@@ -2,7 +2,7 @@
 
 Версия документа: 3.0 (2026-09-19). Заменяет план v2 (2026-09-03) целиком.
 Основание переписывания: сверка плана v2 с текущим кодом upstream Komet
-(docs/reconciliation-20260919.md, тикет OPE-2285) — план v2 описывал Dart-транспорт,
+(docs/сверка/plan-vs-code-reconciliation-20260919.md, тикет OPE-2285) — план v2 описывал Dart-транспорт,
 которого в коде больше нет; решения владельца OPE-2270 (пп.2–4) и решение главы домена (п.4).
 Структура разделов v2 сохранена (совместимость навигации), изменённое — помечено [v3].
 
@@ -601,7 +601,7 @@ FDROID_REPO_KEY. [v3] Сборочные CI-джобы требуют образ
 
 ## Приложение A — Источники
 - [v3] Сверка кода (источник правок плана):
-  /srv/dev/OPE-2270/plan-vs-code-reconciliation-20260919.md (копия: docs/reconciliation-20260919.md);
+  /srv/dev/OPE-2270/plan-vs-code-reconciliation-20260919.md (копия: docs/сверка/plan-vs-code-reconciliation-20260919.md);
   клоны: /srv/dev/research/komet-main (Komet main 1ae0731), /srv/dev/research/kolibri (a6cdce9).
 - Источники v2 (Komet, Avenarius, rumax/PyMax/maxplus, Telegram terms, TDLib-пакеты, Play,
   RuStore, верификация, Work Profile, аналоги) — перечень ссылок без изменений против v2
