@@ -38,7 +38,8 @@
 
 ### 0.1 Общие
 1. **Не переписывать базу.** База — Komet main 1ae0731 (2026-09-11): 434 dart-файла, ~139 610 строк
-   Dart (frontend 87 916, core 22 396, backend 14 406, models 2 477, прочее 1 149), 64 unit-теста,
+   Dart (frontend 87 916, core 22 396, backend 14 406, models 2 477, прочее 12 415 — l10n,
+   main.dart и др.), 64 unit-теста,
    version 0.5.19+19. Плюс Rust-слой kolibri (форк по ADR-0000, kolibri-net ~4 228 строк Rust) и
    native/komet_crypto (Argon2id+ChaCha20-Poly1305+Cyrillic base32, cargokit), third_party/rlottie
    (submodule Samsung/rlottie). Всё новое добавляется модулями и адаптерами.
@@ -126,7 +127,7 @@ lib/core/protocol/opcode_map.dart            опкоды (сгенериров�
 lib/core/transport/dispatcher.dart           диспетчер запросов над kolibri-сессией
 lib/core/transport/tls_config.dart           тонкая обёртка: applyMincifryTrust / isInsecureAllowed (prefs dev_tls_insecure)
 lib/core/transport/traffic_monitor.dart
-lib/core/transport/vpn_bypass.dart           148 строк; работа против Rust-сокетов — под вопросом (см. п.4)
+lib/core/transport/vpn_bypass.dart           148 строк; работа против Rust-сокетов — под вопросом (см. Т-1.11)
 lib/core/webpush/{max_web_protocol,max_web_socket,web_push_service}.dart   webpush-слой [новое в v3]
 lib/core/push/push_service.dart              FCM, локальные уведомления, quick reply
 lib/core/storage/token_storage.dart          auth_token_<id> (secure storage), active_account_id (prefs)
@@ -150,7 +151,7 @@ AcceptAnyCert (tls.rs:57-67) — компиляционной гарантии �
 Встроенный минцифры-траст: MINCIFRY_CA_PEM (include_str, tls.rs), TRUST_MINCIFRY AtomicBool,
 setTrustMincifryCa из Dart — зона для сосуществования с SPKI-пиннингом.
 VPN bypass: vpn_bypass.dart остаётся в Dart — эффективность против Rust-сокетов под вопросом
-(сокеты открывает Rust; bind-to-interface из Dart может не работать); задача Т-0.x v3.
+(сокеты открывает Rust; bind-to-interface из Dart может не работать); задача Т-1.11 v3.
 
 Пуши [v3]: PushService.init → Firebase.initializeApp → FirebaseMessaging.getToken →
 AccountModule.registerPushToken → PrivacyModule.registerPushToken (opcode config=22, payload
@@ -183,7 +184,7 @@ ffi-транспортные зависимости (уехали в Rust-ядр
 komet_crypto (path: native/komet_crypto), web-push библиотеки webpush-слоя.
 
 Цифры [v3]: 434 dart-файла; ~139 610 строк Dart (frontend 87 916, core 22 396, backend 14 406,
-models 2 477, прочее 1 149); 64 unit-теста (flutter_test); version 0.5.19+19; Rust: kolibri-net
+models 2 477, прочее 12 415 — l10n, main.dart и др.); 64 unit-теста (flutter_test); version 0.5.19+19; Rust: kolibri-net
 ~4 228 строк + обёртки kolibri-dart/kotlin/swift/py/go; Gradle 8.14 (AGP 8.11.1), Java 17, minSdk
 23, targetSdk = flutter-версия; Flutter 3.44.3 (Dart 3.10.x, pubspec sdk ^3.10.4); CI upstream:
 5 workflow-файлов для платформ + release-dev/release-main + FCM/Play-варианты — форк наследует
@@ -298,7 +299,7 @@ webpush — по мере подключения), фазы 3–4 только �
 6. Антибан-правила (4.8) закодированы в MaxBackend (rate limiter).
 7. VPN bypass — выключен по умолчанию, отдельный экран с объяснением «MAX увидит ваш реальный
    IP». [v3] Техническая проверка эффективности против Rust-сокетов — отдельная задача
-   (Т-1.9 v3, решение в ADR-0004).
+   (Т-1.11, решение фиксируется в ADR-0004).
 8. Удаление аккаунта: токен, БД, кэш медиа, спуф-профиль, TDLib-директория, push-регистрация —
    всё стирается; тест на отсутствие остатков.
 9. Экспортируемые компоненты: только необходимые; exported=false по умолчанию.
@@ -392,7 +393,9 @@ FEATURE_SELF_UPDATE). [v3] Дополнительно: dart-define BUILD_IMAGE_P
 parallel), SECURITY.md v0 (список хостов по E6 — v3-состав).
 
 ### Фаза 1 — Модель аккаунтов, адаптеры и фон [v3: + foreground-сервис и NotificationCenter, − Т-4.1/Т-4.2 частично]
-(14–20 дней [v3], бывшие 14–20 д + переносForeground из Фазы 4)
+(25–27 дней [v3]: Т-1.1–Т-1.8 = 17–18 д (как в v2) + перенесённые из Фаз 4/3 Т-1.9 (4–5 д) и
+Т-1.10 (3 д) + новая Т-1.11 (1 д + живой тест). Баланс переноса: Фаза 4 сокращена с 12–18 до
+6–10 д за счёт тех же задач)
 
 **Т-1.1 Каркас lib/core/accounts/ (2 д)** — AccountKey, Network, AccountProfile, AccountRegistry
 (persist в prefs как JSON без секретов), события. Unit-тесты.
@@ -441,12 +444,17 @@ account_switcher_overlay.dart без изменения внешнего пов�
   сокетов, открываемых Rust-ядром.
 - Шаги: код-ревью механизма bind в vpn_bypass.dart против клиентского сокета в
   kolibri-net/transport/client.rs; [open] при подтверждении гипотезы — задача в форк kolibri
-  (bind_interface в SessionOptions) отдельным тикетом (ADR-0000 п.3); решение в ADR-0004.
-- Приёмка: вывод зафиксирован (работает/не работает/нужна правка ядра) в docs/experiments/.
+  (bind_interface в SessionOptions) отдельным тикетом (ADR-0000 п.3). Результат фиксируется
+  в ADR-0004 (docs/ADR/0004-vpn-bypass.md, создаётся по итогам Т-1.11): «работает как есть» /
+  «не работает — правка форка kolibri (bind_interface)» / «не работает — фича снимается».
+- Приёмка: вывод зафиксирован (работает/не работает/нужна правка ядра) в docs/experiments/ и
+  ADR-0004.
 
 - Приёмка фазы: все функции Komet работают как раньше (регресс-чеклист 6.2); flutter test ≥ 80 %
   покрытия новых модулей; переключение аккаунтов MAX ≤ 1 с; FGS держит соединение; NotificationCenter
   показывает локальные уведомления.
+- Выход Фазы 1: ADR-0004 (docs/ADR/0004-vpn-bypass.md — решение по vpn_bypass/bind_interface
+  по итогам Т-1.11; см. также 4.7 мера 7).
 
 ### Фаза 2 — Telegram backend (25–35 дней)
 Без изменений против v2 (Т-2.1–Т-2.10) с [v3] уточнениями: Т-2.10 push — по ADR-0002 (включая
