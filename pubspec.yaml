@@ -1,0 +1,16 @@
+name: wellmagram
+description: wellmagram (OPE-2270) — multi-account messenger for MAX and Telegram.
+publish_to: 'none'
+version: 0.0.1
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  # Shared preferences is resolved by `flutter pub get` in the build image
+  # (plugin requires the Flutter SDK); the core module keeps a thin seam
+  # (AccountsStore.usePrefsLoader) so unit tests never touch the plugin.
+  # shared_preferences: ^2.5.4
+
+dev_dependencies:
+  test: ^1.25.0
