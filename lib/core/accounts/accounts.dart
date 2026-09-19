@@ -8,4 +8,5 @@ export 'account_registry.dart';
 export 'account_registry_event.dart';
 export 'accounts_codec.dart';
 export 'accounts_store.dart';
+export 'credential_store.dart';
 export 'network.dart';
