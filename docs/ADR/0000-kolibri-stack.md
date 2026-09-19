@@ -2,7 +2,7 @@
 
 Дата: 2026-09-19. Статус: accepted (по сверке OPE-2270, решение владельца п.3).
 Тикет: OPE-2285 (родитель OPE-2270). Сверка: /srv/dev/OPE-2270/plan-vs-code-reconciliation-20260919.md
-(копия: docs/reconciliation-20260919.md в этом репозитории).
+(копия: docs/сверка/plan-vs-code-reconciliation-20260919.md в этом репозитории).
 
 ## Контекст
 
