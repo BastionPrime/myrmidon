@@ -143,6 +143,7 @@ def main() -> int:
         REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_chat_store.dart',
         REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_messages.dart',
         REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_media.dart',
+        REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_voice.dart',
     ]
     failures: list[str] = []
     checked = 0

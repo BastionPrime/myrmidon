@@ -10,3 +10,4 @@ export 'td_client_seam.dart';
 export 'td_db_key_store.dart';
 export 'td_media.dart';
 export 'td_messages.dart';
+export 'td_voice.dart';
