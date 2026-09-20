@@ -5,5 +5,6 @@ library;
 
 export 'td_auth_flow.dart';
 export 'td_bridge.dart';
+export 'td_chat_store.dart';
 export 'td_client_seam.dart';
 export 'td_db_key_store.dart';
