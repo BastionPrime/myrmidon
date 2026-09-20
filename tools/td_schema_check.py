@@ -216,17 +216,14 @@ def main() -> int:
     for fields in schema.values():
         all_fields.update(fields)
 
-    prod_files = [
-        REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_auth_flow.dart',
-        REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_client_seam.dart',
-        REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_bridge.dart',
-        REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_db_key_store.dart',
-        REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_chat_store.dart',
-        REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_messages.dart',
-        REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_media.dart',
-        REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_voice.dart',
-        REPO / 'lib' / 'core' / 'backends' / 'telegram' / 'td_groups.dart',
-    ]
+    # Glob instead of a hardcoded list (review fe79e1af): every present and
+    # FUTURE file of the telegram module is covered automatically — the
+    # "forgot to add the new file to coverage" defect class disappears.
+    # telegram.dart (the barrel) contains no wire literals; the mock and
+    # the td_*_test.dart fixtures below are covered by their own globs.
+    prod_files = sorted(
+        (REPO / 'lib' / 'core' / 'backends' / 'telegram').glob('td_*.dart')
+    )
     fixture_files = [
         REPO / 'test' / 'mock_td_client.dart',
         *sorted((REPO / 'test').glob('td_*_test.dart')),
