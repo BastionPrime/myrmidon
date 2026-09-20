@@ -78,6 +78,14 @@ TelegramBackend, и не создаёт переделок: смена мост�
 
 ## Ограничения
 
+- Целевая схема моков/швов Фазы 2: официальный `td/generate/scheme/td_api.tl`
+  ветки master TDLib (мастер-схема), проверено по машинной сверке имён полей
+  (см. docs/experiments/2026-09-20-t2-fix-schema-check.md). Отступления от
+  мастер-схемы — только задокументированные легаси-пути:
+  `authorizationStateWaitEncryptionKey`/`setDatabaseEncryptionKey`
+  (сознательно поддержан для старых TDLib) и `user.username` в скрипте мока
+  (в master уже `usernames`); `updateChatAction` без `topic_id` — минимальный
+  профиль для typing-события.
 - Сигнатуры `td_json_client.h` сверены по официальной документации TDLib;
   поле `database_encryption_key` в json-запросе setTdlibParameters
   передаётся как массив байт (bytes). Точное поведение биндингов

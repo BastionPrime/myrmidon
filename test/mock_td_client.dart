@@ -192,7 +192,7 @@ const List<Map<String, dynamic>> _keyUpdateScript = [
   {
     '@type': 'updateChatUnreadMentionCount',
     'chat_id': 101,
-    'unread_unmentioned_count': 0,
+    'unread_mention_count': 0,
   },
   {
     '@type': 'updateChatTitle',
