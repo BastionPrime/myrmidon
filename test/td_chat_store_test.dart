@@ -227,7 +227,6 @@ void main() {
           'list': {'@type': 'chatListMain'},
           'order': '778',
         },
-        'is_pinned': false,
       });
       final positions = store.cached[101]?['positions'] as List;
       expect(positions.length, 1);

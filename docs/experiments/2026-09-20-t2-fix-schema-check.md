@@ -18,6 +18,35 @@
 3. Охват: test/mock_td_client.dart, lib/.../td_auth_flow.dart,
    lib/.../td_client_seam.dart, lib/.../td_chat_store.dart.
 
+## Расширение покрытия по возврату a35a3932 (Т-2.7, итерация 2)
+
+Стрип больше НЕ выбрасывает доступы `json['key']` — они извлекаются до
+стрипа и проверяются против ОБЪЕДИНЕНИЯ полей всех конструкторов
+(имя, не существующее нигде = выдуманное поле). Test-файлы
+(td_*_test.dart) включены в coverage: фикстуры — wire-формы, тот же
+класс ошибок. Токенайзер переработан: ключом считается только строка
+перед `:` после `{`/`,` — строковые ЗНАЧЕНИЯ ('ok', 'fresh', named-
+аргументы) больше не дают ложных ключей. Негативная фикстура
+(намеренно выдуманные имена) толерантна только при маркере
+`// td_schema_check: NEGATIVE_FIXTURE` в файле — pre-fix дерево без
+маркера всё равно падает, воспроизведение сохранено.
+
+Фактические прогоны (дословно):
+
+- v3-скрипт на pre-fix дереве t2-7 (worktree cd018c4):
+  «td_schema_check: 354 field names verified; MISMATCHES: 4 —
+  td_chat_store_test.dart: updateChatPosition.is_pinned,
+  td_groups_test.dart: chatPermissions.can_send_messages,
+  td_groups_test.dart: chatPermissions.can_invite_users_by_link,
+  td_groups.dart: index read can_invite_users_by_link exists in no
+  constructor», exit 1. Оба дефекта ревью ловятся; щит дополнительно
+  вскрыл остаточное выдуманное поле `is_pinned` на top-level
+  updateChatPosition в td_chat_store_test.dart:230 (не замечено
+  fix-итерацией 2 — test-файлы тогда не были в coverage) — исправлено
+  этой же итерацией.
+- v3-скрипт на fix-дереве: «359 field names verified, OK: no
+  mismatches», exit 0.
+
 ## История прогонов (фактическая, по датам)
 
 - Прогон v1 скрипта (первая фикс-коммит 0bbb257): «23 field names

@@ -156,15 +156,15 @@ void main() {
       }
     });
 
-    test('restricted gates on chatPermissions', () {
+    test('restricted gates on chatPermissions (schema names)', () {
       final standing = TdMemberStanding.fromChatMember({
         'status': {
           '@type': 'chatMemberStatusRestricted',
           'is_member': true,
           'permissions': {
             '@type': 'chatPermissions',
-            'can_send_messages': false,
-            'can_invite_users_by_link': true,
+            'can_send_basic_messages': false,
+            'can_invite_users': true,
           },
         },
       });
@@ -172,6 +172,27 @@ void main() {
       expect(standing?.isMember, isTrue);
       expect(standing?.canSendMessages, isFalse);
       expect(standing?.canInviteUsers, isTrue);
+    });
+
+    test('legacy field names do NOT open the restricted gate', () {
+      // td_schema_check: NEGATIVE_FIXTURE — the names below are
+      // deliberately wrong (legacy / invented) so the shield must NOT
+      // count them; the test asserts they never open the gate.
+      final standing = TdMemberStanding.fromChatMember({
+        'status': {
+          '@type': 'chatMemberStatusRestricted',
+          'is_member': true,
+          'permissions': {
+            '@type': 'chatPermissions',
+            'can_send_messages': true,
+            'can_invite_users_by_link': true,
+          },
+        },
+      });
+      expect(standing?.status, 'restricted');
+      expect(standing?.isMember, isTrue);
+      expect(standing?.canSendMessages, isFalse, reason: 'legacy can_send_messages must not open the gate');
+      expect(standing?.canInviteUsers, isFalse, reason: 'invented can_invite_users_by_link must not open the gate');
     });
 
     test('left / banned / broken → no rights or null', () {

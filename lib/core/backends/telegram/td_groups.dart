@@ -120,8 +120,8 @@ class TdMemberStanding {
 
   /// Maps a chatMember.status json to base rights. creator/administrator →
   /// full base rights; member → member defaults; restricted → gated by its
-  /// chatPermissions (can_send_messages / can_invite_users_by_link in the
-  /// schema); left / banned → nothing.
+  /// chatPermissions (can_send_basic_messages / can_invite_users —
+  /// chatPermissions, td_api.tl:1070); left / banned → nothing.
   static TdMemberStanding? fromChatMember(Map<String, dynamic> chatMember) {
     final status = chatMember['status'];
     if (status is! Map) return null;
@@ -156,8 +156,8 @@ class TdMemberStanding {
         return TdMemberStanding(
           status: 'restricted',
           isMember: status['is_member'] == true,
-          canSendMessages: perm['can_send_messages'] == true,
-          canInviteUsers: perm['can_invite_users_by_link'] == true,
+          canSendMessages: perm['can_send_basic_messages'] == true,
+          canInviteUsers: perm['can_invite_users'] == true,
         );
       case 'chatMemberStatusLeft':
         return const TdMemberStanding(
