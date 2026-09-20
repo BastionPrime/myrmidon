@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- ConnectionForegroundService (Т-1.9): kept as a standalone snippet to
+         be merged into the real AndroidManifest.xml when the Komet android/
+         tree lands in the build image; the app manifest itself lives in the
+         upstream tree and is not duplicated here. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
+    <application>
+        <service
+            android:name="ru.wellmagram.app.ConnectionForegroundService"
+            android:foregroundServiceType="remoteMessaging"
+            android:exported="false"/>
+
+        <receiver
+            android:name="ru.wellmagram.app.ConnectionBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="ru.wellmagram.app.PauseReceiver"
+            android:exported="false"/>
+    </application>
+</manifest>
