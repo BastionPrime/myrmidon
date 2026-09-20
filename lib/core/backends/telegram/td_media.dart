@@ -5,7 +5,7 @@
 /// (machine-verified by tools/td_schema_check.py):
 /// - downloadFile file_id:int32 priority:int32 offset:int53 limit:int53
 ///   synchronous:Bool = File;
-/// - readFilePart file_id:int32 offset:int53 count:int32 = Data; (data
+/// - readFilePart file_id:int32 offset:int53 count:int53 = Data; (data
 ///   is a base64 string in the json api);
 /// - updateFile file:File = Update; file.local:localFile carries
 ///   path/is_downloading_active/is_downloading_completed/
