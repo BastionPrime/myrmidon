@@ -153,11 +153,19 @@ void main() {
         '@type': 'updateChatLastMessage',
         'chat_id': 101,
         'last_message': messageJson(id: 900, chatId: 101, text: 'fresh', date: 1758382000),
-        'order': '900',
+        'positions': [
+          {
+            '@type': 'chatPosition',
+            'list': {'@type': 'chatListMain'},
+            'order': '900',
+            'is_pinned': false,
+          },
+        ],
       });
       expect(updated?.lastMessagePreview, 'fresh');
       expect(updated?.lastEventTime, 1758382000000);
-      expect(store.cached[101]?['order'], '900');
+      final positions = store.cached[101]?['positions'] as List;
+      expect((positions.single as Map)['order'], '900');
     });
 
     test('updateChatReadInbox resets/sets unread count', () {

@@ -6,6 +6,14 @@ Extracts constructor definitions from td_api.tl, then walks the mock script
 and the request bodies the production code builds, asserting every
 snake_case key exists in the corresponding constructor of the schema.
 
+The Dart scanner is a real brace-depth parser over map literals: each
+{...} block is attributed to its own '@type' value; nested maps (an update
+wrapping a message wrapping a content object) keep their own constructor.
+Comments are stripped before tokenizing (an apostrophe in a doc comment
+desynchronized the old quote regex and silently dropped whole files —
+review 3b9d24c6); empty '' literals and index accesses json['key'] are
+consumed explicitly so the quote balance never breaks.
+
 Usage: python3 tools/td_schema_check.py [path-to-td_api.tl]
 Exit code 0 = all names verified; nonzero = mismatches found.
 """
@@ -16,11 +24,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-ALLOWED_EXTRA_KEYS = {'@type', '@extra', '@client_id'}
 LEGACY_CONSTRUCTORS = {
     # Deliberately supported for older TDLib versions (ADR-0001):
     'setDatabaseEncryptionKey',
     'authorizationStateWaitEncryptionKey',
+}
+
+# Field names that are NOT TDLib wire fields but appear as map keys in the
+# scanned files (unified-model side or test bookkeeping).
+WELL_KNOWN_NON_WIRE_KEYS = {
+    'error': {'code', 'message'},
 }
 
 
@@ -45,56 +58,78 @@ def parse_schema(path: Path) -> dict[str, set[str]]:
     return constructors
 
 
-def dart_string_keys(path: Path) -> list[tuple[str, str]]:
-    """All 'snake_case' string literals and their enclosing @type context.
+def _strip_non_payloads(text: str) -> str:
+    """Remove everything that is NOT a map-key/constructor payload.
 
-    Returns (constructor, key) pairs: a key literal counts as a field of the
-    constructor named by the nearest preceding '@type' literal in the same
-    map literal.
+    Order matters: comments first (apostrophes in doc comments), then
+    index accesses json['key'] and comparison operands == 'name' (they are
+    reads / constructor names, not wire payloads), each replaced with a
+    balanced, quote-free stub so the token stream stays in sync.
     """
-    text = path.read_text()
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+    text = re.sub(r'//[^\n]*', '', text)
+    text = re.sub(r"\[\s*'([^']*)'\s*\]", '[]', text)
+    text = re.sub(r"==\s*'([^']*)'", ' == ', text)
+    text = re.sub(r"!=\s*'([^']*)'", ' != ', text)
+    return text
+
+
+def dart_string_keys(path: Path) -> list[tuple[str, str]]:
+    """All map-key literals of a Dart file with their @type constructor.
+
+    A real depth-first walk over the token stream: '{' pushes a map frame,
+    '}' pops it; inside a frame, the literal right after the '@type' key is
+    the constructor name of THAT frame (nested frames carry their own).
+    Returns (constructor, key) pairs for every other snake_case-looking key.
+    """
+    text = _strip_non_payloads(path.read_text())
+    # Empty literals must consume their quotes or the balance breaks.
+    token_re = re.compile(r"'([^']*)'|(\{|\})")
+    tokens = [(m.start(), m.group(1), m.group(2)) for m in token_re.finditer(text)]
+
     pairs: list[tuple[str, str]] = []
-    stack: list[str] = []
-    # Skip literals used in comparisons (== 'name' / != 'name'): they name
-    # constructors, not fields. Drop them from the token stream up front.
-    text = re.sub(r"==\s*'([^']+)'", '', text)
-    text = re.sub(r"!=\s*'([^']+)'", '', text)
-    token_re = re.compile(r"'([^']+)'|(\{|\})")
-    for match in token_re.finditer(text):
-        literal, brace = match.group(1), match.group(2)
+    stack: list[dict] = []
+
+    i = 0
+    n = len(tokens)
+    while i < n:
+        pos, literal, brace = tokens[i]
         if literal is not None:
-            if literal == '@type':
-                # Next literal is the constructor name.
-                nxt = token_re.search(text, match.end())
-                if nxt and nxt.group(1) is not None:
-                    stack.append(nxt.group(1))
+            if literal == '':
+                i += 1
                 continue
-            if literal.startswith('@') or not literal.startswith((
-                'update', 'chat', 'message', 'authorization', 'user',
-                'allow_', 'is_', 'use_', 'has_', 'database_', 'api_', 'api',
-                'phone_number', 'system_', 'device_', 'application_', 'files_',
-                'new_verbosity', 'from_message', 'only_local', 'last_read',
-                'unread_', 'code', 'password', 'title', 'text', 'chat_id',
-                'user_id', 'message_id', 'message_ids', 'sender_id', 'date',
-                'order', 'position', 'last_message', 'content', 'photo',
-                'positions', 'new_content', 'settings', 'limit', 'offset',
-                'authorization_state', 'last_read_inbox_message_id',
-                'last_read_outbox_message_id', 'unread_count',
-                'unread_mention_count', 'last_message_id', 'state',
-                'password_hint', 'has_recovery_email_address', 'chat_list',
-                'is_pinned', 'is_channel', 'is_outgoing', 'is_downloading_completed',
-                'first_name', 'last_name', 'type', 'order_extra',
-            )):
-                continue
-            constructor = stack[-1] if stack else ''
-            if constructor:
-                pairs.append((constructor, literal))
-        elif brace == '{':
+            if stack:
+                frame = stack[-1]
+                if literal == '@type' and not frame['type_seen']:
+                    # The next string token is the constructor of this map.
+                    j = i + 1
+                    while j < n and tokens[j][1] is None:
+                        j += 1
+                    if j < n and tokens[j][1]:
+                        frame['constructor'] = tokens[j][1]
+                        frame['type_seen'] = True
+                    i = j + 1 if j < n else i + 1
+                    continue
+                if _looks_like_field(literal):
+                    constructor = frame['constructor']
+                    if constructor:
+                        pairs.append((constructor, literal))
+            i += 1
             continue
+        if brace == '{':
+            stack.append({'constructor': None, 'type_seen': False})
         elif brace == '}':
             if stack:
                 stack.pop()
+        i += 1
     return pairs
+
+
+def _looks_like_field(literal: str) -> bool:
+    """A wire-field-looking key: snake_case / lowerCamel known names."""
+    if literal.startswith('@'):
+        return False
+    return bool(re.fullmatch(r'[a-z][a-z0-9_]*', literal))
 
 
 def main() -> int:
@@ -113,9 +148,10 @@ def main() -> int:
         for constructor, key in dart_string_keys(file):
             if constructor in LEGACY_CONSTRUCTORS:
                 continue
+            if key in WELL_KNOWN_NON_WIRE_KEYS.get(constructor, set()):
+                continue
             fields = schema.get(constructor)
             if fields is None:
-                # Unknown constructor: key check impossible, reported.
                 failures.append(f'{file.name}: unknown constructor {constructor}')
                 continue
             if key not in fields:
