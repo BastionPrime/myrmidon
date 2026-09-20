@@ -9,7 +9,7 @@ library;
 
 import 'dart:async';
 
-/// Identication of what is being rate-limited (lookup phones now; other
+/// Identification of what is being rate-limited (lookup phones now; other
 /// antiban queues can be added by name).
 enum RateLimitKind { phoneLookup }
 
