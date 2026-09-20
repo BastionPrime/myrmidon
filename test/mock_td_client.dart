@@ -28,6 +28,10 @@ class MockTdClient implements TdClientLike {
   bool _draining = false;
   bool _destroyed = false;
 
+  /// Whether [destroy] has been called (test assertions for teardown
+  /// behaviour of session managers).
+  bool get isDestroyed => _destroyed;
+
   /// Simulates a broken receive loop: [updateStream] closes without
   /// destroy — the bridge must apply its reconnect policy.
   bool feedBroken = false;

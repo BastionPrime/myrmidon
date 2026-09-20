@@ -12,4 +12,5 @@ export 'td_ghost.dart';
 export 'td_groups.dart';
 export 'td_media.dart';
 export 'td_messages.dart';
+export 'td_sessions.dart';
 export 'td_voice.dart';
