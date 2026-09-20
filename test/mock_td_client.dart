@@ -56,6 +56,18 @@ class MockTdClient implements TdClientLike {
     answer(extra, {'@type': 'error', 'code': code, 'message': message});
   }
 
+  /// Answers the most recent sent request with a result (ok by default).
+  void answerLast([Map<String, dynamic> result = const {'@type': 'ok'}]) {
+    final extra = sentRequests.last['@extra'];
+    if (extra is String) {
+      answer(extra, result);
+    }
+  }
+
+  /// Answers the most recent request with a TDLib error.
+  void answerLastError(int code, String message) =>
+      answerLast({'@type': 'error', 'code': code, 'message': message});
+
   @override
   void send(Map<String, dynamic> request) {
     if (_destroyed) throw StateError('MockTdClient: destroyed');
