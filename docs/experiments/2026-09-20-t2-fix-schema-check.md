@@ -47,6 +47,35 @@
 - v3-скрипт на fix-дереве: «359 field names verified, OK: no
   mismatches», exit 0.
 
+## Итерация 3 по возврату fe79e1af (Т-2.8: glob вместо хардкода)
+
+Дефект: prod_files в td_schema_check.py был захардкоженным списком из
+9 файлов — td_ghost.dart (новый файл Т-2.8, 11 wire-пар) в нём
+отсутствовал; прирост 359→360 была одной парой из test-фикстуры, а
+сдача заявляла «формы машинно сверены (360 OK)» — отчёт по
+несуществующей проверке (второе повторение паттерна). Контрольный
+инжект ревьюера (fe79e1af): выдуманное поле в билдере openChatRequest
+проходило щит молча.
+
+Правка: prod_files = sorted(glob('lib/core/backends/telegram/
+td_*.dart')) — все настоящие и будущие файлы модуля покрываются
+автоматически; класс дефекта «забыл добавить новый файл» исчезает.
+Баррель telegram.dart wire-литералов не содержит (покрыт неявно
+транзитивно через модули, он не td_*).
+
+Фактические прогоны (дословно):
+
+- Fix-дерево после glob: «td_schema_check: 371 field names verified
+  against td_api.tl (2535 constructors); OK: no mismatches», exit 0.
+  Прирост 360→371 = 11 пар — ровно wire-пары td_ghost.dart, как
+  ожидал ревьюер.
+- Контрольный инжект (мой прогон, тот же ран): вставлено выдуманное
+  поле 'chat_id_typo_fabricated' в билдер openChatRequest
+  td_ghost.dart → «MISMATCHES: td_ghost.dart:
+  openChat.chat_id_typo_fabricated not in schema», exit 1; инжект
+  снят (git checkout), повторный прогон — «OK: no mismatches»,
+  exit 0. Покрытие файла доказано красным прогоном.
+
 ## История прогонов (фактическая, по датам)
 
 - Прогон v1 скрипта (первая фикс-коммит 0bbb257): «23 field names

@@ -45,6 +45,20 @@ class MockTdClient implements TdClientLike {
     }
   }
 
+  /// Auto-answer mode: every `send` is answered with ok on the next
+  /// microtask. For multi-request methods (markRead = openChat +
+  /// viewMessages) where interleaving manual answerLast calls between the
+  /// awaits is not expressible in a single test body.
+  bool autoAnswer = false;
+
+  void _maybeAutoAnswer() {
+    if (!autoAnswer) return;
+    final extra = sentRequests.last['@extra'];
+    if (extra is String) {
+      answer(extra, const {'@type': 'ok'});
+    }
+  }
+
   /// Answers the request with the given `@extra` with a result object.
   void answer(String extra, Map<String, dynamic> result) {
     _updateQueue.add({...result, '@extra': extra});
@@ -72,6 +86,7 @@ class MockTdClient implements TdClientLike {
   void send(Map<String, dynamic> request) {
     if (_destroyed) throw StateError('MockTdClient: destroyed');
     sentRequests.add(request);
+    _maybeAutoAnswer();
   }
 
   @override
