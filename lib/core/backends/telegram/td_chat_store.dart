@@ -182,9 +182,9 @@ class TdChatStore {
         if (last is Map) {
           chat['last_message'] = Map<String, dynamic>.of(last.cast<String, dynamic>());
         }
-        final order = update['order'];
-        if (order is String) {
-          chat['order'] = order;
+        final positions = update['positions'];
+        if (positions is List) {
+          chat['positions'] = List.of(positions);
         }
       case 'updateChatReadInbox':
         chat['last_read_inbox_message_id'] =

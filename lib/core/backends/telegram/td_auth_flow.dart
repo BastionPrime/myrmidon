@@ -176,7 +176,7 @@ class TdAuthFlow {
         'allow_flash_call': false,
         'allow_missed_call': false,
         'is_current_phone_number': true,
-        'allow_sms_retrieval_api': false,
+        'allow_sms_retriever_api': false,
       },
     });
     submitInFlight = false;

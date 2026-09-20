@@ -167,7 +167,14 @@ const List<Map<String, dynamic>> _keyUpdateScript = [
     '@type': 'updateChatLastMessage',
     'chat_id': 101,
     'last_message': {'id': 531, 'chat_id': 101},
-    'order': '778',
+    'positions': [
+      {
+        '@type': 'chatPosition',
+        'list': {'@type': 'chatListMain'},
+        'order': '778',
+        'is_pinned': false,
+      },
+    ],
   },
   {
     '@type': 'updateChatPosition',
@@ -175,8 +182,8 @@ const List<Map<String, dynamic>> _keyUpdateScript = [
     'position': {
       'list': {'@type': 'chatListMain'},
       'order': '778',
+      'is_pinned': false,
     },
-    'is_pinned': false,
   },
   {
     '@type': 'updateChatReadInbox',
@@ -192,7 +199,7 @@ const List<Map<String, dynamic>> _keyUpdateScript = [
   {
     '@type': 'updateChatUnreadMentionCount',
     'chat_id': 101,
-    'unread_unmentioned_count': 0,
+    'unread_mention_count': 0,
   },
   {
     '@type': 'updateChatTitle',

@@ -2,7 +2,7 @@
 /// secrets live ONLY in the secure storage namespace of CredentialStore).
 ///
 /// The key is generated once per account (32 random bytes), hex-encoded in
-/// the `cred:telegram:<id>` namespace of the CredentialStore — same seam,
+/// the `cred:tg:<id>` namespace of the CredentialStore — same seam,
 /// same storage, no new secret surface. The key is never logged and never
 /// written to prefs.
 library;
