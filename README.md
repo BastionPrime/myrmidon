@@ -16,13 +16,6 @@ distribution are not there yet.
 - Security-first: compile-time TLS gates, SPKI pinning points, ghost-mode
   (read/typing/online suppression) per account.
 
-## Documentation
-
-- `docs/plan-v3.md` — the development plan (phases, tasks, estimates).
-- `docs/ADR/` — architecture decision records (kolibri stack ownership,
-  TDLib bridge, VPN bypass analysis).
-- `docs/experiments/` — experiment write-ups backing the ADRs.
-
 ## Requirements
 
 - Dart SDK ^3.10 (the core modules run with plain `dart test`; a full Android
@@ -36,9 +29,8 @@ dart pub get          # resolves dependencies (see pubspec.yaml)
 dart test             # unit tests for lib/ (no device needed)
 ```
 
-For an Android debug build you also need the Flutter toolchain and the Rust
-cross-compile target for the kolibri core — see `docs/plan-v3.md` (Phase 1)
-for the build pipeline description.
+The Android build uses the Flutter toolchain plus a Rust cross-compile
+target for the transport core.
 
 ## Contributing
 
