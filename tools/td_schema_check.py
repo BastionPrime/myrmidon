@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Machine check of TDLib json field names used by wellmagram against the
-official td_api.tl schema (review feedback (г), OPE-2494 fix branch).
+official td_api.tl schema.
 
 Extracts constructor definitions from td_api.tl, then walks the mock script,
 the request bodies the production code builds, AND the test fixtures
