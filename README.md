@@ -1,14 +1,55 @@
 # wellmagram
 
-Репозиторий проекта wellmagram (OPE-2270): безопасный клиент MAX с мультиаккаунтом
-и Telegram в одном окне, Android. Планирование и документация; код — по фазам плана.
+A multi-account messenger for Android combining **MAX** and **Telegram** in one
+app, with a focus on account privacy and safe traffic handling.
 
-## Ключевые документы
-- docs/plan-v3.md — план разработки v3 (заменяет v2 от 2026-09-03; переписан по сверке
-  с kolibri-стеком, OPE-2285)
-- docs/ADR/0000-kolibri-stack.md — схема владения Rust-ядром kolibri (форк + dependency_overrides git)
-- docs/сверка/plan-vs-code-reconciliation-20260919.md — сверка плана v2 с кодом upstream Komet (основание v3)
+Status: **early development**. The core architecture (accounts, backends,
+transport seams) is in place with unit tests; full build packaging and store
+distribution are not there yet.
 
-## Ветки
-- ope-2270-plan-v3 — план v3 + ADR-0000 (OPE-2285)
-- main — базовая ветка (создаётся при мердже первой фазы)
+## Highlights
+
+- Multi-account: several MAX and Telegram accounts in one window, with
+  per-account stores and session isolation.
+- Rust transport core (kolibri) for the MAX backend, TDLib bridge for
+  Telegram — behind Dart seams, so backends are swappable and testable.
+- Security-first: compile-time TLS gates, SPKI pinning points, ghost-mode
+  (read/typing/online suppression) per account.
+
+## Documentation
+
+- `docs/plan-v3.md` — the development plan (phases, tasks, estimates).
+- `docs/ADR/` — architecture decision records (kolibri stack ownership,
+  TDLib bridge, VPN bypass analysis).
+- `docs/experiments/` — experiment write-ups backing the ADRs.
+
+## Requirements
+
+- Dart SDK ^3.10 (the core modules run with plain `dart test`; a full Android
+  build needs the Flutter SDK + Android NDK toolchain).
+- Python 3 for the offline tooling in `tools/`.
+
+## Build & test
+
+```bash
+dart pub get          # resolves dependencies (see pubspec.yaml)
+dart test             # unit tests for lib/ (no device needed)
+```
+
+For an Android debug build you also need the Flutter toolchain and the Rust
+cross-compile target for the kolibri core — see `docs/plan-v3.md` (Phase 1)
+for the build pipeline description.
+
+## Contributing
+
+- One branch per change, named `<topic>-<short-description>`.
+- `dart test` must pass before handover; run `tools/td_schema_check.py` when
+  touching Telegram API mappings (it cross-checks field names against the
+  official TDLib schema).
+- Pull requests against `main`; a reviewer merges.
+- Don't commit secrets, internal hostnames, or internal ticket references —
+  see `CONTRIBUTING.md`.
+
+## License
+
+Not yet decided — all rights reserved for now.
