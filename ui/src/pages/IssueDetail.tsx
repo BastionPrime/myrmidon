@@ -4,6 +4,7 @@ import { Settings as ChatSettings } from "lucide-react";
 import { agentDetailHref } from "./agent-detail-navigation";
 import { deriveInitials } from "@/components/Identity";
 import { ExecutionBlockerNotice } from "../components/ExecutionBlockerNotice";
+import { ReplayBlockedNotice } from "../components/myrmidon/ReplayBlocked"; // myrmidon(N1)
 import type { TaskComposerPause } from "../components/task-chat/TaskChatPausedTakeover";
 import { TaskDetailTasksPanel } from "@/components/task-detail/TaskDetailTasksPanel";
 import { EmailThreadProvider } from "../components/EmailMessageCard";
@@ -7662,6 +7663,8 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
               {issue.executionBlocker && (
                 <ExecutionBlockerNotice companyId={issue.companyId} issueId={issue.id} blocker={issue.executionBlocker} onRetried={invalidateIssueDetail} />
               )}
+              {/* myrmidon(N1) */}
+              <ReplayBlockedNotice companyId={issue.companyId} issueId={issue.id} onResolved={invalidateIssueDetail} />
               {resolvedDetailTab === "chat" ? (
                 <IssueDetailChatTab
                   threadHeader={<>{taskChatThreadHeader}{instanceExperimentalSettings?.enableChatConnectors && <EmailTaskActivity key={issue.id} companyId={issue.companyId} issueId={issue.id} />}</>}
