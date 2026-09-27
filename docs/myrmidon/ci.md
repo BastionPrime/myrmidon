@@ -256,6 +256,25 @@ Workflow [`myrmidon-image.yml`](../../.github/workflows/myrmidon-image.yml), job
 Сопровождающему: после первой публикации проверить видимость пакета
 `ghcr.io/itkadr-git/myrmidon` (Package settings) — новый пакет может оказаться закрытым.
 
+## Доказательство: проверки краснеют
+
+Черновой PR [#73](https://github.com/itkadr-git/myrmidon/pull/73) «[proof, do not merge]»
+(закрыт без слияния, автослияние не включалось) внёс четыре находки сразу; в job `checks`
+каждый шаг выполняется независимо, поэтому каждая проверка покраснела отдельно в одном
+прогоне [36335498882](https://github.com/itkadr-git/myrmidon/actions/runs/36335498882):
+
+| Случай | Что покраснело | Прогон |
+|---|---|---|
+| Нарочно падающий тест в `cli/src/__tests__/update-notice.myrmidon.test.ts` (уровень fast) | `tests (affected)` | [job](https://github.com/itkadr-git/myrmidon/actions/runs/36335498882/job/108665540148) |
+| Фальшивый ключ `api_key = "…"` в документе | `checks` → «Secrets (gitleaks, new commits)» | [job](https://github.com/itkadr-git/myrmidon/actions/runs/36335498882/job/108665440331) |
+| Из `license-policy.json` убран `ISC` (пакеты под ISC стали нарушениями) | `checks` → «Licenses of production dependencies» | [job](https://github.com/itkadr-git/myrmidon/actions/runs/36335498882/job/108665440331) |
+| Адрес из частной сети `10/8` в документе | `checks` → «Internal addresses (private networks)» | [job](https://github.com/itkadr-git/myrmidon/actions/runs/36335498882/job/108665440331) |
+| Запрещённые шаблоны | `checks` → «Internal addresses (forbidden patterns…)» — **зелёный с предупреждением**: секрет `MYRMIDON_FORBIDDEN_PATTERNS` не задан. Не показано | — |
+
+Остальные шаги `checks` (скрипты, совместимость плагинов) остались зелёными. Сводная
+`CI result` при любой красной проверке красная, а обязательна для слияния — автослияние
+такой PR не сольёт.
+
 ## Почему не вендорский `pr.yml`
 
 `pr.yml` вендора вызывает `paperclipai/paperclip/.github/workflows/pr-trusted.yml@master`, то
