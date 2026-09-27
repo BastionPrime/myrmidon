@@ -2,6 +2,8 @@ import type {
   RunPresentationDecision,
   RunPresentationSource,
 } from "@paperclipai/shared";
+// myrmidon(S5): mask secret values in run results
+import { maskSecretsInText, maskSecretsInValue } from "../myrmidon/secret-masking.js";
 
 export const HEARTBEAT_RUN_RESULT_SUMMARY_MAX_CHARS = 500;
 export const HEARTBEAT_RUN_RESULT_OUTPUT_MAX_CHARS = 4_096;
@@ -28,6 +30,9 @@ export function mergeHeartbeatRunResultJson(
   resultJson: Record<string, unknown> | null | undefined,
   summary: string | null | undefined,
 ): Record<string, unknown> | null {
+  // myrmidon(S5): no secret values in the persisted run result
+  resultJson = maskSecretsInValue(resultJson);
+  summary = summary ? maskSecretsInText(summary) : summary;
   const normalizedSummary = readCommentText(summary);
   const baseResult =
     resultJson && typeof resultJson === "object" && !Array.isArray(resultJson)
