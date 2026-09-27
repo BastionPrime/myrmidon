@@ -612,6 +612,8 @@ import { serverVersion } from "../version.js";
 import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/maintenance/gate.js";
 // myrmidon(P1): stale active environment lease sweep
 import { createStaleActiveLeaseSweep } from "../myrmidon/leases-stale-sweep.js";
+// myrmidon(M3): skip idle timer heartbeats
+import { hasOtherActionableWork, skipIdleHeartbeatsEnabled } from "../myrmidon/heartbeat-idle-skip.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -26187,9 +26189,11 @@ export function heartbeatService(
       !readNonEmptyString(enrichedContextSnapshot.taskId) &&
       !readNonEmptyString(enrichedContextSnapshot.taskKey);
     if (
-      policy.skipTimerWhenNoActionableWork &&
+      // myrmidon(M3): instance-wide skip; interactions and reviews count as work
+      (policy.skipTimerWhenNoActionableWork || skipIdleHeartbeatsEnabled()) &&
       genericTimerWake &&
-      !(await hasActionableTimerWork(agent))
+      !(await hasActionableTimerWork(agent)) &&
+      !(await hasOtherActionableWork(db, agent))
     ) {
       await writeSkippedHeartbeatRequest("heartbeat.timer.no_actionable_work", {
         reason:
