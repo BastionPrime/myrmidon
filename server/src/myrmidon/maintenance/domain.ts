@@ -12,6 +12,8 @@ export type MaintenanceState = MaintenanceWindowState | "off";
 
 /** Error code on runs interrupted by maintenance. Only this code skips the reconciliation hold. */
 export const MAINTENANCE_INTERRUPT_ERROR_CODE = "myrmidon_maintenance_interrupted";
+export const MAINTENANCE_RETRY_REASON = "myrmidon_maintenance";
+export const MAINTENANCE_RETRY_WAKE_REASON = "myrmidon_maintenance_retry";
 
 export interface MaintenanceScope {
   type: MaintenanceScopeType;

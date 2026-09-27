@@ -3,10 +3,15 @@
 import type { Db } from "@paperclipai/db";
 import { logger } from "../../middleware/logger.js";
 import { heartbeatService } from "../../services/heartbeat.js";
-import type { MaintenanceDocument } from "./domain.js";
+import {
+  MAINTENANCE_INTERRUPT_ERROR_CODE,
+  MAINTENANCE_RETRY_REASON,
+  MAINTENANCE_RETRY_WAKE_REASON,
+  type MaintenanceDocument,
+} from "./domain.js";
 import { getCachedMaintenanceDocument } from "./gate.js";
 import { maintenanceRoutes } from "./routes.js";
-import { maintenanceService, type MaintenanceHooks } from "./service.js";
+import { maintenanceService, type MaintenanceHeartbeatPort, type MaintenanceHooks } from "./service.js";
 import { readMaintenanceSettings } from "./settings.js";
 
 export {
@@ -27,9 +32,35 @@ export function setMaintenanceHooks(hooks: MaintenanceHooks) {
   integrationHooks = hooks;
 }
 
+/** Heartbeat operations for the mode, on top of the vendor cancel and bounded-retry paths. */
+export function maintenanceHeartbeatPort(heartbeat: ReturnType<typeof heartbeatService>): MaintenanceHeartbeatPort {
+  return {
+    async resumeQueuedRuns() {
+      // Retries scheduled during the window are due already; promote them now
+      // instead of waiting for the vendor's periodic tick.
+      await heartbeat.promoteDueScheduledRetries();
+      await heartbeat.resumeQueuedRuns();
+    },
+    async interruptRunForMaintenance(runId, windowId) {
+      await heartbeat.cancelRun(runId, "Interrupted by maintenance mode; retried after maintenance ends", {
+        errorCode: MAINTENANCE_INTERRUPT_ERROR_CODE,
+        resultJson: { myrmidonMaintenance: { windowId } },
+        eventMessage: "run interrupted by maintenance mode",
+        // The retry below is the successor path; the admission gate holds it until exit.
+        suppressImmediateRecovery: true,
+      });
+      const retry = await heartbeat.scheduleBoundedRetry(runId, {
+        retryReason: MAINTENANCE_RETRY_REASON,
+        wakeReason: MAINTENANCE_RETRY_WAKE_REASON,
+        delayMs: 0,
+      });
+      return { retryScheduled: retry.outcome === "scheduled" };
+    },
+  };
+}
+
 function defaultService(db: Db) {
-  const heartbeat = heartbeatService(db);
-  return maintenanceService(db, { heartbeat, hooks: integrationHooks });
+  return maintenanceService(db, { heartbeat: maintenanceHeartbeatPort(heartbeatService(db)), hooks: integrationHooks });
 }
 
 /** Router for app.ts: GET/POST /api/myrmidon/maintenance. */

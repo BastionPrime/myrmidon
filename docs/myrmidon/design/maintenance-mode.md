@@ -128,13 +128,17 @@
     в журнал пишется `myrmidon.maintenance.drain_timed_out` (один раз). Решает человек или
     скрипт: ждать дальше, выйти или повторить вход с другим окном после выхода;
   - **`interrupt_and_retry`** — каждый оставшийся прогон области прерывается вендорской
-    отменой (`heartbeat.cancelRun`: сигнал процессу, грейс, освобождение аренд). Прогон
-    получает статус `interrupted` и код ошибки **`myrmidon_maintenance_interrupted`**. Для
-    него сразу создаётся повтор — вендорский ограниченный повтор (`scheduled_retry` с
-    `retryOfRunId`). Повтор проходит `run-dispatch` в `queued` и держится шлюзом до выхода.
+    отменой (`heartbeat.cancelRun`: сигнал процессу, грейс, освобождение аренд и замка задачи).
+    Прогон получает статус `cancelled` (так устроена вендорская отмена) и код ошибки
+    **`myrmidon_maintenance_interrupted`**. Для него сразу создаётся повтор — вендорский
+    ограниченный повтор (`scheduleBoundedRetry`, `scheduled_retry` с `retryOfRunId`, причина
+    `myrmidon_maintenance`). Повтор проходит `run-dispatch` в `queued` и держится шлюзом до
+    выхода. При выходе сервис сразу продвигает созревшие повторы и будит очередь.
 - **Замок.** Прерывание режимом не ставит замок «требуется разбор, не повторять»
-  (`legacy_execution_requires_reconciliation`). Проверка сделана в точке вызова в
-  `heartbeat.ts` и срабатывает **только** на код `myrmidon_maintenance_interrupted`. Настоящие
+  (`legacy_execution_requires_reconciliation`). Проверка — одна строка в вендорском
+  `legacyExecutionNeedsReconciliation` (`server/src/services/legacy-execution-recovery.ts`):
+  через эту функцию идут все шесть решений о замке в `heartbeat.ts` и проверка перед
+  ограниченным повтором. Она срабатывает **только** на код `myrmidon_maintenance_interrupted`. Настоящие
   сбои — таймаут, падение процесса, отмена человеком, `server_shutdown_interrupted` — ставят
   замок, как у вендора. Прерывания видны в карточке прогона по коду ошибки и в журнале
   активности (`myrmidon.maintenance.run_interrupted`, с `runId`).
@@ -440,7 +444,8 @@
 
 | Файл | Точка |
 |---|---|
-| `server/src/services/heartbeat.ts` | шлюз в `startNextQueuedRunForAgent` и `executeRun`; отказ от замка для `myrmidon_maintenance_interrupted`; фильтр в `tickTimers` |
+| `server/src/services/heartbeat.ts` | шлюз в `startNextQueuedRunForAgent` и `executeRun`; фильтр в `tickTimers` |
+| `server/src/services/legacy-execution-recovery.ts` | отказ от замка для `myrmidon_maintenance_interrupted` |
 | `server/src/services/routines.ts` | пропуск тика и догона |
 | `server/src/services/recovery/service.ts` | фильтр в `reconcileStrandedAssignedIssues` |
 | `server/src/services/task-watchdogs.ts` | фильтр в `reconcileTaskWatchdogs` |
@@ -450,8 +455,8 @@
 | `server/src/app.ts` | монтирование маршрутов `/api/myrmidon/maintenance` |
 | `server/src/routes/health.ts` | поле `maintenance` |
 
-Файлов `recovery/service.ts`, `task-watchdogs.ts`, `instance-settings.ts` и `app.ts` нет в
-списке файлов трека. Без точек вызова в них не выполнить требования «сторожа не эскалируют» и
+Файлов `recovery/service.ts`, `task-watchdogs.ts`, `instance-settings.ts`,
+`legacy-execution-recovery.ts` и `app.ts` нет в списке файлов трека. Без точек вызова в них не выполнить требования «сторожа не эскалируют» и
 «режим переживает сохранение настроек». Правка в каждом — одна строка, она описывается в PR
 (CONVENTIONS, раздел 12). Каждая точка — строка в DIVERGENCE.md, раздел «Трек 5».
 
