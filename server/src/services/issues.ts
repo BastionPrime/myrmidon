@@ -138,6 +138,8 @@ import {
 import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { redactSensitiveText } from "../redaction.js";
+// myrmidon(S5): mask secret values in agent comments
+import { maskSecretsInText } from "../myrmidon/secret-masking.js";
 import {
   resolveIssueGoalId,
   resolveNextIssueGoalId,
@@ -12043,7 +12045,8 @@ export function issueService(db: Db) {
         enabled: (await instanceSettings.getGeneral({ db: dbOrTx }))
           .censorUsernameInLogs,
       };
-      const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+      // myrmidon(S5): comments written by agents are stored with secret values masked
+      const redactedBody = redactCurrentUserText(actor.agentId ? maskSecretsInText(body) : body, currentUserRedactionOptions);
       if (actor.userId && options?.clientRequestId) {
         const [existing] = await dbOrTx.select().from(issueComments).where(and(eq(issueComments.issueId, issueId),
           eq(issueComments.authorUserId, actor.userId), eq(issueComments.clientRequestId, options.clientRequestId)));

@@ -84,6 +84,8 @@ import {
   assertAccountHomeCacheDirStillValid,
   withAccountHomeSecretMutationLock,
 } from "@paperclipai/adapter-codex-local/server";
+// myrmidon(S5): resolved secret values are masked in stored text
+import { registerSecretValues } from "../myrmidon/secret-masking.js";
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const AGENT_ACCESS_CONFIG_PATH_PREFIX = "access.";
@@ -5192,6 +5194,7 @@ export function secretService(db: Db | DbTransaction) {
           }
         }
       }
+      registerSecretValues(resolved, secretKeys); // myrmidon(S5): mask these values in stored text
       return { env: resolved, secretKeys, manifest };
     },
 
@@ -5678,6 +5681,7 @@ export function secretService(db: Db | DbTransaction) {
         manifest.push(secretResolution.manifestEntry);
         secretKeys.add(key);
       }
+      registerSecretValues(resolved.env, secretKeys); // myrmidon(S5): mask these values in stored text
       return { config: resolved, secretKeys, manifest };
     },
   };

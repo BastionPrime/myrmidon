@@ -1,4 +1,6 @@
 import { redactCommandText } from "@paperclipai/adapter-utils";
+// myrmidon(S5): value-based secret masking
+import { maskSecretsInText } from "./myrmidon/secret-masking.js";
 
 const SECRET_FIELD_NAME_PATTERN = String.raw`[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?token|auth(?:_?token)?|token|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring|browser[-_]?code|login[-_]?url)[A-Za-z0-9_-]*`;
 
@@ -973,7 +975,9 @@ export function redactAgentAdapterConfig(
   return { ...(redactEventPayload(rest) ?? {}), env: redactedEnv };
 }
 
-export function redactSensitiveText(input: string): string {
+export function redactSensitiveText(rawInput: string): string {
+  // myrmidon(S5): known secret values and URL credentials are masked first
+  const input = maskSecretsInText(rawInput);
   if (!maybeContainsSecretText(input)) return input;
   return redactCommandText(
     redactStandaloneBearerCredentials(redactAuthorizationCredentials(input))
