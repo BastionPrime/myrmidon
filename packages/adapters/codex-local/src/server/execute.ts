@@ -989,7 +989,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
     const effectiveEnv = Object.fromEntries(
       // myrmidon(S2): allow-listed server env instead of process.env
-      Object.entries({ ...myrmidonInheritedProcessEnv(config), ...env }).filter(
+      Object.entries({ ...myrmidonInheritedProcessEnv(config, "codex_local"), ...env }).filter(
         (entry): entry is [string, string] => typeof entry[1] === "string",
       ),
     );
@@ -1325,6 +1325,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       try {
         const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
           inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
+          runEnvAdapterType: "codex_local", // myrmidon(S2)
           cwd,
           env,
           stdin: prompt,

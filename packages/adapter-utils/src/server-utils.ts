@@ -4583,6 +4583,8 @@ export async function runChildProcess(
     localProcessSandbox?: LocalProcessSandboxOptions | null;
     // myrmidon(S2): adapterConfig.inheritProcessEnv, restores full inheritance
     inheritProcessEnv?: boolean;
+    // myrmidon(S2): adapter of the run, allows its provider credential variables
+    runEnvAdapterType?: string | null;
   },
 ): Promise<RunProcessResult> {
   const onLogError =
@@ -4591,7 +4593,7 @@ export async function runChildProcess(
   return new Promise<RunProcessResult>((resolve, reject) => {
     const rawMerged: NodeJS.ProcessEnv = {
       // myrmidon(S2): allow list instead of the whole server environment
-      ...filterMyrmidonInheritedEnv(process.env, { inheritProcessEnv: opts.inheritProcessEnv }),
+      ...filterMyrmidonInheritedEnv(process.env, { inheritProcessEnv: opts.inheritProcessEnv, adapterType: opts.runEnvAdapterType }),
       ...opts.env,
     };
 

@@ -424,7 +424,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const runtimeExecutionTarget = overrideAdapterExecutionTargetRemoteCwd(executionTarget, effectiveExecutionCwd);
     const effectiveEnv = Object.fromEntries(
       // myrmidon(S2): allow-listed server env instead of process.env
-      Object.entries({ ...myrmidonInheritedProcessEnv(config), ...env }).filter(
+      Object.entries({ ...myrmidonInheritedProcessEnv(config, "grok_local"), ...env }).filter(
         (entry): entry is [string, string] => typeof entry[1] === "string",
       ),
     );
@@ -560,6 +560,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
         inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
+        runEnvAdapterType: "grok_local", // myrmidon(S2)
         cwd,
         env,
         timeoutSec,

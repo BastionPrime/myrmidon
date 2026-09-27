@@ -505,7 +505,7 @@ export async function execute(
   const userEnv = config.env as Record<string, string> | undefined;
   const env: Record<string, string> = {
     // myrmidon(S2): allow-listed server env instead of process.env
-    ...(myrmidonInheritedProcessEnv(config) as Record<string, string>),
+    ...(myrmidonInheritedProcessEnv(config, "hermes_local") as Record<string, string>),
     ...(userEnv && typeof userEnv === "object" ? userEnv : {}),
     ...buildPaperclipEnv(ctx.agent),
     ...buildRuntimeToolsEnv(ctx.runtimeTools),
@@ -622,6 +622,7 @@ export async function execute(
       onSpawn: ctx.onSpawn,
       stdin: prompt,
       inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
+      runEnvAdapterType: "hermes_local", // myrmidon(S2)
     });
   } finally {
     await runtimeMcpCleanup?.();

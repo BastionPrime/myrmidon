@@ -301,6 +301,8 @@ export interface AdapterExecutionTargetProcessOptions {
   localProcessSandbox?: LocalProcessSandboxOptions | null;
   // myrmidon(S2): adapterConfig.inheritProcessEnv, restores full inheritance
   inheritProcessEnv?: boolean;
+  // myrmidon(S2): adapter of the run, allows its provider credential variables
+  runEnvAdapterType?: string | null;
 }
 
 export interface AdapterExecutionTargetShellOptions {
@@ -925,6 +927,7 @@ export async function runAdapterExecutionTargetProcess(
     localProcessSandbox: target?.kind === "local" || !target ? options.localProcessSandbox : null,
     remoteExecution: adapterExecutionTargetToRemoteSpec(target),
     inheritProcessEnv: options.inheritProcessEnv, // myrmidon(S2)
+    runEnvAdapterType: options.runEnvAdapterType, // myrmidon(S2)
   });
 }
 

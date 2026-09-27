@@ -354,7 +354,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       .filter((entry) => injectedSkillKeys.has(entry.key) && entry.source.length > 0)
       .map((entry) => path.join(entry.source, "bin"));
     // myrmidon(S2): allow-listed server env instead of process.env
-    const mergedEnv = ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config), ...env });
+    const mergedEnv = ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config, "pi_local"), ...env });
     const pathKey =
       typeof mergedEnv.Path === "string" && mergedEnv.Path.length > 0 && !mergedEnv.PATH
         ? "Path"
@@ -500,7 +500,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         loggedEnv = buildInvocationEnvForLogs(env, {
           runtimeEnv: Object.fromEntries(
             // myrmidon(S2): allow-listed server env instead of process.env
-            Object.entries(ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config), ...env })).filter(
+            Object.entries(ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config, "pi_local"), ...env })).filter(
               (entry): entry is [string, string] => typeof entry[1] === "string",
             ),
           ),
@@ -741,6 +741,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
         inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
+        runEnvAdapterType: "pi_local", // myrmidon(S2)
         cwd,
         env: executionTargetIsRemote ? env : runtimeEnv,
         stdin: userPrompt, // myrmidon(H4)

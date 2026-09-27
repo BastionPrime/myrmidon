@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  MYRMIDON_RUN_ENV_PROVIDER_ALLOW,
   buildMyrmidonRunEnv,
   filterMyrmidonInheritedEnv,
   parseRunEnvAllowList,
@@ -36,6 +37,7 @@ const SERVER_ENV: NodeJS.ProcessEnv = {
   https_proxy: "http://proxy.example.com:3128",
   NODE_EXTRA_CA_CERTS: "/etc/ssl/example-ca.pem",
   PAPERCLIP_RUNTIME_API_URL: "http://127.0.0.1:3100",
+  PAPERCLIP_RUNTIME_API_CANDIDATES_JSON: '["http://127.0.0.1:3100/api"]',
   CLAUDE_CONFIG_DIR: "/home/agent-a/.claude",
   PAPERCLIPAI_CMD: "node /opt/example/paperclipai.js",
   SOME_UNRELATED_SERVER_VAR: "value",
@@ -73,6 +75,7 @@ describe("myrmidon(S2) run environment", () => {
       https_proxy: "http://proxy.example.com:3128",
       NODE_EXTRA_CA_CERTS: "/etc/ssl/example-ca.pem",
       PAPERCLIP_RUNTIME_API_URL: "http://127.0.0.1:3100",
+      PAPERCLIP_RUNTIME_API_CANDIDATES_JSON: '["http://127.0.0.1:3100/api"]',
       CLAUDE_CONFIG_DIR: "/home/agent-a/.claude",
     });
   });
@@ -120,6 +123,7 @@ describe("myrmidon(S2) run environment", () => {
     expect(env).not.toHaveProperty("PAPERCLIP_AGENT_JWT_SECRET");
     expect(env).not.toHaveProperty("PAPERCLIPAI_CMD");
     expect(env.PAPERCLIP_RUNTIME_API_URL).toBe("http://127.0.0.1:3100");
+    expect(env.PAPERCLIP_RUNTIME_API_CANDIDATES_JSON).toBe('["http://127.0.0.1:3100/api"]');
   });
 
   it("honours inheritProcessEnv only when it is literally true", () => {
@@ -148,5 +152,38 @@ describe("myrmidon(S2) run environment", () => {
     const line = String(debug.mock.calls[0]![0]);
     expect(line).toContain("BETTER_AUTH_SECRET, DATABASE_URL");
     expect(line).not.toContain("fake-");
+  });
+
+  it("each adapter inherits its own provider credentials, never board secrets", () => {
+    const env: NodeJS.ProcessEnv = {
+      ...SERVER_ENV,
+      XAI_API_KEY: "fake-xai-key",
+      GEMINI_API_KEY: "fake-gemini-key",
+    };
+    const grok = filterMyrmidonInheritedEnv(env, { extraAllow: [], adapterType: "grok_local" });
+    expect(grok.XAI_API_KEY).toBe("fake-xai-key");
+    expect(grok).not.toHaveProperty("GEMINI_API_KEY");
+    expect(grok).not.toHaveProperty("ANTHROPIC_API_KEY");
+
+    const claude = filterMyrmidonInheritedEnv(env, { extraAllow: [], adapterType: "claude_local" });
+    expect(claude.ANTHROPIC_API_KEY).toBe(SERVER_SECRETS.ANTHROPIC_API_KEY);
+    expect(claude).not.toHaveProperty("XAI_API_KEY");
+
+    for (const [adapterType, names] of Object.entries(MYRMIDON_RUN_ENV_PROVIDER_ALLOW)) {
+      const inherited = filterMyrmidonInheritedEnv(env, { extraAllow: [], adapterType });
+      for (const boardSecret of [
+        "DATABASE_URL",
+        "BETTER_AUTH_SECRET",
+        "PAPERCLIP_AGENT_JWT_SECRET",
+        "PAPERCLIP_DECISION_SIGNING_SECRET",
+        "PAPERCLIP_TOOL_ACTION_SIGNING_SECRET",
+        "PAPERCLIP_WORKSPACE_HANDOFF_SECRET",
+        "PAPERCLIP_SECRETS_MASTER_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+      ]) {
+        expect(names).not.toContain(boardSecret);
+        expect(inherited, `${adapterType} ${boardSecret}`).not.toHaveProperty(boardSecret);
+      }
+    }
   });
 });

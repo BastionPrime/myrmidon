@@ -65,6 +65,34 @@ export const MYRMIDON_RUN_ENV_TOOL_HOME_ALLOW: readonly string[] = [
   "XDG_RUNTIME_DIR",
 ];
 
+/**
+ * Credential variables of each local adapter's own model provider. A run of
+ * that adapter inherits them from the server (the CLI reads them to sign in),
+ * runs of other adapters do not. Board secrets are never in these lists.
+ */
+export const MYRMIDON_RUN_ENV_PROVIDER_ALLOW: Readonly<Record<string, readonly string[]>> = {
+  claude_local: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
+  codex_local: ["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+  cursor: ["CURSOR_API_KEY"],
+  gemini_local: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  grok_local: ["XAI_API_KEY"],
+  kimi_local: ["KIMI_API_KEY", "KIMI_MODEL_API_KEY"],
+  opencode_local: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"],
+  pi_local: ["ANTHROPIC_API_KEY", "XAI_API_KEY"],
+  hermes_local: [
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "KIMI_API_KEY",
+    "MINIMAX_API_KEY",
+    "ZAI_API_KEY",
+  ],
+};
+
+export function providerEnvAllow(adapterType: string | null | undefined): readonly string[] {
+  return (adapterType && MYRMIDON_RUN_ENV_PROVIDER_ALLOW[adapterType]) || [];
+}
+
 /** Prefixes of base variables a run inherits (locale categories). */
 export const MYRMIDON_RUN_ENV_BASE_ALLOW_PREFIXES: readonly string[] = ["LC_"];
 
@@ -76,6 +104,9 @@ export const MYRMIDON_RUN_ENV_VENDOR_RUNTIME_KEYS: readonly string[] = [
   "PAPERCLIP_RUNTIME_API_URL",
   "PAPERCLIP_LISTEN_HOST",
   "PAPERCLIP_LISTEN_PORT",
+  // List of server API URLs (not a secret); the gh launcher (P6) tries them
+  // when the public address is unreachable from the run.
+  "PAPERCLIP_RUNTIME_API_CANDIDATES_JSON",
 ];
 
 export interface MyrmidonInheritedEnvOptions {
@@ -83,6 +114,8 @@ export interface MyrmidonInheritedEnvOptions {
   inheritProcessEnv?: boolean;
   /** Extra allowed names; defaults to the `MYRMIDON_RUN_ENV_ALLOW` setting. */
   extraAllow?: readonly string[];
+  /** Adapter of the run: its provider credential variables are allowed. */
+  adapterType?: string | null;
   /** Receives the names (never values) of dropped variables. */
   onDropped?: (names: string[]) => void;
 }
@@ -188,7 +221,10 @@ export function filterMyrmidonInheritedEnv(
     return env;
   }
 
-  const isAllowed = makeAllowCheck(options.extraAllow ?? readExtraAllowFromSetting());
+  const isAllowed = makeAllowCheck([
+    ...(options.extraAllow ?? readExtraAllowFromSetting()),
+    ...providerEnvAllow(options.adapterType),
+  ]);
   const env: NodeJS.ProcessEnv = {};
   const dropped: string[] = [];
   for (const [key, value] of Object.entries(processEnv)) {
@@ -224,8 +260,9 @@ export function buildMyrmidonRunEnv(input: MyrmidonRunEnvInput): Record<string, 
  * Server environment a run of an agent with this adapter config inherits.
  * Adapters use it where they used to spread `process.env`.
  */
-export function myrmidonInheritedProcessEnv(config: unknown): NodeJS.ProcessEnv {
+export function myrmidonInheritedProcessEnv(config: unknown, adapterType?: string | null): NodeJS.ProcessEnv {
   return filterMyrmidonInheritedEnv(process.env, {
     inheritProcessEnv: readInheritProcessEnvFlag(config),
+    adapterType,
   });
 }

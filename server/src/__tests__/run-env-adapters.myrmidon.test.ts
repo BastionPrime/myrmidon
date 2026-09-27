@@ -88,6 +88,9 @@ describe("myrmidon(S2) adapter runs do not inherit server secrets", () => {
       PAPERCLIP_IN_WORKTREE: undefined,
       CODEX_HOME: undefined,
       MYRMIDON_RUN_ENV_ALLOW: undefined,
+      ANTHROPIC_API_KEY: undefined,
+      XAI_API_KEY: undefined,
+      PAPERCLIP_RUNTIME_API_CANDIDATES_JSON: JSON.stringify(["http://127.0.0.1:3100/api"]),
     };
     for (const [key, value] of Object.entries(overrides)) {
       saved[key] = process.env[key];
@@ -163,6 +166,41 @@ describe("myrmidon(S2) adapter runs do not inherit server secrets", () => {
       const agentRun = invocations[invocations.length - 1]!;
       expect(agentRun.names).toContain("DATABASE_URL");
       expect(agentRun.names).toContain("BETTER_AUTH_SECRET");
+    });
+  }
+
+  it("provider credentials of the adapter's own provider are inherited, others are not", async () => {
+    process.env.ANTHROPIC_API_KEY = "fake-server-anthropic-key";
+    process.env.XAI_API_KEY = "fake-server-xai-key";
+    try {
+      const claudeRun = (await runAdapter(CASES[2]!)).at(-1)!;
+      expect(claudeRun.names).toContain("ANTHROPIC_API_KEY");
+      expect(claudeRun.names).not.toContain("XAI_API_KEY");
+      expect(claudeRun.names).not.toContain("DATABASE_URL");
+      const hermesRun = (await runAdapter(CASES[0]!)).at(-1)!;
+      expect(hermesRun.names).toContain("ANTHROPIC_API_KEY");
+      expect(hermesRun.names).not.toContain("XAI_API_KEY");
+      expect(hermesRun.names).not.toContain("BETTER_AUTH_SECRET");
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.XAI_API_KEY;
+    }
+  });
+
+  for (const testCase of CASES) {
+    it(`${testCase.label}: keeps the server API candidate list, drops PAPERCLIP_*_SECRET`, async () => {
+      for (const inheritProcessEnv of [false, true]) {
+        const agentRun = (await runAdapter(testCase, { inheritProcessEnv })).at(-1)!;
+        expect(agentRun.names).toContain("PAPERCLIP_RUNTIME_API_CANDIDATES_JSON");
+        for (const secret of [
+          "PAPERCLIP_AGENT_JWT_SECRET",
+          "PAPERCLIP_DECISION_SIGNING_SECRET",
+          "PAPERCLIP_TOOL_ACTION_SIGNING_SECRET",
+          "PAPERCLIP_SECRETS_MASTER_KEY",
+        ]) {
+          expect(agentRun.names).not.toContain(secret);
+        }
+      }
     });
   }
 

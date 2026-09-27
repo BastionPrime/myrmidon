@@ -310,7 +310,7 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
 
   const runtimeEnv = Object.fromEntries(
     // myrmidon(S2): allow-listed server env instead of process.env
-    Object.entries(ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config), ...env })).filter(
+    Object.entries(ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config, "claude_local"), ...env })).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -486,7 +486,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   );
   const effectiveEnv = Object.fromEntries(
     // myrmidon(S2): allow-listed server env instead of process.env
-    Object.entries({ ...myrmidonInheritedProcessEnv(config), ...env }).filter(
+    Object.entries({ ...myrmidonInheritedProcessEnv(config, "claude_local"), ...env }).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -731,7 +731,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (paperclipBridge) {
       Object.assign(env, paperclipBridge.env);
       // myrmidon(S2): allow-listed server env instead of process.env
-      const runtimeEnv = ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config), ...env });
+      const runtimeEnv = ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config, "claude_local"), ...env });
       loggedEnv = buildInvocationEnvForLogs(env, {
         runtimeEnv,
         includeRuntimeKeys: ["HOME", "CLAUDE_CONFIG_DIR"],
@@ -966,6 +966,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
       inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
+      runEnvAdapterType: "claude_local", // myrmidon(S2)
       cwd,
       env,
       stdin: prompt,

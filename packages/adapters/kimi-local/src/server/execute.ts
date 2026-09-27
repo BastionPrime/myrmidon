@@ -142,7 +142,7 @@ function buildKimiHeadlessEnv(env: Record<string, string>): Record<string, strin
 function buildKimiRuntimeEnv(env: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     // myrmidon(S2): allow-listed server env instead of process.env
-    Object.entries(ensurePathInEnv({ ...myrmidonInheritedProcessEnv(null), ...buildKimiHeadlessEnv(env) })).filter(
+    Object.entries(ensurePathInEnv({ ...myrmidonInheritedProcessEnv(null, "kimi_local"), ...buildKimiHeadlessEnv(env) })).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -606,6 +606,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const eventForwarder = createKimiEventForwardingLog(onLog, onEvent);
     const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
       inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
+      runEnvAdapterType: "kimi_local", // myrmidon(S2)
       cwd,
       env: invocationEnv,
       timeoutSec,
