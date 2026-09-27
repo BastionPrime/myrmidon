@@ -1,0 +1,248 @@
+name: Myrmidon CI
+
+# Myrmidon's own CI. Replaces the vendor's pr.yml, which calls
+# paperclipai/paperclip/.github/workflows/pr-trusted.yml@master (unpinned
+# upstream code with vendor-only runner routing). Everything here runs on
+# GitHub-hosted runners without secrets. See docs/myrmidon/ci.md.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: myrmidon-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_UPDATE_NOTIFIER: "false"
+
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Locate pnpm store
+        id: pnpm_store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm_store.outputs.path }}
+          key: myr-pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: myr-pnpm-${{ runner.os }}-
+
+      - name: Select pinned Rust toolchain
+        working-directory: packages/paperclip-runner
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/paperclip-runner/runner -> target
+          shared-key: myr-check
+          cache-workspace-crates: false
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck all workspaces
+        run: pnpm typecheck
+
+  tests:
+    name: tests (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same split as the vendor's trusted PR CI: `pnpm test:run` equals the
+        # union of the general groups and the serialized server suites.
+        include:
+          - { label: "server 1/5", mode: general, group: general-server, shard_index: 0, shard_count: 5 }
+          - { label: "server 2/5", mode: general, group: general-server, shard_index: 1, shard_count: 5 }
+          - { label: "server 3/5", mode: general, group: general-server, shard_index: 2, shard_count: 5 }
+          - { label: "server 4/5", mode: general, group: general-server, shard_index: 3, shard_count: 5 }
+          - { label: "server 5/5", mode: general, group: general-server, shard_index: 4, shard_count: 5 }
+          - { label: "workspaces-a 1/2", mode: general, group: general-workspaces-a, shard_index: 0, shard_count: 2 }
+          - { label: "workspaces-a 2/2", mode: general, group: general-workspaces-a, shard_index: 1, shard_count: 2 }
+          - { label: "workspaces-b", mode: general, group: general-workspaces-b }
+          - { label: "serialized 1/5", mode: serialized, shard_index: 0, shard_count: 5 }
+          - { label: "serialized 2/5", mode: serialized, shard_index: 1, shard_count: 5 }
+          - { label: "serialized 3/5", mode: serialized, shard_index: 2, shard_count: 5 }
+          - { label: "serialized 4/5", mode: serialized, shard_index: 3, shard_count: 5 }
+          - { label: "serialized 5/5", mode: serialized, shard_index: 4, shard_count: 5 }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Locate pnpm store
+        id: pnpm_store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store (read only)
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm_store.outputs.path }}
+          key: myr-pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: myr-pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run vitest (${{ matrix.label }})
+        env:
+          MODE: ${{ matrix.mode }}
+          GROUP: ${{ matrix.group }}
+          SHARD_INDEX: ${{ matrix.shard_index }}
+          SHARD_COUNT: ${{ matrix.shard_count }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "$MODE" = "general" ]; then
+            args+=(--group "$GROUP")
+          fi
+          if [ -n "$SHARD_COUNT" ]; then
+            args+=(--shard-index "$SHARD_INDEX" --shard-count "$SHARD_COUNT")
+          fi
+          pnpm "test:run:$MODE" -- "${args[@]}"
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Locate pnpm store
+        id: pnpm_store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store (read only)
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm_store.outputs.path }}
+          key: myr-pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: myr-pnpm-${{ runner.os }}-
+
+      - name: Select pinned Rust toolchain
+        working-directory: packages/paperclip-runner
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/paperclip-runner/runner -> target
+          shared-key: myr-build
+          cache-workspace-crates: false
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Runner issue-thread viewer
+        run: pnpm --filter @paperclipai/paperclip-runner build:issue-thread
+
+      - name: Build
+        run: pnpm build
+
+  script-tests:
+    name: script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Run node:test suites under scripts/myrmidon
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find scripts/myrmidon -name '*.test.mjs' -type f 2>/dev/null | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::notice title=script tests::No scripts/myrmidon/**/*.test.mjs files yet"
+            exit 0
+          fi
+          printf 'Running %s\n' "${files[@]}"
+          node --test "${files[@]}"
+
+  ci-result:
+    # Single stable name for the ruleset: fails unless every lane passed.
+    name: CI result
+    if: ${{ always() }}
+    needs: [typecheck, tests, build, script-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check lane results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null
