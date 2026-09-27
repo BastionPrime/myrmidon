@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">wellmagram</string>
+    <string name="fkm_channel_name">Connection service</string>
+    <string name="fkm_channel_description">Keeps the background connection alive (accounts and TDLib clients)</string>
+    <string name="fkm_title">wellmagram · connection</string>
+    <string name="fkm_status_active">Connection active</string>
+    <string name="fkm_status_inactive">Connection inactive</string>
+    <string name="fkm_pause">Пауза</string>
+    <string name="fkm_accounts_line">%1$d accounts connected</string>
+</resources>

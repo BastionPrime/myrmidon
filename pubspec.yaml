@@ -5,8 +5,11 @@ version: 0.0.1
 
 environment:
   sdk: ^3.10.4
+  flutter: ^3.38.5
 
 dependencies:
+  # TDLib FFI adapter (OPE-2568 Шаг 2): utf8 <-> native char* helpers.
+  ffi: ^2.1.0
   # Shared preferences is resolved by `flutter pub get` in the build image
   # (plugin requires the Flutter SDK); the core module keeps a thin seam
   # (AccountsStore.usePrefsLoader) so unit tests never touch the plugin.
@@ -14,3 +17,15 @@ dependencies:
 
 dev_dependencies:
   test: ^1.25.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+
+dependency_overrides:
+  # The Flutter SDK package is a workspace-internal package (resolution:
+  # workspace) and is never resolvable from pub.dev; the build image provides
+  # it via the SDK. This override is the standard way Flutter app repos pin it.
+  flutter:
+    path: /opt/flutter/packages/flutter
