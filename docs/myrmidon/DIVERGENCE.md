@@ -40,6 +40,7 @@
 
 | ID | Что меняем | Файлы вендора | Причина | Тест-сторож | Как снимать | PR |
 |---|---|---|---|---|---|---|
+| vendor:6d0342868 | Представления чата агента с синтетическим id `chat:<uuid>` не шлют запросы коннекторов задачи; маршруты отвечают 400 на id не-UUID вместо 500 | `server/src/routes/chat-channels.ts`, `server/src/routes/email.ts`, `server/src/routes/openapi.ts`, `ui/src/components/EmailTaskActivity.tsx`, `ui/src/components/chat/ExternallyConnectedTaskBanner.tsx` + тесты вендора | P7b, вендорский #13654: открытие чата агента давало 500 (`invalid input syntax for type uuid`) | `server/src/__tests__/task-connector-read-routes.test.ts`, `ui/src/components/task-only-connector-queries.test.tsx` | Уходит сам при переносе тега вендора, который содержит этот коммит | [#28](https://github.com/itkadr-git/myrmidon/pull/28) |
 
 ## Трек 5 — эксплуатация
 
