@@ -367,7 +367,10 @@ export async function execute(
   // library calls that did not opt into Paperclip runtime skills.
   if (Object.prototype.hasOwnProperty.call(config, "paperclipRuntimeSkills")) {
     try {
-      const selectedSkills = await reconcileHermesPaperclipSkills(config);
+      // myrmidon(H1): report a profile skill copy moved aside in the run log
+      const selectedSkills = await reconcileHermesPaperclipSkills(config, undefined, {
+        onLog: (line) => ctx.onLog("stdout", line),
+      });
       if (selectedSkills.length > 0) {
         await ctx.onLog(
           "stdout",

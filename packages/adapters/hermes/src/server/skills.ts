@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type {
   AdapterSkillContext,
@@ -14,25 +13,17 @@ import {
   resolveLegacyPaperclipDesiredSkillNames,
 } from "@paperclipai/adapter-utils/server-utils";
 import { fileURLToPath } from "node:url";
+import {
+  moveOccupiedSkillTargetAside,
+  resolveHermesSkillsHome,
+  SKILL_BACKUP_DIR,
+} from "./myrmidon-skills-home.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function resolveHermesHome(config: Record<string, unknown>): string {
-  const env =
-    typeof config.env === "object" && config.env !== null && !Array.isArray(config.env)
-      ? (config.env as Record<string, unknown>)
-      : {};
-  const configuredHome = asString(env.HOME);
-  return configuredHome ? path.resolve(configuredHome) : os.homedir();
-}
 
 interface SkillFrontmatter {
   name?: string;
@@ -62,6 +53,7 @@ function parseSkillFrontmatter(content: string): SkillFrontmatter {
 
 async function scanHermesSkills(
   skillsHome: string,
+  locationRoot = "~/.hermes/skills", // myrmidon(H1): label the profile skills directory
 ): Promise<AdapterSkillEntry[]> {
   const entries: AdapterSkillEntry[] = [];
 
@@ -74,7 +66,7 @@ async function scanHermesSkills(
       // Check if the category directory itself has a SKILL.md (top-level skill)
       const topLevelSkillMd = path.join(catPath, "SKILL.md");
       if (await fs.stat(topLevelSkillMd).catch(() => null)) {
-        entries.push(await buildSkillEntry(cat.name, topLevelSkillMd, cat.name));
+        entries.push(await buildSkillEntry(cat.name, topLevelSkillMd, cat.name, locationRoot));
       }
 
       // Scan for sub-skills
@@ -84,7 +76,7 @@ async function scanHermesSkills(
         const skillMd = path.join(catPath, item.name, "SKILL.md");
         if (await fs.stat(skillMd).catch(() => null)) {
           const key = item.name;
-          entries.push(await buildSkillEntry(key, skillMd, `${cat.name}/${item.name}`));
+          entries.push(await buildSkillEntry(key, skillMd, `${cat.name}/${item.name}`, locationRoot));
         }
       }
     }
@@ -99,6 +91,7 @@ async function buildSkillEntry(
   key: string,
   skillMdPath: string,
   categoryPath: string,
+  locationRoot = "~/.hermes/skills",
 ): Promise<AdapterSkillEntry> {
   let description: string | null = null;
   try {
@@ -117,7 +110,7 @@ async function buildSkillEntry(
     state: "installed",
     origin: "user_installed",
     originLabel: "Hermes skill",
-    locationLabel: `~/.hermes/skills/${categoryPath}`,
+    locationLabel: `${locationRoot}/${categoryPath}`,
     readOnly: true, // Hermes manages its own skills — Paperclip can't toggle them
     sourcePath: skillMdPath,
     targetPath: null,
@@ -130,8 +123,8 @@ async function buildSkillEntry(
 // ---------------------------------------------------------------------------
 
 async function buildHermesSkillSnapshot(config: Record<string, unknown>): Promise<AdapterSkillSnapshot> {
-  const home = resolveHermesHome(config);
-  const hermesSkillsHome = path.join(home, ".hermes", "skills");
+  // myrmidon(H1): list skills from the agent's own profile when HERMES_HOME is set
+  const { skillsHome: hermesSkillsHome, locationLabel } = resolveHermesSkillsHome(config);
 
   // 1. Scan Paperclip-managed skills (bundled with the adapter)
   const paperclipEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
@@ -140,7 +133,7 @@ async function buildHermesSkillSnapshot(config: Record<string, unknown>): Promis
   const availableByKey = new Map(paperclipEntries.map((e) => [e.key, e]));
 
   // 2. Scan Hermes's own skills from ~/.hermes/skills/
-  const hermesSkillEntries = await scanHermesSkills(hermesSkillsHome);
+  const hermesSkillEntries = await scanHermesSkills(hermesSkillsHome, locationLabel);
   const hermesKeys = new Set(hermesSkillEntries.map((e) => e.key));
 
   // 3. Merge: Paperclip skills first (ephemeral), then Hermes skills
@@ -215,6 +208,8 @@ export async function listHermesSkills(
 export async function reconcileHermesPaperclipSkills(
   config: Record<string, unknown>,
   requestedDesiredSkills?: string[],
+  // myrmidon(H1): run-log sink for moving a profile's own skill copy aside
+  options: { onLog?: (line: string) => Promise<void> | void } = {},
 ): Promise<string[]> {
   const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredSkills = requestedDesiredSkills
@@ -224,7 +219,8 @@ export async function reconcileHermesPaperclipSkills(
       ]))
     : resolveLegacyPaperclipDesiredSkillNames(config, availableEntries);
   const desiredSet = new Set(desiredSkills);
-  const skillsHome = path.join(resolveHermesHome(config), ".hermes", "skills");
+  // myrmidon(H1): install into the agent's own profile when HERMES_HOME is set
+  const { skillsHome, backupRoot } = resolveHermesSkillsHome(config);
   await fs.mkdir(skillsHome, { recursive: true });
   const installed = await readInstalledSkillTargets(skillsHome);
   const availableByRuntimeName = new Map(availableEntries.map((entry) => [entry.runtimeName, entry]));
@@ -232,6 +228,13 @@ export async function reconcileHermesPaperclipSkills(
   for (const entry of availableEntries) {
     if (!desiredSet.has(entry.key) || isPaperclipSkillSourceMissing(entry)) continue;
     const target = path.join(skillsHome, entry.runtimeName);
+    // myrmidon(H1): a real directory in the profile is kept under a backup name, never deleted
+    const movedAside = backupRoot ? await moveOccupiedSkillTargetAside(target, backupRoot) : null;
+    if (movedAside) {
+      await options.onLog?.(
+        `[hermes] Moved the profile's own "${entry.runtimeName}" skill to ${SKILL_BACKUP_DIR}/${movedAside} and linked the managed skill.\n`,
+      );
+    }
     await ensurePaperclipSkillSymlink(entry.source, target);
     const linkedSource = await fs.readlink(target).catch(() => null);
     const resolvedSource = linkedSource
