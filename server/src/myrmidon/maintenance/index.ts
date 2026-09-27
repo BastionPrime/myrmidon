@@ -12,7 +12,8 @@ import {
 } from "./domain.js";
 import { getCachedMaintenanceDocument } from "./gate.js";
 import { maintenanceRoutes } from "./routes.js";
-import { maintenanceService, type MaintenanceHeartbeatPort, type MaintenanceHooks } from "./service.js";
+import { maintenanceService, type MaintenanceHeartbeatPort } from "./service.js";
+import { readZabbixSettings, zabbixMaintenanceHooks } from "./zabbix.js";
 import { readMaintenanceSettings } from "./settings.js";
 
 export {
@@ -25,13 +26,6 @@ export {
 export { preserveMaintenanceGeneralKey } from "./store.js";
 export { MAINTENANCE_INTERRUPT_ERROR_CODE } from "./domain.js";
 export { maintenanceService } from "./service.js";
-
-let integrationHooks: MaintenanceHooks = {};
-
-/** Zabbix (step 4) registers here; the default is no integration. */
-export function setMaintenanceHooks(hooks: MaintenanceHooks) {
-  integrationHooks = hooks;
-}
 
 /** Heartbeat operations for the mode, on top of the vendor cancel and bounded-retry paths. */
 export function maintenanceHeartbeatPort(heartbeat: ReturnType<typeof heartbeatService>): MaintenanceHeartbeatPort {
@@ -61,7 +55,7 @@ export function maintenanceHeartbeatPort(heartbeat: ReturnType<typeof heartbeatS
 }
 
 function defaultService(db: Db) {
-  return maintenanceService(db, { heartbeat: maintenanceHeartbeatPort(heartbeatService(db)), hooks: integrationHooks });
+  return maintenanceService(db, { heartbeat: maintenanceHeartbeatPort(heartbeatService(db)), hooks: zabbixMaintenanceHooks(readZabbixSettings()) });
 }
 
 /** Router for app.ts: GET/POST /api/myrmidon/maintenance. */
