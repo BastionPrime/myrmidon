@@ -2,6 +2,24 @@ import { runIdentityContexts } from "@paperclipai/db";
 import { captureRunIdentity } from "./run-identity.js";
 import { resolveManagedGitHubIdentitySelection } from "./git-credentials.js";
 import { logger } from "../middleware/logger.js";
+// myrmidon(P9): a failing tool must not take its whole connection down
+import {
+  REMOTE_GUARD_NO_ANSWER_CODES,
+  connectedToolFailureMessage,
+  createRemoteToolResilience,
+  disabledConnectedToolError,
+  localStdioToolFailure,
+  remoteFetchFailure,
+  remoteGuardFailure,
+  remoteHttpGuardErrorStatus,
+  remoteHttpStatusFailure,
+  resolveConnectedToolTimeoutMs,
+  toolTimeoutCeilingMs,
+  upstreamRpcErrorDetail,
+  type ConnectedToolFailure,
+  type GatewayErrorSpec,
+  type RemoteToolProbe,
+} from "../myrmidon/tool-gateway-resilience.js";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
@@ -309,6 +327,11 @@ export class ToolGatewayHttpError extends Error {
   ) {
     super(message);
   }
+}
+
+// myrmidon(P9): build a gateway error from a plain error description
+function gatewayErrorFromSpec(spec: GatewayErrorSpec): ToolGatewayHttpError {
+  return new ToolGatewayHttpError(spec.status, spec.message, spec.reasonCode, spec.details);
 }
 
 interface ExecuteGatewayToolInput {
@@ -644,7 +667,8 @@ function timeoutMs(value: number | undefined) {
   if (!Number.isFinite(value)) return DEFAULT_TOOL_TIMEOUT_MS;
   return Math.max(
     1,
-    Math.min(60_000, Math.floor(value ?? DEFAULT_TOOL_TIMEOUT_MS)),
+    // myrmidon(P9): ceiling is a setting (default 180 s) instead of 60 s
+    Math.min(toolTimeoutCeilingMs(), Math.floor(value ?? DEFAULT_TOOL_TIMEOUT_MS)),
   );
 }
 
@@ -1201,15 +1225,9 @@ export function createToolGatewayService(
           inArray(toolConnections.transport, ["mcp_remote", "local_stdio"]),
           eq(toolConnections.status, "active"),
           eq(toolConnections.enabled, true),
-          // A personal connection has no company-level credential to probe. A
-          // credential-less health sweep can therefore mark it as errored even
-          // while the responsible user's grant is valid. Keep its cached active
-          // catalog discoverable; execution resolves and validates that user's
-          // grant, and a successful call restores the shared health indicator.
-          or(
-            inArray(toolConnections.healthStatus, ["ok", "healthy"]),
-            eq(toolConnections.credentialPolicy, "per_user"),
-          ),
+          // myrmidon(P9): no health filter. Health is informational; a failing
+          // call is reported for that one tool instead of hiding every tool of
+          // the connection, and a successful call restores health=ok.
           eq(toolApplications.companyId, companyId),
           inArray(toolApplications.type, ["mcp_http", "mcp_stdio"]),
           eq(toolApplications.status, "active"),
@@ -2616,6 +2634,15 @@ export function createToolGatewayService(
       )
       .find((candidate) => candidate.name === toolName);
     if (!tool) {
+      // myrmidon(P9): a tool of a disabled connection gets 403 with the real state.
+      const disabledError = await disabledConnectedToolError(db, {
+        companyId: session.companyId,
+        toolName,
+        baseToolName: (row) =>
+          `mcp.${slugSegment(row.applicationKey ?? row.connectionName ?? row.applicationName, "mcp")}-${shortStableId(row.connectionId)}:${slugSegment(row.toolName, "tool")}`,
+        collisionSuffix: shortStableId,
+      });
+      if (disabledError) throw gatewayErrorFromSpec(disabledError);
       throw new ToolGatewayHttpError(
         404,
         `Tool "${toolName}" not found`,
@@ -3147,7 +3174,8 @@ export function createToolGatewayService(
   function remoteHttpFetchOptions(): GuardedRemoteHttpFetchOptions {
     return {
       allowPrivateNetwork: allowPrivateRemoteEndpoints(),
-      error: (message, code) => new ToolGatewayHttpError(422, message, code),
+      // myrmidon(P9): guard deadline is 504, DNS/connect failure 502 (not 422).
+      error: (message, code) => new ToolGatewayHttpError(remoteHttpGuardErrorStatus(code), message, code),
     };
   }
 
@@ -3431,6 +3459,9 @@ export function createToolGatewayService(
     summary.metadataHeaderNames.sort();
     return { headers, summary };
   }
+
+  // myrmidon(P9): per-tool breaker and per-connection failure streak (process-local).
+  const remoteToolResilience = createRemoteToolResilience({ now: options.now });
 
   async function markRemoteConnectionHealth(
     connection: typeof toolConnections.$inferSelect,
@@ -5126,11 +5157,13 @@ export function createToolGatewayService(
     );
     const body = await readBoundedRemoteResponse(response);
     if (!response.ok) {
-      await markRemoteConnectionHealth(
-        input.connection,
-        "error",
-        `Remote MCP server failed ${input.method}.`,
-      );
+      // myrmidon(P9): one failed context exchange does not flip connection health;
+      // only a status that means "no answer" extends the failure streak.
+      if (remoteHttpStatusFailure(response.status).counts) {
+        remoteToolResilience.recordConnectionNoAnswer(input.connection.id);
+      } else {
+        remoteToolResilience.recordConnectionAnswered(input.connection.id);
+      }
       throw new ToolGatewayHttpError(
         502,
         "Remote MCP context request failed",
@@ -5175,6 +5208,7 @@ export function createToolGatewayService(
         },
       );
     }
+    remoteToolResilience.recordConnectionAnswered(input.connection.id); // myrmidon(P9)
     await markRemoteConnectionHealth(
       input.connection,
       "ok",
@@ -5734,11 +5768,30 @@ export function createToolGatewayService(
     };
   }
 
+  // myrmidon(P9): `requestedTimeoutMs` is the caller's raw budget (the tool-aware
+  // default is resolved inside); `probe` is the half-open breaker probe this call
+  // owns, freed here when the call ends without an outcome.
   async function executeRemoteHttpTool(
     session: ToolGatewaySession,
     tool: ToolGatewayDescriptor,
     parameters: unknown,
-    ms: number,
+    requestedTimeoutMs: number | undefined,
+    invocationId: string,
+    callerHeaders?: ExecuteGatewayToolInput["callerHeaders"],
+    probe?: RemoteToolProbe | null,
+  ): Promise<RemoteHttpExecutionResult> {
+    try {
+      return await executeRemoteHttpToolCall(session, tool, parameters, requestedTimeoutMs, invocationId, callerHeaders);
+    } finally {
+      remoteToolResilience.release(probe);
+    }
+  }
+
+  async function executeRemoteHttpToolCall(
+    session: ToolGatewaySession,
+    tool: ToolGatewayDescriptor,
+    parameters: unknown,
+    requestedTimeoutMs: number | undefined,
     invocationId: string,
     callerHeaders?: ExecuteGatewayToolInput["callerHeaders"],
   ): Promise<RemoteHttpExecutionResult> {
@@ -5746,6 +5799,31 @@ export function createToolGatewayService(
       session,
       tool,
     );
+    // myrmidon(P9): tool-aware budget; failures are reported for this one tool and
+    // only unanswered calls count for its breaker.
+    const ms = resolveConnectedToolTimeoutMs({
+      requestedTimeoutMs,
+      upstreamToolName: entry.toolName,
+      gatewayToolName: tool.name,
+      connectionConfig: connection.config,
+    });
+    const failureMessage = (failure: ConnectedToolFailure, connectionFailureStreak?: number) =>
+      connectedToolFailureMessage({
+        gatewayToolName: tool.name,
+        upstreamToolName: entry.toolName,
+        connectionName: connection.name,
+        failure,
+        risk: tool.risk,
+        connectionFailureStreak,
+      });
+    const recordNoAnswer = (cause: string) => {
+      remoteToolResilience.recordToolNoAnswer(session, connection, entry.id, cause);
+      return remoteToolResilience.recordConnectionNoAnswer(connection.id);
+    };
+    const recordAnswered = () => {
+      remoteToolResilience.recordToolAnswered(session, connection, entry.id);
+      remoteToolResilience.recordConnectionAnswered(connection.id);
+    };
     const grant = await resolveConnectionGrant(session, connection);
     const composioScopeRevision = `${grant.id}:${grant.status}:${grant.updatedAt.toISOString()}`;
     const composioChild = composioChildConfig(connection);
@@ -5976,19 +6054,18 @@ export function createToolGatewayService(
           response.headers.get("traceparent"),
       };
       if (!response.ok) {
-        await markRemoteConnectionHealth(
-          connection,
-          "error",
-          "Remote MCP server returned an HTTP error.",
-        );
+        // myrmidon(P9): 5xx/408/429 mean "no answer"; any other 4xx is an answer.
+        const failure = remoteHttpStatusFailure(response.status);
+        const failureStreak = failure.counts ? recordNoAnswer(failure.cause) : (recordAnswered(), undefined);
         throw new ToolGatewayHttpError(
           502,
-          "Remote MCP server returned an HTTP error",
+          failureMessage(failure, failureStreak),
           "mcp_remote_status",
           {
             status: response.status,
             connectionId: connection.id,
             catalogEntryId: entry.id,
+            connectionFailureStreak: failureStreak,
             execution,
           },
         );
@@ -6000,18 +6077,21 @@ export function createToolGatewayService(
           response.headers.get("content-type"),
         );
       } catch {
-        await markRemoteConnectionHealth(
-          connection,
-          "error",
-          "Remote MCP server returned invalid JSON.",
-        );
+        // myrmidon(P9): report for this tool, do not flip connection health.
+        const failure: ConnectedToolFailure = {
+          cause: "the MCP server returned a response that is not valid JSON-RPC",
+          scope: "connection",
+          outcome: "uncertain",
+        };
+        const failureStreak = recordNoAnswer(failure.cause);
         throw new ToolGatewayHttpError(
           502,
-          "Remote MCP server returned invalid JSON",
+          failureMessage(failure, failureStreak),
           "mcp_remote_invalid_json",
           {
             connectionId: connection.id,
             catalogEntryId: entry.id,
+            connectionFailureStreak: failureStreak,
             execution,
           },
         );
@@ -6029,14 +6109,12 @@ export function createToolGatewayService(
       }
       if (payloadRecord.error !== undefined) {
         const errorRecord = asRecord(payloadRecord.error);
-        await markRemoteConnectionHealth(
-          connection,
-          "error",
-          "Remote MCP server returned a JSON-RPC error.",
-        );
+        // myrmidon(P9): a JSON-RPC error proves the server answered; only this call
+        // failed. Quote the upstream error (bounded, guarded), keep health.
+        recordAnswered();
         throw new ToolGatewayHttpError(
           502,
-          "Remote MCP server returned an error",
+          failureMessage({ cause: upstreamRpcErrorDetail(errorRecord), scope: "tool", outcome: "rejected" }),
           "remote_mcp_error",
           {
             code:
@@ -6071,6 +6149,7 @@ export function createToolGatewayService(
         false,
         sourceTemplateKey,
       );
+      recordAnswered(); // myrmidon(P9)
       await markRemoteConnectionHealth(
         connection,
         "ok",
@@ -6078,6 +6157,24 @@ export function createToolGatewayService(
       );
       return { result, headerSummary, execution };
     } catch (error) {
+      // myrmidon(P9): the guard's own deadline, a DNS or a connect failure is this
+      // tool not answering: count it and name the tool.
+      if (error instanceof ToolGatewayHttpError && REMOTE_GUARD_NO_ANSWER_CODES.has(error.reasonCode)) {
+        const failure = remoteGuardFailure(error.reasonCode, ms);
+        const failureStreak = recordNoAnswer(failure.cause);
+        throw new ToolGatewayHttpError(
+          remoteHttpGuardErrorStatus(error.reasonCode),
+          failureMessage(failure, failureStreak),
+          error.reasonCode,
+          {
+            ...error.details,
+            connectionId: connection.id,
+            catalogEntryId: entry.id,
+            connectionFailureStreak: failureStreak,
+            execution: error.details.execution ?? execution,
+          },
+        );
+      }
       if (error instanceof ToolGatewayHttpError) {
         throw new ToolGatewayHttpError(
           error.status,
@@ -6090,34 +6187,32 @@ export function createToolGatewayService(
         );
       }
       if (error instanceof Error && error.name === "AbortError") {
-        await markRemoteConnectionHealth(
-          connection,
-          "error",
-          "Remote MCP tool call timed out.",
-        );
+        // myrmidon(P9): report the timeout for this tool, do not flip health.
+        const failure: ConnectedToolFailure = { cause: `timed out after ${ms} ms`, scope: "tool", outcome: "uncertain" };
+        const failureStreak = recordNoAnswer(failure.cause);
         throw new ToolGatewayHttpError(
           504,
-          "Remote MCP tool call timed out",
+          failureMessage(failure, failureStreak),
           "tool_timeout",
           {
             connectionId: connection.id,
             catalogEntryId: entry.id,
+            connectionFailureStreak: failureStreak,
             execution,
           },
         );
       }
-      await markRemoteConnectionHealth(
-        connection,
-        "error",
-        "Remote MCP tool call failed.",
-      );
+      // myrmidon(P9): report the transport failure for this tool, do not flip health.
+      const failure = remoteFetchFailure(error);
+      const failureStreak = recordNoAnswer(failure.cause);
       throw new ToolGatewayHttpError(
         502,
-        "Remote MCP tool call failed",
+        failureMessage(failure, failureStreak),
         "mcp_remote_fetch_failed",
         {
           connectionId: connection.id,
           catalogEntryId: entry.id,
+          connectionFailureStreak: failureStreak,
           execution,
         },
       );
@@ -6144,6 +6239,11 @@ export function createToolGatewayService(
       template,
       grant,
     );
+    // myrmidon(P9): a JSON-RPC error is the stdio server answering. It is carried
+    // past the runtime supervisor as a value, so the slot idles normally instead of
+    // being marked failed (which put every tool of the connection behind the
+    // restart backoff). Failures name the tool, its connection and the cause.
+    const answered: { error: ToolGatewayHttpError | null } = { error: null };
     const result = await runtimeSupervisor.useConnectionSlot(
       {
         companyId: session.companyId,
@@ -6170,12 +6270,63 @@ export function createToolGatewayService(
           env,
           parameters,
           timeoutMs: ms,
+        }).catch((error: unknown) => {
+          if (!isLocalStdioRpcError(error)) throw error;
+          answered.error = error;
+          return null;
         });
       },
-    );
+    ).then(
+      (value) => {
+        if (answered.error) throw answered.error;
+        return value;
+      },
+    ).catch((error: unknown) => {
+      throw localStdioToolError(error, { tool, upstreamToolName: entry.toolName, connection, catalogEntryId: entry.id, timeoutMs: ms });
+    });
     return {
       result: normalizeMcpToolResult(result, "local_stdio", true),
     };
+  }
+
+  // myrmidon(P9): a JSON-RPC error object returned by the stdio server itself.
+  function isLocalStdioRpcError(error: unknown): error is ToolGatewayHttpError {
+    return (
+      error instanceof ToolGatewayHttpError &&
+      error.reasonCode === "local_stdio_protocol_error" &&
+      error.details.error !== undefined
+    );
+  }
+
+  // myrmidon(P9): same error class, status, reason code and details; only the
+  // message names the tool, its connection and the cause.
+  function localStdioToolError(
+    error: unknown,
+    input: {
+      tool: ToolGatewayDescriptor;
+      upstreamToolName: string;
+      connection: typeof toolConnections.$inferSelect;
+      catalogEntryId: string;
+      timeoutMs: number;
+    },
+  ): unknown {
+    if (!(error instanceof ToolGatewayHttpError) && !(error instanceof ToolRuntimeSupervisorError)) return error;
+    const failure = localStdioToolFailure(error.reasonCode, {
+      timeoutMs: input.timeoutMs,
+      rpcError: isLocalStdioRpcError(error) ? asRecord(error.details.error) : null,
+    });
+    if (!failure) return error;
+    const message = connectedToolFailureMessage({
+      gatewayToolName: input.tool.name,
+      upstreamToolName: input.upstreamToolName,
+      connectionName: input.connection.name,
+      failure,
+      risk: input.tool.risk,
+    });
+    const details = { ...error.details, connectionId: input.connection.id, catalogEntryId: input.catalogEntryId };
+    return error instanceof ToolRuntimeSupervisorError
+      ? new ToolRuntimeSupervisorError(error.status, message, error.reasonCode, details)
+      : new ToolGatewayHttpError(error.status, message, error.reasonCode, details);
   }
 
   async function runWithTimeout<T>(
@@ -6977,7 +7128,7 @@ export function createToolGatewayService(
               args.session,
               args.tool,
               args.parameters,
-              executionTimeoutMs,
+              args.timeoutMs, // myrmidon(P9): raw budget; tool-aware default applied inside
               args.invocationId,
             )
           : args.tool.providerType === "mcp_local_stdio"
@@ -9697,6 +9848,8 @@ export function createToolGatewayService(
       });
       let effectiveParameters: unknown = requestedParameters;
       let effectiveArgumentsSummary = argumentValidation.summary;
+      // myrmidon(P9): the half-open breaker probe this call owns, if any.
+      let remoteToolProbe: RemoteToolProbe | null = null;
 
       if (!input.approvedActionRequestId) {
         const replay = await replayMatchingAgentAction({
@@ -10085,6 +10238,14 @@ export function createToolGatewayService(
           consumeRateLimit: true,
         });
         const accessDecision = await policyService.decide(decisionInput);
+        // myrmidon(P9): a paused remote tool fails fast here: after replay and
+        // policy (a denied call keeps its 403) and before the invocation is
+        // recorded (a refused call leaves no idempotency key behind).
+        if (accessDecision.allowed) {
+          const breakerGate = remoteToolResilience.claim(session, tool);
+          if ("error" in breakerGate) throw gatewayErrorFromSpec(breakerGate.error);
+          remoteToolProbe = breakerGate.probe;
+        }
         const recorded = await policyService.recordInvocation(
           decisionInput,
           accessDecision,
@@ -10092,6 +10253,7 @@ export function createToolGatewayService(
         await policyService.writeAudit(decisionInput, accessDecision);
         invocationId = recorded.invocation.id;
         if (recorded.replayed) {
+          remoteToolResilience.release(remoteToolProbe); // myrmidon(P9)
           await writeAudit({
             session,
             companyId: session.companyId,
@@ -10209,9 +10371,10 @@ export function createToolGatewayService(
                 session,
                 tool,
                 effectiveParameters,
-                executionTimeoutMs,
+                input.timeoutMs, // myrmidon(P9): raw budget; tool-aware default applied inside
                 invocationId,
                 input.callerHeaders,
+                remoteToolProbe, // myrmidon(P9)
               )
             : tool.providerType === "mcp_local_stdio"
               ? await executeLocalStdioTool(

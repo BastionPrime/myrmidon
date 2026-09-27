@@ -2024,7 +2024,8 @@ rl.on("line", (line) => {
     });
   });
 
-  it("keeps connected remote MCP gateway names collision-safe and excludes inactive catalog sources", async () => {
+  // myrmidon(P9): an unhealthy but enabled connection stays discoverable.
+  it("keeps connected remote MCP gateway names collision-safe, excludes inactive catalog sources and keeps unhealthy connections", async () => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);
     const { run } = await createIssueAndRun(db, company.id, agent.id);
@@ -2046,7 +2047,7 @@ rl.on("line", (line) => {
       toolName: "kv_set",
       connectionEnabled: false,
     });
-    await createRemoteMcpTool(db, company.id, {
+    const unhealthy = await createRemoteMcpTool(db, company.id, {
       applicationKey: "unhealthy-demo",
       connectionName: "Unhealthy Demo",
       toolName: "kv_set",
@@ -2065,15 +2066,17 @@ rl.on("line", (line) => {
 
     const connectedTools = (await gateway.listToolsForSession(session.token))
       .filter((tool) => tool.providerType === "mcp_remote_http");
-    expect(connectedTools).toHaveLength(2);
+    expect(connectedTools).toHaveLength(3);
     expect(connectedTools.map((tool) => tool.catalogEntryId).sort()).toEqual([
       first.catalogEntry.id,
       second.catalogEntry.id,
+      unhealthy.catalogEntry.id,
     ].sort());
-    expect(new Set(connectedTools.map((tool) => tool.name)).size).toBe(2);
+    expect(new Set(connectedTools.map((tool) => tool.name)).size).toBe(3);
     expect(connectedTools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
       expect.stringMatching(new RegExp(`^mcp\\.kv-demo-${first.connection.id.replace(/-/g, "").slice(0, 8)}:kv-set$`)),
       expect.stringMatching(new RegExp(`^mcp\\.kv-demo-${second.connection.id.replace(/-/g, "").slice(0, 8)}:kv-set$`)),
+      expect.stringMatching(new RegExp(`^mcp\\.unhealthy-demo-${unhealthy.connection.id.replace(/-/g, "").slice(0, 8)}:kv-set$`)),
     ]));
   });
 
