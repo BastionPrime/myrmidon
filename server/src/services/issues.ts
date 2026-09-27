@@ -1,4 +1,6 @@
 import { documentService } from "./documents.js";
+// myrmidon(P5): lock owner lifecycle in checkout 409s
+import { checkoutRunStatusForIssue } from "../myrmidon/issue-checkout-guard.js";
 import { parseTaskSearch, taskSearchCtes, taskSearchScore } from "./task-search.js";
 import { createdFromIssueCondition } from "./issue-creation-origin.js";
 import { executionProjectionsForRuns } from "./execution-projection.js";
@@ -11469,6 +11471,7 @@ export function issueService(db: Db) {
         assigneeAgentId: current.assigneeAgentId,
         checkoutRunId: current.checkoutRunId,
         executionRunId: current.executionRunId,
+        checkoutRunStatus: await checkoutRunStatusForIssue(db, current), // myrmidon(P5)
       });
     },
 
@@ -11609,6 +11612,7 @@ export function issueService(db: Db) {
           assigneeAgentId: resolvedLatest.latest.assigneeAgentId,
           checkoutRunId: resolvedLatest.latest.checkoutRunId,
           executionRunId: resolvedLatest.latest.executionRunId,
+          checkoutRunStatus: await checkoutRunStatusForIssue(db, resolvedLatest.latest), // myrmidon(P5)
           actorAgentId,
           actorRunId,
         });
@@ -11620,6 +11624,7 @@ export function issueService(db: Db) {
         assigneeAgentId: latest.assigneeAgentId,
         checkoutRunId: latest.checkoutRunId,
         executionRunId: latest.executionRunId,
+        checkoutRunStatus: await checkoutRunStatusForIssue(db, latest), // myrmidon(P5)
         actorAgentId,
         actorRunId,
       });
@@ -11664,6 +11669,7 @@ export function issueService(db: Db) {
               issueId: existing.id,
               assigneeAgentId: existing.assigneeAgentId,
               checkoutRunId: existing.checkoutRunId,
+              checkoutRunStatus: await checkoutRunStatusForIssue(tx, existing), // myrmidon(P5)
               actorRunId: actorRunId ?? null,
             });
           }

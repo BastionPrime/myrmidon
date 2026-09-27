@@ -360,6 +360,8 @@ describeEmbeddedPostgres("stale issue execution lock routes", () => {
       status: "running",
       invocationSource: "assignment",
       startedAt: new Date(),
+      // myrmidon(P5): checkout now requires task context on the contender run
+      contextSnapshot: { issueId },
     });
     await db.insert(issues).values({
       id: issueId,
@@ -515,7 +517,20 @@ describeEmbeddedPostgres("stale issue execution lock routes", () => {
       executionLockedAt: null,
     });
 
-    const res = await request(createApp(agentActor(companyId, otherAgentId, currentRunId)))
+    // myrmidon(P5): checkout validates the persisted run (company- and agent-scoped)
+    // and requires task context, so the actor run belongs to the reassigned agent.
+    const otherRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: otherRunId,
+      companyId,
+      agentId: otherAgentId,
+      status: "running",
+      invocationSource: "manual",
+      startedAt: new Date(),
+      contextSnapshot: { issueId },
+    });
+
+    const res = await request(createApp(agentActor(companyId, otherAgentId, otherRunId)))
       .post(`/api/issues/${issueId}/checkout`)
       .send({
         agentId: otherAgentId,
@@ -537,8 +552,8 @@ describeEmbeddedPostgres("stale issue execution lock routes", () => {
     expect(row).toEqual({
       status: "in_progress",
       assigneeAgentId: otherAgentId,
-      checkoutRunId: currentRunId,
-      executionRunId: currentRunId,
+      checkoutRunId: otherRunId,
+      executionRunId: otherRunId,
     });
   });
 });

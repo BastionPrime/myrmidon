@@ -327,6 +327,8 @@ import {
   type IssueThreadInteractionResolverRestriction,
 } from "../services/issue-thread-interaction-resolution.js";
 import { resolveSelectedSuggestedTasks } from "../services/issue-thread-interactions.js";
+// myrmidon(P5): checkout run-context gate
+import { assertRunHasTaskSourceContext } from "../myrmidon/issue-checkout-guard.js";
 import {
   crossIssueInfluenceLimitError,
   crossIssueInfluenceRunContextError,
@@ -15010,6 +15012,16 @@ export function issueRoutes(
 
       const checkoutRunId = requireAgentRunId(req, res);
       if (req.actor.type === "agent" && !checkoutRunId) return;
+
+      // myrmidon(P5): refuse a run without task context before the lock is written
+      // (and before the workspace reopen), so it cannot pin an issue it may not write.
+      if (req.actor.type === "agent" && checkoutRunId && req.actor.agentId) {
+        await assertRunHasTaskSourceContext(db, {
+          companyId: issue.companyId,
+          runId: checkoutRunId,
+          agentId: req.actor.agentId,
+        });
+      }
 
       // Reopen the closed isolated workspace only after the run-id gate passes. A
       // rejected checkout must not rebuild and republish the workspace as active.
