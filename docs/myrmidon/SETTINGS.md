@@ -35,6 +35,7 @@
 
 | Переменная | Функция | По умолчанию | Что делает | Как выключить / особое |
 |---|---|---|---|---|
+| `MYRMIDON_HERMES_RUNTIME_MCP_URL_BASE` | P4 | не задана — адрес шлюза не меняется (как у вендора) | Origin адреса MCP-шлюза прогона `hermes_local` заменяется на этот базовый адрес (например, `http://127.0.0.1:3100`), путь, query и токен сохраняются; в лог пишется только пара origin | Не задавать. На агента: `adapterConfig.runtimeMcpUrlBase` — свой базовый адрес, `adapterConfig.runtimeMcpUrlRewrite: false` — без подмены. Поле `adapterConfig.includeConfiguredMcpServers: false` — не дописывать в `-t` серверы из профиля |
 
 ## Трек 4 — чаты и навыки
 

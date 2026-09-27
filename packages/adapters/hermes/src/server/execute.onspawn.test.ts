@@ -110,7 +110,8 @@ describe("hermes-local adapter onSpawn forwarding", () => {
     await execute({ ...ctx, context: { ...ctx.context, paperclipWake: wake } } as any);
     const call = vi.mocked(serverUtils.runChildProcess).mock.calls.at(-1)!;
     expect(call[3].env).not.toHaveProperty("PAPERCLIP_WAKE_PAYLOAD_JSON");
-    expect(call[2]).toContainEqual(expect.stringContaining("Current task brief"));
+    // myrmidon(P4): the prompt travels on stdin, not in argv
+    expect((call[3] as { stdin?: string }).stdin).toContain("Current task brief");
   });
 
   it("runChildProcess opts type includes onSpawn", () => {

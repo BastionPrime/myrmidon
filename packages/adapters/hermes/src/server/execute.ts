@@ -55,6 +55,13 @@ import {
   resolveProvider,
 } from "./detect-model.js";
 import { reconcileHermesPaperclipSkills } from "./skills.js";
+// myrmidon(P4): run-scoped MCP servers, prompt via stdin, spawn envelope check
+import {
+  applyRuntimeMcpToolsetsToArgs,
+  assertSpawnEnvelopeFits,
+  materializeRunScopedHermesMcp,
+  resolveRuntimeMcpUrlBase,
+} from "./myrmidon-runtime-mcp.js";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -441,7 +448,9 @@ export async function execute(
   // ── Build command args ─────────────────────────────────────────────────
   // Use -Q (quiet) to get clean output: just response + session_id line
   const useQuiet = cfgBoolean(config.quiet) === true; // default false
-  const args: string[] = ["chat", "-q", prompt];
+  // myrmidon(P4): the prompt goes to stdin (`--query-file -`), not argv, so a long
+  // task history cannot hit the kernel per-argument limit (E2BIG).
+  const args: string[] = ["chat", "--query-file", "-"];
   if (useQuiet) args.push("-Q");
 
   if (model) {
@@ -512,6 +521,36 @@ export async function execute(
   const envCommentId = cfgString(ctxContext.commentId) || cfgString(ctxContext.wakeCommentId) || cfgString(ctx.config?.commentId);
   if (envCommentId) env.PAPERCLIP_WAKE_COMMENT_ID = envCommentId;
 
+  // myrmidon(P4): materialize ctx.runtimeMcp into a temporary HERMES_HOME and
+  // allow the run-scoped servers through `-t`. Agents without assigned
+  // connections have no ctx.runtimeMcp and keep the previous behavior.
+  let runtimeMcpCleanup: (() => Promise<void>) | null = null;
+  try {
+    const runtimeMcp = await materializeRunScopedHermesMcp({
+      servers: ctx.runtimeMcp?.getServers() ?? [],
+      hermesHome: env.HERMES_HOME,
+      runId: ctx.runId,
+      includeConfiguredServerNames: cfgBoolean(config.includeConfiguredMcpServers) !== false,
+      urlBase: resolveRuntimeMcpUrlBase({
+        configUrlBase: config.runtimeMcpUrlBase,
+        configRewrite: config.runtimeMcpUrlRewrite,
+        instanceEnv: process.env,
+      }),
+      onLog: ctx.onLog,
+    });
+    if (runtimeMcp) {
+      env.HERMES_HOME = runtimeMcp.hermesHome;
+      runtimeMcpCleanup = runtimeMcp.cleanup;
+      applyRuntimeMcpToolsetsToArgs(args, toolsets, runtimeMcp.toolsetNames);
+    }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    await ctx.onLog(
+      "stdout",
+      `[hermes] Warning: run-scoped MCP materialization failed (${reason}); continuing without the connection tools.\n`,
+    );
+  }
+
   // ── Resolve working directory ──────────────────────────────────────────
   const cwd =
     cfgString(config.cwd) || cfgString(ctx.config?.workspaceDir) || ".";
@@ -557,14 +596,23 @@ export async function execute(
     return ctx.onLog(stream, chunk);
   };
 
-  const result = await runChildProcess(ctx.runId, hermesCmd, args, {
-    cwd,
-    env,
-    timeoutSec,
-    graceSec,
-    onLog: wrappedOnLog,
-    onSpawn: ctx.onSpawn,
-  });
+  // myrmidon(P4): check the spawn envelope, send the prompt on stdin, and remove
+  // the run-scoped HERMES_HOME (it holds the gateway token) once the child exits.
+  let result: Awaited<ReturnType<typeof runChildProcess>>;
+  try {
+    assertSpawnEnvelopeFits(args, env);
+    result = await runChildProcess(ctx.runId, hermesCmd, args, {
+      cwd,
+      env,
+      timeoutSec,
+      graceSec,
+      onLog: wrappedOnLog,
+      onSpawn: ctx.onSpawn,
+      stdin: prompt,
+    });
+  } finally {
+    await runtimeMcpCleanup?.();
+  }
 
   // ── Parse output ───────────────────────────────────────────────────────
   const parsed = parseHermesOutput(result.stdout || "", result.stderr || "");
