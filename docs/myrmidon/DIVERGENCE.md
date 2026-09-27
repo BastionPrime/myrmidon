@@ -29,6 +29,9 @@
 
 | ID | Что меняем | Файлы вендора | Причина | Тест-сторож | Как снимать | PR |
 |---|---|---|---|---|---|---|
+| vendor:c221589b | Перенос коммита вендора: прокси процесса песочницы закрывает вход и выходит после завершения удалённого процесса. Предпосылка теста #13793 | `packages/adapter-utils/src/execution-target.ts` | Вендорский PR #13777; тест #13793 опирается на его помощник `runProxyWithInput(…, keepStdinOpen)` | `packages/adapter-utils/src/execution-target-sandbox.test.ts` | Уходит сам при переносе тега вендора, который содержит этот коммит | [#31](https://github.com/itkadr-git/myrmidon/pull/31) |
+| vendor:4b8ec588f | Перенос коммита вендора: контекст побудки больше не дублируется в окружении адаптеров (`PAPERCLIP_WAKE_PAYLOAD_JSON` и др.) | `packages/adapter-utils/src/{server-utils,acpx-engine/execute}.ts`, `packages/adapters/{claude,codex,cursor,gemini,grok,kimi,opencode,pi}-local/src/server/execute.ts`, `packages/adapters/{hermes,cursor-cloud}/src/server/execute.ts`, документы | Вендорский PR #13891; часть P3 (`spawn E2BIG` на длинной истории) | `packages/adapter-utils/src/server-utils.test.ts`, `packages/adapter-utils/src/acpx-engine/execute.test.ts`, `packages/adapters/hermes/src/server/execute.onspawn.test.ts` | Уходит сам при переносе тега вендора, который содержит этот коммит | [#31](https://github.com/itkadr-git/myrmidon/pull/31) |
+| vendor:8326e33ad | Перенос коммита вендора: большой запуск процесса в песочнице идёт через приватный файл, а не аргументами | `packages/adapter-utils/src/execution-target.ts`, `doc/acp-run-lifecycle.md` | Вендорский PR #13793; часть P3 | `packages/adapter-utils/src/execution-target-sandbox.test.ts` | Уходит сам при переносе тега вендора, который содержит этот коммит | [#31](https://github.com/itkadr-git/myrmidon/pull/31) |
 
 ## Трек 3 — шлюз инструментов и адаптер Hermes
 
