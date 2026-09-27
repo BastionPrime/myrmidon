@@ -53,6 +53,12 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 // myrmidon(S2): allow-listed run environment
 import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
+// myrmidon(H4): prompt transport helpers
+import {
+  promptArgumentOverflowResult,
+  writePromptFile,
+  type PromptFile,
+} from "@paperclipai/adapter-utils/myrmidon-prompt-transport";
 import { shellQuote } from "@paperclipai/adapter-utils/ssh";
 import { isPiUnknownSessionError, parsePiJsonl } from "./parse.js";
 import { ensurePiModelConfiguredAndAvailable } from "./models.js";
@@ -666,6 +672,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       return notes;
     })();
 
+    // myrmidon(H4): locally the system prompt extension travels as a private file
+    // (Pi reads --append-system-prompt from a path when it exists)
+    let systemPromptFile: PromptFile | null = null;
+
     const buildArgs = (sessionFile: string): string[] => {
       const args: string[] = [];
 
@@ -674,7 +684,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("-p"); // Non-interactive mode: process prompt and exit
 
       // Use --append-system-prompt to extend Pi's default system prompt
-      args.push("--append-system-prompt", renderedSystemPromptExtension);
+      args.push("--append-system-prompt", systemPromptFile?.path ?? renderedSystemPromptExtension); // myrmidon(H4)
 
       if (provider) args.push("--provider", provider);
       if (modelId) args.push("--model", modelId);
@@ -686,9 +696,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       if (extraArgs.length > 0) args.push(...extraArgs);
 
-      // Add the user prompt as the last argument
-      args.push(userPrompt);
-
+      // myrmidon(H4): the user prompt is piped on stdin, not passed as the last argument
       return args;
     };
 
@@ -700,7 +708,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           command: resolvedCommand,
           cwd: effectiveExecutionCwd,
           commandNotes,
-          commandArgs: args,
+          commandArgs: [...args, `<stdin prompt ${userPrompt.length} chars>`], // myrmidon(H4)
           env: loggedEnv,
           prompt: userPrompt,
           promptMetrics,
@@ -735,6 +743,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
         cwd,
         env: executionTargetIsRemote ? env : runtimeEnv,
+        stdin: userPrompt, // myrmidon(H4)
         timeoutSec,
         graceSec,
         onSpawn,
@@ -828,6 +837,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
 
     try {
+      // myrmidon(H4): remote targets cannot see a local file; keep the argument within limits
+      if (executionTargetIsRemote) {
+        const promptOverflow = promptArgumentOverflowResult("Pi system prompt", renderedSystemPromptExtension);
+        if (promptOverflow) return promptOverflow;
+      } else {
+        systemPromptFile = await writePromptFile(renderedSystemPromptExtension, { fileName: "system-prompt.md" });
+      }
       const initial = await runAttempt(sessionPath);
       const initialFailed =
         !initial.proc.timedOut && ((initial.proc.exitCode ?? 0) !== 0 || initial.parsed.errors.length > 0);
@@ -867,6 +883,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       return toResult(initial);
     } finally {
+      await systemPromptFile?.cleanup().catch(() => undefined); // myrmidon(H4)
       await Promise.all([
         paperclipBridge?.stop(),
         restoreRemoteWorkspace?.(),

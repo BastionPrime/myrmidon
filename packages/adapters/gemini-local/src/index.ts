@@ -56,7 +56,7 @@ Operational fields:
 
 Notes:
 - Gemini ACP is the preferred auto lane when Node >=24.11.0 and the local Gemini CLI command is available. It runs Gemini CLI's native \`gemini --acp\` server through Paperclip's shared ACP engine, including selected skill links, Paperclip runtime prompt/env guidance, model config, and persistent ACP session state. Missing prerequisites fail both default and explicit ACP runs with an actionable setup error; the adapter never switches engines automatically.
-- Runs use --prompt for non-interactive execution, not stdin.
+- Runs pipe the prompt to Gemini via stdin for non-interactive execution, not --prompt.
 - The adapter sets a headless-safe terminal/browser environment for Gemini CLI child processes so unattended runs do not wait on browser auth or 256-color terminal prompts.
 - Sessions resume with --resume when stored session cwd matches the current cwd.
 - Paperclip auto-injects local skills into \`~/.gemini/skills/\` via symlinks, so the CLI can discover both credentials and skills in their natural location.

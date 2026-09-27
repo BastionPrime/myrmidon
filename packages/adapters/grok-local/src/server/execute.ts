@@ -43,6 +43,13 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 // myrmidon(S2): allow-listed run environment
 import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
+// myrmidon(H4): prompt transport helpers
+import {
+  cliHelpMentionsFlag,
+  promptArgumentOverflowResult,
+  writePromptFile,
+  type PromptFile,
+} from "@paperclipai/adapter-utils/myrmidon-prompt-transport";
 import { DEFAULT_GROK_LOCAL_MODEL } from "../index.js";
 import { copyBackGrokAuth } from "./grok-auth-copyback.js";
 import { resolveManagedGrokHomeDir, stageGrokHomeForSync } from "./grok-home.js";
@@ -255,6 +262,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // every exit path (teardown and setup failure alike), mirroring the Codex
   // adapter's `stagedCodexHomeDir` handling.
   let stagedGrokHomeDir: string | null = null;
+  let promptFile: PromptFile | null = null; // myrmidon(H4)
 
   try {
     const envConfig = parseObject(config.env);
@@ -526,7 +534,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         return asStringArray(config.args);
       })();
       if (extraArgs.length > 0) args.push(...extraArgs);
-      args.push("--single", prompt);
+      // myrmidon(H4): Grok headless mode reads no stdin; prefer a private prompt file
+      if (promptFile) args.push("--prompt-file", promptFile.path);
+      else args.push("--single", prompt);
       return args;
     };
 
@@ -648,6 +658,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       };
     };
 
+    // myrmidon(H4): a local Grok that knows --prompt-file gets a 0600 file; otherwise
+    // the prompt stays an argument and must fit one
+    if (!executionTargetIsRemote && await cliHelpMentionsFlag(command, "--prompt-file", { env: runtimeEnv, cwd })) {
+      promptFile = await writePromptFile(prompt);
+    } else {
+      const promptOverflow = promptArgumentOverflowResult("Grok CLI", prompt);
+      if (promptOverflow) return promptOverflow;
+    }
     const initial = await runAttempt(sessionId);
     if (
       sessionId &&
@@ -682,6 +700,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         );
       });
     }
+    await promptFile?.cleanup().catch(() => undefined); // myrmidon(H4)
     await Promise.all([
       restoreRemoteWorkspace?.(),
       stagedAssets.cleanup(),

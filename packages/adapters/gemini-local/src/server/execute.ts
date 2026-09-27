@@ -55,6 +55,8 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 // myrmidon(S2): allow-listed run environment
 import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
+// myrmidon(H4): prompt transport helpers
+import { promptArgumentOverflowResult } from "@paperclipai/adapter-utils/myrmidon-prompt-transport";
 import { DEFAULT_GEMINI_LOCAL_MODEL, SANDBOX_INSTALL_COMMAND } from "../index.js";
 import {
   describeGeminiFailure,
@@ -525,7 +527,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
   }
   const commandNotes = (() => {
-    const notes: string[] = ["Prompt is passed to Gemini via --prompt for non-interactive execution."];
+    // myrmidon(H4): the prompt travels on stdin, never in argv
+    const notes: string[] = ["Prompt is piped to Gemini via stdin for non-interactive execution."];
     notes.push("Added --approval-mode yolo for unattended execution.");
     notes.push("Set headless terminal/browser env so Gemini fails fast instead of opening interactive auth or color prompts.");
     if (executionTargetIsRemote) {
@@ -606,7 +609,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("--sandbox=none");
     }
     if (extraArgs.length > 0) args.push(...extraArgs);
-    args.push("--prompt", prompt);
+    // myrmidon(H4): no --prompt; headless Gemini reads the prompt from stdin
     return args;
   };
 
@@ -625,9 +628,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         command: resolvedCommand,
         cwd: effectiveExecutionCwd,
         commandNotes,
-        commandArgs: args.map((value, index) => (
-          index === args.length - 1 ? `<prompt ${prompt.length} chars>` : value
-        )),
+        commandArgs: [...args, `<stdin prompt ${prompt.length} chars>`], // myrmidon(H4)
         env: loggedEnv,
         prompt,
         promptMetrics,
@@ -639,6 +640,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
       cwd,
       env: invocationEnv,
+      stdin: prompt, // myrmidon(H4)
       timeoutSec,
       graceSec,
       onSpawn,
@@ -766,6 +768,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 
   try {
+    // myrmidon(H4): with --sandbox Gemini re-passes stdin to its sandboxed child as --prompt
+    const promptOverflow = sandbox ? promptArgumentOverflowResult("Gemini sandbox", prompt) : null;
+    if (promptOverflow) return promptOverflow;
     const initial = await runAttempt(sessionId);
     if (
       sessionId &&

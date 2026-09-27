@@ -11,6 +11,8 @@ const fs = require("node:fs");
 const capturePath = process.env.PAPERCLIP_TEST_CAPTURE_PATH;
 const payload = {
   argv: process.argv.slice(2),
+  // myrmidon(H4): the prompt arrives on stdin
+  stdin: fs.readFileSync(0, "utf8"),
   paperclipEnvKeys: Object.keys(process.env)
     .filter((key) => key.startsWith("PAPERCLIP_"))
     .sort(),
@@ -70,6 +72,7 @@ process.exit(${exit});
 
 type CapturePayload = {
   argv: string[];
+  stdin: string; // myrmidon(H4)
   paperclipEnvKeys: string[];
 };
 
@@ -139,7 +142,7 @@ describe("gemini execute", () => {
     }
   });
 
-  it("passes prompt via --prompt and injects paperclip env vars", async () => {
+  it("passes prompt via stdin and injects paperclip env vars", async () => { // myrmidon(H4)
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-gemini-execute-"));
     const workspace = path.join(root, "workspace");
     const commandPath = path.join(root, "gemini");
@@ -191,11 +194,10 @@ describe("gemini execute", () => {
       const capture = JSON.parse(await fs.readFile(capturePath, "utf8")) as CapturePayload;
       expect(capture.argv).toContain("--output-format");
       expect(capture.argv).toContain("stream-json");
-      expect(capture.argv).toContain("--prompt");
+      expect(capture.argv).not.toContain("--prompt"); // myrmidon(H4)
       expect(capture.argv).toContain("--approval-mode");
       expect(capture.argv).toContain("yolo");
-      const promptFlagIndex = capture.argv.indexOf("--prompt");
-      const promptArg = promptFlagIndex >= 0 ? capture.argv[promptFlagIndex + 1] : "";
+      const promptArg = capture.stdin; // myrmidon(H4)
       expect(promptArg).toContain("Follow the paperclip heartbeat.");
       expect(promptArg).toContain("Paperclip runtime note:");
       expect(capture.paperclipEnvKeys).toEqual(
@@ -486,8 +488,7 @@ describe("gemini execute", () => {
       expect(result.errorMessage).toBeNull();
 
       const capture = JSON.parse(await fs.readFile(capturePath, "utf8")) as CapturePayload;
-      const promptFlagIndex = capture.argv.indexOf("--prompt");
-      const promptArg = promptFlagIndex >= 0 ? capture.argv[promptFlagIndex + 1] : "";
+      const promptArg = capture.stdin; // myrmidon(H4)
       expect(capture.argv).toContain("--resume");
       expect(capture.argv).toContain("gemini-session-1");
       expect(promptArg).toContain("## Paperclip Resume Delta");

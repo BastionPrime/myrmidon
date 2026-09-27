@@ -46,6 +46,8 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 // myrmidon(S2): allow-listed run environment
 import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
+// myrmidon(H4): prompt transport helpers
+import { promptArgumentOverflowResult } from "@paperclipai/adapter-utils/myrmidon-prompt-transport";
 import {
   SANDBOX_INSTALL_COMMAND,
   modelSupportsEffort,
@@ -728,6 +730,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 
   try {
+    // myrmidon(H4): `kimi -p` takes the prompt only as an argument (no stdin or
+    // file); fail clearly before launch instead of spawn E2BIG
+    const promptOverflow = promptArgumentOverflowResult("Kimi CLI", prompt);
+    if (promptOverflow) return promptOverflow;
     const initial = await runAttempt(sessionId);
     if (
       sessionId &&
