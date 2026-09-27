@@ -1,3 +1,6 @@
+// myrmidon(P6): broker candidate walk embedded into the launcher
+import { githubBrokerCandidatesLauncherSource } from "./myrmidon-github-broker.js";
+
 /** Standalone source is staged unchanged on local, SSH, and sandbox runtimes. No secrets in files. */
 export function githubLauncherSource(): string {
   return String.raw`#!/usr/bin/env node
@@ -17,6 +20,7 @@ if (!['git', 'gh'].includes(program) || !executable) {
   process.stderr.write('Paperclip: requested GitHub command is not installed.\n');
   process.exit(127);
 }
+${githubBrokerCandidatesLauncherSource()}
 async function main() {
   let env = { ...process.env };
   const diagnostic = (code) => process.stderr.write('Paperclip: GitHub ' + code + '; continuing without managed credentials.\n');
@@ -46,24 +50,17 @@ async function main() {
       GIT_CONFIG_KEY_2: 'url.https://github.com/.insteadOf', GIT_CONFIG_VALUE_2: 'ssh://git@github.com/',
       GIT_CONFIG_KEY_3: 'core.askPass', GIT_CONFIG_VALUE_3: '',
     });
-    const base = env.PAPERCLIP_GITHUB_BROKER_URL || env.PAPERCLIP_API_URL;
+    // myrmidon(P6): walk up to six broker candidates instead of one URL.
+    const brokerBaseUrls = paperclipBrokerCandidateUrls(env);
     try {
     let response;
-    if (base && env.PAPERCLIP_GITHUB_BROKER_TOKEN) {
-      const url = base.replace(/\/+$/, '').replace(/\/api$/, '') + '/runtime-tools/github/credentials';
-      for (let attempt = 0; attempt < 30; attempt++) {
-        response = await fetch(url, {
-          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
-          headers: { authorization: 'Bearer ' + (env.PAPERCLIP_GITHUB_BRIDGE_TOKEN || env.PAPERCLIP_API_KEY || env.PAPERCLIP_GITHUB_BROKER_TOKEN),
-            'x-paperclip-github-capability': env.PAPERCLIP_GITHUB_BROKER_TOKEN, 'content-type': 'application/json' },
-          body: '{}',
-        });
-        if (response.status !== 409) break;
-        await response.arrayBuffer();
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      if (!response.ok) {
-        diagnostic(response.status === 401 || response.status === 403 ? 'capability_rejected' : 'broker_response_unavailable');
+    if (brokerBaseUrls.length > 0 && env.PAPERCLIP_GITHUB_BROKER_TOKEN) {
+      const brokerAttempt = await paperclipRequestBrokerCredentials(env, brokerBaseUrls);
+      response = brokerAttempt.response;
+      if (!response || !response.ok) {
+        if (brokerAttempt.tried.length > 0) process.stderr.write('Paperclip: GitHub broker candidates tried: ' + brokerAttempt.tried.join(', ') + '.\n');
+        if (!response) diagnostic('broker_transport_unavailable');
+        else diagnostic(response.status === 401 || response.status === 403 ? 'capability_rejected' : 'broker_response_unavailable');
       } else {
       const result = await response.json();
       if (result.status === 'unavailable') {

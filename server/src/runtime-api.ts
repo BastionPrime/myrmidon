@@ -115,6 +115,8 @@ export function buildRuntimeApiCandidateUrls(input: {
   bindHost: string;
   port: number;
   networkInterfacesMap?: NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+  // myrmidon(P6): protocol the server itself listens on
+  listenProtocol?: "http:" | "https:";
 }): string[] {
   const candidates: string[] = [];
   const seen = new Set<string>();
@@ -127,10 +129,16 @@ export function buildRuntimeApiCandidateUrls(input: {
       return null;
     }
   })();
-  const protocol = explicitOrigin ? new URL(explicitOrigin).protocol : "http:";
+  // myrmidon(P6): derived candidates use the listener protocol, not the public
+  // origin protocol: an HTTPS front door must not turn direct listener
+  // candidates into TLS URLs the listener does not serve.
+  const protocol = input.listenProtocol === "https:" ? "https:" : "http:";
 
   pushCandidate(candidates, seen, input.preferredApiUrl);
   pushCandidate(candidates, seen, explicitOrigin);
+  // myrmidon(P6): the loopback listener is always a candidate, right after the
+  // public origins, for runs that share the server's network namespace.
+  pushCandidate(candidates, seen, formatOrigin(protocol, "127.0.0.1", input.port));
 
   for (const rawHost of input.allowedHostnames) {
     const host = normalizeHost(rawHost);

@@ -68,6 +68,8 @@ describe("runtime API discovery", () => {
         },
       }),
     ).toEqual([
+      // myrmidon(P6): the loopback listener is always a candidate
+      "http://127.0.0.1:3102",
       "http://198.51.100.10:3102",
       "http://runtime-host.example.test:3102",
       "http://203.0.113.42:3102",
@@ -87,7 +89,10 @@ describe("runtime API discovery", () => {
     ).toEqual([
       "https://agent-entry.example.test",
       "https://paperclip.example.test",
-      "https://198.51.100.10:3102",
+      // myrmidon(P6): loopback first among derived candidates; derived candidates
+      // use the listener protocol, not the public origin protocol
+      "http://127.0.0.1:3102",
+      "http://198.51.100.10:3102",
     ]);
   });
 
