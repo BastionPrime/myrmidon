@@ -1,0 +1,35 @@
+{
+  "$comment": "Vendor tests that already fail on the vendor base (v2026.916.1, d554c47) in packages the vendor CI never ran. They are reported as warnings, not failures. Anything else that fails is a failure. Remove an entry when the vendor fixes the test; the runner warns when a listed test passes.",
+  "failures": [
+    {
+      "file": "packages/adapters/cursor-local/src/server/execute.test.ts",
+      "name": "cursor execute reruns sandbox command resolution after managed runtime setup and keeps the original sandbox home",
+      "reason": "Fails on the vendor base; the vendor CI does not run this package."
+    },
+    {
+      "file": "packages/mcp-server/src/tools.test.ts",
+      "name": "paperclip MCP tools allows create issue requests to omit status so the API applies assignee defaults",
+      "reason": "Fails on the vendor base; the vendor CI does not run this package."
+    },
+    {
+      "file": "packages/plugins/paperclip-plugin-fake-sandbox/src/plugin.test.ts",
+      "name": "fake sandbox provider plugin runs a deterministic provider lifecycle through environment hooks",
+      "reason": "Fails on the vendor base; the vendor CI does not run this package."
+    },
+    {
+      "file": "packages/plugins/paperclip-plugin-fake-sandbox/src/plugin.test.ts",
+      "name": "fake sandbox provider plugin does not expose host-only environment variables to executed commands",
+      "reason": "Fails on the vendor base; the vendor CI does not run this package."
+    },
+    {
+      "file": "packages/plugins/plugin-llm-wiki/tests/plugin.spec.ts",
+      "name": "(suite failed to load)",
+      "reason": "Fails on the vendor base: imports react, which the package does not declare; the vendor CI does not run this package."
+    },
+    {
+      "file": "packages/plugins/plugin-llm-wiki/tests/wiki-route-sidebar-ui.spec.ts",
+      "name": "(suite failed to load)",
+      "reason": "Fails on the vendor base: imports react, which the package does not declare; the vendor CI does not run this package."
+    }
+  ]
+}

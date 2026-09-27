@@ -1,9 +1,15 @@
 name: Myrmidon CI
 
-# Myrmidon's own CI. Replaces the vendor's pr.yml, which calls
-# paperclipai/paperclip/.github/workflows/pr-trusted.yml@master (unpinned
-# upstream code with vendor-only runner routing). Everything here runs on
-# GitHub-hosted runners without secrets. See docs/myrmidon/ci.md.
+# Myrmidon's own CI (the vendor's pr.yml calls unpinned upstream code and is
+# disabled). Two tiers, chosen by the `plan` job:
+#   docs - only Myrmidon docs/scripts changed: script checks only;
+#   fast - pull requests: typecheck (no Rust), build (no Rust release binary)
+#          and only the tests that the change touches directly;
+#   full - push to main, manual runs, PRs labelled `full-ci` (from the next
+#          push on), and PRs touching
+#          shared foundations (lockfile, db, shared, runner, CI...): every lane.
+# A red full run on main opens (or updates) an issue labelled `main-red`.
+# Everything runs on GitHub-hosted runners without secrets. See docs/myrmidon/ci.md.
 
 on:
   pull_request:
@@ -15,8 +21,10 @@ permissions:
   contents: read
 
 concurrency:
+  # Superseded runs are cancelled on PRs and on main alike; a cancelled run
+  # reports no `CI result`, so it can never look green.
   group: myrmidon-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   NPM_CONFIG_AUDIT: "false"
@@ -24,8 +32,69 @@ env:
   NPM_CONFIG_UPDATE_NOTIFIER: "false"
 
 jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tier: ${{ steps.plan.outputs.tier }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Locate pnpm store
+        id: pnpm_store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store (read only)
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm_store.outputs.path }}
+          key: myr-pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: myr-pnpm-${{ runner.os }}-
+
+      - name: Plan tier and tests
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          set -euo pipefail
+          args=(plan --out "$RUNNER_TEMP/plan.json")
+          if [ "$EVENT" = "pull_request" ]; then
+            args+=(--base "$BASE" --head "$HEAD")
+            if [ "$FULL_LABEL" = "true" ]; then args+=(--force-full); fi
+          fi
+          node scripts/myrmidon/ci/affected-tests.mjs "${args[@]}"
+
+      - name: Upload plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-plan
+          path: ${{ runner.temp }}/plan.json
+          retention-days: 3
+
   typecheck:
     name: typecheck
+    needs: plan
+    if: ${{ needs.plan.outputs.tier == 'fast' || needs.plan.outputs.tier == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -58,10 +127,12 @@ jobs:
           restore-keys: myr-pnpm-${{ runner.os }}-
 
       - name: Select pinned Rust toolchain
+        if: ${{ needs.plan.outputs.tier == 'full' }}
         working-directory: packages/paperclip-runner
         run: rustup show active-toolchain || rustup toolchain install
 
       - name: Cache Rust dependencies
+        if: ${{ needs.plan.outputs.tier == 'full' }}
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: packages/paperclip-runner/runner -> target
@@ -74,10 +145,141 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck all workspaces
+        if: ${{ needs.plan.outputs.tier == 'full' }}
         run: pnpm typecheck
+
+      - name: Typecheck all workspaces (runner Rust skipped)
+        if: ${{ needs.plan.outputs.tier == 'fast' }}
+        run: |
+          set -euo pipefail
+          pnpm run preflight:workspace-links
+          pnpm -r --filter '!@paperclipai/paperclip-runner' typecheck
+          pnpm --filter @paperclipai/paperclip-runner typecheck:typescript
+
+  build:
+    name: build
+    needs: plan
+    if: ${{ needs.plan.outputs.tier == 'fast' || needs.plan.outputs.tier == 'full' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Locate pnpm store
+        id: pnpm_store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store (read only)
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm_store.outputs.path }}
+          key: myr-pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: myr-pnpm-${{ runner.os }}-
+
+      - name: Select pinned Rust toolchain
+        if: ${{ needs.plan.outputs.tier == 'full' }}
+        working-directory: packages/paperclip-runner
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache Rust dependencies
+        if: ${{ needs.plan.outputs.tier == 'full' }}
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/paperclip-runner/runner -> target
+          shared-key: myr-build
+          cache-workspace-crates: false
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Runner issue-thread viewer
+        run: pnpm --filter @paperclipai/paperclip-runner build:issue-thread
+
+      - name: Build
+        if: ${{ needs.plan.outputs.tier == 'full' }}
+        run: pnpm build
+
+      - name: Build (runner TypeScript only, no Rust release binary)
+        if: ${{ needs.plan.outputs.tier == 'fast' }}
+        run: |
+          set -euo pipefail
+          pnpm run preflight:workspace-links
+          pnpm --filter @paperclipai/paperclip-runner build:typescript
+          pnpm -r --filter '!@paperclipai/paperclip-runner' build
+
+  tests-affected:
+    name: tests (affected)
+    needs: plan
+    if: ${{ needs.plan.outputs.tier == 'fast' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Locate pnpm store
+        id: pnpm_store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store (read only)
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm_store.outputs.path }}
+          key: myr-pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: myr-pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: test-plan
+          path: ${{ runner.temp }}
+
+      - name: Build plugin SDK dependencies
+        run: pnpm --filter @paperclipai/plugin-sdk ensure-build-deps
+
+      - name: Run affected tests
+        run: node scripts/myrmidon/ci/affected-tests.mjs run --plan "$RUNNER_TEMP/plan.json"
 
   tests:
     name: tests (${{ matrix.label }})
+    needs: plan
+    if: ${{ needs.plan.outputs.tier == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -148,12 +350,60 @@ jobs:
           fi
           pnpm "test:run:$MODE" -- "${args[@]}"
 
-  build:
-    name: build
+  tests-other:
+    # Packages whose tests `pnpm test:run` does not run (hermes adapter, MCP
+    # servers, several adapters...): scripts/myrmidon/ci/extra-test-lanes.json.
+    name: tests (other packages)
+    needs: plan
+    if: ${{ needs.plan.outputs.tier == 'full' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Locate pnpm store
+        id: pnpm_store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store (read only)
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm_store.outputs.path }}
+          key: myr-pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: myr-pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build plugin SDK dependencies
+        run: pnpm --filter @paperclipai/plugin-sdk ensure-build-deps
+
+      - name: Run tests of the other packages
+        run: node scripts/myrmidon/ci/affected-tests.mjs extra
+
+  tests-runner:
+    # The vendor verifies the runner in its own lane (check:all: TypeScript,
+    # protocol, Rust and API authority checks).
+    name: tests (runner)
+    needs: plan
+    if: ${{ needs.plan.outputs.tier == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    env:
-      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -184,14 +434,16 @@ jobs:
           restore-keys: myr-pnpm-${{ runner.os }}-
 
       - name: Select pinned Rust toolchain
+        if: ${{ needs.plan.outputs.tier == 'full' }}
         working-directory: packages/paperclip-runner
         run: rustup show active-toolchain || rustup toolchain install
 
       - name: Cache Rust dependencies
+        if: ${{ needs.plan.outputs.tier == 'full' }}
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: packages/paperclip-runner/runner -> target
-          shared-key: myr-build
+          shared-key: myr-runner
           cache-workspace-crates: false
           cache-bin: false
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -199,11 +451,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Runner issue-thread viewer
-        run: pnpm --filter @paperclipai/paperclip-runner build:issue-thread
-
-      - name: Build
-        run: pnpm build
+      - name: Verify the runner
+        run: pnpm --filter @paperclipai/paperclip-runner check:all
 
   script-tests:
     name: script tests
@@ -233,16 +482,65 @@ jobs:
           node --test "${files[@]}"
 
   ci-result:
-    # Single stable name for the ruleset: fails unless every lane passed.
+    # Single stable name for the ruleset. Lanes the plan did not need are
+    # skipped; any failure, or a skip without a successful plan, fails it.
     name: CI result
-    if: ${{ always() }}
-    needs: [typecheck, tests, build, script-tests]
+    if: ${{ !cancelled() }}
+    needs: [plan, typecheck, build, tests-affected, tests, tests-other, tests-runner, script-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check lane results
         env:
           RESULTS: ${{ toJSON(needs) }}
+          TIER: ${{ needs.plan.outputs.tier }}
         run: |
+          echo "tier: $TIER"
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null
+          echo "$RESULTS" | jq -e '
+            .plan.result == "success" and
+            all(to_entries[]; .value.result == "success" or .value.result == "skipped")
+          ' > /dev/null
+
+  report-main:
+    # Keeps an issue labelled `main-red` open while main is red: one issue,
+    # a comment per red run, closed by the next green run.
+    name: report main status
+    needs: [ci-result]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Open, update or close the main-red issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RESULT: ${{ needs.ci-result.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --repo "$REPO" --label main-red --state open --json number --jq '.[0].number // empty')"
+          if [ "$RESULT" = "success" ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" --repo "$REPO" --comment "main is green again at $GITHUB_SHA ($RUN_URL)."
+            fi
+            exit 0
+          fi
+          jobs="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" --jq '.jobs[] | select(.conclusion == "failure") | "- " + .name' || true)"
+          # Log lines are "job<TAB>step<TAB>timestamp text"; keep test failure lines.
+          tests="$(gh run view "$RUN_ID" --repo "$REPO" --log-failed 2>/dev/null \
+            | sed -E 's/^[^\t]*\t[^\t]*\t[^ ]+ //; s/\x1b\[[0-9;]*m//g' \
+            | grep -E '^ ?(FAIL |✖ )|^  [^ ].* — ' | sort -u | head -30 || true)"
+          body="$(printf 'Full CI failed on main at %s.\n\nRun: %s\n\nFailed jobs:\n%s\n\nFailing tests (from the logs):\n```\n%s\n```\n' \
+            "$GITHUB_SHA" "$RUN_URL" "${jobs:-unknown}" "${tests:-see the run logs}")"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+          else
+            gh label create main-red --repo "$REPO" --color B60205 --description "Full CI is red on main" --force >/dev/null
+            gh issue create --repo "$REPO" --title "main is red at ${GITHUB_SHA:0:9}" --label main-red --body "$body"
+          fi

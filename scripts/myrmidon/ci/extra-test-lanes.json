@@ -1,0 +1,94 @@
+{
+  "$comment": "Workspace packages whose tests scripts/run-vitest-stable.mjs (pnpm test:run) does not run. The full tier runs all of them in the `tests (other packages)` lane; the fast tier runs the ones a PR touches. Keep in sync: scripts/myrmidon/ci/coverage.test.mjs fails when a package with tests is covered by neither.",
+  "lanes": [
+    {
+      "package": "@paperclipai/adapter-cursor-cloud",
+      "kind": "vitest-project"
+    },
+    {
+      "package": "@paperclipai/adapter-cursor-local",
+      "kind": "vitest-project"
+    },
+    {
+      "package": "@paperclipai/adapter-gemini-local",
+      "kind": "vitest-project"
+    },
+    {
+      "package": "@paperclipai/adapter-kimi-local",
+      "kind": "vitest-project"
+    },
+    {
+      "package": "@paperclipai/adapter-pi-local",
+      "kind": "vitest-project"
+    },
+    {
+      "package": "@paperclipai/hermes-paperclip-adapter",
+      "kind": "vitest-in-package",
+      "args": []
+    },
+    {
+      "package": "@paperclipai/google-sheets-mcp-server",
+      "kind": "vitest-in-package",
+      "args": []
+    },
+    {
+      "package": "@paperclipai/kv-demo-mcp-server",
+      "kind": "vitest-in-package",
+      "args": []
+    },
+    {
+      "package": "@paperclipai/mcp-server",
+      "kind": "vitest-in-package",
+      "args": []
+    },
+    {
+      "package": "@paperclipai/plugin-fake-sandbox",
+      "kind": "vitest-in-package",
+      "args": [
+        "--config",
+        "vitest.config.ts"
+      ]
+    },
+    {
+      "package": "@paperclipai/teams-catalog",
+      "kind": "vitest-at-root",
+      "args": [
+        "--root",
+        "packages/teams-catalog",
+        "--config",
+        "vitest.config.ts"
+      ]
+    },
+    {
+      "package": "@paperclipai/tailscale-https-broker",
+      "kind": "script",
+      "script": "test"
+    },
+    {
+      "package": "@paperclipai/paperclip-eval-kernel",
+      "kind": "script",
+      "script": "test"
+    },
+    {
+      "package": "@paperclipai/plugin-llm-wiki",
+      "kind": "vitest-in-package",
+      "args": [
+        "--config",
+        "./vitest.config.ts"
+      ]
+    },
+    {
+      "package": "@paperclipai/plugin-workspace-diff",
+      "kind": "vitest-in-package",
+      "args": []
+    },
+    {
+      "package": "@paperclipai/plugin-authoring-smoke-example",
+      "kind": "vitest-in-package",
+      "args": [
+        "--config",
+        "./vitest.config.ts"
+      ]
+    }
+  ]
+}
