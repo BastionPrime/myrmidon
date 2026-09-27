@@ -19,6 +19,8 @@ import { accessService } from "../services/index.js";
 import { listConnectionLifecycleEvents } from "../services/tool-connection-activity.js";
 // myrmidon(P10): 405 for SSE GET on MCP gateway endpoints
 import { rejectMcpGatewaySseGet } from "../myrmidon/tool-gateway-sse.js";
+// myrmidon(P9): every MCP endpoint failure answers with a JSON-RPC error body
+import { sendMcpProtocolErrorBody } from "../myrmidon/tool-gateway-jsonrpc-errors.js";
 
 const TOOL_ACTIVITY_EVENT_TYPES = [
   "call_completed",
@@ -213,7 +215,7 @@ async function handleMcpGatewayProtocol(
       });
       return;
     }
-    sendGatewayError(res, err);
+    sendMcpProtocolErrorBody(req, res, err); // myrmidon(P9): JSON-RPC error body for every failure
   }
 }
 
