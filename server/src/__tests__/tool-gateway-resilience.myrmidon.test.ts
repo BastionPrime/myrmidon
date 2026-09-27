@@ -886,6 +886,11 @@ describeEmbeddedPostgres("tool gateway: a failing tool does not take its connect
           expect(gatewayError.message).toContain("Flaky browser");
           expect(gatewayError.message).toContain("not recorded");
           expect(gatewayError.message).toContain("remain available");
+          // A write tool's earlier failed calls are recorded; an identical "retry"
+          // after the pause is an empty replay, and the text says so.
+          expect(gatewayError.message).toContain(
+            "empty replay of that recorded call (result null), which is NOT a success",
+          );
           expect(gatewayError.details).toMatchObject({
             connectionId: remote.connection.id,
             catalogEntryId: remote.catalogEntry.id,
@@ -1428,12 +1433,12 @@ describeEmbeddedPostgres("tool gateway: a failing tool does not take its connect
       },
     );
     // The advice is true: an identical repeat of this write in the run is replayed
-    // from the recorded invocation, not executed again.
+    // from the recorded invocation, not executed again, and carries no result.
     await expect(gateway.executeTool({
       sessionToken: session.token,
       tool: dnsToolName,
       parameters: { key: "d", value: "1" },
-    })).resolves.toMatchObject({ status: "replayed" });
+    })).resolves.toMatchObject({ status: "replayed", result: null });
 
     // The guard's own deadline and a connect failure (injected transport).
     let injected: "timeout" | "connect" = "timeout";
@@ -1697,6 +1702,177 @@ rl.on("line", (line) => {
       tool: toolName,
       parameters: { message: "after" },
     })).resolves.toMatchObject({ status: "completed", result: { content: "local:after" } });
+  }, 30_000);
+
+  it("tells the truth about an identical repeat: an empty replay, not a success", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    const fake = await startFakeRemoteMcpServer(async () => ({ status: 500, body: { error: "boom" } }));
+    try {
+      const writeTool = await createRemoteMcpTool(db, company.id, {
+        applicationKey: "replay-write",
+        connectionName: "Replay write",
+        toolName: "kv_set",
+        url: fake.url,
+      });
+      const readTool = await createRemoteMcpTool(db, company.id, {
+        applicationKey: "replay-read",
+        connectionName: "Replay read",
+        toolName: "kv_get",
+        riskLevel: "read",
+        url: fake.url,
+      });
+      await allowAllToolsForAgent(db, company.id, agent.id);
+      const gateway = createTestToolGatewayService(db);
+      const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+      const writeName = expectedConnectedToolName({
+        applicationKey: "replay-write",
+        connectionId: writeTool.connection.id,
+        toolName: "kv_set",
+      });
+      const readName = expectedConnectedToolName({
+        applicationKey: "replay-read",
+        connectionId: readTool.connection.id,
+        toolName: "kv_get",
+      });
+      const failedMessage = async (tool: string) =>
+        gateway.executeTool({ sessionToken: session.token, tool, parameters: { key: "k", value: "v" } }).then(
+          () => {
+            throw new Error("Expected the HTTP 500 to surface");
+          },
+          (error) => {
+            expectGatewayError(error, 502, "mcp_remote_status");
+            return (error as ToolGatewayHttpError).message;
+          },
+        );
+
+      const writeMessage = await failedMessage(writeName);
+      expect(writeMessage).toContain("empty replay of the recorded call (result null), which is NOT a success");
+      expect(writeMessage).toContain("For a real retry change the arguments, and only if repeating this action is safe");
+      expect(writeMessage).not.toContain("returns this recorded outcome");
+      expectNoHermesSessionMarker(writeMessage);
+      // What the text promises is what happens: the identical repeat is not sent and
+      // comes back as a replay without a result.
+      const requestsBefore = fake.requests.length;
+      await expect(gateway.executeTool({
+        sessionToken: session.token,
+        tool: writeName,
+        parameters: { key: "k", value: "v" },
+      })).resolves.toMatchObject({ status: "replayed", result: null });
+      expect(fake.requests.length).toBe(requestsBefore);
+      // Changed arguments really run again.
+      await expect(
+        gateway.executeTool({ sessionToken: session.token, tool: writeName, parameters: { key: "k", value: "v2" } }),
+      ).rejects.toMatchObject({ reasonCode: "mcp_remote_status" });
+      expect(fake.requests.length).toBeGreaterThan(requestsBefore);
+
+      // A read-only tool has no idempotency key: a repeat really runs, and it says so.
+      const readMessage = await failedMessage(readName);
+      expect(readMessage).toContain("retrying it later is safe");
+      expect(readMessage).not.toContain("empty replay");
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it("names the tool and connection when a stdio call cannot be prepared", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    const secretTool = await createLocalStdioMcpTool(db, company.id, {
+      applicationKey: "stdio-missing-secret",
+      connectionName: "Stdio missing secret",
+      toolName: "echo",
+      envKeys: ["MISSING_TOKEN"],
+    });
+    // The grant points at a secret that cannot be resolved any more.
+    await db
+      .update(connectionGrants)
+      .set({
+        credentialSecretRefs: [{
+          secretId: randomUUID(),
+          versionSelector: "latest",
+          configPath: "env.MISSING_TOKEN",
+          required: true,
+          label: "Missing token",
+        }],
+      })
+      .where(eq(connectionGrants.connectionId, secretTool.connection.id));
+    const templateTool = await createLocalStdioMcpTool(db, company.id, {
+      applicationKey: "stdio-missing-template",
+      connectionName: "Stdio missing template",
+      toolName: "echo",
+      riskLevel: "write",
+    });
+    await db
+      .update(toolConnections)
+      .set({
+        config: { templateId: `missing.template.${randomUUID()}` },
+        transportConfig: { templateId: `missing.template.${randomUUID()}` },
+      })
+      .where(eq(toolConnections.id, templateTool.connection.id));
+    await allowAllToolsForAgent(db, company.id, agent.id);
+    const gateway = createTestToolGatewayService(db, { runtimeSupervisor: { idleTtlMs: 10_000 } });
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+    const secretToolName = expectedConnectedToolName({
+      applicationKey: "stdio-missing-secret",
+      connectionId: secretTool.connection.id,
+      toolName: "echo",
+    });
+    const templateToolName = expectedConnectedToolName({
+      applicationKey: "stdio-missing-template",
+      connectionId: templateTool.connection.id,
+      toolName: "echo",
+    });
+
+    await gateway.executeTool({
+      sessionToken: session.token,
+      tool: secretToolName,
+      parameters: { message: "hello" },
+    }).then(
+      () => {
+        throw new Error("Expected the missing secret");
+      },
+      (error) => {
+        expectGatewayError(error, 422, "local_stdio_missing_secret");
+        const gatewayError = error as ToolGatewayHttpError;
+        expect(gatewayError.message).toContain(`Tool "${secretToolName}"`);
+        expect(gatewayError.message).toContain('connection "Stdio missing secret"');
+        expect(gatewayError.message).toContain("credential of the connection could not be resolved (env.MISSING_TOKEN)");
+        expect(gatewayError.message).toContain("tools of other connections are not affected");
+        expect(gatewayError.details).toMatchObject({
+          connectionId: secretTool.connection.id,
+          catalogEntryId: secretTool.catalogEntry.id,
+          credential: "env.MISSING_TOKEN",
+          tool: secretToolName,
+        });
+      },
+    );
+
+    await gateway.executeTool({
+      sessionToken: session.token,
+      tool: templateToolName,
+      parameters: { message: "hello" },
+    }).then(
+      () => {
+        throw new Error("Expected the missing template");
+      },
+      (error) => {
+        expectGatewayError(error, 422, "local_stdio_template_invalid");
+        const gatewayError = error as ToolGatewayHttpError;
+        expect(gatewayError.message).toContain(`Tool "${templateToolName}"`);
+        expect(gatewayError.message).toContain('connection "Stdio missing template"');
+        expect(gatewayError.message).toContain("no active approved local command template");
+        expect(gatewayError.message).toContain("The call did not reach the server, so nothing was changed.");
+        expect(gatewayError.message).toContain("empty replay");
+        expect(gatewayError.details).toMatchObject({
+          connectionId: templateTool.connection.id,
+          catalogEntryId: templateTool.catalogEntry.id,
+          tool: templateToolName,
+        });
+      },
+    );
   }, 30_000);
 
   it("keeps an unhealthy connection discoverable and callable, and restores its health on success", async () => {

@@ -185,11 +185,25 @@ export function neutralizeSessionExpiryMarkers(text: string): string {
     .replace(/closedresourceerror/gi, (match) => `${match.slice(0, 14)}-${match.slice(14)}`);
 }
 
+/**
+ * A tool that is not read-only gets a side-effect idempotency key: an identical
+ * repeat in the same run is not executed again but answered with an empty replay
+ * of the recorded call (`result: null`). That is not a success, and the text says so.
+ */
+export const CONNECTED_TOOL_REPLAY_NOTE =
+  " A repeat with the same arguments in this run is not executed again: it returns an empty replay of the recorded call (result null), which is NOT a success." +
+  " For a real retry change the arguments, and only if repeating this action is safe.";
+
+/** The same for a call refused by an open breaker (that call itself is not recorded). */
+export const PAUSED_TOOL_REPLAY_NOTE =
+  " If an earlier call of this tool with the same arguments already failed in this run, repeating it is not executed again: it returns an empty replay of that recorded call (result null), which is NOT a success." +
+  " For a real retry change the arguments, and only if repeating this action is safe.";
+
 function retryAdvice(risk: string | null | undefined, outcome: ConnectedToolFailure["outcome"]): string {
   if (risk === "read") {
     return " The tool only reads data, so retrying it later is safe; meanwhile continue with other tools.";
   }
-  const dedupe = " An identical repeat within this run is not executed again: it returns this recorded outcome.";
+  const dedupe = CONNECTED_TOOL_REPLAY_NOTE;
   if (outcome === "uncertain") {
     return (
       " This tool can change data and the failed call may still have taken effect: check the external state before acting on it." +
@@ -384,6 +398,35 @@ export function localStdioToolFailure(
   }
 }
 
+/**
+ * Failure for an error raised while a local stdio call was being prepared (before
+ * any process started): the tool or connection is gone or disabled, the grant or
+ * the command template is unusable, or a credential cannot be resolved.
+ */
+export function localStdioPreparationFailure(
+  reasonCode: string,
+  input: { message: string; details: Record<string, unknown> },
+): ConnectedToolFailure {
+  const credential = typeof input.details.credential === "string" ? ` (${input.details.credential})` : "";
+  switch (reasonCode) {
+    case "local_stdio_missing_secret":
+      return {
+        cause: `a configured credential of the connection could not be resolved${credential}`,
+        scope: "connection",
+        outcome: "not_sent",
+      };
+    case "local_stdio_template_missing":
+    case "local_stdio_template_invalid":
+      return { cause: "the connection has no active approved local command template", scope: "connection", outcome: "not_sent" };
+    case "local_stdio_connection_disabled":
+      return { cause: "the connection is disabled or not active", scope: "connection", outcome: "not_sent" };
+    case "tool_not_found":
+      return { cause: "the tool is no longer in the connection's catalog", scope: "tool", outcome: "not_sent" };
+    default:
+      return { cause: `the call could not be prepared: ${input.message}`, scope: "connection", outcome: "not_sent" };
+  }
+}
+
 /** Plain error description; the gateway turns it into its own error class. */
 export type GatewayErrorSpec = {
   status: number;
@@ -478,6 +521,7 @@ export type BreakerConnection = { id: string; name: string; credentialPolicy?: s
 
 export type BreakerTool = {
   name: string;
+  risk?: string | null;
   providerType: string;
   connectionId?: string | null;
   catalogEntryId?: string | null;
@@ -534,13 +578,16 @@ export function createRemoteToolResilience(options: { now?: () => number } = {})
   function pausedError(tool: BreakerTool, state: BreakerState, retryAfterSeconds: number, probeInFlight: boolean, windowMs: number): GatewayErrorSpec {
     const failures = state.failureTimes.length;
     const windowMinutes = Math.max(1, Math.round(windowMs / 60_000));
+    const replayNote = tool.risk === "read" ? "" : PAUSED_TOOL_REPLAY_NOTE;
     const message = probeInFlight
       ? `Tool "${tool.name}" (connection "${state.connectionName}") is paused after ${failures} unanswered calls in the last ${windowMinutes} min (last: ${state.lastFailure}), and another call is checking right now whether it answers again.` +
         ` This call was not sent to the server and not recorded; retry in ${retryAfterSeconds}s.` +
+        replayNote +
         ` The other tools of this connection and of other connections remain available.`
       : `Tool "${tool.name}" (connection "${state.connectionName}") is temporarily not responding: ${failures} of its calls in the last ${windowMinutes} min got no answer (last: ${state.lastFailure}).` +
         ` Calls to this tool are paused; this call was not sent to the server and not recorded.` +
         ` Retry in ${retryAfterSeconds}s: the first call after the pause checks whether the tool answers again.` +
+        replayNote +
         ` The other tools of this connection and of other connections remain available.`;
     return {
       status: 503,

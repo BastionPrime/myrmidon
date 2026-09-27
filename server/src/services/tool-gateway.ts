@@ -8,6 +8,7 @@ import {
   connectedToolFailureMessage,
   createRemoteToolResilience,
   disabledConnectedToolError,
+  localStdioPreparationFailure,
   localStdioToolFailure,
   remoteFetchFailure,
   remoteGuardFailure,
@@ -6227,18 +6228,7 @@ export function createToolGatewayService(
     parameters: unknown,
     ms: number,
   ): Promise<RemoteHttpExecutionResult> {
-    const { entry, connection } = await resolveConnectedLocalStdioTool(
-      session,
-      tool,
-    );
-    const grant = await resolveConnectionGrant(session, connection);
-    const template = await resolveLocalStdioRuntimeTemplate(connection);
-    const env = await localStdioEnvironment(
-      session,
-      connection,
-      template,
-      grant,
-    );
+    const { entry, connection, template, env } = await prepareLocalStdioCall(session, tool); // myrmidon(P9)
     // myrmidon(P9): a JSON-RPC error is the stdio server answering, and a timeout
     // is this one call not answering (its per-call process is killed). Both are
     // carried past the runtime supervisor as a value, so the slot idles normally
@@ -6288,6 +6278,42 @@ export function createToolGatewayService(
     return {
       result: normalizeMcpToolResult(result, "local_stdio", true),
     };
+  }
+
+  // myrmidon(P9): errors raised before the stdio process starts (tool or
+  // connection gone/disabled, grant, template, an unresolvable credential) name
+  // the tool and the connection too. Class, status, reason code and details are
+  // kept; the call was not sent.
+  async function prepareLocalStdioCall(session: ToolGatewaySession, tool: ToolGatewayDescriptor) {
+    let resolved: Awaited<ReturnType<typeof resolveConnectedLocalStdioTool>> | null = null;
+    try {
+      resolved = await resolveConnectedLocalStdioTool(session, tool);
+      const grant = await resolveConnectionGrant(session, resolved.connection);
+      const template = await resolveLocalStdioRuntimeTemplate(resolved.connection);
+      const env = await localStdioEnvironment(session, resolved.connection, template, grant);
+      return { ...resolved, template, env };
+    } catch (error) {
+      if (!(error instanceof ToolGatewayHttpError) && !(error instanceof ToolRuntimeSupervisorError)) throw error;
+      const failure = localStdioPreparationFailure(error.reasonCode, { message: error.message, details: error.details });
+      const message = connectedToolFailureMessage({
+        gatewayToolName: tool.name,
+        upstreamToolName: resolved?.entry.toolName ?? tool.upstreamToolName ?? tool.name,
+        connectionName: resolved?.connection.name ?? tool.applicationDisplayName ?? tool.connectionId ?? "unknown",
+        failure,
+        risk: tool.risk,
+      });
+      const connectionId = resolved?.connection.id ?? tool.connectionId ?? null;
+      const catalogEntryId = resolved?.entry.id ?? tool.catalogEntryId ?? null;
+      const details = {
+        ...error.details,
+        ...(connectionId ? { connectionId } : {}),
+        ...(catalogEntryId ? { catalogEntryId } : {}),
+        tool: tool.name,
+      };
+      throw error instanceof ToolRuntimeSupervisorError
+        ? new ToolRuntimeSupervisorError(error.status, message, error.reasonCode, details)
+        : new ToolGatewayHttpError(error.status, message, error.reasonCode, details);
+    }
   }
 
   // myrmidon(P9): one stdio call ran out of its budget.
