@@ -33,6 +33,8 @@ import {
 } from "../../../services/issue-continuation-summary.js";
 import { parseIssueExecutionState } from "../../../services/issue-execution-policy.js";
 import { decideQueuedRunStaleness, decideScheduledRetryGate } from "../domain/policy.js";
+// myrmidon(P2): pending interaction addressee wake
+import { isPendingInteractionAddresseeWake } from "../myrmidon-pending-interaction-wake.js";
 import type {
   QueuedRunFacts,
   ReviewParticipantFacts,
@@ -497,6 +499,13 @@ export function createPostgresRunDispatchAdapter(
       context,
       ISSUE_TREE_CONTROL_INTERACTION_WAKE_REASONS,
     );
+    // myrmidon(P2): a pending interaction wakes its addressee, who may not be the assignee
+    const pendingInteractionAddresseeWake = await isPendingInteractionAddresseeWake(dbOrTx, {
+      companyId: input.companyId,
+      issueId,
+      agentId: input.agentId,
+      contextSnapshot: context,
+    });
     const resumeIntent = context.resumeIntent === true || context.followUpRequested === true;
     const wakeReason = readNonEmptyString(context.wakeReason);
     const retryReason =
@@ -570,6 +579,8 @@ export function createPostgresRunDispatchAdapter(
       isConnectionContinuation: (isResolvedInteractionContinuation && context.interactionKind === "connection_intent")
         || context.source === "connection_tools.refreshed",
       isInteractionWake,
+      // myrmidon(P2): pending interaction addressee wake
+      isPendingInteractionAddresseeWake: pendingInteractionAddresseeWake,
       isAuthorizedSourceScopedRecovery,
       isNonAssigneeWorkspaceBusyRetry: isNonAssigneeWorkspaceBusyRetry(retryReason, context),
       resumeIntent,
