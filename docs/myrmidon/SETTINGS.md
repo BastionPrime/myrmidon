@@ -85,3 +85,4 @@
 | `PAPERCLIP_TELEMETRY_ENDPOINT` | Адрес приёма телеметрии. У нас без него телеметрия не работает даже с флагом, адресов по умолчанию нет | Не задавать | TEL |
 | `PAPERCLIP_ANNOUNCEMENTS_ENABLED`, `PAPERCLIP_ANNOUNCEMENTS_FEED_URL` | Лента объявлений. У вендора включена по умолчанию с адресом вендора; у нас включается только `PAPERCLIP_ANNOUNCEMENTS_ENABLED=true` плюс свой адрес ленты | Не задавать | TEL |
 | `PAPERCLIP_FEEDBACK_EXPORT_BACKEND_URL` (или `PAPERCLIP_TELEMETRY_BACKEND_URL`) | Куда уходят отзывы, которыми пользователь решил поделиться. У нас адреса по умолчанию нет: без него отзывы остаются локально, выгрузка помечается «не настроено» | Не задавать | TEL |
+| `PAPERCLIP_UPDATE_CHECK_URL` | Адрес, где CLI проверяет новую версию (формат ответа npm registry). У вендора — `registry.npmjs.org/paperclipai` всегда; у нас без переменной проверки нет | Не задавать | TEL |

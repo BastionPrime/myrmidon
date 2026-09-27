@@ -12,9 +12,12 @@ describe("update notice", () => {
     delete process.env.PAPERCLIP_UPDATE_CHECK; const config = path.join(root, "config.json"); fs.writeFileSync(config, JSON.stringify({ updates: { checkEnabled: false } })); expect(isUpdateNoticeEnabled(config)).toBe(false);
   });
   it("throttles registry checks for 24 hours", async () => {
+    // myrmidon(TEL): the check needs an explicit registry URL
+    vi.stubEnv("PAPERCLIP_UPDATE_CHECK_URL", "https://registry.example.com/paperclipai");
     const cachePath = path.join(root, "cache.json"); const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ "dist-tags": { latest: "99.0.0" } }), { status: 200 }));
     expect(await checkForUpdateNotice({ cachePath, now: 1000, fetchImpl })).toBe("99.0.0");
     expect(await checkForUpdateNotice({ cachePath, now: 2000, fetchImpl })).toBe("99.0.0");
     expect(fetchImpl).toHaveBeenCalledOnce();
+    vi.unstubAllEnvs();
   });
 });

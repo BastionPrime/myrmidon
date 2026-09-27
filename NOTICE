@@ -1,0 +1,32 @@
+Myrmidon
+Copyright (c) 2026 The Myrmidon project contributors
+
+Myrmidon is based on Paperclip (https://github.com/paperclipai/paperclip),
+version 2026.916.1 (tag v2026.916.1, commit d554c47).
+
+    Paperclip
+    Copyright (c) 2025 Paperclip AI
+    Licensed under the MIT License. The full license text is in LICENSE.
+
+Myrmidon is not affiliated with or endorsed by Paperclip AI. The Paperclip
+name remains in package names (@paperclipai/*), environment variables
+(PAPERCLIP_*) and the paperclipai CLI for compatibility only.
+
+Third-party notices kept in this tree:
+
+- packages/adapters/hermes/LICENSE
+    Hermes adapter, Copyright (c) 2026 Nous Research, MIT License.
+- ui/public/fonts/NOTICE.md
+    Inter font bundled with the board UI, SIL Open Font License 1.1.
+- ui/public/brands/adapters/LICENSE
+    Adapter brand icons, Copyright (c) 2023 LobeHub, MIT License.
+- ui/public/brands/apps/LOBE-LICENSE
+    App brand icons, Copyright (c) 2023 LobeHub, MIT License.
+- packages/paperclip-runner/devtools/issue-thread/src/fonts/NOTICE.md
+    Fonts bundled with the Runner issue-thread viewer, SIL Open Font License 1.1.
+
+Brand logos under ui/public/brands/ are trademarks of their respective owners
+and are used only to identify the corresponding products.
+
+Licenses of npm dependencies are listed by `pnpm licenses list --prod` and
+checked in CI (see docs/myrmidon/ci.md).
