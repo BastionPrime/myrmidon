@@ -13,6 +13,8 @@ import type { ExecutionContinuationEnvelope } from "@paperclipai/shared";
 import { sanitizeQuarantinedCommentForHigherTrust } from "./source-trust.js";
 import { hasConversationContinuationPolicy } from "./conversation-continuation.js";
 import { queuedCommentIdsFromWakePayload } from "./issue-queued-comment-queue.js";
+// myrmidon(P3): bounded continuation history
+import { limitExecutionContinuationHistory } from "../myrmidon/continuation-history-limit.js";
 
 const object = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v)
@@ -314,7 +316,8 @@ export async function buildExecutionContinuation(input: {
     (hasConversationContinuationPolicy(lastTerminal.result) ||
       lastTerminal.status === "interrupted" || lastTerminal.errorCode === "process_lost")
     ? lastTerminal.id : undefined);
-  return {
+  // myrmidon(P3): bound the returned history; checks above ran on the full history
+  return limitExecutionContinuationHistory({
     ...(interruptedRunId ? { interruptedRunId } : {}),
     ...(resumeDelta ? { resumeDelta } : {}),
     recoveryOutcomes: reconciliations
@@ -357,5 +360,5 @@ export async function buildExecutionContinuation(input: {
       throughCommentId: messages.at(-1)?.id ?? null,
       summaryThroughCommentId: null,
     },
-  };
+  });
 }
