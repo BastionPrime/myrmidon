@@ -610,6 +610,8 @@ import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { serverVersion } from "../version.js";
 // myrmidon(R3): maintenance mode admission gate
 import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/maintenance/gate.js";
+// myrmidon(P1): stale active environment lease sweep
+import { createStaleActiveLeaseSweep } from "../myrmidon/leases-stale-sweep.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -18162,6 +18164,25 @@ export function heartbeatService(
   // for that period between attempts. The sweep reads and writes the attempt
   // count in the lease metadata. It warns once when a lease reaches the attempt
   // cap and then stops the retries for that lease.
+  // myrmidon(P1): release active leases left on terminal runs with dead processes
+  const sweepStaleActiveEnvironmentLeases = createStaleActiveLeaseSweep({
+    db,
+    environments: environmentsSvc,
+    environmentRuntime,
+    isRunStillActive: (run) =>
+      isNativeRunnerOwnershipHeld(run) ||
+      runningProcesses.has(run.id) ||
+      activeRunExecutions.has(run.id) ||
+      (!!run.processPid && isProcessAlive(run.processPid)) ||
+      (!!run.processGroupId && isProcessGroupAlive(run.processGroupId)),
+    afterRelease: async (lease) => {
+      if (!lease.heartbeatRunId) return;
+      await acknowledgeRemoteStop(lease.heartbeatRunId, lease.companyId);
+      const stopped = await getRun(lease.heartbeatRunId);
+      if (stopped) await resumeRemoteStopComments(stopped);
+    },
+  });
+
   async function sweepPendingCleanupLeases(opts?: {
     backoffMs?: number;
     /** One cleanup attempt per explicit user Retry, for this failed run only.
@@ -18975,6 +18996,16 @@ export function heartbeatService(
         { reapedCount: reaped.length, runIds: reaped },
         "reaped orphaned heartbeat runs",
       );
+    }
+
+    // myrmidon(P1): retire active leases left on terminal runs on this tick too
+    try {
+      const staleActive = await sweepStaleActiveEnvironmentLeases();
+      if (staleActive.released > 0 || staleActive.failed > 0) {
+        logger.warn(staleActive, "swept stale active environment leases on terminal heartbeat runs");
+      }
+    } catch {
+      logger.warn({ errorKind: "stale_active_lease_sweep_failed" }, "stale active environment lease sweep failed");
     }
 
     // Retry stranded pending_cleanup leases on the same tick. Isolate the sweep
@@ -28530,6 +28561,14 @@ export function heartbeatService(
           message: options.eventMessage ?? "run cancelled",
           ...(options.eventPayload ? { payload: options.eventPayload } : {}),
         });
+        // myrmidon(P1): release run environment leases before promotion, like finalization
+        await releaseEnvironmentLeasesForRun({
+          runId: cancelled.id,
+          companyId: cancelled.companyId,
+          agentId: cancelled.agentId,
+          status: cancelled.status,
+          failureReason: cancelled.error ?? undefined,
+        });
         await releaseIssueExecutionAndPromote(cancelled, {
           suppressImmediateRecovery: options.suppressImmediateRecovery,
         });
@@ -28613,6 +28652,14 @@ export function heartbeatService(
           });
         }
         runningProcesses.delete(run.id);
+        // myrmidon(P1): release run environment leases before promotion, like finalization
+        await releaseEnvironmentLeasesForRun({
+          runId: run.id,
+          companyId: run.companyId,
+          agentId: run.agentId,
+          status: "cancelled",
+          failureReason: reason,
+        });
         await releaseIssueExecutionAndPromote(run);
       } finally {
         stopOwnership?.release();
@@ -29026,6 +29073,8 @@ export function heartbeatService(
     recoverNativeRunsAfterRestart,
     reapOrphanedRuns,
     sweepPendingCleanupLeases,
+    // myrmidon(P1): exposed for tests and operators
+    sweepStaleActiveEnvironmentLeases,
     // Override-aware scheduling-suppression check (honors the worktree
     // run-execution experimental setting). Callers outside the service that
     // gate on suppression should prefer this over the env-only resolver.
