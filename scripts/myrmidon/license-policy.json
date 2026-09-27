@@ -1,0 +1,114 @@
+{
+  "$comment": "License policy for production dependencies (pnpm licenses list --prod). Checked by scripts/myrmidon/check-licenses.mjs. An exception matches a package name together with the exact license string pnpm reports; every exception needs a reason.",
+  "allowed": [
+    "MIT",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Apache-2.0",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    "BlueOak-1.0.0",
+    "Python-2.0",
+    "OFL-1.1"
+  ],
+  "forbidden": [
+    "GPL-*",
+    "AGPL-*",
+    "SSPL-*",
+    "Unknown"
+  ],
+  "exceptions": [
+    {
+      "name": "@csstools/color-helpers",
+      "license": "MIT-0",
+      "reason": "MIT No Attribution: MIT without the attribution clause, strictly more permissive than MIT."
+    },
+    {
+      "name": "@csstools/css-syntax-patches-for-csstree",
+      "license": "MIT-0",
+      "reason": "MIT No Attribution: MIT without the attribution clause, strictly more permissive than MIT."
+    },
+    {
+      "name": "url-template",
+      "license": "BSD",
+      "reason": "Non-SPDX label; the bundled LICENSE file is the two-clause BSD license (BSD-2-Clause)."
+    },
+    {
+      "name": "khroma",
+      "license": "Unknown",
+      "reason": "package.json has no license field; the bundled license file is MIT (Fabio Spampinato, Andrew Maney). Transitive dependency of mermaid in the UI."
+    },
+    {
+      "name": "opencode-linux-x64",
+      "license": "Unknown",
+      "reason": "Platform binary of opencode-ai (MIT) without its own license field; pulled by the vendor Runner package for the opencode adapter."
+    },
+    {
+      "name": "opencode-linux-x64-baseline",
+      "license": "Unknown",
+      "reason": "Platform binary of opencode-ai (MIT) without its own license field; pulled by the vendor Runner package for the opencode adapter."
+    },
+    {
+      "name": "opencode-linux-x64-baseline-musl",
+      "license": "Unknown",
+      "reason": "Platform binary of opencode-ai (MIT) without its own license field; pulled by the vendor Runner package for the opencode adapter."
+    },
+    {
+      "name": "opencode-linux-x64-musl",
+      "license": "Unknown",
+      "reason": "Platform binary of opencode-ai (MIT) without its own license field; pulled by the vendor Runner package for the opencode adapter."
+    },
+    {
+      "name": "lightningcss",
+      "license": "MPL-2.0",
+      "reason": "Weak file-level copyleft; used unmodified as the CSS transformer of the UI build. MPL obligations apply only to modified MPL files, and we modify none."
+    },
+    {
+      "name": "lightningcss-linux-x64-gnu",
+      "license": "MPL-2.0",
+      "reason": "Platform binary of lightningcss (MPL-2.0), used unmodified; see lightningcss."
+    },
+    {
+      "name": "lightningcss-linux-x64-musl",
+      "license": "MPL-2.0",
+      "reason": "Platform binary of lightningcss (MPL-2.0), used unmodified; see lightningcss."
+    },
+    {
+      "name": "@img/sharp-libvips-linux-x64",
+      "license": "LGPL-3.0-or-later",
+      "reason": "Prebuilt libvips shared library loaded dynamically by sharp (Apache-2.0), unmodified. LGPL permits dynamic linking; the source is published upstream. Vendor dependency."
+    },
+    {
+      "name": "@img/sharp-libvips-linuxmusl-x64",
+      "license": "LGPL-3.0-or-later",
+      "reason": "Prebuilt libvips shared library loaded dynamically by sharp (Apache-2.0), unmodified; see @img/sharp-libvips-linux-x64."
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk",
+      "license": "Unknown",
+      "reason": "Proprietary SDK (Anthropic commercial terms) required by the vendor Claude ACP adapter. Redistributed unmodified in the image as upstream Paperclip does; flagged for maintainer review."
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-linux-x64",
+      "license": "Unknown",
+      "reason": "Platform binary of @anthropic-ai/claude-agent-sdk; same terms and review note."
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-linux-x64-musl",
+      "license": "Unknown",
+      "reason": "Platform binary of @anthropic-ai/claude-agent-sdk; same terms and review note."
+    },
+    {
+      "name": "@cursor/sdk",
+      "license": "Unknown",
+      "reason": "Proprietary SDK (Cursor terms of service) required by the vendor cursor-cloud adapter. Redistributed unmodified in the image as upstream Paperclip does; flagged for maintainer review."
+    },
+    {
+      "name": "@cursor/sdk-linux-x64",
+      "license": "SEE LICENSE IN LICENSE.md",
+      "reason": "Platform binary of @cursor/sdk; same terms and review note."
+    }
+  ]
+}

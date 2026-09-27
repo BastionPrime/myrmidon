@@ -454,15 +454,22 @@ jobs:
       - name: Verify the runner
         run: pnpm --filter @paperclipai/paperclip-runner check:all
 
-  script-tests:
-    name: script tests
+  checks:
+    # Cheap checks that run on every tier: node:test suites of our scripts,
+    # gitleaks, the internal-address scan, dependency licenses and plugin
+    # compatibility. Every step runs even if an earlier one failed.
+    name: checks
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -470,23 +477,125 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
-      - name: Run node:test suites under scripts/myrmidon
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Locate pnpm store
+        id: pnpm_store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store (read only)
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm_store.outputs.path }}
+          key: myr-pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: myr-pnpm-${{ runner.os }}-
+
+      - name: Select commit range
+        id: range
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          mapfile -t files < <(find scripts/myrmidon -name '*.test.mjs' -type f 2>/dev/null | sort)
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "::notice title=script tests::No scripts/myrmidon/**/*.test.mjs files yet"
-            exit 0
+          skip_tests=""
+          if [ "$EVENT" = "pull_request" ]; then
+            base="$PR_BASE"; head="$PR_HEAD"
+            # Vendor release sync brings vendor test fixtures with sample addresses.
+            case "$HEAD_REF" in sync/*) skip_tests="--skip-tests" ;; esac
+          elif [ -n "${PUSH_BEFORE:-}" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            base="$PUSH_BEFORE"; head="$GITHUB_SHA"
+          else
+            base="$GITHUB_SHA~1"; head="$GITHUB_SHA"
           fi
+          {
+            echo "base=$base"
+            echo "head=$head"
+            echo "skip_tests=$skip_tests"
+          } >> "$GITHUB_OUTPUT"
+          echo "range: $base..$head"
+
+      - name: Shellcheck deploy scripts
+        run: shellcheck --version && shellcheck -x scripts/myrmidon/deploy/*.sh
+
+      - name: Script tests (node:test under scripts/myrmidon)
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find scripts/myrmidon -name '*.test.mjs' -type f | sort)
           printf 'Running %s\n' "${files[@]}"
           node --test "${files[@]}"
+
+      - name: Secrets (gitleaks, new commits)
+        if: ${{ !cancelled() }}
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+          HEAD: ${{ steps.range.outputs.head }}
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact --verbose \
+            --config .gitleaks.toml --log-opts="$BASE..$HEAD" .
+
+      - name: Internal addresses (private networks)
+        if: ${{ !cancelled() }}
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+          HEAD: ${{ steps.range.outputs.head }}
+          SKIP_TESTS: ${{ steps.range.outputs.skip_tests }}
+        run: |
+          args=(--check private-ip --base "$BASE" --head "$HEAD")
+          if [ -n "$SKIP_TESTS" ]; then args+=("$SKIP_TESTS"); fi
+          node scripts/myrmidon/scan-diff.mjs "${args[@]}"
+
+      - name: Internal addresses (forbidden patterns from the repository secret)
+        if: ${{ !cancelled() }}
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+          HEAD: ${{ steps.range.outputs.head }}
+          MYRMIDON_FORBIDDEN_PATTERNS: ${{ secrets.MYRMIDON_FORBIDDEN_PATTERNS }}
+        run: node scripts/myrmidon/scan-diff.mjs --check forbidden --base "$BASE" --head "$HEAD"
+
+      - name: Install dependencies
+        if: ${{ !cancelled() }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Licenses of production dependencies
+        if: ${{ !cancelled() }}
+        run: node scripts/myrmidon/check-licenses.mjs
+
+      - name: Plugin compatibility — build plugin SDK and shared from the repository
+        id: sdk
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @paperclipai/plugin-sdk ensure-build-deps
+
+      - name: Plugin compatibility — manifest snapshots (offline)
+        if: ${{ !cancelled() && steps.sdk.outcome == 'success' }}
+        run: pnpm --filter @paperclipai/server exec tsx ../scripts/myrmidon/plugin-compat/check.ts --fixtures-only
+
+      - name: Plugin compatibility — installed plugins against the host
+        if: ${{ !cancelled() && steps.sdk.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          node scripts/myrmidon/plugin-compat/install.mjs --work "$RUNNER_TEMP/plugin-compat"
+          pnpm --filter @paperclipai/server exec tsx ../scripts/myrmidon/plugin-compat/check.ts --work "$RUNNER_TEMP/plugin-compat"
 
   ci-result:
     # Single stable name for the ruleset. Lanes the plan did not need are
     # skipped; any failure, or a skip without a successful plan, fails it.
     name: CI result
     if: ${{ !cancelled() }}
-    needs: [plan, typecheck, build, tests-affected, tests, tests-other, tests-runner, script-tests]
+    needs: [plan, typecheck, build, tests-affected, tests, tests-other, tests-runner, checks]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -1,0 +1,9 @@
+{
+  "$comment": "Third-party plugins Myrmidon deployments run. Versions are the ones in production. required=true blocks CI; required=false only warns (breakage outside our code). Checked by scripts/myrmidon/plugin-compat (see docs/myrmidon/ci.md).",
+  "plugins": [
+    { "name": "@vectorize-io/hindsight-paperclip", "version": "0.3.0", "required": true, "fixture": "fixtures/hindsight-paperclip.manifest.json" },
+    { "name": "@pingstray/paperclip-lang-ru", "version": "1.0.23", "required": false, "fixture": "fixtures/paperclip-lang-ru.manifest.json" },
+    { "name": "paperclip-claude-auth", "version": "1.1.1", "required": false, "fixture": "fixtures/paperclip-claude-auth.manifest.json" },
+    { "name": "paperclip-plugin-telegram", "version": "0.8.1", "required": false, "fixture": "fixtures/paperclip-plugin-telegram.manifest.json" }
+  ]
+}

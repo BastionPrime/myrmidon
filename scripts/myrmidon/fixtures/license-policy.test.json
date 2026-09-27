@@ -1,0 +1,8 @@
+{
+  "allowed": ["MIT", "Apache-2.0", "BSD-3-Clause"],
+  "forbidden": ["GPL-*", "AGPL-*", "SSPL-*", "Unknown"],
+  "exceptions": [
+    { "name": "pkg-excepted", "license": "Unknown", "reason": "Fixture: license file checked by hand." },
+    { "name": "pkg-gone", "license": "MIT-0", "reason": "Fixture: exception for a package that is not installed." }
+  ]
+}

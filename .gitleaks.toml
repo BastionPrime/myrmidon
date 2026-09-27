@@ -1,0 +1,53 @@
+# gitleaks configuration for Myrmidon (gitleaks 8.30.1, pinned in
+# .github/workflows/myrmidon-ci.yml). Default rules plus an allowlist of vendor
+# (Paperclip) files whose matches are known false positives.
+#
+# How the list was built: a full-history scan on 2026-09-27 (4050 commits) gave
+# 57 matches, all in vendor commits, all fake values: test fixtures, redaction
+# tests, PEM header literals used by validators, placeholder IDs in docs. Each
+# path below was reviewed by hand. Do not add our own files here; fix the value
+# instead (tests use neutral data, see docs/myrmidon/CONVENTIONS.md, section 7).
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Vendor test fixtures with fake tokens, keys and JWTs"
+paths = [
+  '''^packages/google-sheets-mcp-server/src/http\.test\.ts$''',
+  '''^packages/google-sheets-mcp-server/src/server\.test\.ts$''',
+  '''^packages/paperclip-runner/runner/crates/runner-core/tests/acpx_sidecar_transport\.rs$''',
+  '''^packages/paperclip-runner/src/control-plane/durable-prp-control-plane\.test\.ts$''',
+  '''^packages/paperclip-runner/src/drivers/opencode/opencode-server-driver\.test\.ts$''',
+  '''^packages/paperclip-runner/src/live/runnerd-codex-transport\.test\.ts$''',
+  '''^packages/paperclip-runner/src/tools/capability-semantic-tools\.test\.ts$''',
+  '''^packages/plugins/sandbox-providers/exe-dev/src/plugin\.test\.ts$''',
+  '''^server/src/__tests__/company-artifacts-service\.test\.ts$''',
+  '''^server/src/__tests__/decisions-service\.test\.ts$''',
+  '''^server/src/__tests__/environment-custom-images-service\.test\.ts$''',
+  '''^server/src/__tests__/heartbeat-active-run-output-watchdog\.test\.ts$''',
+  '''^server/src/__tests__/http-log-redaction\.test\.ts$''',
+  '''^server/src/__tests__/invite-accept-gateway-defaults\.test\.ts$''',
+  '''^server/src/__tests__/redact-sensitive\.test\.ts$''',
+  '''^server/src/__tests__/redaction\.test\.ts$''',
+  '''^server/src/__tests__/secrets-service\.test\.ts$''',
+  '''^server/src/__tests__/server-startup-feedback-export\.test\.ts$''',
+  '''^server/src/__tests__/tool-gateway\.test\.ts$''',
+  '''^server/src/services/__tests__/run-failure-report\.test\.ts$''',
+  '''^tests/e2e/chat-adapters-ui\.spec\.ts$''',
+  '''^ui/src/pages/apps/gateways/ConnectClientDialog\.test\.tsx$''',
+  '''^ui/src/pages/apps/gateways/gateway-helpers\.test\.ts$''',
+  '''^ui/src/pages/apps/gateways/panels/TokensPanel\.test\.tsx$''',
+]
+
+[[allowlists]]
+description = "Vendor sources and docs: PEM header literals in validators, placeholder IDs and example requests"
+paths = [
+  '''^doc/logs/2026-05-24-cli-api-parity-e2e-log\.md$''',
+  '''^doc/plans/chat-adapters/2026-09-08-chat-queue-and-webhook-repair\.md$''',
+  '''^doc/plans/chat-adapters/2026-09-08-github-private-attachment-authority\.md$''',
+  '''^docs/deploy/secrets\.md$''',
+  '''^packages/paperclip-runner/runner/crates/runner-core/src/durable/state\.rs$''',
+  '''^packages/plugins/sandbox-providers/exe-dev/src/plugin\.ts$''',
+  '''^scripts/smoke/hermes-gateway-e2e\.sh$''',
+]

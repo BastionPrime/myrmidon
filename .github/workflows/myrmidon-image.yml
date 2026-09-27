@@ -1,0 +1,193 @@
+name: Myrmidon image
+
+# Builds the Myrmidon container image from the vendor Dockerfile (production
+# stage, amd64 only) and publishes it to ghcr.io/itkadr-git/myrmidon.
+# Never runs on pull requests, so fork PRs cannot build or push. The image is
+# pushed by digest first, smoke-tested (/api/health must report the expected
+# version and commit), and only then tagged. See docs/myrmidon/ci.md.
+
+on:
+  push:
+    branches: [main]
+    tags: ["*-myr.*"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: myrmidon-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/itkadr-git/myrmidon
+
+jobs:
+  image:
+    name: image
+    if: ${{ github.repository == 'itkadr-git/myrmidon' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Compute versions
+        id: version
+        run: |
+          set -euo pipefail
+          git fetch --force --tags --quiet origin
+          vendor_tag="$(git describe --tags --abbrev=0 --match 'v20*' HEAD)"
+          vendor_version="${vendor_tag#v}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+            if [[ ! "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+-myr\.[0-9]+$ ]]; then
+              echo "::error::release tag must look like <vendor version>-myr.<N>, got $tag"
+              exit 1
+            fi
+            if [[ "${tag%-myr.*}" != "$vendor_version" ]]; then
+              echo "::error::tag $tag does not match the vendor base $vendor_version of this commit"
+              exit 1
+            fi
+            build_version="$tag"
+            expected_version="$tag"
+          else
+            # git describe output; the server turns it into <version>+<n>.git.<sha>.
+            build_version="$(git describe --tags --long --abbrev=7 --match 'v20*' HEAD)"
+            if [[ "$build_version" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-g([0-9a-f]+)$ ]]; then
+              if [[ "${BASH_REMATCH[2]}" == "0" ]]; then
+                expected_version="${BASH_REMATCH[1]}"
+              else
+                expected_version="${BASH_REMATCH[1]}+${BASH_REMATCH[2]}.git.${BASH_REMATCH[3]}"
+              fi
+            else
+              echo "::error::unexpected git describe output: $build_version"
+              exit 1
+            fi
+          fi
+          {
+            echo "vendor=$vendor_version"
+            echo "build=$build_version"
+            echo "expected=$expected_version"
+          } >> "$GITHUB_OUTPUT"
+          echo "vendor=$vendor_version build=$build_version expected=$expected_version"
+
+      - name: Free runner disk
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/share/swift /usr/local/lib/android /usr/local/share/boost \
+            /usr/local/share/powershell /opt/ghc /opt/hostedtoolcache/CodeQL /opt/hostedtoolcache/PyPy \
+            /opt/hostedtoolcache/Ruby || true
+          docker system prune -af || true
+          df -h /
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+          labels: |
+            org.opencontainers.image.title=Myrmidon
+            org.opencontainers.image.description=Control plane for companies of AI agents, based on Paperclip
+            org.opencontainers.image.source=https://github.com/itkadr-git/myrmidon
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.version=${{ steps.version.outputs.expected }}
+            io.github.itkadr-git.myrmidon.base.paperclip-version=${{ steps.version.outputs.vendor }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          target: production
+          platforms: linux/amd64
+          build-args: |
+            PAPERCLIP_BUILD_VERSION=${{ steps.version.outputs.build }}
+            PAPERCLIP_BUILD_COMMIT=${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+      - name: Smoke test /api/health
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          EXPECTED_VERSION: ${{ steps.version.outputs.expected }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker pull --quiet "$REF"
+          # local_trusted returns full health details (version) without auth;
+          # it requires a loopback bind, hence the host network.
+          docker run -d --name myrmidon-smoke --network host \
+            -e HOST=127.0.0.1 -e PORT=3100 \
+            -e PAPERCLIP_DEPLOYMENT_MODE=local_trusted -e PAPERCLIP_DEPLOYMENT_EXPOSURE=private \
+            "$REF" >/dev/null
+          body=""
+          for _ in $(seq 1 180); do
+            if body="$(curl -fsS http://127.0.0.1:3100/api/health 2>/dev/null)" \
+              && [ "$(jq -r '.status' <<<"$body")" = "ok" ]; then
+              break
+            fi
+            body=""
+            sleep 2
+          done
+          if [ -z "$body" ]; then
+            echo "::error::server did not report status ok on /api/health"
+            docker logs --tail 200 myrmidon-smoke || true
+            exit 1
+          fi
+          jq '{status, version, commit}' <<<"$body"
+          version="$(jq -r '.version' <<<"$body")"
+          commit="$(jq -r '.commit' <<<"$body")"
+          docker rm -f myrmidon-smoke >/dev/null
+          [ "$version" = "$EXPECTED_VERSION" ] || { echo "::error::version $version, expected $EXPECTED_VERSION"; exit 1; }
+          [ "$commit" = "$EXPECTED_COMMIT" ] || { echo "::error::commit $commit, expected $EXPECTED_COMMIT"; exit 1; }
+
+      - name: Tag the tested digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=(-t "$tag")
+          done < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools create "${args[@]}" "$IMAGE@$DIGEST"
+          docker buildx imagetools inspect "$IMAGE@$DIGEST"
+
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.expected }}
+        run: |
+          {
+            echo "### Myrmidon image"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Digest | \`$IMAGE@$DIGEST\` |"
+            echo "| Version (/api/health) | \`$VERSION\` |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Base Paperclip | \`${{ steps.version.outputs.vendor }}\` |"
+            echo "| Tags | $(jq -r '.tags | map("`" + . + "`") | join(", ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") |"
+          } >> "$GITHUB_STEP_SUMMARY"

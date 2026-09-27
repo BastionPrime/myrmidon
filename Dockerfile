@@ -150,13 +150,19 @@ ARG USER_GID=1000
 # the @latest CLI tools advance weekly). Without it the cached layer would
 # freeze the tools until an unrelated cache bust.
 ARG CLI_TOOLS_CACHE_EPOCH=""
+# myrmidon(R1): pin the agent CLI versions (vendor installs @latest) so image builds are reproducible
+ARG CLAUDE_CODE_VERSION=2.1.283
+ARG CODEX_VERSION=0.157.1
+ARG OPENCODE_VERSION=1.18.32
+ARG GEMINI_CLI_VERSION=0.61.0
+ARG KIMI_CODE_VERSION=2.1.1
 WORKDIR /app
 # Tool and OS layer BEFORE the app copy: it references nothing from /app, and
 # the app copy changes on every commit — ordered the other way around, this
 # (the single most expensive layer: four CLI toolchains + apt, per arch) can
 # never hit the layer cache and rebuilds on every build.
 RUN echo "cli-tools-epoch: ${CLI_TOOLS_CACHE_EPOCH}" \
-  && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest \
+  && npm install --global --omit=dev @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/codex@${CODEX_VERSION} opencode-ai@${OPENCODE_VERSION} @google/gemini-cli@${GEMINI_CLI_VERSION} @moonshot-ai/kimi-code@${KIMI_CODE_VERSION} \
   && apt-get update \
   && apt-get install -y --no-install-recommends openssh-client jq \
   && rm -rf /var/lib/apt/lists/* \

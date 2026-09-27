@@ -1,0 +1,35 @@
+{
+  "id": "paperclip.lang.ru",
+  "apiVersion": 1,
+  "version": "1.0.0",
+  "displayName": "Russian Language Pack",
+  "description": "Russian language pack for Paperclip UI. Adds Russian language support.",
+  "author": "yaches",
+  "categories": [
+    "ui"
+  ],
+  "capabilities": [
+    "ui.action.register",
+    "instance.settings.register"
+  ],
+  "entrypoints": {
+    "worker": "./dist/worker.js",
+    "ui": "./dist/ui"
+  },
+  "ui": {
+    "slots": [
+      {
+        "type": "globalToolbarButton",
+        "id": "lang-switcher",
+        "displayName": "Language",
+        "exportName": "LangSwitcher"
+      },
+      {
+        "type": "settingsPage",
+        "id": "lang-settings",
+        "displayName": "Language Pack",
+        "exportName": "LangSettingsPage"
+      }
+    ]
+  }
+}

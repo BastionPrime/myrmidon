@@ -1,0 +1,4 @@
+{
+  "$comment": "Paths where the private-address check of scripts/myrmidon/scan-diff.mjs does not apply. Glob syntax (** and *). Each entry needs a reason. Vendor test files are skipped automatically only on vendor sync branches (sync/*); list other vendor files here when a cherry-picked vendor change carries a documentation or test address.",
+  "privateIp": []
+}

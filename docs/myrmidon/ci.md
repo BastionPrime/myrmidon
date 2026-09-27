@@ -12,9 +12,9 @@ Workflow [`myrmidon-ci.yml`](../../.github/workflows/myrmidon-ci.yml) — на �
 
 | Уровень | Когда | Что запускается |
 |---|---|---|
-| **docs** | PR меняет только `docs/myrmidon/**`, `scripts/myrmidon/**` (кроме `scripts/myrmidon/ci/**`), `CLAUDE.md`, `NOTICE`, `.github/README.md`, `.gitleaks.toml` | `script tests` |
-| **fast** | Остальные PR | `typecheck` (без Rust раннера), `build` (без релизной сборки Rust), `tests (affected)`, `script tests` |
-| **full** | `push` в `main`; ручной запуск; PR с меткой `full-ci`; PR, который трогает основу (список ниже); PR, где отбор дал больше 60 файлов тестов на один большой пакет | Всё: `typecheck` и `build` полностью, 13 частей `tests (…)` (= `pnpm test:run`), `tests (other packages)`, `tests (runner)`, `script tests` |
+| **docs** | PR меняет только `docs/myrmidon/**`, `scripts/myrmidon/**` (кроме `scripts/myrmidon/ci/**`), `CLAUDE.md`, `NOTICE`, `.github/README.md`, `.gitleaks.toml` | `checks` |
+| **fast** | Остальные PR | `typecheck` (без Rust раннера), `build` (без релизной сборки Rust), `tests (affected)`, `checks` |
+| **full** | `push` в `main`; ручной запуск; PR с меткой `full-ci`; PR, который трогает основу (список ниже); PR, где отбор дал больше 60 файлов тестов на один большой пакет | Всё: `typecheck` и `build` полностью, 13 частей `tests (…)` (= `pnpm test:run`), `tests (other packages)`, `tests (runner)`, `checks` |
 
 **Обязателен для слияния быстрый уровень** (сводная проверка `CI result` на PR). Полный
 уровень гарантируется на `main` после слияния; его сбой сразу виден (ниже).
@@ -76,7 +76,7 @@ Job `report main status` после полного прогона на `main`:
 | `tests (server 1/5)` … `(server 5/5)`, `tests (serialized 1/5)` … `(5/5)`, `tests (workspaces-a 1/2)`, `(2/2)`, `tests (workspaces-b)` | full | Весь `pnpm test:run`, разбиение как у вендора |
 | `tests (other packages)` | full | Пакеты, которые `pnpm test:run` не запускает (ниже) |
 | `tests (runner)` | full | `pnpm --filter @paperclipai/paperclip-runner check:all`, как отдельная проверка раннера у вендора |
-| `script tests` | все | `node --test` по `scripts/myrmidon/**/*.test.mjs` |
+| `checks` | все | Шаги: `shellcheck` скриптов выката; `node --test` по `scripts/myrmidon/**/*.test.mjs`; секреты (gitleaks); внутренние адреса (частные сети и запрещённые шаблоны); лицензии зависимостей; совместимость плагинов. Каждый шаг выполняется, даже если предыдущий упал: в журнале видно все сбои сразу |
 | **`CI result`** | все | Сводная: зелёная, если `plan` прошёл и каждая проверка прошла или не требовалась уровнем |
 | `report main status` | только `main` | issue `main-red` (выше) |
 
@@ -122,6 +122,139 @@ Job `report main status` после полного прогона на `main`:
 - Хранилище pnpm: пишет только job `typecheck`, остальные читают. Ключ — хеш `pnpm-lock.yaml`.
 - Зависимости Rust (`Swatinem/rust-cache`): сохраняются только на `push` в `main`, PR их
   только читают.
+
+## Лицензии зависимостей
+
+`node scripts/myrmidon/check-licenses.mjs` запускает `pnpm licenses list --prod --json` и
+сверяет каждый пакет с политикой [`scripts/myrmidon/license-policy.json`](../../scripts/myrmidon/license-policy.json):
+
+- разрешены MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0, 0BSD, CC0-1.0, Unlicense,
+  BlueOak-1.0.0, Python-2.0, OFL-1.1 (без учёта регистра). Выражение `A OR B` проходит, если
+  разрешена хотя бы одна сторона; `A AND B` — если разрешены обе;
+- запрещены GPL-\*, AGPL-\*, SSPL-\* и `Unknown` (лицензия не указана);
+- всё остальное (MPL-2.0, LGPL, «SEE LICENSE IN …») тоже не проходит без исключения;
+- исключение задаётся парой «имя пакета + лицензия ровно как её пишет pnpm» и обязательно с
+  причиной. Если у пакета сменится лицензия, исключение перестанет действовать.
+
+Локально: `node scripts/myrmidon/check-licenses.mjs` (после `pnpm install`). Новую зависимость с
+неразрешённой лицензией — заменить или добавить исключение с причиной в том же PR.
+
+Исключения на 27.09.2026 (18 пакетов): MIT-0 (`@csstools/*`), BSD-2 без SPDX-метки
+(`url-template`), MIT без поля `license` (`khroma`, бинарники `opencode-linux-*`), MPL-2.0
+(`lightningcss*`), LGPL-3.0 (`@img/sharp-libvips-*`, динамическая библиотека) и
+проприетарные SDK адаптеров вендора (`@anthropic-ai/claude-agent-sdk*`, `@cursor/sdk*`).
+Последние помечены для решения сопровождающего.
+
+## Поиск секретов
+
+gitleaks **8.30.1**, архив проверяется по sha256 (в workflow). Сканируются только новые коммиты:
+на PR — `base..head`, на `push` в `main` — `before..after`. Настройки —
+[`.gitleaks.toml`](../../.gitleaks.toml): правила по умолчанию плюс список файлов вендора с
+заведомо ложными срабатываниями (тестовые токены, литералы заголовков PEM, примеры в
+документах). Наши файлы туда не добавляем: вместо этого убираем значение.
+
+Полный скан истории 27.09.2026 (4050 коммитов): 57 срабатываний, все в коммитах вендора,
+все — тестовые или примерные значения (34 generic-api-key, 15 private-key, 6 jwt,
+1 discord-api-token, 1 curl-auth-header). С `.gitleaks.toml` — 0.
+
+Локально: `gitleaks git --config .gitleaks.toml --log-opts="origin/main..HEAD" .`
+
+## Внутренние адреса
+
+`node scripts/myrmidon/scan-diff.mjs` смотрит только добавленные строки диффа
+(`git diff base...head`) и не печатает найденные значения: только файл, строку и правило.
+
+- **Частные адреса** (всегда): IPv4 из частных сетей `10/8`, `172.16/12`, `192.168/16` и `100.64/10`
+  (CGNAT). Для примеров — `192.0.2.0/24`, `198.51.100.0/24`, `localhost`,
+  `127.0.0.1` (CONVENTIONS, раздел 9). Исключения по путям —
+  [`scripts/myrmidon/scan-diff-allowlist.json`](../../scripts/myrmidon/scan-diff-allowlist.json)
+  с причиной. На ветках `sync/*` (перенос вендора) тестовые файлы пропускаются: в тестах
+  вендора бывают примерные адреса.
+- **Запрещённые шаблоны** — из секрета репозитория `MYRMIDON_FORBIDDEN_PATTERNS`: по одному
+  регулярному выражению на строку, `#` — комментарий, без учёта регистра. Сам список в
+  открытом репозитории не лежит, и в журнал CI не попадает ни шаблон, ни совпадение — только
+  номер строки шаблона. Если секрет не задан (или PR из чужого форка, где секретов нет), шаг
+  проходит с предупреждением.
+
+Сопровождающему: завести секрет `MYRMIDON_FORBIDDEN_PATTERNS` (Settings → Secrets and
+variables → Actions) — наши домены, имена хостов, подсети, имена ботов.
+
+## Совместимость плагинов
+
+Плагины, которые стоят на наших установках, — в
+[`scripts/myrmidon/plugin-compat/plugins.json`](../../scripts/myrmidon/plugin-compat/plugins.json)
+с точными версиями. hindsight (`@vectorize-io/hindsight-paperclip`) — обязательный: его сбой
+красит CI. Остальные (`@pingstray/paperclip-lang-ru`, `paperclip-claude-auth`,
+`paperclip-plugin-telegram`) — «предупреждение, не блок»: сбой виден как warning в сводке.
+
+Как проверяется (шаги `Plugin compatibility — …` job `checks`):
+
+1. **Снимки манифестов** (`plugin-compat/fixtures/*.manifest.json`, без сети) проходят через
+   проверки хоста из репозитория: схема манифеста (`pluginManifestV1Schema`), версия API
+   плагинов, согласованность возможностей (`pluginCapabilityValidator`), минимальная версия
+   хоста. Это те же проверки, что делает `plugin-loader` при установке.
+2. **Установка как на сервере:** `install.mjs` ставит каждый плагин в свой чистый каталог
+   (`npm install --ignore-scripts`), затем заменяет все копии `@paperclipai/plugin-sdk` и
+   `@paperclipai/shared` пакетами, собранными из репозитория (`pnpm pack` — ровно то, что было
+   бы опубликовано). Так плагин работает с нашим SDK, а не с версией из npm.
+3. **Проверка установленного пакета** (`check.ts`): модуль манифеста загружается, проходит
+   те же проверки, файл воркера на месте. Затем воркер запускается через
+   `createPluginWorkerHandle` сервера — настоящий процесс и RPC хоста: `initialize` и
+   `health`. `health` со статусом `error` — сбой; `degraded` (плагину не хватает настроек,
+   например токена бота) — норма.
+
+Полный старт сервера со встроенным postgres и установкой через API не делаем: это ещё
+несколько минут на каждый PR, а шаги выше уже проходят тот же код хоста (валидаторы и
+менеджер воркеров).
+
+Локально:
+
+```sh
+pnpm --filter @paperclipai/plugin-sdk ensure-build-deps
+node scripts/myrmidon/plugin-compat/install.mjs --work /tmp/plugin-compat
+pnpm --filter @paperclipai/server exec tsx ../scripts/myrmidon/plugin-compat/check.ts --work /tmp/plugin-compat
+```
+
+Новая версия плагина на установке: поменять версию в `plugins.json` и обновить снимок
+манифеста (JSON того, что экспортирует `dist/manifest.js` пакета).
+
+## Образ
+
+Workflow [`myrmidon-image.yml`](../../.github/workflows/myrmidon-image.yml), job `image`.
+Вендорский `docker.yml` не правим: он строит `ghcr.io/${{ github.repository }}` для двух
+архитектур по тегам `v*` вендора, с его схемой тегов и каналами npm. Свой файл проще и не
+конфликтует при переносе.
+
+- **Когда:** `push` в `main`, git-тег вида `<версия вендора>-myr.<N>` (первый —
+  `2026.916.1-myr.1`), вручную. На `pull_request` не запускается вовсе, плюс проверка
+  `github.repository == 'itkadr-git/myrmidon'`: PR из чужих форков образ не собирают.
+- **Что:** `Dockerfile` вендора, стадия `production`, только `linux/amd64`. Кеш BuildKit — в
+  реестре (`ghcr.io/itkadr-git/myrmidon:buildcache`).
+- **Версия и коммит** для `/api/health`: `PAPERCLIP_BUILD_VERSION` и
+  `PAPERCLIP_BUILD_COMMIT`. На теге выпуска версия — сам тег (сверяется с тегом вендора в
+  основе коммита). На `main` — `git describe` от тега вендора, сервер показывает его как
+  `2026.916.1+<N>.git.<sha>`.
+- **Порядок:** образ сначала публикуется только по digest, затем smoke: `docker run` с
+  `local_trusted` (он отдаёт версию без входа), `/api/health` должен ответить `status: ok` и
+  ровно ожидаемыми версией и коммитом. Только после этого digest получает теги. Упал smoke —
+  тегов нет.
+- **Теги:** `sha-<короткий коммит>` на каждый запуск, `main` — плавающий на `main`, тег
+  выпуска — на теге.
+- **Метки OCI:** `org.opencontainers.image.title=Myrmidon`, `source` — адрес репозитория,
+  `licenses=MIT`, `version` — версия, которую покажет `/api/health`, `revision` — коммит,
+  `io.github.itkadr-git.myrmidon.base.paperclip-version` — версия вендора в основе. Скрипты
+  выката берут ожидаемые версию и коммит из этих меток.
+- **Сводка job** — digest, версия, коммит, теги.
+- **Версии CLI агентов** в стадии `production` закреплены аргументами сборки
+  (`CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `OPENCODE_VERSION`, `GEMINI_CLI_VERSION`,
+  `KIMI_CODE_VERSION`; у вендора — `@latest`). Обновлять — правкой значений по умолчанию в
+  `Dockerfile`.
+- Медиа-инструментов (ffmpeg, yt-dlp и т. п.) в образе нет; тест
+  `scripts/myrmidon/image/image.test.mjs` следит за этим, за закреплёнными версиями CLI и за
+  тем, что workflow не срабатывает на PR.
+
+Сопровождающему: после первой публикации проверить видимость пакета
+`ghcr.io/itkadr-git/myrmidon` (Package settings) — новый пакет может оказаться закрытым.
 
 ## Почему не вендорский `pr.yml`
 
