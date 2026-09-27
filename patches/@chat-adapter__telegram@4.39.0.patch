@@ -74,9 +74,9 @@ diff --git a/dist/index.js b/dist/index.js
      );
 +    this.maxDownloadBytes = this.clampInteger(
 +      config.maxDownloadBytes,
-+      TELEGRAM_FILE_LIMIT,
++      Math.max(0, Math.trunc(Number(process.env.MYRMIDON_TELEGRAM_FILE_LIMIT_BYTES))) || TELEGRAM_FILE_LIMIT, // myrmidon(P8): self-hosted Bot API serves files up to 2 GB
 +      1,
-+      TELEGRAM_FILE_LIMIT
++      Math.max(0, Math.trunc(Number(process.env.MYRMIDON_TELEGRAM_FILE_LIMIT_BYTES))) || TELEGRAM_FILE_LIMIT
 +    );
      this.secretToken = config.secretToken ?? process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
      this.allowUnverifiedWebhooks = config.allowUnverifiedWebhooks ?? process.env.TELEGRAM_ALLOW_UNVERIFIED_WEBHOOKS === "true";

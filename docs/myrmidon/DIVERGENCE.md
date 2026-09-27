@@ -41,6 +41,7 @@
 | ID | Что меняем | Файлы вендора | Причина | Тест-сторож | Как снимать | PR |
 |---|---|---|---|---|---|---|
 | vendor:6d0342868 | Представления чата агента с синтетическим id `chat:<uuid>` не шлют запросы коннекторов задачи; маршруты отвечают 400 на id не-UUID вместо 500 | `server/src/routes/chat-channels.ts`, `server/src/routes/email.ts`, `server/src/routes/openapi.ts`, `ui/src/components/EmailTaskActivity.tsx`, `ui/src/components/chat/ExternallyConnectedTaskBanner.tsx` + тесты вендора | P7b, вендорский #13654: открытие чата агента давало 500 (`invalid input syntax for type uuid`) | `server/src/__tests__/task-connector-read-routes.test.ts`, `ui/src/components/task-only-connector-queries.test.tsx` | Уходит сам при переносе тега вендора, который содержит этот коммит | [#28](https://github.com/itkadr-git/myrmidon/pull/28) |
+| P8 | Потолок скачивания файла Telegram задаётся переменной `MYRMIDON_TELEGRAM_FILE_LIMIT_BYTES`; без неё — вендорские 25 МБ | `patches/@chat-adapter__telegram@4.39.0.patch` (две строки в вендорском pnpm-патче), `pnpm-lock.yaml` (хэш патча) | Свой Bot API отдаёт файлы до 2 ГБ, а вендорский патч адаптера режет всё больше 25 МБ | `server/src/__tests__/telegram-file-limit.myrmidon.test.ts` | Никогда, пока вендор зажимает предел константой. Снимать: вернуть две строки с меткой `myrmidon(P8)` в патче к `TELEGRAM_FILE_LIMIT`, `pnpm install`, удалить тест. При обновлении версии адаптера — перенести две строки в новый патч | [#30](https://github.com/itkadr-git/myrmidon/pull/30) |
 
 ## Трек 5 — эксплуатация
 
