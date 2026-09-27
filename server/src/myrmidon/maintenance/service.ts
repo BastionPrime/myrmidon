@@ -213,7 +213,16 @@ export function maintenanceService(
         }));
       }
     } catch (err) {
+      // The mode enters and exits regardless; the failure is logged and audited.
+      const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, windowId: window.id, hook: name }, "maintenance integration hook failed");
+      await audit(window, "zabbix_failed", SYSTEM_ACTOR, { hook: name, error: message });
+      await write((doc) => ({
+        next: doc.windows.some((w) => w.id === window.id)
+          ? updateWindow(doc, window.id, { zabbix: { ...window.zabbix, lastError: message } })
+          : null,
+        result: null,
+      })).catch(() => undefined);
     }
   }
 
