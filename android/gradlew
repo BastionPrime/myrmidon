@@ -1,0 +1,10 @@
+#!/bin/sh
+
+# Gradle start script for wellmagram (standard Flutter wrapper).
+# Uses gradle-wrapper.jar + gradle-wrapper.properties (gradle-8.14-all,
+# as pinned by upstream Komet build; JDK 17 from the build image).
+
+APP_HOME=$(cd "$(dirname "$0")" && pwd -P)
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+exec java -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"
