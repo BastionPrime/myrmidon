@@ -37,6 +37,7 @@ import {
 import { serverVersion } from "../version.js";
 import { getStartupRecoveryState } from "../startup-recovery-state.js";
 import { nativeRestartRecoverySummary } from "../services/native-runtime/native-restart-recovery.js";
+import { maintenanceHealth } from "../myrmidon/maintenance/index.js"; // myrmidon(R3)
 import {
   removeHotRestartIntent,
   writeHotRestartIntent,
@@ -378,6 +379,7 @@ export function healthRoutes(
       ? inspectDatabaseBackupHealth(opts.databaseBackupHealth)
       : undefined;
     const warnings = databaseBackup?.warnings.length ? databaseBackup.warnings : undefined;
+    const maintenance = await maintenanceHealth(db); // myrmidon(R3): public; present only while a window is open
     const nativeRecovery = exposeFullDetails
       ? await nativeRestartRecoverySummary(db).catch((error) => {
           logger.warn({ err: error }, "native recovery health summary failed");
@@ -393,6 +395,7 @@ export function healthRoutes(
         deploymentMode: opts.deploymentMode,
         deploymentExposure: opts.deploymentExposure,
         localAiLoginSupported: supportsLocalAiLogin(opts),
+        ...(maintenance ? { maintenance } : {}), // myrmidon(R3)
         commit,
         bootstrapStatus,
         bootstrapInviteActive,
@@ -426,6 +429,7 @@ export function healthRoutes(
       serverInfo,
       startupRecovery,
       nativeRecovery,
+      ...(maintenance ? { maintenance } : {}), // myrmidon(R3)
       ...(databaseBackup ? { databaseBackup } : {}),
       ...(warnings ? { warnings } : {}),
       ...(devServer ? { devServer } : {}),

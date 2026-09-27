@@ -340,8 +340,11 @@
 "maintenance": { "active": true, "instanceState": "on", "windows": 1 }
 ```
 
-`instanceState` — `off` | `entering` | `on` | `leaving`. Статус health режим не меняет:
-`status` остаётся `ok`.
+- Поле есть, **только пока открыто хотя бы одно окно**. Нет поля — окон нет. Вне режима ответ
+  совпадает с вендорским, как у полей `cloud` и `hiddenSettings`.
+- `instanceState` — состояние окна инстанса: `entering` | `on` | `leaving`, или `off`, если
+  открыты только окна узких областей.
+- Статус health режим не меняет: `status` остаётся `ok`.
 
 ### Как выкат (R4) пользуется режимом
 
@@ -353,7 +356,8 @@
    при старте до первого прохода планировщика, прогоны не стартуют.
 4. Проверить `/api/health`: версия, коммит и `maintenance.instanceState == "on"`.
 5. `POST {"action":"exit","scope":{"type":"instance"}}`, затем опрашивать, пока
-   `instance == null` (или `health.maintenance.instanceState == "off"`).
+   `instance == null` (или пока в `/api/health` не пропадёт поле `maintenance` либо
+   `maintenance.instanceState` не станет `off`).
 6. Откат выполняется так же: окно не закрывают, пока старый digest не поднят и не проверен.
 
 ## 8. Плашка в интерфейсе
