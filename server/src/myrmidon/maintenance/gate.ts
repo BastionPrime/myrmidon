@@ -1,8 +1,8 @@
 // Maintenance mode admission gate. Called from the vendor heartbeat admission points,
 // so it must stay cheap and must not import the heartbeat service.
 
-import { eq } from "drizzle-orm";
-import { agents, heartbeatRuns, type Db } from "@paperclipai/db";
+import { eq, inArray } from "drizzle-orm";
+import { agents, heartbeatRuns, issues, type Db } from "@paperclipai/db";
 import {
   blockingWindows,
   departmentMembers,
@@ -156,3 +156,50 @@ export async function isInstanceUnderMaintenance(db: Runner): Promise<boolean> {
   return blockingWindows(await getCachedMaintenanceDocument(db)).some((w) => w.scope.type === "instance");
 }
 
+
+/**
+ * Routine ticks are skipped while a window covers the routine's company or its
+ * assignee agent (instance, company, department, agent scopes).
+ */
+export async function isRoutineUnderMaintenance(
+  db: Runner,
+  routine: { companyId: string; assigneeAgentId?: string | null },
+): Promise<boolean> {
+  const windows = blockingWindows(await getCachedMaintenanceDocument(db));
+  if (windows.length === 0) return false;
+  if (windows.some((w) => w.scope.type === "instance" || (w.scope.type === "company" && w.scope.id === routine.companyId))) {
+    return true;
+  }
+  return routine.assigneeAgentId ? isAgentUnderMaintenance(db, routine.assigneeAgentId) : false;
+}
+
+/**
+ * Task watchdogs: skip a watchdog when its watchdog agent or the assignee of the
+ * watched issue is under maintenance (the subtree looks stopped only because
+ * the window holds it).
+ */
+export async function filterTaskWatchdogsOutsideMaintenance<T extends { issueId: string; watchdogAgentId: string }>(
+  db: Runner,
+  rows: T[],
+): Promise<T[]> {
+  const windows = blockingWindows(await getCachedMaintenanceDocument(db));
+  if (windows.length === 0 || rows.length === 0) return rows;
+  if (windows.some((w) => w.scope.type === "instance")) return [];
+  const issueIds = [...new Set(rows.map((row) => row.issueId))];
+  const assignees = new Map(
+    (
+      await db
+        .select({ id: issues.id, assigneeAgentId: issues.assigneeAgentId })
+        .from(issues)
+        .where(inArray(issues.id, issueIds))
+    ).map((issue) => [issue.id, issue.assigneeAgentId] as const),
+  );
+  const kept: T[] = [];
+  for (const row of rows) {
+    if (await isAgentUnderMaintenance(db, row.watchdogAgentId)) continue;
+    const assignee = assignees.get(row.issueId);
+    if (assignee && (await isAgentUnderMaintenance(db, assignee))) continue;
+    kept.push(row);
+  }
+  return kept;
+}

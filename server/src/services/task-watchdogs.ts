@@ -23,6 +23,8 @@ import { evaluateAgentInvokabilityFromDb } from "./agent-invokability.js";
 import { issueService } from "./issues.js";
 import { visibleIssueCondition } from "./issue-visibility.js";
 import { TASK_WATCHDOG_ORIGIN_KIND } from "./task-watchdog-scope.js";
+// myrmidon(R3): maintenance mode holds task watchdogs
+import { filterTaskWatchdogsOutsideMaintenance } from "../myrmidon/maintenance/gate.js";
 
 const TASK_WATCHDOG_STOP_FINGERPRINT_PREFIX = "task_watchdog_stop:";
 const TASK_WATCHDOG_SUBTREE_MAX_DEPTH = 100;
@@ -1728,6 +1730,7 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
       issueCreatedAtGte?: Date | null;
     } = {}) => {
       let rows = await listActiveWatchdogsForCompany(opts.companyId ?? null);
+      rows = await filterTaskWatchdogsOutsideMaintenance(db, rows); // myrmidon(R3): watchdogs do not wake or escalate during maintenance
       if (opts.issueCreatedAtGte) {
         const watchdogIssueIds = [...new Set(rows.map((row) => row.issueId))];
         const eligibleIssueIds = new Set(
