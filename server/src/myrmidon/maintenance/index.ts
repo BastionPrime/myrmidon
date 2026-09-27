@@ -2,7 +2,8 @@
 
 import type { Db } from "@paperclipai/db";
 import { logger } from "../../middleware/logger.js";
-import { heartbeatService } from "../../services/heartbeat.js";
+// Same entry point as the vendor server/src/index.ts, so startup tests that mock it keep working.
+import { heartbeatService } from "../../services/index.js";
 import {
   MAINTENANCE_INTERRUPT_ERROR_CODE,
   MAINTENANCE_RETRY_REASON,
@@ -74,9 +75,15 @@ export function myrmidonMaintenanceRoutes(db: Db) {
  */
 export async function startMaintenanceMode(db: Db): Promise<() => void> {
   const service = defaultService(db);
-  const doc = await service.restore();
-  if (doc.windows.length > 0) {
-    logger.warn({ windows: doc.windows.map((w) => ({ scope: w.scope, state: w.state })) }, "maintenance mode is active");
+  try {
+    const doc = await service.restore();
+    if (doc.windows.length > 0) {
+      logger.warn({ windows: doc.windows.map((w) => ({ scope: w.scope, state: w.state })) }, "maintenance mode is active");
+    }
+  } catch (err) {
+    // The admission gate reads the state itself on its first check and the tick
+    // below retries; a failed read here must not stop the server from starting.
+    logger.error({ err }, "failed to restore maintenance mode state at startup");
   }
   const timer = setInterval(() => {
     void service.tick().catch((err) => logger.error({ err }, "maintenance tick failed"));

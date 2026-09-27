@@ -5,9 +5,11 @@ import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
+  agentWakeupRequests,
   agents,
   companies,
   createDb,
+  heartbeatRunEvents,
   heartbeatRuns,
   issueComments,
   issueRelations,
@@ -20,6 +22,7 @@ import {
 import { errorHandler } from "../middleware/index.js";
 import { issueRoutes } from "../routes/issues.js";
 import { issueService } from "../services/issues.js";
+import { heartbeatService } from "../services/heartbeat.js";
 import { checkoutRunStatusForIssue } from "../myrmidon/issue-checkout-guard.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -45,11 +48,16 @@ describeEmbeddedPostgres("issue checkout run-context gate and lock-owner status 
   }, 20_000);
 
   afterEach(async () => {
+    // Checkout and comment routes start wakes in the background; let them finish
+    // before cleanup so no wake row is written after its agent is gone.
+    await heartbeatService(db).drainActiveRunExecutions();
     await db.delete(issueComments);
     await db.delete(issueRelations);
     await db.delete(activityLog);
     await db.delete(issues);
+    await db.delete(heartbeatRunEvents);
     await db.delete(heartbeatRuns);
+    await db.delete(agentWakeupRequests);
     await db.delete(agents);
     await db.delete(companies);
   });
