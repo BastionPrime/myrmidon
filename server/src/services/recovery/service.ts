@@ -139,6 +139,8 @@ import {
   type RunOutputSilenceSummary,
   type WatchdogDecisionActor,
 } from "../../modules/active-run-watchdog/index.js";
+// myrmidon(R3): maintenance mode holds watchdog sweeps
+import { filterAgentsOutsideMaintenance } from "../../myrmidon/maintenance/gate.js";
 
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = [
   "queued",
@@ -4162,6 +4164,7 @@ export function recoveryService(
           not(unadmittedChatWakeupCondition(issues.id, issues.companyId)),
         ),
       );
+    candidates.splice(0, candidates.length, ...(await filterAgentsOutsideMaintenance(db, candidates, (issue) => issue.assigneeAgentId))); // myrmidon(R3): no stranded-issue redispatch or escalation during maintenance
 
     const result = {
       assignmentDispatched: 0,

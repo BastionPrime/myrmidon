@@ -78,6 +78,8 @@ import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./is
 import { logActivity } from "./activity-log.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { runtimePublicOrigin } from "./cloud-runtime-identity.js";
+// myrmidon(R3): maintenance mode skips scheduled routine ticks
+import { isRoutineUnderMaintenance } from "../myrmidon/maintenance/gate.js";
 
 const OPEN_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked"];
 const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"];
@@ -3091,11 +3093,12 @@ export function routineService(
         const projectPaused = !!(row.routine.projectId && row.projectPausedAt);
         const automaticEligibility = await getAutomaticRoutineDispatchEligibility(row.routine, worktreeActivation);
         const worktreeSuppressed = !automaticEligibility.eligible;
+        const maintenanceSuppressed = await isRoutineUnderMaintenance(db, row.routine); // myrmidon(R3): skip, no catch-up
 
         let runCount = 1;
         let claimedNextRunAt = nextCronTickInTimeZone(row.trigger.cronExpression, row.trigger.timezone, now);
 
-        if (!projectPaused && !worktreeSuppressed && row.routine.catchUpPolicy === "enqueue_missed_with_cap") {
+        if (!projectPaused && !worktreeSuppressed && !maintenanceSuppressed && row.routine.catchUpPolicy === "enqueue_missed_with_cap") { // myrmidon(R3)
           if (isSubHourlyCronExpression(row.trigger.cronExpression, row.trigger.timezone, now)) {
             claimedNextRunAt = nextCronTickInTimeZone(row.trigger.cronExpression, row.trigger.timezone, now);
           } else {
@@ -3126,12 +3129,12 @@ export function routineService(
           .then((rows) => rows[0] ?? null);
         if (!claimed) continue;
 
-        if (projectPaused || worktreeSuppressed) {
+        if (projectPaused || worktreeSuppressed || maintenanceSuppressed) { // myrmidon(R3)
           await recordSuppressedAutomaticRun({
             routine: row.routine,
             trigger: row.trigger,
             source: "schedule",
-            reason: worktreeSuppressed ? "worktree_execution_cutoff" : "paused",
+            reason: maintenanceSuppressed ? "maintenance" : worktreeSuppressed ? "worktree_execution_cutoff" : "paused", // myrmidon(R3)
             nextRunAt: claimedNextRunAt,
           });
           continue;

@@ -172,13 +172,15 @@
   области: их прогоны законно стоят в очереди;
 - `reconcileTaskWatchdogs` — не будит сторожевого агента по поддереву в области и не будит
   агента из области;
-- `active-run-watchdog` (`scanSilentActiveRuns`) — не считает «молчащими» прогоны области,
-  пока окно открыто;
+- `active-run-watchdog` (`scanSilentActiveRuns`) — **не трогаем**. В 916.1 он никого не будит
+  и не эскалирует: только считает уже открытые оценки и сворачивает прогоны, чья задача уже
+  закрыта. Сворачивание помогает дренажу;
 - `sweepStaleIssueLocks` — работает как у вендора: он снимает только замки завершённых
   прогонов.
 
 Для окна инстанса эти обходы пропускаются целиком. Для узких областей агенты из области
-отфильтровываются внутри обхода, одной строкой вызова с меткой `myrmidon(R3)`.
+отфильтровываются внутри обхода, одной строкой вызова с меткой `myrmidon(R3)`. Сторож задачи
+пропускается, если в области его сторожевой агент или исполнитель наблюдаемой задачи.
 
 ## 6. Хранение
 
@@ -449,7 +451,6 @@
 | `server/src/services/routines.ts` | пропуск тика и догона |
 | `server/src/services/recovery/service.ts` | фильтр в `reconcileStrandedAssignedIssues` |
 | `server/src/services/task-watchdogs.ts` | фильтр в `reconcileTaskWatchdogs` |
-| `server/src/modules/active-run-watchdog/**` | фильтр в `scanSilentActiveRuns` |
 | `server/src/services/instance-settings.ts` | сохранение ключа `myrmidonMaintenance` в `updateGeneral` |
 | `server/src/index.ts` | восстановление при старте, запуск тика режима |
 | `server/src/app.ts` | монтирование маршрутов `/api/myrmidon/maintenance` |

@@ -29110,6 +29110,7 @@ export function heartbeatService(
           agentsByCompany.get(agent.companyId) ?? [],
         );
         if (!invokability.invokable) continue;
+        if (await isAgentUnderMaintenance(db, agent.id)) continue; // myrmidon(R3): no timer wakes during maintenance
         const policy = parseHeartbeatPolicy(agent);
         if (!policy.enabled || policy.intervalSec <= 0) continue;
 
