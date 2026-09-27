@@ -184,6 +184,8 @@ import { useStreamlinedUiEnabled } from "../hooks/useStreamlinedUiEnabled";
 import { workModeMetaFor } from "../lib/work-mode-meta";
 import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff";
 import { IssueAttachmentsSection } from "../components/IssueAttachmentsSection";
+// myrmidon(U3)
+import { IssueFilesPanel } from "@/components/myrmidon/IssueFilesPanel";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { IssuePlanDecompositionsSection } from "../components/IssuePlanDecompositionsSection";
 import { IssueOutputSection } from "../components/issue-output/IssueOutputSection";
@@ -7506,6 +7508,18 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
             />
           )}
 
+          {/* myrmidon(U3): the chat shell hides the attachment section; list every task file here */}
+          {taskChatShellEnabled ? (
+            <IssueFilesPanel
+              attachments={attachments ?? []}
+              workProducts={workProducts ?? []}
+              resolveAuthor={(entry) =>
+                (entry.createdByAgentId ? agentMap.get(entry.createdByAgentId)?.name : null) ??
+                (entry.createdByUserId ? userLabelMap.get(entry.createdByUserId) : null) ??
+                null
+              }
+            />
+          ) : null}
           {taskChatShellEnabled ? null : attachmentsInitialLoading ? (
             <IssueSectionSkeleton titleWidth="w-24" rows={2} />
           ) : hasAttachments ? (
