@@ -1614,7 +1614,7 @@ rl.on("line", (line) => {
       parameters: { message: "after" },
     })).resolves.toMatchObject({ status: "completed", result: { content: "local:after" } });
 
-    // A timeout is still a runtime failure, but the caller learns which tool it was.
+    // A timeout is reported for the tool as well.
     await gateway.executeTool({
       sessionToken: session.token,
       tool: toolName,
@@ -1633,6 +1633,70 @@ rl.on("line", (line) => {
         expect(message).toContain("retrying it later is safe");
       },
     );
+  }, 30_000);
+
+  it("keeps a local stdio connection usable after repeated timeouts of one tool", async () => {
+    // Each stdio call runs in its own process, which a timeout kills. A timed-out
+    // call is this one tool not answering: it must not fail the connection's
+    // runtime slot and put every tool of the connection behind restart backoff or
+    // storm suppression.
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    const localTool = await createLocalStdioMcpTool(db, company.id, {
+      applicationKey: "stdio-timeouts",
+      connectionName: "Stdio timeouts",
+      toolName: "echo",
+      stdioScript: `
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stdio-timeouts", version: "0.0.0" } } }) + "\\n");
+    return;
+  }
+  if (message.method === "tools/call") {
+    const text = String(message.params?.arguments?.message ?? "");
+    if (text === "hang") return;
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "local:" + text }] } }) + "\\n");
+  }
+});
+`,
+    });
+    const toolName = expectedConnectedToolName({
+      applicationKey: "stdio-timeouts",
+      connectionId: localTool.connection.id,
+      toolName: "echo",
+    });
+    await allowAllToolsForAgent(db, company.id, agent.id);
+    const gateway = createTestToolGatewayService(db, { runtimeSupervisor: { idleTtlMs: 10_000 } });
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+    const slot = async () =>
+      (await db.select().from(toolRuntimeSlots).where(eq(toolRuntimeSlots.connectionId, localTool.connection.id)))[0];
+
+    for (let index = 0; index < 5; index += 1) {
+      await gateway.executeTool({
+        sessionToken: session.token,
+        tool: toolName,
+        parameters: { message: "hang" },
+        timeoutMs: 200,
+      }).then(
+        () => {
+          throw new Error("Expected the stdio timeout");
+        },
+        (error) => {
+          expectGatewayError(error, 504, "tool_timeout");
+          expect((error as ToolGatewayHttpError).message).toContain("timed out after 200 ms");
+        },
+      );
+      expect(await slot()).toMatchObject({ status: "idle", healthStatus: "ok" });
+    }
+    await expect(gateway.executeTool({
+      sessionToken: session.token,
+      tool: toolName,
+      parameters: { message: "after" },
+    })).resolves.toMatchObject({ status: "completed", result: { content: "local:after" } });
   }, 30_000);
 
   it("keeps an unhealthy connection discoverable and callable, and restores its health on success", async () => {

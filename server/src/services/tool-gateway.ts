@@ -6239,10 +6239,11 @@ export function createToolGatewayService(
       template,
       grant,
     );
-    // myrmidon(P9): a JSON-RPC error is the stdio server answering. It is carried
-    // past the runtime supervisor as a value, so the slot idles normally instead of
-    // being marked failed (which put every tool of the connection behind the
-    // restart backoff). Failures name the tool, its connection and the cause.
+    // myrmidon(P9): a JSON-RPC error is the stdio server answering, and a timeout
+    // is this one call not answering (its per-call process is killed). Both are
+    // carried past the runtime supervisor as a value, so the slot idles normally
+    // instead of being marked failed (which put every tool of the connection
+    // behind restart backoff). Failures name the tool, its connection and the cause.
     const answered: { error: ToolGatewayHttpError | null } = { error: null };
     const result = await runtimeSupervisor.useConnectionSlot(
       {
@@ -6271,7 +6272,7 @@ export function createToolGatewayService(
           parameters,
           timeoutMs: ms,
         }).catch((error: unknown) => {
-          if (!isLocalStdioRpcError(error)) throw error;
+          if (!isLocalStdioRpcError(error) && !isLocalStdioCallTimeout(error)) throw error;
           answered.error = error;
           return null;
         });
@@ -6287,6 +6288,11 @@ export function createToolGatewayService(
     return {
       result: normalizeMcpToolResult(result, "local_stdio", true),
     };
+  }
+
+  // myrmidon(P9): one stdio call ran out of its budget.
+  function isLocalStdioCallTimeout(error: unknown): error is ToolGatewayHttpError {
+    return error instanceof ToolGatewayHttpError && error.reasonCode === "tool_timeout";
   }
 
   // myrmidon(P9): a JSON-RPC error object returned by the stdio server itself.

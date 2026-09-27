@@ -175,8 +175,10 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
     ).resolves.toEqual([]);
     expect(await db.select().from(toolMcpGatewayTokens)).toHaveLength(2);
 
+    // myrmidon(P9): health no longer drops a connection from the run; a disabled
+    // connection is still left out and reported.
     await db.update(toolConnections)
-      .set({ healthStatus: "degraded", healthMessage: "fixture unavailable" })
+      .set({ enabled: false })
       .where(eq(toolConnections.id, installedConnection!.id));
     const unavailableReports: Array<Array<{ id: string; name: string }>> = [];
     await expect(

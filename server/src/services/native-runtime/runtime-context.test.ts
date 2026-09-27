@@ -84,7 +84,8 @@ afterEach(async () => {
 });
 
 describe("buildNativeRuntimeContext", () => {
-  it.each(["disabled", "degraded"] as const)(
+  // myrmidon(P9): a degraded connection stays in the run; only disabled is omitted.
+  it.each<"disabled" | "degraded">(["disabled"])(
     "omits an unavailable native MCP connection when it is %s without aborting runtime context creation",
     async (unavailableState) => {
       serviceMocks.exportFiles.mockResolvedValue({

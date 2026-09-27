@@ -84,7 +84,6 @@ import {
   PROVIDER_QUOTA_MONITOR_SERVICE_NAME,
   envBindingSchema,
   isEnvironmentDriverSupportedForAdapter,
-  isToolConnectionAttentionHealth,
   type BillingType,
   type ChatProvider,
   type CostStatus,
@@ -162,6 +161,8 @@ import {
 import { createHostDuplexObservabilityRecorder } from "./duplex-observability-recorder.js";
 import { incrementToolRuntimeMetricCounter } from "./tool-runtime-metrics.js";
 import { logger } from "../middleware/logger.js";
+// myrmidon(P9): run MCP selection ignores connection health
+import { isRunSelectableConnection, isRunUnavailableConnection } from "../myrmidon/tool-gateway-run-selection.js";
 import {
   createGitRemoteAuthProvider,
   resolveManagedGitHubIdentitySelection,
@@ -4527,26 +4528,13 @@ export async function buildPaperclipRuntimeMcpServers(input: {
     )
     .map(({ id, name }) => ({ id, name }))
     .sort((a, b) => a.name.localeCompare(b.name));
+  // myrmidon(P9): health is not a filter; an assigned connection stays in the run
+  // unless it is disabled or inactive (same rule as native runtime-context).
   const assignedConnections = resolvedInstalledConnections.filter(
-    (connection) =>
-      permittedConnectionIds.has(connection.id) &&
-      connection.status === "active" &&
-      connection.enabled &&
-      ((Boolean(runIdentity?.activeIdentityContextId) &&
-        (connection.config?.sourceTemplateKey === "github" ||
-          connection.transportConfig?.sourceTemplateKey === "github")) ||
-        !isToolConnectionAttentionHealth(connection.healthStatus)) &&
-      (connection.transport === "mcp_remote" ||
-        connection.transport === "local_stdio"),
+    (connection) => permittedConnectionIds.has(connection.id) && isRunSelectableConnection(connection),
   );
   const unhealthyConnections = resolvedInstalledConnections.filter(
-    (connection) =>
-      permittedConnectionIds.has(connection.id) &&
-      (connection.transport === "mcp_remote" ||
-        connection.transport === "local_stdio") &&
-      (!connection.enabled ||
-        connection.status !== "active" ||
-        isToolConnectionAttentionHealth(connection.healthStatus)),
+    (connection) => permittedConnectionIds.has(connection.id) && isRunUnavailableConnection(connection),
   );
   if (unhealthyConnections.length && input.onUnavailableAssignedConnections) {
     try {

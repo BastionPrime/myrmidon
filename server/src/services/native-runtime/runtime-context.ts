@@ -4,7 +4,8 @@ import path from "node:path";
 import { and, eq } from "drizzle-orm";
 import { heartbeatRuns, type Db } from "@paperclipai/db";
 import type { PaperclipSkillEntry } from "@paperclipai/adapter-utils/server-utils";
-import { isToolConnectionAttentionHealth } from "@paperclipai/shared";
+// myrmidon(P9): run MCP selection ignores connection health
+import { isRunSelectableConnection } from "../../myrmidon/tool-gateway-run-selection.js";
 import {
   PAPERCLIP_OPERATIONAL_SKILL_KEY,
   resolvePaperclipDesiredSkillNames,
@@ -199,13 +200,9 @@ export async function resolveNativeRuntimeMcpSnapshot(input: { db: Db; agent: Pi
   });
   // App access is optional runtime context. Keep usable assignments pinned, but
   // do not stop unrelated work because an assigned app needs attention.
+  // myrmidon(P9): health is not a filter (same rule as heartbeat.ts).
   const availableConnectionIds = new Set(resolvedInstalledConnections.filter((connection) =>
-    permitted.has(connection.id)
-    && connection.status === "active"
-    && connection.enabled
-    && (Boolean(runIdentity?.activeIdentityContextId) && (connection.config?.sourceTemplateKey === "github" || connection.transportConfig?.sourceTemplateKey === "github")
-      || !isToolConnectionAttentionHealth(connection.healthStatus))
-    && ["mcp_remote", "local_stdio"].includes(connection.transport)
+    permitted.has(connection.id) && isRunSelectableConnection(connection)
   ).map((connection) => connection.id));
   const assignment = {
     version: 1,
