@@ -21,6 +21,7 @@ import {
 } from "../lib/recovery-lineage";
 import { StatusIcon } from "./StatusIcon";
 import { hasAssignedBacklogBlocker } from "../lib/issue-blockers";
+import { ReplayBlockedChip } from "./myrmidon/ReplayBlocked"; // myrmidon(N1)
 import { ExternalObjectStatusSummary } from "./ExternalObjectStatusSummary";
 import { Badge } from "@/components/ui/badge";
 
@@ -307,6 +308,8 @@ export function IssueRow({
               {issue.title}{titleSuffix}
             </span>
             {recoveryIndicator}
+            {/* myrmidon(N1) */}
+            <ReplayBlockedChip companyId={issue.companyId} issueId={issue.id} />
             {mobileTitleMeta ? (
               <span className="ml-auto shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground sm:hidden">
                 {mobileTitleMeta}
@@ -397,6 +400,8 @@ export function IssueRow({
             {issue.title}{titleSuffix}
           </span>
           {recoveryIndicator}
+          {/* myrmidon(N1) */}
+          <ReplayBlockedChip companyId={issue.companyId} issueId={issue.id} />
         </span>
         {checklistDependencyChips ? (
           <span className="flex flex-wrap gap-1 sm:order-3 sm:ml-(--sz-calc-13)">
