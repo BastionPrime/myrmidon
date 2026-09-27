@@ -427,6 +427,118 @@ export function localStdioPreparationFailure(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Context listings (resources/list, prompts/list) across assigned connections
+// ---------------------------------------------------------------------------
+
+/**
+ * Key under which a context listing repeats its report of skipped connections in
+ * `result._meta`. MCP SDK result models drop unknown result fields, so a client
+ * that lists natively only sees the report there.
+ */
+export const UNAVAILABLE_CONNECTIONS_META_KEY = "paperclip/unavailableConnections";
+
+/** One assigned connection missing from a context listing, and why. */
+export type UnavailableContextConnection = {
+  name: string;
+  connectionId: string;
+  reasonCode: string | null;
+  cause: string;
+};
+
+type ErrorWithDetails = { message: string; reasonCode?: unknown; details?: Record<string, unknown> };
+
+function errorWithDetails(error: unknown): ErrorWithDetails | null {
+  if (!(error instanceof Error)) return null;
+  const record = error as Error & { reasonCode?: unknown; details?: unknown };
+  return {
+    message: error.message,
+    reasonCode: record.reasonCode,
+    details: asRecord(record.details) ?? undefined,
+  };
+}
+
+/** JSON-RPC error code a failed context exchange carries (remote `rpcErrorCode`, stdio raw error). */
+export function contextRpcErrorCode(error: unknown): number | null {
+  const details = errorWithDetails(error)?.details;
+  if (!details) return null;
+  if (typeof details.rpcErrorCode === "number") return details.rpcErrorCode;
+  const stdioError = asRecord(details.error);
+  return typeof stdioError?.code === "number" ? stdioError.code : null;
+}
+
+/** Why one connection is missing from a context listing: bounded and defused. */
+export function contextFailureCause(error: unknown): string {
+  const parsed = errorWithDetails(error);
+  let cause: string;
+  if (!parsed) {
+    cause = String(error);
+  } else {
+    const details = parsed.details ?? {};
+    const stdioError = asRecord(details.error);
+    if (typeof details.rpcError === "string") cause = details.rpcError;
+    else if (stdioError) cause = upstreamRpcErrorDetail(stdioError);
+    else if (typeof details.status === "number") cause = `${parsed.message} (HTTP ${details.status})`;
+    else cause = parsed.message;
+  }
+  const bounded = cause.length > REMOTE_ERROR_DETAIL_MAX_CHARS ? `${cause.slice(0, REMOTE_ERROR_DETAIL_MAX_CHARS)}…` : cause;
+  return neutralizeSessionExpiryMarkers(bounded);
+}
+
+/**
+ * Ask every connection for its context listing, each in its own try/catch. A
+ * connection that fails is skipped and reported; a JSON-RPC "method not found"
+ * (-32601) is a server without resources/prompts and is skipped without a report.
+ */
+export async function listConnectionContext<C extends { id: string; name: string }>(input: {
+  connections: C[];
+  method: string;
+  call: (connection: C) => Promise<unknown>;
+}): Promise<{
+  answered: Array<{ connection: C; result: Record<string, unknown> | null }>;
+  unavailableConnections: UnavailableContextConnection[];
+}> {
+  const answered: Array<{ connection: C; result: Record<string, unknown> | null }> = [];
+  const unavailableConnections: UnavailableContextConnection[] = [];
+  for (const connection of input.connections) {
+    try {
+      answered.push({ connection, result: asRecord(await input.call(connection)) });
+    } catch (error) {
+      if (contextRpcErrorCode(error) === -32601) continue;
+      const reason = errorWithDetails(error)?.reasonCode;
+      const reasonCode = typeof reason === "string" ? reason : null;
+      logger.warn(
+        { connectionId: connection.id, method: input.method, reasonCode },
+        "Assigned MCP connection skipped in a context listing",
+      );
+      unavailableConnections.push({
+        name: connection.name,
+        connectionId: connection.id,
+        reasonCode,
+        cause: contextFailureCause(error),
+      });
+    }
+  }
+  return { answered, unavailableConnections };
+}
+
+/**
+ * A context listing with its report of skipped connections, as the
+ * `unavailableConnections` field and in `_meta`. Nothing is added when every
+ * connection answered.
+ */
+export function withUnavailableConnections<T extends Record<string, unknown>>(
+  listing: T,
+  unavailableConnections: UnavailableContextConnection[],
+): T | (T & { unavailableConnections: UnavailableContextConnection[]; _meta: Record<string, unknown> }) {
+  if (unavailableConnections.length === 0) return listing;
+  return {
+    ...listing,
+    unavailableConnections,
+    _meta: { [UNAVAILABLE_CONNECTIONS_META_KEY]: unavailableConnections },
+  };
+}
+
 /** Plain error description; the gateway turns it into its own error class. */
 export type GatewayErrorSpec = {
   status: number;

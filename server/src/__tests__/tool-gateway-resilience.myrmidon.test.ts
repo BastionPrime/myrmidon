@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import express from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -1873,6 +1873,316 @@ rl.on("line", (line) => {
         });
       },
     );
+  }, 30_000);
+
+  it("lists context from the connections that answer and reports the ones that fail", async () => {
+    // resources/list and prompts/list no longer fail as a whole because one
+    // assigned connection fails; a tools-only server's -32601 is not a failure; a
+    // stdio server's JSON-RPC error keeps its runtime slot healthy.
+    const company = await createCompany(db);
+    const contextServer = await startFakeRemoteMcpServer(async ({ body }) => {
+      const method = body?.method;
+      if (method === "resources/list") {
+        return { body: { jsonrpc: "2.0", id: body?.id, result: { resources: [{ uri: "notes://one", name: "Note one" }] } } };
+      }
+      if (method === "prompts/list") {
+        return { body: { jsonrpc: "2.0", id: body?.id, result: { prompts: [{ name: "summarize", title: "Summarize" }] } } };
+      }
+      return { body: { jsonrpc: "2.0", id: body?.id, result: {} } };
+    });
+    const toolsOnlyServer = await startFakeRemoteMcpServer(async ({ body }) => ({
+      body: { jsonrpc: "2.0", id: body?.id, error: { code: -32601, message: "Method not found" } },
+    }));
+    const brokenServer = await startFakeRemoteMcpServer(async () => ({
+      status: 500,
+      body: { error: "upstream exploded" },
+    }));
+    try {
+      const answering = await createRemoteMcpTool(db, company.id, {
+        url: contextServer.url,
+        applicationKey: "ctx-answering",
+        connectionName: "Answering context",
+        toolName: "search_notes",
+        riskLevel: "read",
+      });
+      const toolsOnly = await createRemoteMcpTool(db, company.id, {
+        url: toolsOnlyServer.url,
+        applicationKey: "ctx-tools-only",
+        connectionName: "Tools only",
+        toolName: "kv_get",
+        riskLevel: "read",
+      });
+      const broken = await createRemoteMcpTool(db, company.id, {
+        url: brokenServer.url,
+        applicationKey: "ctx-broken",
+        connectionName: "Broken context",
+        toolName: "kv_get",
+        riskLevel: "read",
+      });
+      const stdioToolsOnly = await createLocalStdioMcpTool(db, company.id, {
+        applicationKey: "ctx-stdio-tools-only",
+        connectionName: "Stdio tools only",
+        toolName: "echo",
+        stdioScript: `
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "stdio-tools-only", version: "0.0.0" } } }) + "\\n");
+    return;
+  }
+  if (message.method === "tools/call") {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "local:ok" }] } }) + "\\n");
+    return;
+  }
+  if (message.id !== undefined) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found: " + message.method } }) + "\\n");
+  }
+});
+`,
+      });
+      const unconfigured = await createLocalStdioMcpTool(db, company.id, {
+        applicationKey: "ctx-stdio-unconfigured",
+        connectionName: "Unconfigured stdio",
+        toolName: "echo",
+      });
+      await db
+        .update(toolConnections)
+        .set({
+          config: { templateId: `missing.template.${randomUUID()}` },
+          transportConfig: { templateId: `missing.template.${randomUUID()}` },
+        })
+        .where(eq(toolConnections.id, unconfigured.connection.id));
+      const [profile] = await db.insert(toolProfiles).values({
+        companyId: company.id,
+        profileKey: `ctx-partial-${randomUUID()}`,
+        name: `Partial context ${randomUUID()}`,
+        defaultAction: "deny",
+      }).returning();
+      for (const connectionId of [
+        answering.connection.id,
+        toolsOnly.connection.id,
+        broken.connection.id,
+        stdioToolsOnly.connection.id,
+        unconfigured.connection.id,
+      ]) {
+        await db.insert(toolProfileEntries).values({
+          companyId: company.id,
+          profileId: profile.id,
+          selectorType: "connection",
+          effect: "include",
+          connectionId,
+        });
+      }
+      const gateway = createTestToolGatewayService(db, { runtimeSupervisor: { idleTtlMs: 10_000 } });
+      const created = await gateway.createNamedGateway({
+        companyId: company.id,
+        body: { name: "Partial context gateway", profileId: profile.id },
+      });
+      const token = await gateway.createNamedGatewayToken({
+        companyId: company.id,
+        gatewayId: created.id,
+        body: { name: "Partial context runner", clientLabel: "context test", ownerNote: "test token" },
+      });
+      const app = createGatewayRouteApp(db, gateway);
+      const expectedUnavailable = [
+        expect.objectContaining({
+          name: "Broken context",
+          connectionId: broken.connection.id,
+          reasonCode: "mcp_remote_status",
+          cause: expect.stringContaining("HTTP 500"),
+        }),
+        expect.objectContaining({
+          name: "Unconfigured stdio",
+          connectionId: unconfigured.connection.id,
+          reasonCode: "local_stdio_template_invalid",
+        }),
+      ];
+
+      const resources = await request(app)
+        .post(`/api/tool-gateway/gateways/${created.id}/mcp`)
+        .set("authorization", `Bearer ${token.token}`)
+        .send({ jsonrpc: "2.0", id: 1, method: "resources/list" })
+        .expect(200);
+      expect(resources.body.error).toBeUndefined();
+      expect(resources.body.result.resources).toEqual([
+        expect.objectContaining({ name: "Answering context: Note one" }),
+      ]);
+      expect(resources.body.result.unavailableConnections).toHaveLength(2);
+      expect(resources.body.result.unavailableConnections).toEqual(expect.arrayContaining(expectedUnavailable));
+
+      const prompts = await request(app)
+        .post(`/api/tool-gateway/gateways/${created.id}/mcp`)
+        .set("authorization", `Bearer ${token.token}`)
+        .send({ jsonrpc: "2.0", id: 2, method: "prompts/list" })
+        .expect(200);
+      expect(prompts.body.result.prompts).toEqual([
+        expect.objectContaining({ title: "Answering context: Summarize" }),
+      ]);
+      expect(prompts.body.result.unavailableConnections).toHaveLength(2);
+      expect(prompts.body.result.unavailableConnections).toEqual(expect.arrayContaining(expectedUnavailable));
+
+      // The same through the tools/call wrapper an agent uses.
+      const wrapped = await request(app)
+        .post(`/api/tool-gateway/gateways/${created.id}/mcp`)
+        .set("authorization", `Bearer ${token.token}`)
+        .send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "paperclip_list_resources", arguments: {} } })
+        .expect(200);
+      expect(wrapped.body.result.isError).toBe(false);
+      expect(wrapped.body.result.structuredContent.resources).toHaveLength(1);
+      expect(wrapped.body.result.structuredContent.unavailableConnections).toHaveLength(2);
+      for (const entry of wrapped.body.result.structuredContent.unavailableConnections as Array<{ cause: string }>) {
+        expectNoHermesSessionMarker(entry.cause);
+      }
+
+      // The stdio server that answered -32601 three times is not a failed runtime.
+      const [slot] = await db
+        .select()
+        .from(toolRuntimeSlots)
+        .where(eq(toolRuntimeSlots.connectionId, stdioToolsOnly.connection.id));
+      expect(slot).toMatchObject({ status: "idle", healthStatus: "ok" });
+
+      // Only when every connection answers is the listing plain.
+      await db.delete(toolProfileEntries).where(and(
+        eq(toolProfileEntries.profileId, profile.id),
+        inArray(toolProfileEntries.connectionId, [broken.connection.id, unconfigured.connection.id]),
+      ));
+      const clean = await request(app)
+        .post(`/api/tool-gateway/gateways/${created.id}/mcp`)
+        .set("authorization", `Bearer ${token.token}`)
+        .send({ jsonrpc: "2.0", id: 4, method: "resources/list" })
+        .expect(200);
+      expect(clean.body.result).toEqual({
+        resources: [expect.objectContaining({ name: "Answering context: Note one" })],
+      });
+    } finally {
+      await contextServer.close();
+      await toolsOnlyServer.close();
+      await brokenServer.close();
+    }
+  }, 30_000);
+
+  it("repeats the partial-listing report in result._meta, which MCP clients keep", async () => {
+    // MCP SDK result models drop unknown result fields, so a native resources/list or prompts/list never told the agent that
+    // one connection fell off. The report is repeated in `_meta`, which the SDK keeps.
+    const company = await createCompany(db);
+    const answeringServer = await startFakeRemoteMcpServer(async ({ body }) => {
+      const method = body?.method;
+      if (method === "resources/list") {
+        return { body: { jsonrpc: "2.0", id: body?.id, result: { resources: [{ uri: "notes://a", name: "Note A" }] } } };
+      }
+      if (method === "prompts/list") {
+        return { body: { jsonrpc: "2.0", id: body?.id, result: { prompts: [{ name: "brief", title: "Brief" }] } } };
+      }
+      return { body: { jsonrpc: "2.0", id: body?.id, result: {} } };
+    });
+    let flakyFails = true;
+    const flakyServer = await startFakeRemoteMcpServer(async ({ body }) => {
+      if (flakyFails) return { status: 502, body: { error: "bad gateway upstream" } };
+      const method = body?.method;
+      if (method === "resources/list") {
+        return { body: { jsonrpc: "2.0", id: body?.id, result: { resources: [{ uri: "notes://b", name: "Note B" }] } } };
+      }
+      if (method === "prompts/list") {
+        return { body: { jsonrpc: "2.0", id: body?.id, result: { prompts: [{ name: "digest", title: "Digest" }] } } };
+      }
+      return { body: { jsonrpc: "2.0", id: body?.id, result: {} } };
+    });
+    try {
+      const answering = await createRemoteMcpTool(db, company.id, {
+        url: answeringServer.url,
+        applicationKey: "meta-answering",
+        connectionName: "Answering meta",
+        toolName: "kv_get",
+        riskLevel: "read",
+      });
+      const flaky = await createRemoteMcpTool(db, company.id, {
+        url: flakyServer.url,
+        applicationKey: "meta-flaky",
+        connectionName: "Flaky meta",
+        toolName: "kv_get",
+        riskLevel: "read",
+      });
+      const [profile] = await db.insert(toolProfiles).values({
+        companyId: company.id,
+        profileKey: `ctx-meta-${randomUUID()}`,
+        name: `Meta context ${randomUUID()}`,
+        defaultAction: "deny",
+      }).returning();
+      for (const connectionId of [answering.connection.id, flaky.connection.id]) {
+        await db.insert(toolProfileEntries).values({
+          companyId: company.id,
+          profileId: profile.id,
+          selectorType: "connection",
+          effect: "include",
+          connectionId,
+        });
+      }
+      const gateway = createTestToolGatewayService(db);
+      const created = await gateway.createNamedGateway({
+        companyId: company.id,
+        body: { name: "Meta context gateway", profileId: profile.id },
+      });
+      const token = await gateway.createNamedGatewayToken({
+        companyId: company.id,
+        gatewayId: created.id,
+        body: { name: "Meta context runner", clientLabel: "context meta test", ownerNote: "test token" },
+      });
+      const app = createGatewayRouteApp(db, gateway);
+      const list = (id: number, method: "resources/list" | "prompts/list") =>
+        request(app)
+          .post(`/api/tool-gateway/gateways/${created.id}/mcp`)
+          .set("authorization", `Bearer ${token.token}`)
+          .send({ jsonrpc: "2.0", id, method })
+          .expect(200);
+
+      // One of the two connections fails: the report is in the field AND in _meta.
+      const resources = await list(1, "resources/list");
+      expect(resources.body.error).toBeUndefined();
+      expect(resources.body.result.resources).toEqual([
+        expect.objectContaining({ name: "Answering meta: Note A" }),
+      ]);
+      expect(resources.body.result.unavailableConnections).toEqual([
+        {
+          name: "Flaky meta",
+          connectionId: flaky.connection.id,
+          reasonCode: "mcp_remote_status",
+          cause: expect.stringContaining("HTTP 502"),
+        },
+      ]);
+      expect(resources.body.result._meta).toEqual({
+        "paperclip/unavailableConnections": resources.body.result.unavailableConnections,
+      });
+      expectNoHermesSessionMarker(resources.body.result._meta["paperclip/unavailableConnections"][0].cause);
+
+      const prompts = await list(2, "prompts/list");
+      expect(prompts.body.result.prompts).toEqual([
+        expect.objectContaining({ title: "Answering meta: Brief" }),
+      ]);
+      expect(prompts.body.result._meta).toEqual({
+        "paperclip/unavailableConnections": [
+          expect.objectContaining({ name: "Flaky meta", connectionId: flaky.connection.id, reasonCode: "mcp_remote_status" }),
+        ],
+      });
+      expect(prompts.body.result._meta["paperclip/unavailableConnections"]).toEqual(
+        prompts.body.result.unavailableConnections,
+      );
+
+      // Both connections answer: no report, no _meta.
+      flakyFails = false;
+      const cleanResources = await list(3, "resources/list");
+      expect(cleanResources.body.result._meta).toBeUndefined();
+      expect(cleanResources.body.result.unavailableConnections).toBeUndefined();
+      expect(cleanResources.body.result.resources).toHaveLength(2);
+      const cleanPrompts = await list(4, "prompts/list");
+      expect(cleanPrompts.body.result._meta).toBeUndefined();
+      expect(cleanPrompts.body.result.unavailableConnections).toBeUndefined();
+      expect(cleanPrompts.body.result.prompts).toHaveLength(2);
+    } finally {
+      await answeringServer.close();
+      await flakyServer.close();
+    }
   }, 30_000);
 
   it("keeps an unhealthy connection discoverable and callable, and restores its health on success", async () => {

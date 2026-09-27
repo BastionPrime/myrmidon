@@ -8,6 +8,7 @@ import {
   connectedToolFailureMessage,
   createRemoteToolResilience,
   disabledConnectedToolError,
+  listConnectionContext,
   localStdioPreparationFailure,
   localStdioToolFailure,
   remoteFetchFailure,
@@ -17,6 +18,7 @@ import {
   resolveConnectedToolTimeoutMs,
   toolTimeoutCeilingMs,
   upstreamRpcErrorDetail,
+  withUnavailableConnections,
   type ConnectedToolFailure,
   type GatewayErrorSpec,
   type RemoteToolProbe,
@@ -5199,6 +5201,9 @@ export function createToolGatewayService(
       record.error !== undefined ||
       !Object.prototype.hasOwnProperty.call(record, "result")
     ) {
+      // myrmidon(P9): keep what the server answered, so a context listing can tell
+      // "no such method" (-32601, a tools-only server) from a real failure.
+      const rpcError = asRecord(record?.error);
       throw new ToolGatewayHttpError(
         502,
         "Remote MCP context request returned an error",
@@ -5206,6 +5211,9 @@ export function createToolGatewayService(
         {
           connectionId: input.connection.id,
           method: input.method,
+          ...(rpcError
+            ? { rpcErrorCode: typeof rpcError.code === "number" ? rpcError.code : null, rpcError: upstreamRpcErrorDetail(rpcError) }
+            : {}),
         },
       );
     }
@@ -5246,7 +5254,11 @@ export function createToolGatewayService(
       template,
       grant,
     );
-    return runtimeSupervisor.useConnectionSlot(
+    // myrmidon(P9): a JSON-RPC error of the stdio server (e.g. -32601 from a
+    // tools-only server asked for resources/list) is an answer; it is carried past
+    // the runtime supervisor as a value so the slot is not marked failed.
+    const answered: { error: ToolGatewayHttpError | null } = { error: null };
+    const result = await runtimeSupervisor.useConnectionSlot(
       {
         companyId: input.session.companyId,
         applicationId: input.connection.applicationId,
@@ -5269,8 +5281,14 @@ export function createToolGatewayService(
           protocolMethod: input.method,
           protocolParams: input.params ?? {},
           timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
+        }).catch((error: unknown) => {
+          if (!isLocalStdioRpcError(error)) throw error;
+          answered.error = error;
+          return null;
         }),
     );
+    if (answered.error) throw answered.error;
+    return result;
   }
 
   function contextHandle(
@@ -5317,15 +5335,13 @@ export function createToolGatewayService(
     const connections = await fullyAssignedMcpConnections(session);
     if (input.method === "resources/list") {
       const resources = [] as Array<Record<string, unknown>>;
-      for (const connection of connections) {
-        const result = asRecord(
-          await callAssignedConnectionProtocol({
-            ...input,
-            session,
-            connection,
-            method: input.method,
-          }),
-        );
+      // myrmidon(P9): one failing connection is skipped and reported, not fatal.
+      const { answered, unavailableConnections } = await listConnectionContext({
+        connections,
+        method: input.method,
+        call: (connection) => callAssignedConnectionProtocol({ ...input, session, connection, method: input.method }),
+      });
+      for (const { connection, result } of answered) {
         for (const resource of Array.isArray(result?.resources)
           ? result.resources
           : []) {
@@ -5338,19 +5354,17 @@ export function createToolGatewayService(
           });
         }
       }
-      return { resources };
+      return withUnavailableConnections({ resources }, unavailableConnections); // myrmidon(P9)
     }
     if (input.method === "prompts/list") {
       const prompts = [] as Array<Record<string, unknown>>;
-      for (const connection of connections) {
-        const result = asRecord(
-          await callAssignedConnectionProtocol({
-            ...input,
-            session,
-            connection,
-            method: input.method,
-          }),
-        );
+      // myrmidon(P9): one failing connection is skipped and reported, not fatal.
+      const { answered, unavailableConnections } = await listConnectionContext({
+        connections,
+        method: input.method,
+        call: (connection) => callAssignedConnectionProtocol({ ...input, session, connection, method: input.method }),
+      });
+      for (const { connection, result } of answered) {
         for (const prompt of Array.isArray(result?.prompts)
           ? result.prompts
           : []) {
@@ -5363,7 +5377,7 @@ export function createToolGatewayService(
           });
         }
       }
-      return { prompts };
+      return withUnavailableConnections({ prompts }, unavailableConnections); // myrmidon(P9)
     }
     const kind = input.method === "resources/read" ? "resource" : "prompt";
     const handle = parseContextHandle(
