@@ -7,6 +7,8 @@ environment:
   sdk: ^3.10.4
 
 dependencies:
+  # TDLib FFI adapter (OPE-2568 Шаг 2): utf8 <-> native char* helpers.
+  ffi: ^2.1.0
   # Shared preferences is resolved by `flutter pub get` in the build image
   # (plugin requires the Flutter SDK); the core module keeps a thin seam
   # (AccountsStore.usePrefsLoader) so unit tests never touch the plugin.
