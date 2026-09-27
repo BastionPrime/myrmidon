@@ -76,6 +76,9 @@
 
 | Где | Что | Значение для Myrmidon | Функция |
 |---|---|---|---|
+| Задача: поле `workMode` (`POST/PATCH /api/issues…`, `"planning"`); в интерфейсе — переключатель «Plan mode» в поле ввода задачи | Режим плана задачи: в промпт побудки идёт `planning directive` — агент только составляет или обновляет план, код не пишет. После принятия плана — только дочерние задачи | Работает с `hermes_local` без правок: указания плана доходят до промпта прогона (тест `server/src/__tests__/hermes-planning-mode.myrmidon.test.ts`). Включается на задаче, отдельного переключателя инстанса не нужно | X2 |
+| `PATCH /api/instance/settings/experimental`: `enableIssuePlanDecompositions` (в интерфейсе — Instance Settings → Experimental, «Task Plan Decomposition») | Показывает на странице задачи историю разбиения принятого плана на дочерние задачи | По желанию, по умолчанию выключено. На работу режима плана в прогоне не влияет | X2 |
+| `PATCH /api/instance/settings/experimental`: `enableFirstTaskPlanProposal` («First task: propose with a plan document») | Для первой одиночной задачи новой организации руководитель пишет короткий документ плана и карточку с вариантами вместо одной карточки подтверждения | По желанию, по умолчанию выключено. Действует только на организации, созданные после включения | X2 |
 | `TELEGRAM_API_BASE_URL` | Адрес Bot API для адаптера Telegram (вендорская переменная) | Адрес своего Bot API, если нужны файлы больше 20 МБ; не задана — облачный Bot API | P8 |
 | `PAPERCLIP_ATTACHMENT_MAX_BYTES` | Общий предел размера вложения доски (вендор, по умолчанию 10 МБ) | Ограничивает и файлы Telegram: поднять вместе с `MYRMIDON_TELEGRAM_FILE_LIMIT_BYTES` | P8 |
 | Файл конфигурации инстанса, `telemetry.enabled` | Флаг телеметрии. У вендора по умолчанию `true`, у нас `false` | Не включать. Включение требует ещё и `PAPERCLIP_TELEMETRY_ENDPOINT` (свой адрес приёма) | TEL |
