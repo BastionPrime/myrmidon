@@ -28,6 +28,8 @@ import {
   type TrustPresetResolution,
 } from "./trust-preset-resolver.js";
 import { logger } from "../middleware/logger.js";
+// myrmidon(S4): deny agent self-updates
+import { decideAgentSelfConfigUpdate } from "../myrmidon/agent-self-update.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { grantsForHumanRole, normalizeHumanRole } from "./company-member-roles.js";
 
@@ -1871,6 +1873,9 @@ export function authorizationService(db: Db | DbTransaction) {
         explanation: "Actor agent was not found in the target company.",
       });
     }
+    // myrmidon(S4): an agent never changes its own configuration
+    const selfUpdateDecision = decideAgentSelfConfigUpdate({ ...input, actorAgentId });
+    if (selfUpdateDecision) return selfUpdateDecision;
 
     if (input.actor.keyScope?.kind === "skill_test") {
       const skillTestDecision = decideSkillTestAccess({

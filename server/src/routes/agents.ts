@@ -233,6 +233,11 @@ import { resolveCoreTrustPreset } from "../services/trust-preset-resolver.js";
 import { readObject } from "../lib/objects.js";
 import { listInvalidOrgChainDescendantIds } from "../services/agent-invokability.js";
 import { logger } from "../middleware/logger.js";
+// myrmidon(S4): agent self-update guards and model validation
+import {
+  assertInheritProcessEnvChangeAllowed,
+  assertMyrmidonAgentConfigChange,
+} from "../myrmidon/agent-self-update.js";
 import {
   AGENT_PROFILE_CHANGE_CONSENT_FIELDS,
   agentInstructionsChangeTargetKey,
@@ -4421,6 +4426,7 @@ export function agentRoutes(
       rawHireAdapterConfig,
     );
     assertNoAgentAdapterConfigMutation(req, rawHireAdapterConfig);
+    assertInheritProcessEnvChangeAllowed(req, { companyId, agentId: null, previousAdapterConfig: null, nextAdapterConfig: rawHireAdapterConfig }); // myrmidon(S4)
     const hiredAgentId = randomUUID();
     const authInheritance = await applyHiringAgentAuthInheritance(
       req,
@@ -4723,6 +4729,7 @@ export function agentRoutes(
       rawCreateAdapterConfig,
     );
     assertNoAgentAdapterConfigMutation(req, rawCreateAdapterConfig);
+    assertInheritProcessEnvChangeAllowed(req, { companyId, agentId: null, previousAdapterConfig: null, nextAdapterConfig: rawCreateAdapterConfig }); // myrmidon(S4)
     const agentId = randomUUID();
     const requestedAdapterConfig = applyCodexLocalKeyIsolation(
       companyId,
@@ -5282,6 +5289,8 @@ export function agentRoutes(
         ...existing,
         adapterConfig: patchData.adapterConfig,
       });
+      // myrmidon(S4): admin-only inheritProcessEnv, unknown models are rejected
+      await assertMyrmidonAgentConfigChange(req, existing, requestedAdapterType, patchData.adapterConfig as Record<string, unknown>);
     }
     if (existing.runtimeConfig.aiConnection && requestedRuntimeConfig && !requestedRuntimeConfig.aiConnection) requestedRuntimeConfig.aiConnection = existing.runtimeConfig.aiConnection;
     const nextAiBinding = aiConnectionBindingSchema.safeParse(requestedRuntimeConfig?.aiConnection ?? existing.runtimeConfig.aiConnection).data;
