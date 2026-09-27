@@ -101,6 +101,9 @@ describe("cli telemetry", () => {
     process.env.PAPERCLIP_HOME = path.join(root, "home");
     process.env.PAPERCLIP_INSTANCE_ID = "telemetry-test";
 
+    // myrmidon(TEL): telemetry needs an explicit endpoint besides the flag
+    process.env.PAPERCLIP_TELEMETRY_ENDPOINT = "http://127.0.0.1:9/ingest";
+
     const { initTelemetry, flushTelemetry } = await import("../telemetry.js");
     const client = initTelemetry({ enabled: true });
     const statePath = path.join(root, "home", "instances", "telemetry-test", "telemetry", "state.json");

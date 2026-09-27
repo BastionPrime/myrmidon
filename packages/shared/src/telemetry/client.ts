@@ -11,10 +11,8 @@ import type {
 import { type ResolvedTelemetryCaps, resolveCaps } from "./config.js";
 import { PAPERCLIP_EVENTS } from "./generated/paperclip-telemetry.js";
 
-const DEFAULT_ENDPOINTS = [
-  "https://telemetry.paperclip.ing/ingest",
-  "https://rusqrrg391.execute-api.us-east-1.amazonaws.com/ingest",
-] as const;
+// myrmidon(TEL): no built-in ingest endpoints; only an explicitly configured endpoint is used
+const DEFAULT_ENDPOINTS: readonly string[] = [];
 // Queue-pressure valve: auto-flush once this many events are buffered. This is
 // an in-memory backpressure trigger, independent of the wire caps that
 // `chunkForSend` enforces on each POST.
@@ -132,6 +130,8 @@ export class TelemetryClient {
 
   private enqueue(eventName: string, dimensions?: object): void {
     if (!this.config.enabled) return;
+    // myrmidon(TEL): nothing to send to without an explicit endpoint
+    if (this.resolveEndpoints().length === 0) return;
     this.getState(); // ensure state is initialised (side-effect: creates state file on first call)
 
     this.queue.push({
@@ -147,6 +147,8 @@ export class TelemetryClient {
 
   async flush(): Promise<void> {
     if (!this.config.enabled) return;
+    // myrmidon(TEL): nothing to send to without an explicit endpoint
+    if (this.resolveEndpoints().length === 0) return;
 
     // Re-send any due retries first, then send freshly-queued events.
     await this.drainPending();

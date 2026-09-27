@@ -72,3 +72,7 @@
 |---|---|---|---|
 | `TELEGRAM_API_BASE_URL` | Адрес Bot API для адаптера Telegram (вендорская переменная) | Адрес своего Bot API, если нужны файлы больше 20 МБ; не задана — облачный Bot API | P8 |
 | `PAPERCLIP_ATTACHMENT_MAX_BYTES` | Общий предел размера вложения доски (вендор, по умолчанию 10 МБ) | Ограничивает и файлы Telegram: поднять вместе с `MYRMIDON_TELEGRAM_FILE_LIMIT_BYTES` | P8 |
+| Файл конфигурации инстанса, `telemetry.enabled` | Флаг телеметрии. У вендора по умолчанию `true`, у нас `false` | Не включать. Включение требует ещё и `PAPERCLIP_TELEMETRY_ENDPOINT` (свой адрес приёма) | TEL |
+| `PAPERCLIP_TELEMETRY_ENDPOINT` | Адрес приёма телеметрии. У нас без него телеметрия не работает даже с флагом, адресов по умолчанию нет | Не задавать | TEL |
+| `PAPERCLIP_ANNOUNCEMENTS_ENABLED`, `PAPERCLIP_ANNOUNCEMENTS_FEED_URL` | Лента объявлений. У вендора включена по умолчанию с адресом вендора; у нас включается только `PAPERCLIP_ANNOUNCEMENTS_ENABLED=true` плюс свой адрес ленты | Не задавать | TEL |
+| `PAPERCLIP_FEEDBACK_EXPORT_BACKEND_URL` (или `PAPERCLIP_TELEMETRY_BACKEND_URL`) | Куда уходят отзывы, которыми пользователь решил поделиться. У нас адреса по умолчанию нет: без него отзывы остаются локально, выгрузка помечается «не настроено» | Не задавать | TEL |

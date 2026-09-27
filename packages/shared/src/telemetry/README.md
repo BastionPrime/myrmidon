@@ -1,5 +1,17 @@
 # Telemetry Data Contract
 
+> **Myrmidon:** telemetry is **off by default** and there are no built-in
+> ingest endpoints. The client sends nothing unless both are set:
+>
+> 1. `telemetry.enabled: true` in the instance config file (the schema default
+>    is `false`; `onboard` and `configure` write `false`), and
+> 2. `PAPERCLIP_TELEMETRY_ENDPOINT` pointing at an operator-owned ingest URL.
+>
+> The flag alone or the endpoint alone does nothing. The vendor opt-out
+> switches (`PAPERCLIP_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1`, CI detection)
+> still win. Guard tests: `telemetry.myrmidon.test.ts` here and
+> `server/src/__tests__/telemetry.myrmidon.test.ts`.
+
 This document explains how contributors should use Paperclip's public telemetry
 contract. It does not duplicate the full list of individual events or
 dimensions. It documents extra semantic and privacy rules where the generated

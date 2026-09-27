@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { announcementFeedService, ANNOUNCEMENT_CACHE_MS, ANNOUNCEMENT_FAILURE_MS } from "../services/announcement-feed.js";
+import { announcementFeedService as createAnnouncementFeedService, ANNOUNCEMENT_CACHE_MS, ANNOUNCEMENT_FAILURE_MS } from "../services/announcement-feed.js";
 import { logger } from "../middleware/logger.js";
 
 const item = { id: "new-projects", eyebrow: "New", title: "Projects", description: "Organize your work.", primaryAction: { kind: "route", label: "Open", path: "/projects" } };
 const json = (announcement: unknown = item, etag = '"v1"') => new Response(JSON.stringify({ schemaVersion: 1, announcement }), { headers: { "Content-Type": "application/json", ETag: etag } });
+// myrmidon(TEL): Myrmidon has no default feed URL, so these cases run against an explicit placeholder feed.
+const TEST_FEED_URL = "https://feed.example.com/announcements/v1/current.json";
+const announcementFeedService = (options: Parameters<typeof createAnnouncementFeedService>[0]) =>
+  createAnnouncementFeedService({ feedUrl: TEST_FEED_URL, ...options });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 describe("announcement feed", () => {
   it("treats a 404 as quiet empty content, drops stale ETags, and recovers after cooldown", async () => {
@@ -106,7 +110,7 @@ describe("announcement feed", () => {
     expect(images[1]).toEqual(images[0]);
     await service.image(item.id);
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(String(fetch.mock.calls[1][0])).toBe(`https://pages.paperclip.ing/announcements/v1/${path}`);
+    expect(String(fetch.mock.calls[1][0])).toBe(`https://feed.example.com/announcements/v1/${path}`);
   });
   it("rejects image digest mismatches and cools down image retries", async () => {
     const fetch = vi.fn().mockImplementationOnce(async () => json({ ...item, image: { path: `assets/${"0".repeat(64)}.png`, alt: "" } })).mockImplementation(async () => new Response("wrong", { headers: { "Content-Type": "image/png" } }));

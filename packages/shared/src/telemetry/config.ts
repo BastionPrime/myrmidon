@@ -81,6 +81,10 @@ export function resolveTelemetryConfig(
     return { enabled: false, ...caps };
   }
 
-  const endpoint = process.env.PAPERCLIP_TELEMETRY_ENDPOINT || undefined;
+  // myrmidon(TEL): opt-in only; both the enable flag and an explicit endpoint are required
+  const endpoint = process.env.PAPERCLIP_TELEMETRY_ENDPOINT?.trim() || undefined;
+  if (fileConfig?.enabled !== true || !endpoint) {
+    return { enabled: false, ...caps };
+  }
   return { enabled: true, endpoint, ...caps };
 }

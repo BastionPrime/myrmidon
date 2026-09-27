@@ -21,7 +21,8 @@ describe("announcement routes and durable dismissals", () => {
       req.actor = (actorOverride ?? { type: "board", userId, source: "session", companyIds: [companyId, otherCompanyId], memberships: [{ companyId, membershipRole: "viewer", status: "active" }] }) as never;
       next();
     });
-    server.use("/api", announcementRoutes(db, { version: "2026.913.0", fetch: async (url) => animationHtml && url.pathname.endsWith(".html") ? new Response(animationHtml, { headers: { "Content-Type": "text/html" } }) : new Response(JSON.stringify({ schemaVersion: 1, announcement }), { status: feedStatus, headers: { "Content-Type": "application/json" } }) }));
+    // myrmidon(TEL): no default feed URL in Myrmidon; use an explicit placeholder feed
+    server.use("/api", announcementRoutes(db, { version: "2026.913.0", feedUrl: "https://feed.example.com/announcements/v1/current.json", fetch: async (url) => animationHtml && url.pathname.endsWith(".html") ? new Response(animationHtml, { headers: { "Content-Type": "text/html" } }) : new Response(JSON.stringify({ schemaVersion: 1, announcement }), { status: feedStatus, headers: { "Content-Type": "application/json" } }) }));
     server.use(errorHandler);
     return server;
   }

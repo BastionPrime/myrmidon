@@ -74,7 +74,8 @@ function defaultConfig(): PaperclipConfig {
       disableSignUp: false,
     },
     telemetry: {
-      enabled: true,
+      // myrmidon(TEL): telemetry is opt-in; new configs start disabled
+      enabled: false,
     },
     storage: defaultStorageConfig(),
     secrets: defaultSecretsConfig(),

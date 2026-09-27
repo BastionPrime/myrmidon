@@ -283,7 +283,8 @@ export function buildWorktreeConfig(input: {
       disableSignUp: source?.auth.disableSignUp ?? false,
     },
     telemetry: {
-      enabled: source?.telemetry?.enabled ?? true,
+      // myrmidon(TEL): telemetry is opt-in; missing flag means disabled
+      enabled: source?.telemetry?.enabled ?? false,
     },
     storage: {
       provider: source?.storage.provider ?? "local_disk",

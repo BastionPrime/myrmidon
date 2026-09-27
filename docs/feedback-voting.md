@@ -183,7 +183,7 @@ Votes you choose to share are sent to the Telemetry Backend immediately from the
 - App server responsibility: build the bundle, POST it to Telemetry Backend, update trace status
 - Telemetry Backend responsibility: authenticate the request, validate payload shape, compress/store the bundle, return the final object key
 - Retry behavior: failed uploads move to `failed` with an error message in `failureReason`, and the worker retries them on later ticks
-- Default endpoint: when no feedback export backend URL is configured, Paperclip falls back to `https://telemetry.paperclip.ing`
+- Default endpoint (Myrmidon): there is none. Sharing works only after the operator sets `PAPERCLIP_FEEDBACK_EXPORT_BACKEND_URL` (or `PAPERCLIP_TELEMETRY_BACKEND_URL`) to their own backend; until then shared votes are marked `failed` with a "not configured" reason and nothing leaves the instance
 - Important nuance: the uploaded object is a snapshot of the full bundle at vote time. If you fetch a local bundle later and the underlying adapter session file has continued to grow, the local regenerated bundle may be larger than the already-uploaded snapshot for that same trace.
 
 Exported objects use a deterministic key pattern so they are easy to inspect:

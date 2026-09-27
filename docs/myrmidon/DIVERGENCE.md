@@ -24,6 +24,7 @@
 
 | ID | Что меняем | Файлы вендора | Причина | Тест-сторож | Как снимать | PR |
 |---|---|---|---|---|---|---|
+| TEL | Телеметрия, выгрузка отзывов и лента объявлений выключены по умолчанию, адресов вендора в коде нет. Телеметрия включается только флагом `telemetry.enabled: true` **и** адресом `PAPERCLIP_TELEMETRY_ENDPOINT` | `packages/shared/src/telemetry/{client,config}.ts`, `packages/shared/src/config-schema.ts` (умолчание флага), `packages/shared/src/announcements.ts`, `server/src/config.ts`, `server/src/services/{announcement-feed,feedback-share-client}.ts`, `cli/src/commands/{onboard,configure,worktree-lib}.ts`, `packages/shared/src/telemetry/README.md`, `docs/feedback-voting.md`; тесты вендора: `packages/shared/src/telemetry/client.test.ts`, `server/src/__tests__/{telemetry-client-flush,feedback-share-client,announcement-feed,announcements-routes}.test.ts`, `cli/src/__tests__/telemetry.test.ts`; + `packages/shared/src/telemetry/telemetry.myrmidon.test.ts`, `server/src/__tests__/telemetry.myrmidon.test.ts` | Решение владельца: данные вендору не отправляем | `packages/shared/src/telemetry/telemetry.myrmidon.test.ts`, `server/src/__tests__/telemetry.myrmidon.test.ts` | Никогда, наше поведение. При переносе сохранять куски с меткой `myrmidon(TEL)`; если вендор добавит новый адрес по умолчанию, сторож «are absent from shipped source» покраснеет | [#50](https://github.com/itkadr-git/myrmidon/pull/50) |
 
 ## Трек 2 — ядро побудок и прогонов
 

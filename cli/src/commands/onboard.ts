@@ -710,7 +710,8 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
     server,
     auth,
     telemetry: {
-      enabled: true,
+      // myrmidon(TEL): telemetry is opt-in; new configs start disabled
+      enabled: false,
     },
     storage,
     secrets,

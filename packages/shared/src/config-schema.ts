@@ -100,7 +100,8 @@ export const secretsConfigSchema = z.object({
 }).passthrough();
 
 export const telemetryConfigSchema = z.object({
-  enabled: z.boolean().default(true),
+  // myrmidon(TEL): telemetry is opt-in; a missing flag means disabled
+  enabled: z.boolean().default(false),
 }).passthrough().prefault({});
 
 export const updatesConfigSchema = z.object({

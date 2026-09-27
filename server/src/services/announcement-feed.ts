@@ -134,6 +134,8 @@ export function announcementFeedService(options: AnnouncementFeedOptions) {
 
   async function current() {
     if (options.enabled === false) return null;
+    // myrmidon(TEL): without an explicit feed URL the feed is off and never fetched
+    if (!(options.feedUrl ?? DEFAULT_ANNOUNCEMENT_FEED_URL)) return null;
     if (pending) await pending;
     else if (now() >= nextCheck) {
       pending = refresh().finally(() => { pending = null; });
