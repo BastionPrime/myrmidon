@@ -255,6 +255,7 @@ git diff origin/main...HEAD | grep -nEi \
 | `packages/adapters/hermes/src/server/execute.ts` | 2 (вендорский #13891, 4 строки; X2 — только если понадобится), 3 (P4, основной перенос), 4 (H1 — только если нужна точка вызова), 6 (S2, M1) | 2 → 3 → 4 и 6 (и 2 для X2). После слияния P4 другие треки вносят сюда только точки вызова |
 | `packages/adapters/{claude,codex,cursor,gemini,grok,kimi,opencode,pi}-local/src/server/execute.ts` | 2 (вендорский #13891), 4 (H4, stdin), 6 (S2, окружение) | 2 первым, потом 4 и 6 в любом порядке |
 | `packages/adapter-utils/src/server-utils.ts` | 2 (вендорский #13891). 4 и 6 — только если без этого никак | 2 первым; 4 и 6 кладут свой код в новые файлы |
+| `packages/adapters/hermes/src/server/config-schema.ts` | 3 (P4 — только если выносит поля заплатки в форму), 6 (M1, поля моделей) | 3 → 6 |
 | `packages/adapter-utils/src/execution-target.ts` | 2 (вендорский #13793), 6 (S2, точки вызова) | 2 → 6 |
 | `server/src/routes/openapi.ts` | 2 (P11, схема ответа health), 4 (вендорский #13654), 5 (если регистрирует свой API) | 4 → 5; 2 — в любом порядке с ними, перебазируйся |
 | `server/src/services/heartbeat.ts` | 2 (P1), 3 (P9, отбор подключений прогона), 5 (R3, точки вызова), 6 (S5, точка вызова) | 2 и 3 в любом порядке; 5 и 6 — по возможности после них |
