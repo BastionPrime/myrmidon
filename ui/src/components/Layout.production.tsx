@@ -32,6 +32,7 @@ import { ToastViewport } from "./ToastViewport";
 import { MobileBottomNav } from "./MobileBottomNav";
 import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
+import { MaintenanceBanner } from "./myrmidon/MaintenanceBanner"; // myrmidon(R3)
 import { StandaloneBrowserControls } from "./StandaloneBrowserControls";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import { SidebarShell } from "./SidebarShell.production";
@@ -655,6 +656,7 @@ export function Layout() {
         </a>
         <WorktreeBanner />
         <DevRestartBanner devServer={health?.devServer} />
+        <MaintenanceBanner companyId={selectedCompanyId ?? null} /> {/* myrmidon(R3) */}
         <div
           className={cn(
             "min-h-0 flex-1",
