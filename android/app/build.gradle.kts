@@ -22,6 +22,8 @@ android {
     defaultConfig {
         // Wellmagram identity (Т-0.2 ребрендинг, без MAX/Telegram в id).
         applicationId = "ru.wellmagram.app"
+        // Effective floor: maxOf(flutter.minSdkVersion, 23) == 24 with
+        // Flutter 3.38.5 — the APK ships minSdkVersion 24 (ревью c5a1e425).
         minSdk = maxOf(flutter.minSdkVersion, 23)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
