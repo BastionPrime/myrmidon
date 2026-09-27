@@ -41,6 +41,8 @@ import {
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
 } from "@paperclipai/adapter-utils/server-utils";
+// myrmidon(S2): allow-listed run environment
+import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
 import { DEFAULT_GROK_LOCAL_MODEL } from "../index.js";
 import { copyBackGrokAuth } from "./grok-auth-copyback.js";
 import { resolveManagedGrokHomeDir, stageGrokHomeForSync } from "./grok-home.js";
@@ -413,7 +415,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const runtimeExecutionTarget = overrideAdapterExecutionTargetRemoteCwd(executionTarget, effectiveExecutionCwd);
     const effectiveEnv = Object.fromEntries(
-      Object.entries({ ...process.env, ...env }).filter(
+      // myrmidon(S2): allow-listed server env instead of process.env
+      Object.entries({ ...myrmidonInheritedProcessEnv(config), ...env }).filter(
         (entry): entry is [string, string] => typeof entry[1] === "string",
       ),
     );
@@ -546,6 +549,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
 
       const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
+        inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
         cwd,
         env,
         timeoutSec,

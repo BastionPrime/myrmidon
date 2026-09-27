@@ -51,6 +51,8 @@ import {
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
 } from "@paperclipai/adapter-utils/server-utils";
+// myrmidon(S2): allow-listed run environment
+import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
 import { buildSkillLibraryManifestMarkdown } from "@paperclipai/adapter-utils/skill-library-manifest";
 import {
   parseLocalProcessFilesystemScope,
@@ -307,7 +309,8 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
   }
 
   const runtimeEnv = Object.fromEntries(
-    Object.entries(ensurePathInEnv({ ...process.env, ...env })).filter(
+    // myrmidon(S2): allow-listed server env instead of process.env
+    Object.entries(ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config), ...env })).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -482,7 +485,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     asNumber(config.terminalResultCleanupGraceMs, 5_000),
   );
   const effectiveEnv = Object.fromEntries(
-    Object.entries({ ...process.env, ...env }).filter(
+    // myrmidon(S2): allow-listed server env instead of process.env
+    Object.entries({ ...myrmidonInheritedProcessEnv(config), ...env }).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -726,7 +730,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     });
     if (paperclipBridge) {
       Object.assign(env, paperclipBridge.env);
-      const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+      // myrmidon(S2): allow-listed server env instead of process.env
+      const runtimeEnv = ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config), ...env });
       loggedEnv = buildInvocationEnvForLogs(env, {
         runtimeEnv,
         includeRuntimeKeys: ["HOME", "CLAUDE_CONFIG_DIR"],
@@ -960,6 +965,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
 
     const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
+      inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
       cwd,
       env,
       stdin: prompt,

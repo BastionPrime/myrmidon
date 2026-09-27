@@ -36,6 +36,7 @@ const SERVER_ENV: NodeJS.ProcessEnv = {
   https_proxy: "http://proxy.example.com:3128",
   NODE_EXTRA_CA_CERTS: "/etc/ssl/example-ca.pem",
   PAPERCLIP_RUNTIME_API_URL: "http://127.0.0.1:3100",
+  CLAUDE_CONFIG_DIR: "/home/agent-a/.claude",
   PAPERCLIPAI_CMD: "node /opt/example/paperclipai.js",
   SOME_UNRELATED_SERVER_VAR: "value",
 };
@@ -72,6 +73,7 @@ describe("myrmidon(S2) run environment", () => {
       https_proxy: "http://proxy.example.com:3128",
       NODE_EXTRA_CA_CERTS: "/etc/ssl/example-ca.pem",
       PAPERCLIP_RUNTIME_API_URL: "http://127.0.0.1:3100",
+      CLAUDE_CONFIG_DIR: "/home/agent-a/.claude",
     });
   });
 

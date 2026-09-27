@@ -51,6 +51,8 @@ import {
   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
+// myrmidon(S2): allow-listed run environment
+import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
 import { shellQuote } from "@paperclipai/adapter-utils/ssh";
 import { isPiUnknownSessionError, parsePiJsonl } from "./parse.js";
 import { ensurePiModelConfiguredAndAvailable } from "./models.js";
@@ -345,7 +347,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const skillBinDirs = piSkillEntries
       .filter((entry) => injectedSkillKeys.has(entry.key) && entry.source.length > 0)
       .map((entry) => path.join(entry.source, "bin"));
-    const mergedEnv = ensurePathInEnv({ ...process.env, ...env });
+    // myrmidon(S2): allow-listed server env instead of process.env
+    const mergedEnv = ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config), ...env });
     const pathKey =
       typeof mergedEnv.Path === "string" && mergedEnv.Path.length > 0 && !mergedEnv.PATH
         ? "Path"
@@ -490,7 +493,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         Object.assign(env, paperclipBridge.env);
         loggedEnv = buildInvocationEnvForLogs(env, {
           runtimeEnv: Object.fromEntries(
-            Object.entries(ensurePathInEnv({ ...process.env, ...env })).filter(
+            // myrmidon(S2): allow-listed server env instead of process.env
+            Object.entries(ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config), ...env })).filter(
               (entry): entry is [string, string] => typeof entry[1] === "string",
             ),
           ),
@@ -728,6 +732,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       };
 
       const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
+        inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
         cwd,
         env: executionTargetIsRemote ? env : runtimeEnv,
         timeoutSec,

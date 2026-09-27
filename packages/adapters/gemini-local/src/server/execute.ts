@@ -53,6 +53,8 @@ import {
   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
+// myrmidon(S2): allow-listed run environment
+import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
 import { DEFAULT_GEMINI_LOCAL_MODEL, SANDBOX_INSTALL_COMMAND } from "../index.js";
 import {
   describeGeminiFailure,
@@ -99,7 +101,8 @@ function buildGeminiHeadlessEnv(env: Record<string, string>): Record<string, str
 
 function buildGeminiRuntimeEnv(env: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(ensurePathInEnv({ ...process.env, ...buildGeminiHeadlessEnv(env) })).filter(
+    // myrmidon(S2): allow-listed server env instead of process.env
+    Object.entries(ensurePathInEnv({ ...myrmidonInheritedProcessEnv(null), ...buildGeminiHeadlessEnv(env) })).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -633,6 +636,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
 
     const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
+      inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
       cwd,
       env: invocationEnv,
       timeoutSec,

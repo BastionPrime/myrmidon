@@ -41,6 +41,8 @@ import {
   stringifyPaperclipWakePayload,
   isPaperclipRecoveryWakePayload,
 } from "@paperclipai/adapter-utils/server-utils";
+// myrmidon(S2): allow-listed run environment
+import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
 
 import {
   HERMES_CLI,
@@ -500,7 +502,8 @@ export async function execute(
   // ── Build environment ──────────────────────────────────────────────────
   const userEnv = config.env as Record<string, string> | undefined;
   const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
+    // myrmidon(S2): allow-listed server env instead of process.env
+    ...(myrmidonInheritedProcessEnv(config) as Record<string, string>),
     ...(userEnv && typeof userEnv === "object" ? userEnv : {}),
     ...buildPaperclipEnv(ctx.agent),
     ...buildRuntimeToolsEnv(ctx.runtimeTools),
@@ -612,6 +615,7 @@ export async function execute(
       onLog: wrappedOnLog,
       onSpawn: ctx.onSpawn,
       stdin: prompt,
+      inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
     });
   } finally {
     await runtimeMcpCleanup?.();

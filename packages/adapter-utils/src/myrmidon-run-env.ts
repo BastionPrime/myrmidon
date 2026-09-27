@@ -43,6 +43,28 @@ export const MYRMIDON_RUN_ENV_BASE_ALLOW: readonly string[] = [
   "PATHEXT",
 ];
 
+/**
+ * Directory pointers of the agent CLIs (paths, not secrets). Local adapters
+ * rely on inheriting them from the server, e.g. claude_local reads the
+ * shared `CLAUDE_CONFIG_DIR`; dropping them would silently move the CLI to a
+ * different profile.
+ */
+export const MYRMIDON_RUN_ENV_TOOL_HOME_ALLOW: readonly string[] = [
+  "CLAUDE_CONFIG_DIR",
+  "CODEX_HOME",
+  "CURSOR_HOME",
+  "GROK_HOME",
+  "HERMES_HOME",
+  "KIMI_CODE_HOME",
+  "PI_CODING_AGENT_DIR",
+  "GH_CONFIG_DIR",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_STATE_HOME",
+  "XDG_RUNTIME_DIR",
+];
+
 /** Prefixes of base variables a run inherits (locale categories). */
 export const MYRMIDON_RUN_ENV_BASE_ALLOW_PREFIXES: readonly string[] = ["LC_"];
 
@@ -94,6 +116,7 @@ function buildAllowSet(extraAllow: readonly string[]): Set<string> {
     allowed.add(name.toLowerCase());
   }
   for (const name of MYRMIDON_RUN_ENV_VENDOR_RUNTIME_KEYS) allowed.add(name);
+  for (const name of MYRMIDON_RUN_ENV_TOOL_HOME_ALLOW) allowed.add(name);
   for (const name of extraAllow) allowed.add(name);
   return allowed;
 }
@@ -195,4 +218,14 @@ export function buildMyrmidonRunEnv(input: MyrmidonRunEnvInput): Record<string, 
     if (typeof value === "string") env[key] = value;
   }
   return env;
+}
+
+/**
+ * Server environment a run of an agent with this adapter config inherits.
+ * Adapters use it where they used to spread `process.env`.
+ */
+export function myrmidonInheritedProcessEnv(config: unknown): NodeJS.ProcessEnv {
+  return filterMyrmidonInheritedEnv(process.env, {
+    inheritProcessEnv: readInheritProcessEnvFlag(config),
+  });
 }

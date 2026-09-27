@@ -44,6 +44,8 @@ import {
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
 } from "@paperclipai/adapter-utils/server-utils";
+// myrmidon(S2): allow-listed run environment
+import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
 import {
   SANDBOX_INSTALL_COMMAND,
   modelSupportsEffort,
@@ -137,7 +139,8 @@ function buildKimiHeadlessEnv(env: Record<string, string>): Record<string, strin
 
 function buildKimiRuntimeEnv(env: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(ensurePathInEnv({ ...process.env, ...buildKimiHeadlessEnv(env) })).filter(
+    // myrmidon(S2): allow-listed server env instead of process.env
+    Object.entries(ensurePathInEnv({ ...myrmidonInheritedProcessEnv(null), ...buildKimiHeadlessEnv(env) })).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -600,6 +603,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const eventForwarder = createKimiEventForwardingLog(onLog, onEvent);
     const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
+      inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
       cwd,
       env: invocationEnv,
       timeoutSec,

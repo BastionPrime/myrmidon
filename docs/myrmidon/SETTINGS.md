@@ -54,7 +54,7 @@
 
 | Переменная | Функция | По умолчанию | Что делает | Как выключить / особое |
 |---|---|---|---|---|
-| `MYRMIDON_RUN_ENV_ALLOW` | S2 | пусто | Дополнительные имена переменных окружения сервера (через запятую, без значений), которые передаются в процесс прогона сверх базового списка | Базовый список: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TERM`, `TMPDIR`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTP(S)_PROXY`, `NO_PROXY` (и строчные), Windows: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`. Полное наследование — только флагом агента `adapterConfig.inheritProcessEnv: true` |
+| `MYRMIDON_RUN_ENV_ALLOW` | S2 | пусто | Дополнительные имена переменных окружения сервера (через запятую, без значений), которые передаются в процесс прогона сверх базового списка | Базовый список: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TERM`, `TMPDIR`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTP(S)_PROXY`, `NO_PROXY` (и строчные), Windows: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`. Указатели каталогов CLI: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CURSOR_HOME`, `GROK_HOME`, `HERMES_HOME`, `KIMI_CODE_HOME`, `PI_CODING_AGENT_DIR`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`. Полное наследование — только флагом агента `adapterConfig.inheritProcessEnv: true` |
 
 ## Настройки вендора, которые важны для Myrmidon
 

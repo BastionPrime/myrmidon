@@ -50,6 +50,8 @@ import {
   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
   joinPromptSections,
 } from "@paperclipai/adapter-utils/server-utils";
+// myrmidon(S2): allow-listed run environment
+import { myrmidonInheritedProcessEnv, readInheritProcessEnvFlag } from "@paperclipai/adapter-utils/myrmidon-run-env";
 import { DEFAULT_CURSOR_LOCAL_MODEL, SANDBOX_INSTALL_COMMAND } from "../index.js";
 import { parseCursorJsonl, isCursorUnknownSessionError } from "./parse.js";
 import { prepareCursorSandboxCommand } from "./remote-command.js";
@@ -443,7 +445,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
   const runtimeExecutionTarget = overrideAdapterExecutionTargetRemoteCwd(executionTarget, effectiveExecutionCwd);
   const effectiveEnv = Object.fromEntries(
-    Object.entries({ ...process.env, ...env }).filter(
+    // myrmidon(S2): allow-listed server env instead of process.env
+    Object.entries({ ...myrmidonInheritedProcessEnv(config), ...env }).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -474,7 +477,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (paperclipBridge) {
       Object.assign(env, paperclipBridge.env);
       loggedEnv = buildInvocationEnvForLogs(env, {
-        runtimeEnv: ensurePathInEnv({ ...process.env, ...env }),
+        // myrmidon(S2): allow-listed server env instead of process.env
+        runtimeEnv: ensurePathInEnv({ ...myrmidonInheritedProcessEnv(config), ...env }),
         includeRuntimeKeys: ["HOME"],
         resolvedCommand,
       });
@@ -650,6 +654,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
 
     const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
+      inheritProcessEnv: readInheritProcessEnvFlag(config), // myrmidon(S2)
       cwd,
       env,
       timeoutSec,
