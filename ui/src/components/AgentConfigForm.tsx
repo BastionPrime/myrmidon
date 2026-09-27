@@ -75,6 +75,8 @@ import { getUIAdapter } from "../adapters";
 import { ClaudeLocalAdvancedFields } from "../adapters/claude-local/config-fields";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { ChoosePathButton } from "./PathInstructionsModal";
+// myrmidon(M1): extra models on the agent card
+import { AgentCardModelsFields } from "./myrmidon/AgentCardModelsFields";
 import { OpenCodeLogoIcon } from "./OpenCodeLogoIcon";
 import { ReportsToPicker } from "./ReportsToPicker";
 import {
@@ -1791,6 +1793,17 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                       </p>
                     )}
                 </>
+              )}
+              {/* myrmidon(M1): extra models on the agent card */}
+              {!isCreate && (
+                <AgentCardModelsFields
+                  adapterType={adapterType}
+                  value={eff("adapterConfig", "models", config.models)}
+                  onChange={(next) => mark("adapterConfig", "models", next)}
+                  renderModelPicker={(picker) => (
+                    <ModelDropdown models={models} value={picker.value} onChange={picker.onChange} open={picker.open} onOpenChange={picker.onOpenChange} allowDefault required={false} groupByProvider={adapterType === "opencode_local" || adapterType === "pi_local"} creatable />
+                  )}
+                />
               )}
           </>)}
         </div>

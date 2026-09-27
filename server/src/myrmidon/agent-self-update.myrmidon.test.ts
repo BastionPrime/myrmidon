@@ -220,6 +220,14 @@ describeEmbeddedPostgres("myrmidon(S4) agent does not change its own configurati
     expect(unknownFallback.status).toBe(422);
     expect(JSON.stringify(unknownFallback.body)).toContain("adapterConfig.models.fallbacks");
 
+    for (const field of ["vision", "video", "stt", "tts"]) {
+      const res = await request(app)
+        .patch(`/api/agents/${agent.id}`)
+        .send({ adapterConfig: { models: { [field]: "model-unknown" } } });
+      expect(res.status).toBe(422);
+      expect(JSON.stringify(res.body)).toContain(`adapterConfig.models.${field}`);
+    }
+
     const known = await request(app)
       .patch(`/api/agents/${agent.id}`)
       .send({ adapterConfig: { model: "model-a", models: { vision: "model-b", fallbacks: ["model-a"] } } });

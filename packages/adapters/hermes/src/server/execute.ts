@@ -64,6 +64,8 @@ import {
   materializeRunScopedHermesMcp,
   resolveRuntimeMcpUrlBase,
 } from "./myrmidon-runtime-mcp.js";
+// myrmidon(M1): card models in the run-scoped config.yaml
+import { materializeHermesRunModels } from "./myrmidon-profile-config.js";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -557,6 +559,10 @@ export async function execute(
     );
   }
 
+  // myrmidon(M1): card models go into this run's config.yaml, never the profile
+  const runModels = await materializeHermesRunModels({ config, hermesHome: env.HERMES_HOME, homeDir: env.HOME, runScopedHome: runtimeMcpCleanup !== null, runId: ctx.runId, provider: resolvedProvider, onLog: ctx.onLog }).catch(async (err) => { await ctx.onLog("stdout", `[hermes] Warning: card models not applied (${err instanceof Error ? err.message : String(err)}).\n`); return null; });
+  if (runModels) env.HERMES_HOME = runModels.hermesHome;
+
   // ── Resolve working directory ──────────────────────────────────────────
   const cwd =
     cfgString(config.cwd) || cfgString(ctx.config?.workspaceDir) || ".";
@@ -619,6 +625,7 @@ export async function execute(
     });
   } finally {
     await runtimeMcpCleanup?.();
+    await runModels?.cleanup(); // myrmidon(M1)
   }
 
   // ── Parse output ───────────────────────────────────────────────────────
