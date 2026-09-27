@@ -17,6 +17,8 @@ import { ToolGatewayHttpError, type ToolGatewayService } from "../services/tool-
 import { forbidden, HttpError } from "../errors.js";
 import { accessService } from "../services/index.js";
 import { listConnectionLifecycleEvents } from "../services/tool-connection-activity.js";
+// myrmidon(P10): 405 for SSE GET on MCP gateway endpoints
+import { rejectMcpGatewaySseGet } from "../myrmidon/tool-gateway-sse.js";
 
 const TOOL_ACTIVITY_EVENT_TYPES = [
   "call_completed",
@@ -218,6 +220,7 @@ async function handleMcpGatewayProtocol(
 export function mcpGatewayProtocolRoutes(toolGateway: ToolGatewayService) {
   const router = Router();
   router.get("/mcp/gateways/:gatewayPublicId", async (req, res) => {
+    if (rejectMcpGatewaySseGet(req, res)) return; // myrmidon(P10): MCP spec requires 405 when no SSE stream
     res.json({
       transport: "streamable_http",
       endpoint: `/mcp/gateways/${req.params.gatewayPublicId}`,
@@ -441,6 +444,7 @@ export function toolGatewayRoutes(db: Db, toolGateway: ToolGatewayService) {
   });
 
   router.get("/tool-gateway/gateways/:gatewayId/mcp", async (req, res) => {
+    if (rejectMcpGatewaySseGet(req, res)) return; // myrmidon(P10): MCP spec requires 405 when no SSE stream
     res.json({
       transport: "streamable_http",
       endpoint: `/api/tool-gateway/gateways/${req.params.gatewayId}/mcp`,

@@ -34,6 +34,7 @@
 
 | ID | Что меняем | Файлы вендора | Причина | Тест-сторож | Как снимать | PR |
 |---|---|---|---|---|---|---|
+| P10 | GET с `Accept: text/event-stream` на оба GET-обработчика MCP-шлюза получает 405 и `Allow: POST`; обычный GET — вендорская визитка | `server/src/routes/tool-gateway.ts` + `server/src/myrmidon/tool-gateway-sse.ts` | Спецификация MCP Streamable HTTP: без SSE-потока сервер обязан ответить 405; клиент MCP, открывающий фоновый GET-поток, на 200 с JSON терял инструменты. У вендора открыт PR #11433 (безусловный 405) | `server/src/__tests__/tool-gateway-sse.myrmidon.test.ts` | Когда вендор отвечает 405 на SSE GET (например, влит #11433): удалить куски `myrmidon(P10)`, наш модуль и тест | [#27](https://github.com/itkadr-git/myrmidon/pull/27) |
 
 ## Трек 4 — чаты и навыки
 
