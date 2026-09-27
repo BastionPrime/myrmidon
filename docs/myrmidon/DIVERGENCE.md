@@ -51,6 +51,7 @@
 
 | ID | Что меняем | Файлы вендора | Причина | Тест-сторож | Как снимать | PR |
 |---|---|---|---|---|---|---|
+| S2 | Процесс прогона наследует из окружения сервера только разрешённые переменные; `inheritProcessEnv` возвращает поведение вендора | `packages/adapter-utils/src/server-utils.ts` (`runChildProcess`), `packages/adapter-utils/src/execution-target.ts` (опция `inheritProcessEnv`) + `packages/adapter-utils/src/myrmidon-run-env.ts` | Прогон получал `DATABASE_URL`, `BETTER_AUTH_SECRET`, облачные ключи сервера; идея из вендорского #10052 | `packages/adapter-utils/src/server-utils-run-env.myrmidon.test.ts` | Никогда, наше поведение. Если вендор введёт свой белый список — сверить, удалить куски `myrmidon(S2)` и модуль, тест переписать на вендорский механизм | S2-1 |
 
 ## Известные пробелы
 

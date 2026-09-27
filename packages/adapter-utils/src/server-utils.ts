@@ -12,6 +12,8 @@ import {
 } from "./local-process-sandbox.js";
 import { buildSshSpawnTarget, type SshRemoteExecutionSpec } from "./ssh.js";
 import { redactCommandText } from "./command-redaction.js";
+// myrmidon(S2): run processes inherit only allow-listed server variables
+import { filterMyrmidonInheritedEnv } from "./myrmidon-run-env.js";
 import { paperclipChatFilePreparationDelivery } from "./chat-file-delivery.js";
 import {
   PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES,
@@ -4577,6 +4579,8 @@ export async function runChildProcess(
     stdin?: string;
     remoteExecution?: RemoteExecutionSpec | null;
     localProcessSandbox?: LocalProcessSandboxOptions | null;
+    // myrmidon(S2): adapterConfig.inheritProcessEnv, restores full inheritance
+    inheritProcessEnv?: boolean;
   },
 ): Promise<RunProcessResult> {
   const onLogError =
@@ -4584,7 +4588,8 @@ export async function runChildProcess(
     ((err, id, msg) => console.warn({ err, runId: id }, msg));
   return new Promise<RunProcessResult>((resolve, reject) => {
     const rawMerged: NodeJS.ProcessEnv = {
-      ...sanitizeInheritedPaperclipEnv(process.env),
+      // myrmidon(S2): allow list instead of the whole server environment
+      ...filterMyrmidonInheritedEnv(process.env, { inheritProcessEnv: opts.inheritProcessEnv }),
       ...opts.env,
     };
 

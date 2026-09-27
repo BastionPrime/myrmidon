@@ -50,6 +50,7 @@
 
 | Переменная | Функция | По умолчанию | Что делает | Как выключить / особое |
 |---|---|---|---|---|
+| `MYRMIDON_RUN_ENV_ALLOW` | S2 | пусто | Дополнительные имена переменных окружения сервера (через запятую, без значений), которые передаются в процесс прогона сверх базового списка | Базовый список: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TERM`, `TMPDIR`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTP(S)_PROXY`, `NO_PROXY` (и строчные), Windows: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`. Полное наследование — только флагом агента `adapterConfig.inheritProcessEnv: true` |
 
 ## Настройки вендора, которые важны для Myrmidon
 

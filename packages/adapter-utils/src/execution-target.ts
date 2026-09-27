@@ -299,6 +299,8 @@ export interface AdapterExecutionTargetProcessOptions {
    */
   settleRunDisposition?: (() => DuplexBrokerRunDisposition) | null;
   localProcessSandbox?: LocalProcessSandboxOptions | null;
+  // myrmidon(S2): adapterConfig.inheritProcessEnv, restores full inheritance
+  inheritProcessEnv?: boolean;
 }
 
 export interface AdapterExecutionTargetShellOptions {
@@ -922,6 +924,7 @@ export async function runAdapterExecutionTargetProcess(
     terminalResultCleanup: options.terminalResultCleanup,
     localProcessSandbox: target?.kind === "local" || !target ? options.localProcessSandbox : null,
     remoteExecution: adapterExecutionTargetToRemoteSpec(target),
+    inheritProcessEnv: options.inheritProcessEnv, // myrmidon(S2)
   });
 }
 
