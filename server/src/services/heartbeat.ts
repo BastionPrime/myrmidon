@@ -607,6 +607,8 @@ import {
 } from "./effective-run-config-fingerprints.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { serverVersion } from "../version.js";
+// myrmidon(R3): maintenance mode admission gate
+import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/maintenance/gate.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -19424,6 +19426,7 @@ export function heartbeatService(
 
   async function startNextQueuedRunForAgent(agentId: string) {
     if ((await getSchedulingSuppression()).suppressed) return [];
+    if (await isAgentUnderMaintenance(db, agentId)) return []; // myrmidon(R3): queued runs wait for maintenance exit
     const cutoff = await getWorktreeExecutionCutoff();
 
     return withAgentStartLock(agentId, async () => {
@@ -19661,7 +19664,8 @@ export function heartbeatService(
   ) {
     const attemptStartedAtMs = Date.now();
     let attestedQuestionResponseAtMs: number | null = null;
-    if ((await getSchedulingSuppression()).suppressed) {
+    // myrmidon(R3): a maintenance window that opened after the claim releases the run like a task drain
+    if ((await getSchedulingSuppression()).suppressed || (await isRunUnderMaintenance(db, runId))) {
       try {
         await releaseRunClaimedJustBeforeSuppression(runId);
       } catch (err) {

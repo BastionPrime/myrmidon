@@ -56,6 +56,8 @@
 
 | ID | Что меняем | Файлы вендора | Причина | Тест-сторож | Как снимать | PR |
 |---|---|---|---|---|---|---|
+| R3 | Шлюз допуска режима обслуживания: прогоны агентов в области открытого окна остаются `queued` (`startNextQueuedRunForAgent`), прогон, захваченный перед открытием окна, возвращается в очередь (`executeRun`) | `server/src/services/heartbeat.ts` + `server/src/myrmidon/maintenance/**` | Режим обслуживания R3; вендорский task drain в 916.1 теряет побудки и не переживает перезапуск | `server/src/myrmidon/maintenance/gate.test.ts` | Никогда, наше поведение. Снимать вместе со всем R3: удалить куски `myrmidon(R3)` и модуль | [#39](https://github.com/itkadr-git/myrmidon/pull/39) |
+| R3 | `updateGeneral` сохраняет ключ `myrmidonMaintenance` в `instance_settings.general` | `server/src/services/instance-settings.ts` | Вендор нормализует `general` через `strip()` и стирает неизвестные ключи, режим терялся бы при сохранении общих настроек | `server/src/myrmidon/maintenance/gate.test.ts` («keeps the maintenance key…») | Когда вендор перестанет стирать неизвестные ключи `general` или состояние переедет в своё хранилище — удалить кусок `myrmidon(R3)` | [#39](https://github.com/itkadr-git/myrmidon/pull/39) |
 
 ## Трек 6 — безопасность и модели
 

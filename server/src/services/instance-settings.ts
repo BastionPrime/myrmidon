@@ -33,6 +33,8 @@ import {
   stripOperatorGeneralEchoes,
 } from "@paperclipai/shared";
 import { eq } from "drizzle-orm";
+// myrmidon(R3): keep maintenance mode state across vendor writes of `general`
+import { preserveMaintenanceGeneralKey } from "../myrmidon/maintenance/store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -540,7 +542,7 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          general: { ...nextGeneral },
+          general: { ...nextGeneral, ...preserveMaintenanceGeneralKey(current.general) }, // myrmidon(R3)
           updatedAt: now,
         })
         .where(eq(instanceSettings.id, current.id))
