@@ -124,6 +124,8 @@ import { initializeCloudRuntimeIdentity } from "./services/cloud-runtime-identit
 import { systemdNotify } from "./services/systemd-notify.js";
 import { flushInFlightRunLogMirrors } from "./services/run-log-store.js";
 import { startMaintenanceMode } from "./myrmidon/maintenance/index.js"; // myrmidon(R3)
+// myrmidon(P11): database backup catch-up
+import { BACKUP_CATCHUP_WINDOW_ENV, readBackupCatchUpSettings, startBackupCatchUp } from "./myrmidon/backup-catch-up.js";
 import {
   createEmbeddedPostgresSupervisor,
   type EmbeddedPostgresSupervisor,
@@ -901,6 +903,7 @@ async function startServerWithDatabaseTeardown(
           enabled: config.databaseBackupEnabled,
           backupDir: config.databaseBackupDir,
           maxAgeHours: databaseBackupMaxAgeHours,
+          intervalMinutes: config.databaseBackupIntervalMinutes, // myrmidon(P11): missed-slot warning
           alertFile: databaseBackupAlertFile,
           alertFiles: databaseBackupAlertFiles,
         }
@@ -1825,6 +1828,14 @@ async function startServerWithDatabaseTeardown(
     });
   }
   
+  // myrmidon(P11): with catch-up enabled the cadence starts after the catch-up check below
+  const backupCatchUp = readBackupCatchUpSettings();
+  if (backupCatchUp.enabled === false && backupCatchUp.invalidValue !== undefined) {
+    logger.warn(
+      { setting: BACKUP_CATCHUP_WINDOW_ENV },
+      "Database backup catch-up disabled: expected 'none' or '<IANA zone> HH:MM-HH:MM'",
+    );
+  }
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
 
@@ -1836,6 +1847,7 @@ async function startServerWithDatabaseTeardown(
       },
       "Automatic database backups enabled",
     );
+    if (!backupCatchUp.enabled) // myrmidon(P11)
     setInterval(() => {
       void runServerDatabaseBackup("scheduled").catch(() => {
         // runServerDatabaseBackup already logs the failure with context.
@@ -1848,6 +1860,17 @@ async function startServerWithDatabaseTeardown(
   // reject valid external adapter types during the startup loading window.
   const { waitForExternalAdapters } = await import("./adapters/registry.js");
   await waitForExternalAdapters();
+  // myrmidon(P11): catch up a missed backup slot and anchor the cadence to the newest dump
+  if (config.databaseBackupEnabled && backupCatchUp.enabled) {
+    startBackupCatchUp({
+      settings: backupCatchUp,
+      backupDir: config.databaseBackupDir,
+      intervalMinutes: config.databaseBackupIntervalMinutes,
+      isInFlight: () => databaseBackupInFlight,
+      runBackup: () => runServerDatabaseBackup("scheduled"),
+      logger,
+    });
+  }
 
   // Reconcile the agent-creation picker to the declaratively-configured adapter
   // set (PAPERCLIP_ADAPTERS). Must run after external adapters are loaded so the

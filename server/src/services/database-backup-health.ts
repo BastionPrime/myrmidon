@@ -1,10 +1,13 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+// myrmidon(P11): missed backup slot threshold
+import { resolveBackupSlotGapThresholdHours } from "../myrmidon/backup-slot-gap.js";
 
 export type DatabaseBackupHealthWarningCode =
   | "database_backup_check_failed"
   | "database_backup_last_failure"
   | "database_backup_missing"
+  | "database_backup_slot_missed" // myrmidon(P11)
   | "database_backup_stale";
 
 export type DatabaseBackupHealthWarning = {
@@ -17,6 +20,8 @@ export type DatabaseBackupHealthStatus = {
   status: "ok" | "warning";
   backupDir: string;
   maxAgeHours: number;
+  // myrmidon(P11): age above which a scheduled slot looks missed; null without a cadence
+  gapThresholdHours: number | null;
   latestBackup: {
     name: string;
     path: string;
@@ -36,6 +41,8 @@ export type InspectDatabaseBackupHealthOptions = {
   enabled: boolean;
   backupDir: string;
   maxAgeHours: number;
+  // myrmidon(P11): backup cadence; enables the missed-slot warning
+  intervalMinutes?: number;
   alertFile?: string;
   alertFiles?: string[];
   now?: Date;
@@ -108,6 +115,11 @@ export function inspectDatabaseBackupHealth(
   const warnings: DatabaseBackupHealthWarning[] = [];
   const now = opts.now ?? new Date();
   const maxAgeHours = Math.max(1, opts.maxAgeHours);
+  // myrmidon(P11): missed-slot threshold, only when the caller declares the cadence
+  const gapThresholdHours =
+    typeof opts.intervalMinutes === "number" && Number.isFinite(opts.intervalMinutes) && opts.intervalMinutes > 0
+      ? resolveBackupSlotGapThresholdHours(opts.intervalMinutes)
+      : null;
 
   let latestBackup: DatabaseBackupHealthStatus["latestBackup"] = null;
   let lastFailure: DatabaseBackupHealthStatus["lastFailure"] = null;
@@ -125,6 +137,14 @@ export function inspectDatabaseBackupHealth(
       warnings.push({
         code: "database_backup_stale",
         message: `Latest database backup is ${latestBackup.ageHours}h old, exceeding ${maxAgeHours}h.`,
+      });
+    } else if (gapThresholdHours !== null && latestBackup.ageHours > gapThresholdHours) {
+      // myrmidon(P11): one warning per condition; a long outage reports as stale only
+      warnings.push({
+        code: "database_backup_slot_missed",
+        message:
+          `Latest database backup is ${latestBackup.ageHours}h old, over the ${gapThresholdHours}h ` +
+          `threshold for a ${roundHours(opts.intervalMinutes! / 60)}h backup cadence: a scheduled slot looks missed.`,
       });
     }
 
@@ -146,6 +166,7 @@ export function inspectDatabaseBackupHealth(
     status: warnings.length > 0 ? "warning" : "ok",
     backupDir: opts.backupDir,
     maxAgeHours,
+    gapThresholdHours, // myrmidon(P11)
     latestBackup,
     lastFailure,
     warnings,

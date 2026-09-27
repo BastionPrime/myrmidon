@@ -1784,6 +1784,7 @@ registry.registerPath({
             status: z.enum(["ok", "warning"]),
             backupDir: z.string().optional(),
             maxAgeHours: z.number().optional(),
+            gapThresholdHours: z.number().nullable().optional(), // myrmidon(P11)
             latestBackup: z
               .object({
                 name: z.string(),
@@ -1808,6 +1809,7 @@ registry.registerPath({
                   "database_backup_check_failed",
                   "database_backup_last_failure",
                   "database_backup_missing",
+                  "database_backup_slot_missed", // myrmidon(P11)
                   "database_backup_stale",
                 ]),
                 message: z.string(),
