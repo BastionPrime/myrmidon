@@ -347,6 +347,10 @@ import {
   validateChatQuestionFormSubmission,
 } from "./chat-question-forms.js";
 import { secretService } from "./secrets.js";
+import {
+  createOmissionTracker,
+  telegramAttachmentOmissionNotice,
+} from "../myrmidon/chat-attachment-omission.js";
 import type {
   ActionEvent,
   AdapterPostableMessage,
@@ -10433,11 +10437,12 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   }): Promise<{
     storedIds: string[];
     omissionReasons: Record<string, number>;
+    omitted: Array<{ name: string | null; reason: string }>; // myrmidon(P7)
   }> {
-    const omissionReasons: Record<string, number> = {};
-    const omit = (reason: string, count = 1) => {
-      omissionReasons[reason] = (omissionReasons[reason] ?? 0) + count;
-    };
+    // myrmidon(P7): counts stay authoritative; per-file names feed the sender notice
+    const { omissionReasons, omitted, omit } = createOmissionTracker();
+    const omitAttachment = (reason: string, attachment: Attachment) =>
+      omit(reason, 1, [sanitizeFilename(attachment.name)]);
     const boundedAttachments = input.attachments.slice(0, 20);
     const photonDerivatives = new Map<Attachment, { source: Attachment; sourceHash: string; kind: "heif_jpeg_preview" | "live_photo_video" }>();
     const originalPhotonAttachments = new Map<Attachment, string>();
@@ -10465,7 +10470,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     if (!options.storage) {
       if (boundedAttachments.length)
         omit("storage_unavailable", boundedAttachments.length);
-      return { storedIds: [], omissionReasons };
+      return { storedIds: [], omissionReasons, omitted };
     }
     const existingByFingerprint = new Map<string, string[]>();
     const existingAttachments = await db
@@ -10738,7 +10743,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         input.endpoint.provider === "github" || sourceBoundMedia;
       try {
         if (teamsInlineImage && teamsInlineBatchSignal?.aborted) {
-          omit("download_unavailable");
+          omitAttachment("download_unavailable", attachment);
           continue;
         }
         // GitHub's anonymized upload URLs carry no trustworthy MIME metadata.
@@ -10773,11 +10778,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           attachment.size !== undefined &&
           attachment.size > MAX_ATTACHMENT_BYTES
         ) {
-          omit("declared_too_large");
+          omitAttachment("declared_too_large", attachment);
           continue;
         }
         if (!attachment.fetchData) {
-          omit("download_unavailable");
+          omitAttachment("download_unavailable", attachment);
           continue;
         }
         const originalFilename = sanitizeFilename(attachment.name);
@@ -10800,7 +10805,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             attachment.mimeType ?? "application/octet-stream",
           ) === "application/octet-stream";
         if (!isAllowedContentType(contentType) && !identifyTelegram) {
-          omit("unsupported_type");
+          omitAttachment("unsupported_type", attachment);
           continue;
         }
         const fetched = teamsInlineImage
@@ -10811,11 +10816,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           : await attachment.fetchData();
         const body = Buffer.isBuffer(fetched) ? fetched : Buffer.from(fetched);
         if (body.length === 0) {
-          omit("empty_download");
+          omitAttachment("empty_download", attachment);
           continue;
         }
         if (body.length > MAX_ATTACHMENT_BYTES) {
-          omit("downloaded_too_large");
+          omitAttachment("downloaded_too_large", attachment);
           continue;
         }
         if (identifyTelegram) {
@@ -10823,7 +10828,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             identifyTelegramMedia(attachment, body) ??
             "application/octet-stream";
           if (!isAllowedContentType(contentType)) {
-            omit("unsupported_type");
+            omitAttachment("unsupported_type", attachment);
             continue;
           }
         }
@@ -10966,10 +10971,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           throw error;
         // Use the closed current-input omission vocabulary consumed by native
         // prompts; provider-specific diagnostics remain redacted log codes.
-        omit(
+        omitAttachment(
           error instanceof GitHubAttachmentUnavailableError
             ? "download_unavailable"
             : "processing_failed",
+          attachment,
         );
         // A malformed or unavailable provider attachment must not strand the
         // durable text delivery. The rejected file is intentionally omitted;
@@ -10992,7 +10998,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         );
       }
     }
-    return { storedIds, omissionReasons };
+    return { storedIds, omissionReasons, omitted };
   }
 
   function attachmentOmissionDetail(result: {
@@ -11113,6 +11119,66 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     // delivery back into a replayable attachment message.
     scheduleProviderEffect(effect.id, input.thread);
     return true;
+  }
+
+  // myrmidon(P7): tell the sender which Telegram files were dropped.
+  // Staged in the same durable shape as the attachment-only visible failure:
+  // the notice is its own outbox operation, so neither a provider outage nor a
+  // retry can turn the already-accepted text delivery back into a replayable
+  // inbound message that warns the sender twice. The caller sends it only after
+  // the inbound wakeup is processed: sending takes the endpoint lock that wakeup
+  // authorization refuses to wait for. A staged notice that is never sent here
+  // is recovered by processPendingProviderEffects.
+  async function stageTelegramAttachmentOmissionNotice(input: {
+    activeDelivery: DeliveryRow;
+    attachmentResult: Awaited<ReturnType<typeof ingestAttachments>>;
+    conversationId: string;
+    endpoint: EndpointRow;
+    message: Message;
+    principalId: string | null;
+    resourceId: string | null;
+    runtimeContext?: InboundRuntimeContext;
+    thread: Thread;
+  }): Promise<(() => void) | null> {
+    if (
+      input.endpoint.provider !== "telegram" ||
+      input.message.attachments.length === 0
+    )
+      return null;
+    const notice = telegramAttachmentOmissionNotice(input.attachmentResult);
+    if (!notice) return null;
+    const effectContext =
+      input.runtimeContext ??
+      runtimeContextForRecord(
+        (await endpointRecord(input.endpoint.id)) ??
+          (() => {
+            throw new Error("Chat endpoint is unavailable");
+          })(),
+      );
+    const effect = await db.transaction((tx) =>
+      stageProviderEffect(tx, {
+        endpoint: input.endpoint,
+        deliveryId: input.activeDelivery.id,
+        conversationId: input.conversationId,
+        principalId: input.principalId,
+        // One notice per delivery: a replay or retry of the same inbound
+        // message re-stages this exact provider action.
+        providerActionId: `provider_effect:attachment-omission-notice:${input.activeDelivery.id}`,
+        payload: {
+          version: 1,
+          authorizationMode: "safe_notice",
+          effect: "thread_message",
+          threadId: input.thread.id,
+          text: notice,
+          settleDelivery: false,
+          ...(input.resourceId ? { resourceId: input.resourceId } : {}),
+        },
+        runtimeContext: effectContext,
+      }),
+    );
+    if (!effect)
+      throw new Error("Attachment omission notice was not persisted");
+    return () => scheduleProviderEffect(effect.id, input.thread);
   }
 
   async function admitDiscordRootMention(
@@ -15200,12 +15266,27 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         ) {
           return;
         }
+        // myrmidon(P7): stage the dropped-attachment notice; sent after the wakeup
+        const sendOmissionNotice = await stageTelegramAttachmentOmissionNotice({
+          activeDelivery,
+          attachmentResult,
+          conversationId: existingMessageLink.conversationId,
+          endpoint,
+          message,
+          principalId: activeDelivery.principalId,
+          resourceId: rebound.resourceId,
+          runtimeContext,
+          thread,
+        });
         // Subscription is part of the durable acceptance boundary. If it
         // fails, keep the delivery retryable; the committed message link makes
         // the retry resume here without duplicating the task or comment.
         if (addressed && !thread.isDM) await thread.subscribe();
         await acceptInboundWakeup(activeDelivery.id, attachmentResult);
-        if (!(await processInboundWakeup(activeDelivery.id))) return;
+        // myrmidon(P7): send the notice once the wakeup no longer needs the endpoint lock
+        const wakeProcessed = await processInboundWakeup(activeDelivery.id);
+        sendOmissionNotice?.();
+        if (!wakeProcessed) return;
         const acceptedWake = await db
           .select({ status: chatActions.status })
           .from(chatActions)
@@ -16269,12 +16350,27 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       ) {
         return;
       }
+      // myrmidon(P7): stage the dropped-attachment notice; sent after the wakeup
+      const sendOmissionNotice = await stageTelegramAttachmentOmissionNotice({
+        activeDelivery,
+        attachmentResult,
+        conversationId: conversation.id,
+        endpoint,
+        message,
+        principalId: principalResolution.principal.id,
+        resourceId: resource.id,
+        runtimeContext,
+        thread,
+      });
       // Do not discard a subscription failure after marking the delivery
       // processed. A retry reuses the committed message link above and tries
       // this idempotent subscription again before completing the delivery.
       if (addressed && !thread.isDM) await thread.subscribe();
       await acceptInboundWakeup(activeDelivery.id, attachmentResult);
-      if (!(await processInboundWakeup(activeDelivery.id))) return;
+      // myrmidon(P7): send the notice once the wakeup no longer needs the endpoint lock
+      const wakeProcessed = await processInboundWakeup(activeDelivery.id);
+      sendOmissionNotice?.();
+      if (!wakeProcessed) return;
       const acceptedWake = await db
         .select({ status: chatActions.status })
         .from(chatActions)

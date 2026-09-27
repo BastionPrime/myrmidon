@@ -162,6 +162,8 @@ import {
   rehydrateGitHubPublicAttachment,
 } from "../services/chat-github-attachments.js";
 import * as attachmentEgress from "../services/remote-http-fetch.js";
+// myrmidon(P7)
+import { effectiveTelegramAttachmentLimitBytes } from "../myrmidon/chat-attachment-omission.js";
 import { logger as chatAttachmentLogger } from "../middleware/logger.js";
 import type {
   PrpStructuredRunResult,
@@ -61103,6 +61105,177 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           { kind: "provider_effect", status: "processed" },
         ]),
       );
+      // myrmidon(P7): an empty turn keeps exactly one visible message: the replacement
+      // failure. No omission notice is added beside it.
+      await expect(
+        db
+          .select({ id: chatActions.id })
+          .from(chatActions)
+          .where(
+            and(
+              eq(chatActions.deliveryId, delivery.id),
+              like(chatActions.providerActionId, "%attachment-omission-notice%"),
+            ),
+          ),
+      ).resolves.toEqual([]);
+      expect(dm.post.mock.calls.map(([text]) => text)).toEqual([
+        visibleFailure,
+      ]);
+    } finally {
+      await retirePublicationFixture(service, endpoint.id);
+    }
+  });
+
+  // myrmidon(P7): sender-visible notice for dropped Telegram attachments
+  it("names an omitted Telegram attachment beside the delivered text and never warns twice", async () => {
+    const fixture = await seedCompany();
+    const storage = createStorageService();
+    const { callbacks, endpoint, service, wakeup } =
+      await configuredTelegramEndpoint(fixture, { storage: storage.storage });
+    const dm = makeThread({
+      channelId: "77115581",
+      id: "telegram:77115581",
+      isDM: true,
+      name: "Telegram oversized deck DM",
+    });
+    const oversizedFetch = vi.fn(async () => {
+      throw new Error("A file above the channel limit must not be downloaded");
+    });
+    try {
+      await deliverMessage({
+        callbacks,
+        endpointId: endpoint.id,
+        provider: "telegram",
+        thread: dm.thread,
+        message: makeMessage({
+          attachments: [
+            {
+              type: "file",
+              name: "quarterly-plan.pptx",
+              mimeType:
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+              size: MAX_ATTACHMENT_BYTES + 1,
+              fetchData: oversizedFetch,
+              fetchMetadata: { testRecoveryKey: "telegram-oversized-deck" },
+            } as Attachment,
+          ],
+          id: "77115581:41",
+          text: "Please review the attached deck",
+          userId: "77115581",
+        }),
+        trigger: "direct_message",
+      });
+
+      expect(oversizedFetch).not.toHaveBeenCalled();
+      expect(storage.putFile).not.toHaveBeenCalled();
+      const [conversation] = await service.listConversations(endpoint.id);
+      if (!conversation)
+        throw new Error("Expected an admitted Telegram conversation");
+      // The sender's own text stays the comment body untouched.
+      await expect(
+        db
+          .select({ body: issueComments.body })
+          .from(issueComments)
+          .where(eq(issueComments.issueId, conversation.issueId)),
+      ).resolves.toEqual([{ body: "Please review the attached deck" }]);
+      await expect(
+        db
+          .select({ id: issueAttachments.id })
+          .from(issueAttachments)
+          .where(eq(issueAttachments.issueId, conversation.issueId)),
+      ).resolves.toEqual([]);
+      // The text turn still reaches the agent; only the file was dropped.
+      expect(wakeup).toHaveBeenCalledTimes(1);
+      const [delivery] = await db
+        .select()
+        .from(chatDeliveries)
+        .where(eq(chatDeliveries.endpointId, endpoint.id));
+      if (!delivery) throw new Error("Expected an admitted Telegram delivery");
+      expect(delivery).toMatchObject({
+        state: "processed",
+        redactedError: expect.stringContaining("declared too large: 1"),
+      });
+      const notice = `Could not import the attached Telegram file: "quarterly-plan.pptx" — declared too large. Please resend it as a supported file under ${formatAttachmentSize(effectiveTelegramAttachmentLimitBytes())}.`;
+      await vi.waitFor(() => expect(dm.post).toHaveBeenCalledWith(notice));
+      await expect(
+        db
+          .select({
+            providerActionId: chatActions.providerActionId,
+            status: chatActions.status,
+          })
+          .from(chatActions)
+          .where(eq(chatActions.deliveryId, delivery.id)),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          {
+            providerActionId: `provider_effect:attachment-omission-notice:${delivery.id}`,
+            status: "processed",
+          },
+        ]),
+      );
+
+      // A healthy text turn with a supported attachment adds no message.
+      await deliverMessage({
+        callbacks,
+        endpointId: endpoint.id,
+        provider: "telegram",
+        thread: dm.thread,
+        message: makeMessage({
+          attachments: [
+            {
+              type: "file",
+              name: "notes.txt",
+              mimeType: "text/plain",
+              size: 12,
+              fetchData: async () => Buffer.from("hello there\n"),
+              fetchMetadata: { testRecoveryKey: "telegram-healthy-notes" },
+            } as Attachment,
+          ],
+          id: "77115581:42",
+          text: "Here are the meeting notes",
+          userId: "77115581",
+        }),
+        trigger: "direct_message",
+      });
+      const [healthyDelivery] = await db
+        .select()
+        .from(chatDeliveries)
+        .where(like(chatDeliveries.providerEventId, "%77115581:42"));
+      if (!healthyDelivery)
+        throw new Error("Expected the healthy Telegram delivery");
+      expect(healthyDelivery).toMatchObject({ state: "processed" });
+      expect(storage.putFile).toHaveBeenCalledTimes(1);
+      await expect(
+        db
+          .select({ id: chatActions.id })
+          .from(chatActions)
+          .where(
+            and(
+              eq(chatActions.deliveryId, healthyDelivery.id),
+              like(chatActions.providerActionId, "%attachment-omission-notice%"),
+            ),
+          ),
+      ).resolves.toEqual([]);
+
+      // Replay the exact same delivery through its committed message link: a
+      // retry re-stages one provider action instead of warning twice.
+      await db
+        .update(chatDeliveries)
+        .set({ state: "retry", nextAttemptAt: new Date(0) })
+        .where(eq(chatDeliveries.id, delivery.id));
+      await service.processPendingDeliveries(25, delivery.id);
+      await expect(
+        db
+          .select({ id: chatActions.id })
+          .from(chatActions)
+          .where(
+            and(
+              eq(chatActions.deliveryId, delivery.id),
+              like(chatActions.providerActionId, "%attachment-omission-notice%"),
+            ),
+          ),
+      ).resolves.toHaveLength(1);
+      expect(dm.post.mock.calls.map(([text]) => text)).toEqual([notice]);
     } finally {
       await retirePublicationFixture(service, endpoint.id);
     }
