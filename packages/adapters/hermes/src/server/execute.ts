@@ -68,17 +68,17 @@ import {
 // myrmidon(M1): card models in the run-scoped config.yaml
 import { materializeHermesRunModels } from "./myrmidon-profile-config.js";
 // myrmidon(G5): live progress by default (ignore adapterConfig.quiet=true),
-// session id in both -Q and non-Q output, Rich Panel frame stripping
+// session id in both -Q and non-Q output, Rich Panel frame stripping, and a
+// per-run sanitizer (buffered redaction + Query-echo suppression) for the
+// raw chunks forwarded to Paperclip's persisted run log
 import {
+  createLiveLogSanitizer,
   extractLiveSessionId,
   resolveHermesQuietMode,
   stripExitSummary,
   stripQueryEcho,
   stripRichPanelFrames,
 } from "./myrmidon-live-progress.js";
-// myrmidon(G5): mask secret-shaped text in live-progress mode's raw
-// tool-progress lines before they reach the persisted run log
-import { redactSecretsForLog } from "../shared/myrmidon-secret-redaction.js";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -624,33 +624,50 @@ export async function execute(
   // Hermes writes non-error noise to stderr (MCP init, INFO logs, etc).
   // Paperclip renders all stderr as red/error in the UI.
   // Wrap onLog to reclassify benign stderr lines as stdout.
-  const wrappedOnLog = async (stream: "stdout" | "stderr", rawChunk: string) => {
-    // myrmidon(G5): live progress mode's tool-progress lines carry raw,
-    // largely unredacted tool arguments (the vendor's own
-    // redact_tool_args_for_display only covers browser_type — see
-    // shared/myrmidon-secret-redaction.ts). Mask secret-shaped text before
-    // it reaches Paperclip's persisted run log / live transcript. Quiet
-    // mode (-Q) already suppresses this output entirely, so there is
-    // nothing new to redact there — skip the pass to leave its behavior
-    // unchanged.
-    const chunk = useQuiet ? rawChunk : redactSecretsForLog(rawChunk);
-    if (stream === "stderr") {
-      const trimmed = chunk.trimEnd();
-      // Benign patterns that should NOT appear as errors:
-      // - Structured log lines: [timestamp] INFO/DEBUG/WARN: ...
-      // - MCP server registration messages
-      // - Python import/site noise
-      const isBenign = /^\[?\d{4}[-/]\d{2}[-/]\d{2}T/.test(trimmed) || // structured timestamps
-        /^[A-Z]+:\s+(INFO|DEBUG|WARN|WARNING)\b/.test(trimmed) || // log levels
-        /Successfully registered all tools/.test(trimmed) ||
-        /MCP [Ss]erver/.test(trimmed) ||
-        /tool registered successfully/.test(trimmed) ||
-        /Application initialized/.test(trimmed);
-      if (isBenign) {
-        return ctx.onLog("stdout", chunk);
-      }
+  //
+  // Benign patterns that should NOT appear as errors:
+  // - Structured log lines: [timestamp] INFO/DEBUG/WARN: ...
+  // - MCP server registration messages
+  // - Python import/site noise
+  const isBenignStderrLine = (trimmed: string): boolean =>
+    /^\[?\d{4}[-/]\d{2}[-/]\d{2}T/.test(trimmed) || // structured timestamps
+    /^[A-Z]+:\s+(INFO|DEBUG|WARN|WARNING)\b/.test(trimmed) || // log levels
+    /Successfully registered all tools/.test(trimmed) ||
+    /MCP [Ss]erver/.test(trimmed) ||
+    /tool registered successfully/.test(trimmed) ||
+    /Application initialized/.test(trimmed);
+
+  const forwardLogLine = (stream: "stdout" | "stderr", line: string) => {
+    const chunk = `${line}\n`;
+    if (stream === "stderr" && isBenignStderrLine(line.trimEnd())) {
+      return ctx.onLog("stdout", chunk);
     }
     return ctx.onLog(stream, chunk);
+  };
+
+  // myrmidon(G5): live progress mode's tool-progress lines carry raw,
+  // largely unredacted tool arguments (the vendor's own
+  // redact_tool_args_for_display only covers browser_type — see
+  // shared/myrmidon-secret-redaction.ts) and, before any tool runs, the
+  // vendor CLI's whole-prompt `Query:` echo (myrmidon-live-progress.ts).
+  // createLiveLogSanitizer buffers each stream's trailing partial line so a
+  // secret or that echo's boundary can't hide by straddling two `data`
+  // events, redacts secret-shaped text, and drops the echo before any of it
+  // reaches Paperclip's persisted run log / live transcript. Quiet mode
+  // (-Q) never prints either in the first place, so it skips the sanitizer
+  // entirely and stays byte-for-byte unchanged.
+  const liveLogSanitizer = useQuiet ? null : createLiveLogSanitizer();
+
+  const wrappedOnLog = async (stream: "stdout" | "stderr", rawChunk: string) => {
+    if (!liveLogSanitizer) {
+      if (stream === "stderr" && isBenignStderrLine(rawChunk.trimEnd())) {
+        return ctx.onLog("stdout", rawChunk);
+      }
+      return ctx.onLog(stream, rawChunk);
+    }
+    for (const line of liveLogSanitizer.push(stream, rawChunk)) {
+      await forwardLogLine(stream, line);
+    }
   };
 
   // myrmidon(P4): check the spawn envelope, send the prompt on stdin, and remove
@@ -670,6 +687,14 @@ export async function execute(
       runEnvAdapterType: "hermes_local", // myrmidon(S2)
     });
   } finally {
+    // myrmidon(G5): flush each stream's buffered trailing partial line (see
+    // createLiveLogSanitizer) now that no more chunks are coming, so the
+    // very last line isn't silently lost when it never ended in a newline.
+    if (liveLogSanitizer) {
+      for (const { stream, line } of liveLogSanitizer.flush()) {
+        await forwardLogLine(stream, line);
+      }
+    }
     await runtimeMcpCleanup?.();
     await runModels?.cleanup(); // myrmidon(M1)
   }

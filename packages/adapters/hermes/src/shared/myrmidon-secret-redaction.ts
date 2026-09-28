@@ -40,9 +40,19 @@ const BARE_BEARER_RE = /\bBearer\s+([A-Za-z0-9._~+/=-]{8,})/g;
  * env-style invocations, or JSON snippets. The optional `[A-Za-z0-9_-]*`
  * prefix also catches compound env-var names (`DB_PASSWORD=`,
  * `STRIPE_API_KEY=`), which are far more common in real commands than the
- * bare keyword alone. */
+ * bare keyword alone.
+ *
+ * The quoted branch matches up to the actual closing quote — not up to the
+ * first whitespace — so a quoted value containing spaces
+ * (`password="correct horse battery"`) is still matched and redacted whole;
+ * matching `[^\s'",;&]+` unconditionally (as an earlier version of this
+ * regex did) cannot consume the space, so the closing-quote backreference
+ * can never be reached and the WHOLE match attempt fails, leaving a spaced
+ * quoted secret completely unredacted. The unquoted branch keeps the old,
+ * whitespace-terminated behavior, since there is no closing delimiter to
+ * scan for there. */
 const KEY_VALUE_SECRET_RE =
-  /\b([A-Za-z0-9_-]*(?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|secret|password|passwd|pwd)\s*[:=]\s*)(['"]?)([^\s'",;&]+)\2/gi;
+  /\b([A-Za-z0-9_-]*(?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|secret|password|passwd|pwd)\s*[:=]\s*)(?:(["'])(?:(?!\2)[^\\]|\\.)*\2|[^\s'",;&]+)/gi;
 
 /** `user:password@` credentials embedded in a URL or DB connection string. */
 const URL_CREDENTIALS_RE = /(:\/\/)[^/\s:@]+:[^/\s:@]+@/g;
@@ -65,7 +75,11 @@ export function redactSecretsForLog(text: string): string {
   let out = text
     .replace(AUTH_HEADER_RE, (_match, prefix: string) => `${prefix}${REDACTED}`)
     .replace(BARE_BEARER_RE, `Bearer ${REDACTED}`)
-    .replace(KEY_VALUE_SECRET_RE, (_match, prefix: string, quote: string) => `${prefix}${quote}${REDACTED}${quote}`)
+    .replace(
+      KEY_VALUE_SECRET_RE,
+      (_match, prefix: string, quote: string | undefined) =>
+        quote ? `${prefix}${quote}${REDACTED}${quote}` : `${prefix}${REDACTED}`,
+    )
     .replace(URL_CREDENTIALS_RE, (_match, scheme: string) => `${scheme}${REDACTED}@`);
   for (const re of VENDOR_KEY_PREFIX_RES) out = out.replace(re, REDACTED);
   return out;

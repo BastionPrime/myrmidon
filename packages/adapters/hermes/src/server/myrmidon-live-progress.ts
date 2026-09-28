@@ -45,13 +45,9 @@
  * CONVENTIONS.md §"утверждения отчётов — гипотезы").
  */
 
-import { TOOL_OUTPUT_PREFIX } from "../shared/constants.js";
-import {
-  isPanelRuleLine,
-  isPanelTitleLine,
-  isStreamBoxHeaderLine,
-  stripRichPanelFrames,
-} from "../shared/myrmidon-panel-frame.js";
+import { stripRichPanelFrames } from "../shared/myrmidon-panel-frame.js";
+import { redactSecretsForLog } from "../shared/myrmidon-secret-redaction.js";
+import { isTurnOutputBoundaryLine } from "../shared/myrmidon-turn-output-boundary.js";
 
 /**
  * Env flag: ignore `adapterConfig.quiet: true` and always run without `-Q`.
@@ -131,26 +127,6 @@ export function stripExitSummary(stdout: string): string {
 const QUERY_ECHO_START_RE = /^Query:\s/;
 
 /**
- * True for an ALREADY-TRIMMED line that starts real turn output, i.e. is
- * definitely NOT a wrapped continuation of the `Query:` echo: a tool-progress
- * line, the answer's Panel/streaming-box frame, or the interactive exit
- * summary. Used by `stripQueryEcho` to find where the echo ends without
- * having to reconstruct Rich's word-wrapping.
- */
-function isTurnOutputBoundaryLine(trimmedLine: string): boolean {
-  return (
-    trimmedLine.startsWith("[tool]") ||
-    trimmedLine.startsWith("[done]") ||
-    trimmedLine.startsWith(TOOL_OUTPUT_PREFIX) ||
-    trimmedLine.startsWith("session_id:") ||
-    trimmedLine === "Resume this session with:" ||
-    isPanelTitleLine(trimmedLine) ||
-    isPanelRuleLine(trimmedLine) ||
-    isStreamBoxHeaderLine(trimmedLine)
-  );
-}
-
-/**
  * Cut the vendor CLI's `Query: <prompt>` echo off the front of a non-quiet
  * run's stdout. `_query_label` is the ENTIRE prompt Paperclip sent on stdin
  * (agent instructions + wake context + task markdown), and `cli.console.print`
@@ -178,3 +154,94 @@ export function stripQueryEcho(stdout: string): string {
 
 // Re-exported so execute.ts's response cleaning needs a single G5 import.
 export { stripRichPanelFrames };
+
+/**
+ * Per-run, per-stream sanitizer for the raw stdout/stderr chunks forwarded to
+ * Paperclip's live/persisted run log (`execute.ts`'s `wrappedOnLog`) while
+ * live progress mode is in effect. Fixes two gaps in that path:
+ *
+ *  - `redactSecretsForLog` only ever saw the raw bytes of a single `data`
+ *    event from the child process's pipe, which Node delivers at OS/pipe
+ *    read granularity, not at line or token boundaries — a secret that
+ *    straddles two events (e.g. `Authorization: Bearer ` in one chunk, the
+ *    token in the next) matched nothing in either call. This buffers each
+ *    stream's trailing partial line across calls and only redacts complete,
+ *    reassembled lines.
+ *  - the `Query: <prompt>` echo (see `stripQueryEcho` above) was previously
+ *    only cut from the *parsed final response*: every raw chunk of it still
+ *    reached the persisted run log, protected only by `redactSecretsForLog`'s
+ *    pattern-based redaction — which "can only mask shapes it recognizes"
+ *    (../shared/myrmidon-secret-redaction.ts) and would miss a credential
+ *    pasted as free prose in the agent's own instructions or the task
+ *    markdown. This drops the whole echoed block from the log stream itself,
+ *    using the same `isTurnOutputBoundaryLine` scan `stripQueryEcho` uses,
+ *    applied incrementally as lines arrive instead of over the whole
+ *    (post-hoc) stdout.
+ *
+ * Construct one instance per run (per `execute()` call) — the suppression
+ * flag and the per-stream buffers are run-scoped state, never module-level.
+ */
+export interface LiveLogSanitizer {
+  /**
+   * Feed one raw chunk from `stream`. Returns zero or more complete,
+   * sanitized lines (each WITHOUT a trailing newline — the caller decides
+   * how to rejoin them) that are safe to forward now; an empty array means
+   * nothing is ready yet (still buffering a partial line, or the whole
+   * chunk was inside a suppressed `Query:` echo).
+   */
+  push(stream: "stdout" | "stderr", rawChunk: string): string[];
+  /**
+   * Call once after the child process has exited (no more chunks are
+   * coming): flushes each stream's trailing partial line, redacted and
+   * tagged with the stream it came from (the caller still needs that, e.g.
+   * to reclassify a benign stderr line as stdout). A partial line still
+   * inside an unterminated `Query:` echo (no boundary ever arrived — e.g.
+   * the run was killed mid-echo) is dropped rather than forwarded: at that
+   * point it can only be echoed prompt, never real turn output.
+   */
+  flush(): Array<{ stream: "stdout" | "stderr"; line: string }>;
+}
+
+export function createLiveLogSanitizer(): LiveLogSanitizer {
+  const pending: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
+  let suppressingQueryEcho = false;
+
+  function sanitizeCompleteLine(stream: "stdout" | "stderr", line: string): string | null {
+    const trimmed = line.trim();
+    if (stream === "stdout") {
+      if (suppressingQueryEcho) {
+        if (!isTurnOutputBoundaryLine(trimmed)) return null; // still inside the echo: drop
+        suppressingQueryEcho = false; // boundary reached: keep this line, resume normally
+      } else if (QUERY_ECHO_START_RE.test(trimmed)) {
+        suppressingQueryEcho = true; // drop the "Query:" line itself too
+        return null;
+      }
+    }
+    return redactSecretsForLog(line);
+  }
+
+  return {
+    push(stream, rawChunk) {
+      const combined = pending[stream] + rawChunk;
+      const lines = combined.split(/\r?\n/);
+      pending[stream] = lines.pop() ?? "";
+      const out: string[] = [];
+      for (const line of lines) {
+        const sanitized = sanitizeCompleteLine(stream, line);
+        if (sanitized !== null) out.push(sanitized);
+      }
+      return out;
+    },
+    flush() {
+      const out: Array<{ stream: "stdout" | "stderr"; line: string }> = [];
+      for (const stream of ["stdout", "stderr"] as const) {
+        const remainder = pending[stream];
+        pending[stream] = "";
+        if (!remainder) continue;
+        if (stream === "stdout" && suppressingQueryEcho) continue; // no boundary ever arrived: drop
+        out.push({ stream, line: redactSecretsForLog(remainder) });
+      }
+      return out;
+    },
+  };
+}

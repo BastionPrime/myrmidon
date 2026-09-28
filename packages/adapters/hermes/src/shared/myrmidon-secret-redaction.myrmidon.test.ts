@@ -14,6 +14,7 @@ const FAKE_QUERY_KEY = "abc123" + "def456";
 const FAKE_BEARER_TOKEN = "abcdEFGH" + "12345678";
 const FAKE_DB_PASSWORD = "hunter2correct" + "horse";
 const FAKE_CONNSTRING_PASSWORD = "hunter" + "2";
+const FAKE_SPACED_PASSWORD = "correct horse" + " battery staple";
 const FAKE_GITHUB_TOKEN = "ghp_" + "abcdefghijklmnopqrstuvwxyz012345";
 const FAKE_AWS_KEY = "AKIA" + "ABCDEFGHIJKLMNOP";
 
@@ -45,6 +46,20 @@ describe("redactSecretsForLog", () => {
       FAKE_CONNSTRING_PASSWORD,
     );
     expect(redactSecretsForLog(`export DB_PASSWORD="${FAKE_DB_PASSWORD}"`)).not.toContain(FAKE_DB_PASSWORD);
+  });
+
+  it("masks a quoted key=value secret whose value contains whitespace", () => {
+    // KEY_VALUE_SECRET_RE's quoted branch must scan for the actual closing
+    // quote, not stop at the first space inside it. A value group that
+    // simply excludes whitespace (`[^\s'",;&]+`) can never reach the closing
+    // quote once the value itself contains a space, so the WHOLE match
+    // attempt used to fail — not even a partial redaction — leaving a
+    // spaced, quoted secret completely unmasked (e.g. a `mysql --password="…"`
+    // invocation, or a `terminal` tool-progress line echoing it).
+    const line = `mysql --password="${FAKE_SPACED_PASSWORD}"`;
+    const result = redactSecretsForLog(line);
+    expect(result).not.toContain(FAKE_SPACED_PASSWORD);
+    expect(result).toBe('mysql --password="[REDACTED]"');
   });
 
   it("masks user:password@ credentials in a connection string / URL", () => {

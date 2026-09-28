@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createLiveLogSanitizer,
   extractLiveSessionId,
   LIVE_PROGRESS_ENV_VAR,
   LIVE_SESSION_ID_REGEX,
@@ -167,5 +168,56 @@ describe("stripQueryEcho", () => {
   it("leaves leading blank lines before the Query: line untouched", () => {
     const stdout = ["", "Query: hi", "[tool] terminal: ls", "Done."].join("\n");
     expect(stripQueryEcho(stdout)).toBe(["", "[tool] terminal: ls", "Done."].join("\n"));
+  });
+});
+
+describe("createLiveLogSanitizer", () => {
+  it("buffers a trailing partial line and only redacts once it is complete", () => {
+    const sanitizer = createLiveLogSanitizer();
+    // Fake, two-halves-built secret value (see
+    // shared/myrmidon-secret-redaction.myrmidon.test.ts for why), split mid-value
+    // across two `data` events: the first chunk alone has no closing quote,
+    // so it must not be forwarded yet.
+    const secretValue = "correct horse" + " battery";
+    const line = `password="${secretValue}"\n`;
+    const splitAt = line.indexOf(secretValue) + 6; // mid-value, not a clean boundary
+    expect(sanitizer.push("stdout", line.slice(0, splitAt))).toEqual([]);
+    expect(sanitizer.push("stdout", line.slice(splitAt))).toEqual(['password="[REDACTED]"']);
+  });
+
+  it("drops the 'Query:' echo across several pushes, keeps the boundary line", () => {
+    const sanitizer = createLiveLogSanitizer();
+    expect(sanitizer.push("stdout", "Query: entire prompt\n")).toEqual([]);
+    expect(sanitizer.push("stdout", "wrapped continuation, no marker\n")).toEqual([]);
+    expect(sanitizer.push("stdout", "still wrapped\n")).toEqual([]);
+    expect(sanitizer.push("stdout", '[tool] terminal: curl -s "https://example.com"\n')).toEqual([
+      '[tool] terminal: curl -s "https://example.com"',
+    ]);
+    // Suppression is over: ordinary output after the boundary passes through.
+    expect(sanitizer.push("stdout", "Done.\n")).toEqual(["Done."]);
+  });
+
+  it("only suppresses the Query: echo on stdout, never on stderr", () => {
+    const sanitizer = createLiveLogSanitizer();
+    expect(sanitizer.push("stdout", "Query: entire prompt\n")).toEqual([]);
+    // A benign stderr line arriving mid-echo must still pass through — the
+    // suppression state is stdout-only, matching where the vendor CLI
+    // actually prints the echo.
+    expect(sanitizer.push("stderr", "some MCP init noise\n")).toEqual(["some MCP init noise"]);
+  });
+
+  it("flush() drops a still-buffered partial line if the echo boundary never arrived", () => {
+    const sanitizer = createLiveLogSanitizer();
+    sanitizer.push("stdout", "Query: entire prompt\n");
+    sanitizer.push("stdout", "wrapped continuation with no trailing newline (run killed here)");
+    expect(sanitizer.flush()).toEqual([]);
+  });
+
+  it("flush() redacts and forwards an ordinary trailing partial line with no newline", () => {
+    const sanitizer = createLiveLogSanitizer();
+    sanitizer.push("stdout", "Done, verified with a targeted run.");
+    expect(sanitizer.flush()).toEqual([
+      { stream: "stdout", line: "Done, verified with a targeted run." },
+    ]);
   });
 });

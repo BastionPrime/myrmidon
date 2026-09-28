@@ -260,6 +260,56 @@ describe("execute() — G5 live progress wiring", () => {
     expect(loggedChunks.some((c) => c.includes("Authorization: Bearer [REDACTED]"))).toBe(true);
   });
 
+  it("redacts a secret whose token is split across two child-process stdout chunks", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // Node delivers child-process stdout at OS/pipe read granularity, not at
+    // line or token boundaries (adapter-utils' runChildProcess forwards each
+    // `data` event to onLog unmodified) — split the same tool-progress line
+    // the test above uses across two chunks, landing mid-token.
+    const fakeToken = "sk-ant-" + "abcdef0123456789";
+    vi.mocked(serverUtils.runChildProcess).mockImplementationOnce(async (_runId, _cmd, _args, opts: any) => {
+      const line = `[done] ┊ 💻 $         curl -H "Authorization: Bearer ${fakeToken}"  0.1s\n`;
+      const splitAt = line.indexOf(fakeToken) + 6; // mid-token, not a clean line/word boundary
+      await opts.onLog("stdout", line.slice(0, splitAt));
+      await opts.onLog("stdout", line.slice(splitAt));
+      return { exitCode: 0, signal: null, timedOut: false, stdout: "Done.", stderr: "", pid: null, startedAt: null };
+    });
+
+    const ctx = makeCtx({});
+    await execute(ctx as any);
+
+    const logged = ctx.onLog.mock.calls.map((call) => call[1] as string).join("");
+    expect(logged).not.toContain(fakeToken);
+    expect(logged).toContain("Authorization: Bearer [REDACTED]");
+  });
+
+  it("never forwards the raw 'Query:' prompt echo to ctx.onLog, even wrapped across several chunks", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // Simulates cli.py's _run_single_query_mode echoing the whole prompt to
+    // stdout across several `data` events before any tool or answer output —
+    // the raw echo must never reach the persisted run log, not just the
+    // parsed final response (stripQueryEcho, covered by the "strips the
+    // 'Query:' prompt echo…" test above operates on `result.stdout`, a
+    // different code path from `ctx.onLog`).
+    vi.mocked(serverUtils.runChildProcess).mockImplementationOnce(async (_runId, _cmd, _args, opts: any) => {
+      await opts.onLog("stdout", "Query: You are \"agent-a\", an AI age");
+      await opts.onLog("stdout", "nt employee in a Paperclip-managed company.\n");
+      await opts.onLog("stdout", "(the rest of the prompt, wrapped with no per-line marker)\n");
+      await opts.onLog("stdout", '[done] ┊ 💻 $         curl -s "https://example.com"  0.1s\n');
+      return { exitCode: 0, signal: null, timedOut: false, stdout: "Done.", stderr: "", pid: null, startedAt: null };
+    });
+
+    const ctx = makeCtx({});
+    await execute(ctx as any);
+
+    const logged = ctx.onLog.mock.calls.map((call) => call[1] as string).join("");
+    expect(logged).not.toContain("Query:");
+    expect(logged).not.toContain("Paperclip-managed company");
+    expect(logged).not.toContain("wrapped with no per-line marker");
+    // Real turn output after the echo still reaches the persisted log.
+    expect(logged).toContain("curl -s");
+  });
+
   it("does not redact (no-op, nothing new to redact) when quiet mode is in effect", async () => {
     process.env[LIVE_PROGRESS_ENV_VAR] = "0";
     const fakePassword = "hunter" + "2";
