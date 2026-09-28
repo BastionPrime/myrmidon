@@ -15720,6 +15720,13 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           text: message.text,
           current: existingConversation,
           latestConversation,
+          // myrmidon(X8b): a `reply`-kind command result finishes the whole
+          // turn inside handleTelegramDmCommand, before persistTaskMutation
+          // below ever runs — so the release/migration this transition needs
+          // must be passed through and applied there too (F: reply-first
+          // migration).
+          releaseConversationId: x8Dm.releaseConversationId,
+          migratedFromIssueId: x8Dm.migratedFromIssueId,
         });
         if (dmCommand.done) return;
         x8MessageBody = dmCommand.body;

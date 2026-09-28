@@ -26,6 +26,7 @@ import {
   companyMemberships,
   createDb,
   issueComments,
+  issueTreeHolds,
   issues,
   principalPermissionGrants,
 } from "@paperclipai/db";
@@ -1565,6 +1566,73 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
     expect(commentsAfter).toHaveLength(3);
   });
 
+  it("resumes a held conversation on '/new@bot' the same way as a literal '/new'", async () => {
+    const fixture = await seedCompany();
+    const { callbacks, endpoint } = await configuredTelegramEndpoint(fixture);
+    await linkTelegramPrincipal({
+      companyId: fixture.companyId,
+      endpointId: endpoint.id,
+      userId: "700011",
+      boardUserId: "owner-user",
+    });
+    await sendTelegramDm({
+      callbacks,
+      endpointId: endpoint.id,
+      channelId: "700011",
+      text: "First message",
+      userId: "700011",
+      messageId: 1,
+    });
+    const conversationBefore = await conversationRow(endpoint.id, "700011");
+    const [issue] = await db
+      .select()
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, fixture.companyId),
+          eq(issues.conversationUserId, telegramConversationUserId("owner-user")),
+        ),
+      );
+
+    // A pause hold (the kind `/new` is meant to release) so this scenario can
+    // tell a real reset apart from a no-op: without it, an unrecognized
+    // "/new@bot" and a correctly normalized one look identical.
+    const [hold] = await db
+      .insert(issueTreeHolds)
+      .values({ companyId: fixture.companyId, rootIssueId: issue.id, mode: "pause" })
+      .returning();
+
+    await sendTelegramDm({
+      callbacks,
+      endpointId: endpoint.id,
+      channelId: "700011",
+      text: "/new@TestBot",
+      userId: "700011",
+      messageId: 2,
+    });
+
+    const comments = await db
+      .select()
+      .from(issueComments)
+      .where(eq(issueComments.issueId, issue.id))
+      .orderBy(issueComments.createdAt);
+    // The stored comment keeps the sender's literal text; only the copy fed
+    // to the vendor's reset check is normalized (see bridge.ts's own comment
+    // on this call site).
+    expect(comments.at(-1)!.body).toBe("/new@TestBot");
+
+    const holdAfter = await db
+      .select()
+      .from(issueTreeHolds)
+      .where(eq(issueTreeHolds.id, hold.id))
+      .then((rows) => rows[0]);
+    expect(holdAfter.status).toBe("released");
+
+    const conversationAfter = await conversationRow(endpoint.id, "700011");
+    expect(conversationAfter!.id).toBe(conversationBefore!.id);
+    expect(conversationAfter!.state).toBe("active");
+  });
+
   describe("with a mocked command module", () => {
     it("finishes the turn for a reply-kind command without a comment or wakeup", async () => {
       const fixture = await seedCompany();
@@ -1670,6 +1738,81 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
         .where(eq(chatPublications.conversationId, conversation!.id));
       const notices = publications.filter((row) => row.idempotencyKey.startsWith("control:x8-notice:"));
       expect(notices).toHaveLength(1);
+    });
+
+    it("still releases the old binding and sends the migration notice when the migrating thread's first message is a reply-kind command", async () => {
+      const fixture = await seedCompany();
+      const { callbacks, endpoint } = await configuredTelegramEndpoint(fixture);
+      await linkTelegramPrincipal({
+        companyId: fixture.companyId,
+        endpointId: endpoint.id,
+        userId: "700012",
+        boardUserId: "owner-user",
+      });
+
+      // Flag off: the vendor creates its usual per-session task first.
+      delete process.env[TELEGRAM_DM_CONVERSATIONS_ENV];
+      await sendTelegramDm({
+        callbacks,
+        endpointId: endpoint.id,
+        channelId: "700012",
+        text: "Old-style first message",
+        userId: "700012",
+        messageId: 1,
+      });
+      const [oldIssue] = await db
+        .select()
+        .from(issues)
+        .where(and(eq(issues.companyId, fixture.companyId), eq(issues.originKind, "chat_channel")));
+      const oldConversation = await conversationRow(endpoint.id, "700012");
+      expect(oldConversation?.state).toBe("active");
+
+      // Flag on: the thread's first bridged message happens to parse as a
+      // recognized command whose result is `reply` — that finishes the whole
+      // turn inside handleTelegramDmCommand, before chat-channels.ts ever
+      // reaches persistTaskMutation, so the release/migration this
+      // transition needs must happen there too (F: reply-first migration).
+      process.env[TELEGRAM_DM_CONVERSATIONS_ENV] = "*";
+      vi.mocked(runBridgedDirectMessageCommand).mockResolvedValueOnce({
+        kind: "reply",
+        command: "status",
+        text: "Agent: Maya. Model: default.",
+      });
+      await sendTelegramDm({
+        callbacks,
+        endpointId: endpoint.id,
+        channelId: "700012",
+        text: "/status",
+        userId: "700012",
+        messageId: 2,
+      });
+
+      const oldConversationAfter = await db
+        .select()
+        .from(chatConversations)
+        .where(eq(chatConversations.id, oldConversation!.id))
+        .then((rows) => rows[0]);
+      expect(oldConversationAfter.state).toBe("completed");
+      const oldIssueAfter = await db
+        .select()
+        .from(issues)
+        .where(eq(issues.id, oldIssue.id))
+        .then((rows) => rows[0]);
+      expect(oldIssueAfter.status).toBe(oldIssue.status);
+
+      const newConversation = await conversationRow(endpoint.id, "700012");
+      expect(newConversation!.id).not.toBe(oldConversation!.id);
+
+      const publications = await db
+        .select()
+        .from(chatPublications)
+        .where(eq(chatPublications.conversationId, newConversation!.id));
+      expect(
+        publications.filter((row) => row.idempotencyKey.startsWith("control:x8-status:")),
+      ).toHaveLength(1);
+      expect(
+        publications.filter((row) => row.idempotencyKey.startsWith("control:x8-migrated:")),
+      ).toHaveLength(1);
     });
   });
 });

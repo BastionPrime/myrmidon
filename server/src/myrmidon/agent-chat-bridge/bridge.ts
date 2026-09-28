@@ -2,7 +2,7 @@
 // conversation instead of a fresh per-session task. This file holds every
 // piece of that logic; `chat-channels.ts` only calls into it (see the
 // `myrmidon(X8b)` call sites there). See docs/myrmidon/DIVERGENCE.md, track 4.
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   agents,
   chatConversations,
@@ -17,6 +17,7 @@ import type {
 } from "@paperclipai/shared";
 
 import { logger } from "../../middleware/logger.js";
+import { redactSensitiveText } from "../../redaction.js";
 import {
   publishActivity,
   type ActivityPublication,
@@ -174,6 +175,43 @@ export async function decideTelegramDmBinding(
   return { applies: false, detachExisting: false };
 }
 
+/** The text of the one-time notice sent when a thread migrates onto the standing conversation. */
+async function buildMigrationNoticeText(
+  db: DbOrTx,
+  input: {
+    companyId: string;
+    agentId: string;
+    publicBaseUrl: string | null;
+    migratedFromIssueId: string;
+  },
+): Promise<string> {
+  const [agent] = await db
+    .select({ name: agents.name })
+    .from(agents)
+    .where(and(eq(agents.companyId, input.companyId), eq(agents.id, input.agentId)));
+  const link = safeChatTaskUrl(input.publicBaseUrl, input.migratedFromIssueId);
+  return `This chat is now a standing conversation with ${agent?.name ?? "this agent"}. Earlier tasks stay on the board${link ? `: ${link}` : "."}`;
+}
+
+const MAX_LOGGED_ERROR_TEXT = 2_000;
+
+/**
+ * Mirrors chat-channels.ts's own module-private `redactError`: a raw error
+ * from a Telegram Bot API call can carry the bot token in the request URL,
+ * so it must never reach logs unredacted. `redactSensitiveText` is a shared,
+ * exported helper (server/src/redaction.ts); the Telegram-token-shaped regex
+ * below is duplicated because the vendor's own copy is not exported. See
+ * docs/myrmidon/DIVERGENCE.md, track 4 (X8b): keep this in sync if the
+ * vendor's `redactError` regex changes.
+ */
+function redactTelegramDmError(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  const withoutTelegramBotTokens = text
+    .replace(/(\/bot)\d{5,}(?::|%3A)[A-Za-z0-9_-]{20,}/gi, "$1***REDACTED***")
+    .replace(/\b\d{5,}:[A-Za-z0-9_-]{20,}\b/g, "***REDACTED***");
+  return redactSensitiveText(withoutTelegramBotTokens).slice(0, MAX_LOGGED_ERROR_TEXT);
+}
+
 /** Gets or creates the standing Telegram conversation issue for (agent, boardUserId). */
 export async function ensureTelegramDmConversation(
   tx: DbOrTx,
@@ -328,12 +366,31 @@ export async function handleTelegramDmCommand(input: {
   text: string;
   current: ConversationRow | null;
   latestConversation: { sessionGeneration: number } | null;
+  // myrmidon(X8b): `decideTelegramDmBinding`'s own release/migration fields.
+  // A `reply`-kind command result finishes the whole turn in this function
+  // (the caller never reaches persistTaskMutation/afterTelegramDmMessage in
+  // chat-channels.ts), so this is the only place left that can release the
+  // thread's old binding and queue the migration notice for a transition
+  // whose first message happens to be a recognized command.
+  releaseConversationId?: string;
+  migratedFromIssueId?: string;
 }): Promise<{ done: true } | { done: false; body?: string; notice?: string }> {
   const parsed = parseBridgedCommand(input.text);
   if (!parsed) return { done: false };
   const commandPublications: ActivityPublication[] = [];
-  const bound = await input.db.transaction((tx) =>
-    ensureTelegramDmBinding(
+  const bound = await input.db.transaction(async (tx) => {
+    if (input.releaseConversationId) {
+      await tx
+        .update(chatConversations)
+        .set({ state: "completed", updatedAt: new Date() })
+        .where(
+          and(
+            eq(chatConversations.id, input.releaseConversationId),
+            inArray(chatConversations.state, ["active", "waiting"]),
+          ),
+        );
+    }
+    return ensureTelegramDmBinding(
       tx,
       input.deps,
       {
@@ -346,8 +403,8 @@ export async function handleTelegramDmCommand(input: {
         latestConversation: input.latestConversation,
       },
       commandPublications,
-    ),
-  );
+    );
+  });
   for (const publication of commandPublications) publishActivity(publication);
   const result = await runBridgedDirectMessageCommand({
     db: input.db,
@@ -397,6 +454,27 @@ export async function handleTelegramDmCommand(input: {
       }),
       principalId: input.principalId,
     });
+    if (input.migratedFromIssueId) {
+      const text = await buildMigrationNoticeText(tx as unknown as Db, {
+        companyId: input.endpoint.companyId,
+        agentId: input.endpoint.assignedAgentId,
+        publicBaseUrl: input.deps.publicBaseUrl,
+        migratedFromIssueId: input.migratedFromIssueId,
+      });
+      await input.deps.stageTaskControlPublication(tx as unknown as Db, {
+        companyId: input.endpoint.companyId,
+        endpointId: input.endpoint.id,
+        conversationId: bound.conversation.id,
+        issueId: bound.issue.id,
+        idempotencyKey: `control:x8-migrated:${input.deliveryId}`,
+        payload: projectSafeChatPublication({
+          classification: "external",
+          source: "task_control",
+          text,
+        }),
+        principalId: input.principalId,
+      });
+    }
   });
   return { done: true };
 }
@@ -439,8 +517,10 @@ export async function refuseUnlinkedTelegramDm(
     });
     if (effect) await deps.processProviderEffect(effect.id, input.thread);
   } catch (error) {
+    // myrmidon(X8b): never log the raw error — a Telegram Bot API failure
+    // can carry the bot token in its request URL (see redactTelegramDmError).
     logger.warn(
-      { endpointId: input.endpoint.id, error },
+      { endpointId: input.endpoint.id, error: redactTelegramDmError(error) },
       "myrmidon(X8b): unlinked Telegram DM refusal notice failed",
     );
   }
@@ -470,13 +550,20 @@ export async function afterTelegramDmMessage(input: {
   notice?: string;
   migratedFromIssueId?: string;
 }): Promise<void> {
-  if (input.comment.body.trim() === "/new") {
-    await resumeConversationForReset(
-      input.db,
-      input.comment as unknown as Parameters<
+  // myrmidon(X8b): recognize both "/new" and "/new@<bot username>" — Telegram
+  // clients append the bot's username in a group, and a person may paste it
+  // into a DM out of habit too. `resumeConversationForReset` itself compares
+  // the comment's raw `body` against a literal "/new" (agent-conversations.ts,
+  // not ours to change), so the mention suffix must be stripped from the copy
+  // passed in rather than from the stored comment.
+  const resetCommand = parseBridgedCommand(input.comment.body);
+  if (resetCommand && resetCommand.name === "new" && resetCommand.args === "") {
+    await resumeConversationForReset(input.db, {
+      ...(input.comment as unknown as Parameters<
         typeof resumeConversationForReset
-      >[1],
-    );
+      >[1]),
+      body: "/new",
+    });
   }
   if (input.notice) {
     await input.db.transaction((tx) =>
@@ -496,12 +583,12 @@ export async function afterTelegramDmMessage(input: {
     );
   }
   if (input.migratedFromIssueId) {
-    const [agent] = await input.db
-      .select({ name: agents.name })
-      .from(agents)
-      .where(and(eq(agents.companyId, input.companyId), eq(agents.id, input.agentId)));
-    const link = safeChatTaskUrl(input.deps.publicBaseUrl, input.migratedFromIssueId);
-    const text = `This chat is now a standing conversation with ${agent?.name ?? "this agent"}. Earlier tasks stay on the board${link ? `: ${link}` : "."}`;
+    const text = await buildMigrationNoticeText(input.db, {
+      companyId: input.companyId,
+      agentId: input.agentId,
+      publicBaseUrl: input.deps.publicBaseUrl,
+      migratedFromIssueId: input.migratedFromIssueId,
+    });
     await input.db.transaction((tx) =>
       input.deps.stageTaskControlPublication(tx as unknown as Db, {
         companyId: input.companyId,
