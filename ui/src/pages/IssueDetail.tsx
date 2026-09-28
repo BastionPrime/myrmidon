@@ -7144,6 +7144,19 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
               />
             </TooltipProvider>
           ) : null}
+          {/* myrmidon(U3): desktop instance of the files drawer trigger —
+          the ancestor "hidden md:flex" group above hides this on mobile,
+          where the standalone twin further up (md:hidden) takes over
+          instead. Kept as a plain flow sibling of task-title-actions, not
+          nested inside it: that div goes `absolute right-0 top-0` in the
+          streamlined (default) header to float the kebab over the title
+          row, which only reserves `md:pr-8` (32px) there — just enough for
+          the kebab itself. A wider "Files (N)" trigger placed inside that
+          absolute box would extend past the reserved space and sit on top
+          of the title text, intercepting clicks meant for the title. In
+          normal flow here it lays out beside the kebab instead of over the
+          title. */}
+          {filesDrawerTrigger}
           <div
             data-slot="task-title-actions"
             className={cn(
@@ -7151,11 +7164,6 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                 "absolute right-0 top-0 flex h-7 items-center",
             )}
           >
-            {/* myrmidon(U3): desktop instance of the files drawer trigger,
-            next to the existing task actions — the ancestor "hidden md:flex"
-            group above hides this on mobile, where the standalone twin
-            further up (md:hidden) takes over instead. */}
-            {filesDrawerTrigger}
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
               <PopoverTrigger asChild>
                 <Button
