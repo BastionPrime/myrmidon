@@ -29132,18 +29132,23 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       status: "failed",
       result: expect.objectContaining({
         code: "telegram_maintenance_delivery_unknown",
-        // myrmidon(X8e): the bridge's own credentialLease.assertOwned()
-        // check, right after the vendor's own unscoped deleteMyCommands,
-        // now observes the reclaimed lease before providerConfirmed is set
-        // — see the matching note in "quarantines Telegram maintenance
-        // success…" above. deleteWebhook and the vendor's own
-        // deleteMyCommands still both went through (acceptedRemovalMutations
-        // below); the bridge's own all_private_chats cleanup never got a
-        // chance to run and is retried along with the rest.
+        // myrmidon(X8e): unlike the register_commands path (see the
+        // matching note in "quarantines Telegram maintenance success…"
+        // above, where the bridge's own assertOwned() call observes the
+        // reclaim before the bridge's own follow-up provider call), here
+        // that same assertOwned() call races the interval-driven
+        // lease-loss detection and loses: the bridge's own
+        // all_private_chats deleteMyCommands call still goes out
+        // (acceptedRemovalMutations below counts all three — deleteWebhook,
+        // the vendor's unscoped deleteMyCommands, and the bridge's own
+        // scoped one). The loss is only observed at the final
+        // post-mutation assertOwned() check, after providerConfirmed was
+        // set locally but before that gets persisted, so the whole
+        // operation is still retried along with the rest.
         providerConfirmed: false,
       }),
     });
-    expect(acceptedRemovalMutations).toBe(2);
+    expect(acceptedRemovalMutations).toBe(3);
     // The simulated successor has no live worker. Retire only its synthetic
     // lease and removal retry after proving stale settlement could not clear
     // the successor refs, keeping later global recovery tests independent.
