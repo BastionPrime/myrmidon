@@ -634,17 +634,6 @@ async function seedLowTrustFixture(db: Db) {
       contextSnapshot: { issueId: standardChild!.id },
     })
     .returning();
-  // myrmidon(L5): reviewRoot's own checkout lock now needs a live run behind
-  // it — the write-lock check no longer trusts "in_progress" status alone.
-  const [ctoReviewRun] = await db
-    .insert(heartbeatRuns)
-    .values({
-      companyId: company!.id,
-      agentId: cto!.id,
-      status: "running",
-      contextSnapshot: { issueId: reviewRoot!.id },
-    })
-    .returning();
   await db
     .update(issues)
     .set({
@@ -665,15 +654,6 @@ async function seedLowTrustFixture(db: Db) {
     .where(eq(issues.id, standardChild!.id));
   standardChild!.checkoutRunId = standardReportRun!.id;
   standardChild!.executionRunId = standardReportRun!.id;
-  await db
-    .update(issues)
-    .set({
-      checkoutRunId: ctoReviewRun!.id,
-      executionRunId: ctoReviewRun!.id,
-    })
-    .where(eq(issues.id, reviewRoot!.id));
-  reviewRoot!.checkoutRunId = ctoReviewRun!.id;
-  reviewRoot!.executionRunId = ctoReviewRun!.id;
 
   await db.insert(issueComments).values({
     companyId: company!.id,
@@ -859,7 +839,6 @@ async function seedLowTrustFixture(db: Db) {
       lowTrust: lowTrustRun!,
       standard: standardRun!,
       standardReport: standardReportRun!,
-      ctoReview: ctoReviewRun!,
     },
     canaries,
   };
@@ -1015,6 +994,28 @@ describeEmbeddedPostgres(
         expect(response.status, JSON.stringify(response.body)).toBe(201);
       }
 
+      // myrmidon(L5): the run lock now only holds a *live* run — give
+      // reviewRoot one, scoped to this test only (a permanent fixture-wide
+      // run here would make every wake into reviewRoot look permanently
+      // busy for unrelated tests, e.g. the wake assertions below in
+      // "redacts quarantined low-trust output…").
+      const [ctoReviewRun] = await db
+        .insert(heartbeatRuns)
+        .values({
+          companyId: fixture.company.id,
+          agentId: fixture.agents.cto.id,
+          status: "running",
+          contextSnapshot: { issueId: fixture.issues.reviewRoot.id },
+        })
+        .returning();
+      await db
+        .update(issues)
+        .set({
+          checkoutRunId: ctoReviewRun!.id,
+          executionRunId: ctoReviewRun!.id,
+        })
+        .where(eq(issues.id, fixture.issues.reviewRoot.id));
+
       const checkedOutPeerUpdate = await request(standardApp)
         .patch(`/api/issues/${fixture.issues.reviewRoot.id}`)
         .send({ status: "blocked" });
@@ -1026,9 +1027,9 @@ describeEmbeddedPostgres(
         "issue_write_assignee_run_lock",
       );
       // myrmidon(L5): the lock only holds because reviewRoot has a genuinely
-      // live run behind it (fixture.runs.ctoReview) — the 409 names it.
+      // live run behind it (ctoReviewRun, inserted above) — the 409 names it.
       expect(checkedOutPeerUpdate.body.details.liveRunId).toBe(
-        fixture.runs.ctoReview.id,
+        ctoReviewRun!.id,
       );
 
       const documentWrite = await request(standardApp)
