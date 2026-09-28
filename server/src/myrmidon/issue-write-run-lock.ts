@@ -50,8 +50,8 @@ export function isWriteLockLiveRunCheckEnabled(
  * `CANCELLABLE_HEARTBEAT_RUN_STATUSES` in server/src/services/heartbeat.ts,
  * both `["queued", "running", "scheduled_retry"]`) rather than importing it:
  * that file has no export for either constant, and this is a new-file-only
- * module (CONVENTIONS.md §4) that keeps its point of contact with vendor
- * code to the labeled call site in routes/issues.ts.
+ * module (CONVENTIONS.md §8, "minimal footprint") that keeps its point of
+ * contact with vendor code to the labeled call site in routes/issues.ts.
  */
 const LIVE_RUN_STATUSES = new Set(["running", "queued", "scheduled_retry"]);
 
