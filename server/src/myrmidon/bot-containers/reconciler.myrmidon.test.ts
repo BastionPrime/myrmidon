@@ -238,7 +238,11 @@ describe("reconcileBot", () => {
         { botKey: "agent-a", state: "running", restartHash: applied.restartHash, filesHash: applied.filesHash },
         { drift: true },
       );
-      const maintenance = fakeMaintenance([1, 0]); // one run in flight, then drained
+      // enter() consumes the first value (1); the poll loop then reads 1 again
+      // (still running -> sleeps, captured below) before 0 (drained). Two non-zero
+      // reads are needed, not one: `enter()` itself consumes one value from this
+      // shared sequence before the poll loop ever runs (see `fakeMaintenance`).
+      const maintenance = fakeMaintenance([1, 1, 0]);
       let callsAtFirstDrainPoll: string[] | undefined;
       const outcome = await reconcileBot({
         agentId: "agent-a",
