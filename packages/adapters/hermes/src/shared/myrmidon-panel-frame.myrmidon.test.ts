@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { isPanelRuleLine, isPanelTitleLine, stripRichPanelFrames } from "./myrmidon-panel-frame.js";
+import {
+  isPanelRuleLine,
+  isPanelTitleLine,
+  isStreamBoxFooterLine,
+  isStreamBoxHeaderLine,
+  stripRichPanelFrames,
+} from "./myrmidon-panel-frame.js";
 
 /**
  * Builds the exact bytes `rich.panel.Panel(..., box=box.HORIZONTALS,
@@ -144,5 +150,106 @@ describe("stripRichPanelFrames", () => {
         "",
       ].join("\n"),
     );
+  });
+});
+
+/**
+ * Builds the streaming box Hermes actually uses for a normal successful turn
+ * (`display.streaming: true`, the vendor CLI's default — see
+ * myrmidon-panel-frame.ts): a rounded-corner header/footer with NO per-row
+ * border decoration (`_STREAM_PAD = ""`, cli.py), unlike the
+ * `box.HORIZONTALS` Panel above. `fill` approximates
+ * `_status_bar_display_width` (prompt_toolkit's `get_cwidth`) with
+ * `.length` — exact for a plain-BMP label like "⚕ Hermes"; only the frame's
+ * SHAPE matters for the regex under test, not the precise dash count.
+ */
+function buildStreamBox(label: string, bodyLines: string[], width = 80): string {
+  const fill = width - 2 - label.length;
+  const header = `╭─${label}${"─".repeat(Math.max(fill - 1, 0))}╮`;
+  const footer = `╰${"─".repeat(width - 2)}╯`;
+  return ["", header, ...bodyLines, footer].join("\n");
+}
+
+describe("isStreamBoxHeaderLine / isStreamBoxFooterLine", () => {
+  it("recognizes the header and footer once trimmed", () => {
+    const block = buildStreamBox("⚕ Hermes", ["hi"]);
+    const rows = block.split("\n");
+    expect(isStreamBoxHeaderLine(rows[1].trim())).toBe(true);
+    expect(isStreamBoxFooterLine(rows[rows.length - 1].trim())).toBe(true);
+  });
+
+  it("does not cross-match the box.HORIZONTALS Panel frame", () => {
+    expect(isStreamBoxHeaderLine("─ ⚕ Hermes ──────")).toBe(false);
+    expect(isStreamBoxFooterLine("─".repeat(78))).toBe(false);
+    expect(isPanelTitleLine("╭─⚕ Hermes──────╮")).toBe(false);
+    expect(isPanelRuleLine("╰──────╯")).toBe(false);
+  });
+
+  it("does not mistake the (square-corner) reasoning box for the response's streaming box", () => {
+    // `_chat_print_reasoning_box`: ┌─ Reasoning ─…─┐ / └─…─┘ — a DIFFERENT
+    // glyph set (U+250C/2510/2514/2518), never confused with ╭╮╰╯.
+    expect(isStreamBoxHeaderLine("┌─ Reasoning ──────┐")).toBe(false);
+    expect(isStreamBoxFooterLine("└──────┘")).toBe(false);
+  });
+
+  it("does not mistake a tool-progress or markdown line for the streaming box", () => {
+    expect(isStreamBoxHeaderLine("┊ 💻 $         curl -s https://example.com  0.1s")).toBe(false);
+    expect(isStreamBoxHeaderLine("- top level bullet")).toBe(false);
+  });
+});
+
+describe("stripRichPanelFrames — streaming box (display.streaming: true, the vendor default)", () => {
+  it("removes the header/footer and passes bare content lines through unchanged", () => {
+    const block = buildStreamBox("⚕ Hermes", ["Done."]);
+    expect(stripRichPanelFrames(block)).toBe("\nDone.\n");
+  });
+
+  it("keeps multi-line content, blank paragraph separators, and markdown bullets (no border to unwrap)", () => {
+    const bodyLines = [
+      "Fixed the missing null check in the session lookup.",
+      "",
+      "- Verified with a targeted run",
+      "- Updated the changelog entry",
+    ];
+    const block = buildStreamBox("⚕ Hermes", bodyLines);
+    expect(stripRichPanelFrames(block)).toBe(["", ...bodyLines, ""].join("\n"));
+  });
+
+  it("preserves a nested markdown list's own indentation", () => {
+    const block = buildStreamBox("⚕ Hermes", ["- top item", "  - nested item"]);
+    expect(stripRichPanelFrames(block).split("\n")).toContain("  - nested item");
+  });
+
+  it("passes surrounding tool-progress lines through untouched", () => {
+    const before = '[tool] terminal: curl -s "https://example.com"';
+    const after = "[done] ┊ 💻 $         curl -s https://example.com  0.2s (0.2s)";
+    const block = buildStreamBox("⚕ Hermes", ["Done."]);
+    const text = [before, block, after].join("\n");
+    expect(stripRichPanelFrames(text)).toBe([before, "", "Done.", "", after].join("\n"));
+  });
+
+  it("leaves an unterminated streaming box (killed mid-answer) alone instead of guessing", () => {
+    const block = buildStreamBox("⚕ Hermes", ["Working on it"]);
+    const truncated = block.split("\n").slice(0, 3).join("\n"); // blank + header + first content line, no footer
+    expect(stripRichPanelFrames(truncated)).toBe(truncated);
+  });
+
+  it("still strips a box.HORIZONTALS Panel (e.g. a failed/partial turn) when both formats appear in the same run", () => {
+    // already_streamed is false for an error/partial turn even with
+    // streaming on, so _chat_print_response_panel falls back to Panel.
+    const streamed = buildStreamBox("⚕ Hermes", ["Partial progress before the error."]);
+    const panelBlock = [
+      " ─ ⚕ Hermes " + "─".repeat(67) + " ",
+      " ".repeat(80),
+      " The turn failed partway through.".padEnd(79, " ") + " ",
+      " ".repeat(80),
+      " " + "─".repeat(78) + " ",
+    ].join("\r\n");
+    const text = [streamed, panelBlock].join("\n");
+    const result = stripRichPanelFrames(text);
+    expect(result).toContain("Partial progress before the error.");
+    expect(result).toContain("The turn failed partway through.");
+    expect(result).not.toMatch(/[╭╮╰╯]/);
+    expect(result).not.toMatch(/^─+$/m);
   });
 });

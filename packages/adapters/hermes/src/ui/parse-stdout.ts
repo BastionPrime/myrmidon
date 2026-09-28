@@ -24,8 +24,14 @@ function stripAnsi(text: string): string {
 import type { TranscriptEntry } from "@paperclipai/adapter-utils";
 
 import { TOOL_OUTPUT_PREFIX } from "../shared/constants.js";
-// myrmidon(G5): drop the Rich Panel frame around the non-quiet final answer
-import { isPanelRuleLine, isPanelTitleLine } from "../shared/myrmidon-panel-frame.js";
+// myrmidon(G5): drop the Rich Panel / streaming-box frame around the
+// non-quiet final answer
+import {
+  isPanelRuleLine,
+  isPanelTitleLine,
+  isStreamBoxFooterLine,
+  isStreamBoxHeaderLine,
+} from "../shared/myrmidon-panel-frame.js";
 
 // ── Kaomoji / noise stripping ──────────────────────────────────────────────
 
@@ -270,13 +276,34 @@ export function parseHermesStdoutLine(
     return [{ kind: "stdout", ts, text: stripped }];
   }
 
-  // ── Rich Panel frame around the non-quiet final answer ─────────────────
-  // myrmidon(G5): the border rule and title line of the Panel that wraps the
-  // final response when hermes runs without -Q are chrome, not transcript
-  // content — drop them instead of emitting them as garbage "assistant"
-  // lines. The panel's inner text lines fall through to the plain-text
-  // branch below unchanged (already-trimmed border padding included).
-  if (isPanelTitleLine(trimmed) || isPanelRuleLine(trimmed)) {
+  // ── Rich Panel / streaming-box frame around the non-quiet final answer ──
+  // myrmidon(G5): the border rule and title line of the Panel — or the
+  // rounded-corner header/footer of the streaming box `display.streaming`
+  // (the vendor CLI's default) actually uses for a normal successful turn —
+  // that wraps the final response when hermes runs without -Q are chrome,
+  // not transcript content — drop them instead of emitting them as garbage
+  // "assistant" lines. The frame's inner text lines fall through to the
+  // plain-text branch below unchanged (already-trimmed border padding
+  // included, for the Panel case; the streaming box has none to begin with).
+  if (
+    isPanelTitleLine(trimmed) ||
+    isPanelRuleLine(trimmed) ||
+    isStreamBoxHeaderLine(trimmed) ||
+    isStreamBoxFooterLine(trimmed)
+  ) {
+    return [];
+  }
+
+  // ── Vendor CLI's whole-prompt echo (non-quiet single-query mode) ────────
+  // myrmidon(G5): `_run_single_query_mode` (cli.py) prints "Query: <prompt>"
+  // before the turn starts, where <prompt> is the ENTIRE stdin payload
+  // Paperclip sent. This drops the line carrying the "Query:" label; a long
+  // prompt that Rich word-wraps across further lines has no marker of its
+  // own to recognize per-line (see execute.ts's stripQueryEcho, which sees
+  // the whole stdout at once and can scope the cut precisely) and still
+  // surfaces as stray "assistant" lines here — a known, accepted gap for
+  // this line-at-a-time parser.
+  if (trimmed.startsWith("Query:")) {
     return [];
   }
 

@@ -61,3 +61,37 @@ describe("parseHermesStdoutLine — G5: Rich Panel frame around the live-progres
     expect(toolResult[1]).toMatchObject({ kind: "tool_result" });
   });
 });
+
+describe("parseHermesStdoutLine — G5: streaming box (display.streaming: true, the vendor default)", () => {
+  it("drops the streaming box's rounded-corner header", () => {
+    expect(parseHermesStdoutLine("╭─⚕ Hermes──────────────────────────────────────────────────────────────╮", TS)).toEqual([]);
+  });
+
+  it("drops the streaming box's rounded-corner footer", () => {
+    expect(parseHermesStdoutLine("╰──────────────────────────────────────────────────────────────────────────╯", TS)).toEqual([]);
+  });
+
+  it("still surfaces the streaming box's own content lines as assistant text (no border to strip)", () => {
+    expect(parseHermesStdoutLine("Done, verified with a targeted run.", TS)).toEqual([
+      { kind: "assistant", ts: TS, text: "Done, verified with a targeted run." },
+    ]);
+  });
+
+  it("does not mistake the square-corner reasoning box for the response's streaming box", () => {
+    expect(parseHermesStdoutLine("┌─ Reasoning ──────────────────────────────────────────────────────────┐", TS)).toEqual([
+      { kind: "assistant", ts: TS, text: "┌─ Reasoning ──────────────────────────────────────────────────────────┐" },
+    ]);
+  });
+});
+
+describe("parseHermesStdoutLine — G5: vendor CLI's whole-prompt 'Query:' echo", () => {
+  it("drops the Query: line instead of emitting it as assistant garbage", () => {
+    expect(parseHermesStdoutLine("Query: Fix the missing null check in the session lookup.", TS)).toEqual([]);
+  });
+
+  it("does not drop unrelated assistant text that merely mentions a query", () => {
+    expect(parseHermesStdoutLine("Here is the query result you asked for.", TS)).toEqual([
+      { kind: "assistant", ts: TS, text: "Here is the query result you asked for." },
+    ]);
+  });
+});

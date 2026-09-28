@@ -73,6 +73,7 @@ import {
   extractLiveSessionId,
   resolveHermesQuietMode,
   stripExitSummary,
+  stripQueryEcho,
   stripRichPanelFrames,
 } from "./myrmidon-live-progress.js";
 
@@ -294,7 +295,14 @@ function cleanResponse(raw: string): string {
 // Output parsing
 // ---------------------------------------------------------------------------
 
-function parseHermesOutput(stdout: string, stderr: string): ParsedOutput {
+function parseHermesOutput(rawStdout: string, stderr: string): ParsedOutput {
+  // myrmidon(G5): live progress mode (no -Q) echoes the whole prompt as a
+  // "Query: <prompt>" line before any turn output (cli.py
+  // _run_single_query_mode); strip it before anything else parses stdout so
+  // it never lands in the stored response or (via SESSION_ID_REGEX_LEGACY)
+  // gets mistaken for session chrome. No-op for quiet-mode stdout, which
+  // never contains this line. See myrmidon-live-progress.ts.
+  const stdout = stripQueryEcho(rawStdout);
   const combined = stdout + "\n" + stderr;
   const result: ParsedOutput = {};
 

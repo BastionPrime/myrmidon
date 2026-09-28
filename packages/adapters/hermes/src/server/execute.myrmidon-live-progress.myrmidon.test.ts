@@ -80,6 +80,19 @@ function buildPanelBlock(title: string, bodyLines: string[], width = 80): string
   return [top, blank, ...bodyLines.map(row), blank, bottom].join("\r\n");
 }
 
+/**
+ * The streaming box (`display.streaming: true`, the vendor CLI's default —
+ * see shared/myrmidon-panel-frame.ts) a normal successful turn actually
+ * prints, as opposed to `buildPanelBlock`'s `box.HORIZONTALS` Panel (only
+ * used off-default / on a failed or partial turn).
+ */
+function buildStreamBox(title: string, bodyLines: string[], width = 80): string {
+  const fill = width - 2 - title.length;
+  const header = `╭─${title}${"─".repeat(Math.max(fill - 1, 0))}╮`;
+  const footer = `╰${"─".repeat(width - 2)}╯`;
+  return ["", header, ...bodyLines, footer].join("\n");
+}
+
 function buildExitSummary(sessionId: string): string {
   return [
     "",
@@ -160,5 +173,66 @@ describe("execute() — G5 live progress wiring", () => {
         "- Verified with a targeted run\n" +
         "- Updated the changelog entry",
     );
+  });
+
+  it("strips the 'Query:' prompt echo and reads the streaming-box answer (display.streaming: true, the default, successful-turn shape)", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // A normal successful turn: the vendor CLI's single-query mode echoes
+    // the whole prompt first (cli.py _run_single_query_mode), THEN the
+    // already-streamed answer closes into the rounded-corner box (not the
+    // box.HORIZONTALS Panel, which only prints for a failed/partial turn).
+    const stdout =
+      "Query: You are \"agent-a\", an AI agent employee in a Paperclip-managed company. " +
+      "(the rest of the full prompt, Rich-wrapped across more lines with no per-line marker)\n" +
+      '[tool] terminal: curl -s "https://example.com"\n' +
+      '[done] ┊ 💻 $         curl -s "https://example.com"  0.2s (0.3s)\n' +
+      buildStreamBox("⚕ Hermes", ["All fixed. See the PR."]) +
+      "\n" +
+      buildExitSummary(SESSION_ID);
+
+    vi.mocked(serverUtils.runChildProcess).mockResolvedValueOnce({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout,
+      stderr: "",
+      pid: null,
+      startedAt: null,
+    });
+
+    const result = await execute(makeCtx({}) as any);
+
+    expect(result.sessionParams).toEqual({ sessionId: SESSION_ID });
+    expect(result.resultJson).toMatchObject({ result: "All fixed. See the PR.", session_id: SESSION_ID });
+    expect(result.summary).toBe("All fixed. See the PR.");
+    // The echoed prompt must never leak into the persisted response.
+    expect(result.resultJson!.result as string).not.toContain("Query:");
+    expect(result.resultJson!.result as string).not.toContain("Paperclip-managed company");
+  });
+
+  it("is not fooled by a 'Session:'-shaped line inside the agent's own streamed answer", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    const stdout =
+      buildStreamBox("⚕ Hermes", [
+        "Here is the field layout:",
+        "Session:        not-the-real-session-id",
+        "That is unrelated to this CLI run.",
+      ]) +
+      "\n" +
+      buildExitSummary(SESSION_ID);
+
+    vi.mocked(serverUtils.runChildProcess).mockResolvedValueOnce({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout,
+      stderr: "",
+      pid: null,
+      startedAt: null,
+    });
+
+    const result = await execute(makeCtx({}) as any);
+
+    expect(result.sessionParams).toEqual({ sessionId: SESSION_ID });
   });
 });

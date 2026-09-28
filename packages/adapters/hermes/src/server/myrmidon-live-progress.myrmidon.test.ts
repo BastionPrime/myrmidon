@@ -7,6 +7,7 @@ import {
   QUIET_SESSION_ID_REGEX,
   resolveHermesQuietMode,
   stripExitSummary,
+  stripQueryEcho,
 } from "./myrmidon-live-progress.js";
 
 describe("resolveHermesQuietMode", () => {
@@ -73,6 +74,31 @@ describe("extractLiveSessionId", () => {
   it("returns undefined for quiet-mode stdout (no exit summary line)", () => {
     expect(extractLiveSessionId("Just the final response.\n")).toBeUndefined();
   });
+
+  it("does NOT match a 'Session:'-shaped line inside the agent's own answer", () => {
+    // A coding/ops assistant's own answer text could plausibly contain a
+    // line shaped like the exit summary's `Session:  <id>` — e.g. reporting
+    // on some unrelated session/auth field. Before scoping to the exit
+    // summary tail, `.match()` (non-global) returned this FIRST hit instead
+    // of the real id that follows it.
+    const fakeSessionLine = "Session:        not-the-real-session-id";
+    const stdout = [
+      "The user's auth session looks like this:",
+      "",
+      fakeSessionLine,
+      "",
+      "That field is unrelated to this CLI run.",
+    ].join("\n") + buildExitSummary("20260928_143022_ab12cd");
+    expect(extractLiveSessionId(stdout)).toBe("20260928_143022_ab12cd");
+  });
+
+  it("returns undefined (not a false positive) when the answer contains a look-alike line but no real exit summary follows (killed run)", () => {
+    const stdout = [
+      "Reporting on a field:",
+      "Session:        not-the-real-session-id",
+    ].join("\n");
+    expect(extractLiveSessionId(stdout)).toBeUndefined();
+  });
 });
 
 describe("stripExitSummary", () => {
@@ -86,5 +112,60 @@ describe("stripExitSummary", () => {
   it("is a no-op when there is no exit summary (killed run, or quiet mode)", () => {
     const stdout = "Just the final response, no CLI chrome after it.\n";
     expect(stripExitSummary(stdout)).toBe(stdout);
+  });
+});
+
+describe("stripQueryEcho", () => {
+  it("cuts a single-line Query echo up to the first tool-progress line", () => {
+    const stdout = [
+      "Query: Fix the missing null check in the session lookup.",
+      '[tool] terminal: curl -s "https://example.com"',
+      '[done] ┊ 💻 $         curl -s "https://example.com"  0.2s (0.3s)',
+      "Done.",
+    ].join("\n");
+    expect(stripQueryEcho(stdout)).toBe(
+      [
+        '[tool] terminal: curl -s "https://example.com"',
+        '[done] ┊ 💻 $         curl -s "https://example.com"  0.2s (0.3s)',
+        "Done.",
+      ].join("\n"),
+    );
+  });
+
+  it("cuts a Rich-wrapped multi-line Query echo (no per-line marker of its own) up to the answer's streaming box", () => {
+    // Rich's console.print word-wraps a long "Query: <entire prompt>" string
+    // at the console width with plain continuation lines carrying no prefix
+    // — this is what a real Paperclip agent prompt (agent instructions +
+    // wake context + task markdown) looks like once echoed.
+    const wrappedEcho = [
+      "Query: You are \"agent-a\", an AI agent employee in a Paperclip-managed",
+      "company. Paperclip runtime identity: - Agent ID: agent-a - Company ID:",
+      "company-1 ... (many more wrapped lines of the full prompt)",
+    ];
+    const stdout = [...wrappedEcho, "╭─⚕ Hermes──────╮", "Done.", "╰──────╯"].join("\n");
+    expect(stripQueryEcho(stdout)).toBe(["╭─⚕ Hermes──────╮", "Done.", "╰──────╯"].join("\n"));
+  });
+
+  it("also recognizes the exit summary and the box.HORIZONTALS panel title as boundaries", () => {
+    const exitSummaryStdout = ["Query: hi", "", "Resume this session with:", "  hermes --resume abc"].join("\n");
+    expect(stripQueryEcho(exitSummaryStdout)).toBe(["Resume this session with:", "  hermes --resume abc"].join("\n"));
+
+    const panelStdout = ["Query: hi", "─ ⚕ Hermes ──────", "Done.", "─────────────────"].join("\n");
+    expect(stripQueryEcho(panelStdout)).toBe(["─ ⚕ Hermes ──────", "Done.", "─────────────────"].join("\n"));
+  });
+
+  it("is a no-op for quiet-mode stdout (no Query: line at all)", () => {
+    const stdout = "Just the final response.\n\nsession_id: 20260928_143022_ab12cd\n";
+    expect(stripQueryEcho(stdout)).toBe(stdout);
+  });
+
+  it("is a no-op when no recognized boundary follows the echo (e.g. killed before any turn output)", () => {
+    const stdout = "Query: Fix the missing null check.\nstill just wrapped prompt text, nothing else ever printed";
+    expect(stripQueryEcho(stdout)).toBe(stdout);
+  });
+
+  it("leaves leading blank lines before the Query: line untouched", () => {
+    const stdout = ["", "Query: hi", "[tool] terminal: ls", "Done."].join("\n");
+    expect(stripQueryEcho(stdout)).toBe(["", "[tool] terminal: ls", "Done."].join("\n"));
   });
 });
