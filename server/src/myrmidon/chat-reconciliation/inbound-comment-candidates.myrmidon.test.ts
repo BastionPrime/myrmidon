@@ -100,4 +100,37 @@ describeEmbeddedPostgres("inboundCommentCandidateIds", () => {
 
     expect(candidates).toEqual([]);
   });
+
+  it("does not throw when wakeCommentIds is a JSON null instead of an array", async () => {
+    const commentId = randomUUID();
+    const candidates = await candidatesFor({
+      commentId,
+      wakeCommentIds: null,
+    });
+
+    expect(candidates).toEqual([commentId]);
+  });
+
+  it("does not throw when wakeCommentIds is a scalar instead of an array", async () => {
+    const wakeCommentId = randomUUID();
+    // A legacy/malformed context_snapshot: wakeCommentIds as a bare string
+    // rather than an array. jsonb_array_elements_text() would throw on this
+    // without the jsonb_typeof guard, aborting the whole sweep query.
+    const candidates = await candidatesFor({
+      wakeCommentId,
+      wakeCommentIds: "not-an-array",
+    });
+
+    expect(candidates).toEqual([wakeCommentId]);
+  });
+
+  it("does not throw when wakeCommentIds is an object instead of an array", async () => {
+    const commentId = randomUUID();
+    const candidates = await candidatesFor({
+      commentId,
+      wakeCommentIds: { unexpected: "shape" },
+    });
+
+    expect(candidates).toEqual([commentId]);
+  });
 });

@@ -125,7 +125,10 @@ import {
 } from "../attachment-types.js";
 import { isUniqueViolation } from "../db-errors.js";
 import { coalescedOwnerId } from "../myrmidon/chat-reconciliation/owner-join.js";
-import { nextSweepCursor } from "../myrmidon/chat-reconciliation/sweep-cursor.js";
+import {
+  nextSweepCursor,
+  shouldForceFullSweep,
+} from "../myrmidon/chat-reconciliation/sweep-cursor.js";
 import {
   bindTeamsPersonalRecipient,
   deriveTeamsPersonalRecipient,
@@ -762,6 +765,13 @@ const SUPPLIED_CREDENTIAL_KEYS: Record<ChatProvider, readonly string[]> = {
 const MAX_INBOUND_TEXT = 100_000;
 const MAX_ERROR_TEXT = 2_000;
 const DELIVERY_PROCESSING_STALE_MS = 60_000;
+// myrmidon(D1): how often enqueueInboundWakeupPublications ignores its
+// keyset cursor and rescans chat_actions from the start, to recover a row
+// whose owner went terminal after a later-created sibling's owner already
+// did (see sweep-cursor.ts's doc comments). Bounds staleness instead of
+// eliminating it: worst case, a straggler notice is delayed by up to this
+// long, not lost.
+const INBOUND_WAKE_SWEEP_FULL_RESCAN_MS = 5 * 60_000;
 // Reactions can beat the transaction that persists a just-sent provider
 // message link. Keep that narrow gap durable, but never retain an unbound
 // reaction indefinitely or let it enter the ordinary inbound-message FIFO.
@@ -13749,6 +13759,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   }
 
   let inboundWakeNoticeCursor: { createdAt: Date; id: string } | null = null;
+  // myrmidon(D1): last time enqueueInboundWakeupPublications used a null
+  // (start-of-table) cursor, forced or otherwise. Drives
+  // shouldForceFullSweep. See INBOUND_WAKE_SWEEP_FULL_RESCAN_MS and
+  // sweep-cursor.ts.
+  let inboundWakeLastFullSweepAt: number | null = null;
 
   async function inboundQueueNoticeStillVisible(
     tx: DbOrTransaction,
@@ -13785,7 +13800,18 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     // docs/myrmidon/DIVERGENCE.md.
     const removedComment = alias(issueComments, "removed_comment");
     const sourceRemoved = isNotNull(removedComment.id);
-    const cursor = inboundWakeNoticeCursor;
+    // myrmidon(D1): eligibility here depends on the owner's status, which
+    // can go terminal well after chat_actions.created_at, so the keyset
+    // cursor below can lap a still-pending row. Periodically force a
+    // start-of-table scan to recover it. See sweep-cursor.ts and
+    // INBOUND_WAKE_SWEEP_FULL_RESCAN_MS.
+    const sweepStartedAt = Date.now();
+    const forceFullSweep = shouldForceFullSweep(
+      inboundWakeLastFullSweepAt,
+      sweepStartedAt,
+      INBOUND_WAKE_SWEEP_FULL_RESCAN_MS,
+    );
+    const cursor = forceFullSweep ? null : inboundWakeNoticeCursor;
     const hasVisibleQueue = sql`exists (select 1 from chat_publications queued_notice
       join chat_message_links visible_queue on visible_queue.publication_id = queued_notice.id
         and visible_queue.company_id = queued_notice.company_id
@@ -13860,13 +13886,16 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       )
       .orderBy(asc(chatActions.createdAt), asc(chatActions.id))
       .limit(Math.max(1, Math.min(limit, 200)));
-    const last = candidates.at(-1)?.action;
     // myrmidon(D1): advance to the last row a non-empty page returned
     // (whether or not the page was full), and otherwise keep the previous
-    // cursor instead of resetting to the very start of chat_actions. See
-    // nextSweepCursor's doc comment and docs/myrmidon/DIVERGENCE.md.
+    // cursor instead of resetting to the very start of chat_actions on every
+    // call. shouldForceFullSweep above still does that reset periodically,
+    // to catch a row whose eligibility resolves after the cursor has passed
+    // it. See nextSweepCursor's and shouldForceFullSweep's doc comments and
+    // docs/myrmidon/DIVERGENCE.md.
+    if (forceFullSweep) inboundWakeLastFullSweepAt = sweepStartedAt;
     inboundWakeNoticeCursor = nextSweepCursor(
-      inboundWakeNoticeCursor,
+      cursor,
       candidates.map(({ action }) => ({ createdAt: action.createdAt, id: action.id })),
     );
     let inserted = retryInserted;

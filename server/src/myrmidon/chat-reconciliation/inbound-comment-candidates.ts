@@ -24,6 +24,15 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
  * heartbeat_runs row with a context_snapshot found 0 mismatches.
  */
 export function inboundCommentCandidateIds(contextSnapshot: AnyPgColumn): SQL {
+  // myrmidon(D1): jsonb_array_elements_text() throws (instead of returning no
+  // rows) when its argument is present but not a JSON array — an explicit
+  // JSON null, a string, a number or an object. coalesce(x, '[]'::jsonb)
+  // alone only substitutes on SQL NULL (key absent), so one legacy/malformed
+  // context_snapshot.wakeCommentIds among the candidate rows this is
+  // evaluated against would abort the whole sweep. Guard the shape first, the
+  // same way heartbeat.ts's stranded-queue scan already does for the
+  // equivalent field on agent_wakeup_requests.payload.
+  const wakeCommentIds = sql`(case when jsonb_typeof(${contextSnapshot} -> 'wakeCommentIds') = 'array' then ${contextSnapshot} -> 'wakeCommentIds' else '[]'::jsonb end)`;
   return sql`array(
     select candidate.value
     from (
@@ -31,7 +40,7 @@ export function inboundCommentCandidateIds(contextSnapshot: AnyPgColumn): SQL {
       union all
       select ${contextSnapshot} ->> 'commentId'
       union all
-      select jsonb_array_elements_text(coalesce(${contextSnapshot} -> 'wakeCommentIds', '[]'::jsonb))
+      select jsonb_array_elements_text(${wakeCommentIds})
     ) candidate
     where candidate.value is not null
   )`;

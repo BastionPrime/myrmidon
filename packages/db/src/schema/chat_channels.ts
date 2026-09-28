@@ -680,6 +680,19 @@ export const chatActions = pgTable(
       table.endpointId,
       table.providerActionId,
     ),
+    // myrmidon(D1): the inbound-wakeup notice sweep
+    // (enqueueInboundWakeupPublications) filters chat_actions by
+    // (kind, status) and orders/keyset-scans by (created_at, id); without
+    // this index that was a sequential scan of the whole table on every
+    // call, including the periodic full rescan the sweep does to recover
+    // rows whose eligibility resolves out of created_at order. See
+    // docs/myrmidon/DIVERGENCE.md.
+    index("chat_actions_inbound_wakeup_sweep_idx").on(
+      table.kind,
+      table.status,
+      table.createdAt,
+      table.id,
+    ),
     foreignKey({
       columns: [table.companyId, table.deliveryId],
       foreignColumns: [chatDeliveries.companyId, chatDeliveries.id],
