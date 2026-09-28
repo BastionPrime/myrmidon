@@ -71,6 +71,9 @@ describe("nextSweepCursor + shouldForceFullSweep together (out-of-order eligibil
     let cursor: Row | null = null;
     cursor = nextSweepCursor(cursor, [rowB]);
     expect(cursor).toEqual(rowB);
+    if (cursor === null) {
+      throw new Error("expected cursor to be set after a non-empty page");
+    }
 
     // Call 2: A's owner has now gone terminal, but a plain keyset predicate
     // `(created_at, id) > cursor` with cursor = rowB excludes rowA, whose

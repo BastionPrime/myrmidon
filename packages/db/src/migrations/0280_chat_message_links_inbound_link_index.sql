@@ -4,4 +4,14 @@
 -- run on every poll, whether an inbound message already links to a given
 -- comment; without this index that check was a full table scan repeated on
 -- every call, dominating the sweep's cost as chat_message_links grows.
+--
+-- myrmidon(D1): this is NOT CREATE INDEX CONCURRENTLY (migrations run inside
+-- a transaction, so it cannot be), and check-migration-safety.ts's
+-- large-table gate does not flag that: chat_message_links is absent from
+-- packages/db/src/table-size-estimates.ts's baseline (collected 2026-07-06),
+-- so it is treated as "small" and the check stays silent even though this is
+-- a live, growing production table. See PR #98's review for the maintainer
+-- decision on applying this migration outside the stand (manual CREATE INDEX
+-- CONCURRENTLY first, or accept the build-time lock at a low-traffic
+-- window) — do not let a routine migration run apply it unattended.
 CREATE INDEX IF NOT EXISTS "chat_message_links_inbound_link_idx" ON "chat_message_links" USING btree ("company_id","conversation_id","direction","comment_id");

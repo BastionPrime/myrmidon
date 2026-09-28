@@ -5,4 +5,14 @@
 -- to recover rows whose eligibility resolves later than a sibling row's
 -- (see sweep-cursor.ts); without this index every such scan fell back to a
 -- sequential scan of the whole table.
+--
+-- myrmidon(D1): this is NOT CREATE INDEX CONCURRENTLY (migrations run inside
+-- a transaction, so it cannot be), and check-migration-safety.ts's
+-- large-table gate does not flag that: chat_actions is absent from
+-- packages/db/src/table-size-estimates.ts's baseline (collected 2026-07-06),
+-- so it is treated as "small" and the check stays silent even though this is
+-- a live, growing production table. See PR #98's review for the maintainer
+-- decision on applying this migration outside the stand (manual CREATE INDEX
+-- CONCURRENTLY first, or accept the build-time lock at a low-traffic
+-- window) — do not let a routine migration run apply it unattended.
 CREATE INDEX IF NOT EXISTS "chat_actions_inbound_wakeup_sweep_idx" ON "chat_actions" USING btree ("kind","status","created_at","id");
