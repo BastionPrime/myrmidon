@@ -695,11 +695,16 @@ describeEmbeddedPostgres("issue recovery actions", () => {
   describe("L4 stranded auto-policy", () => {
     // A `latestRun` fixture matching the shape the surrounding tests already
     // use for `escalateStrandedAssignedIssue` (see the `it.each` above):
-    // `LatestIssueRun` only needs these fields in practice here.
-    function succeededRun(agentId: string) {
+    // `LatestIssueRun` only needs these fields in practice here. It also
+    // seeds a real `heartbeat_runs` row for that id — the manager-handoff
+    // branch logs `activity_log.run_id = latestRun.id`, and that column has
+    // a live FK to `heartbeat_runs.id`, so an in-memory-only id 23503s.
+    async function succeededRun(input: { companyId: string; agentId: string }) {
+      const id = randomUUID();
+      await seedHeartbeatRun({ companyId: input.companyId, agentId: input.agentId, runId: id, status: "succeeded" });
       return {
-        id: randomUUID(),
-        agentId,
+        id,
+        agentId: input.agentId,
         status: "succeeded",
         error: null,
         errorCode: null,
@@ -775,7 +780,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       await recovery.escalateStrandedAssignedIssue({
         issue: sourceIssue,
         previousStatus: "in_progress",
-        latestRun: succeededRun(coderId),
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
         recoveryCause: "successful_run_missing_state",
       });
 
@@ -809,7 +814,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       const updated = await recovery.escalateStrandedAssignedIssue({
         issue: sourceIssue,
         previousStatus: "in_progress",
-        latestRun: succeededRun(coderId),
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
         recoveryCause: "stranded_assigned_issue",
       });
 
@@ -851,7 +856,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       await recovery.escalateStrandedAssignedIssue({
         issue: sourceIssue,
         previousStatus: "in_progress",
-        latestRun: succeededRun(coderId),
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
         recoveryCause: "stranded_assigned_issue",
       });
 
@@ -874,7 +879,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
       const enqueueWakeup = vi.fn(async () => null);
       const recovery = recoveryService(db, { enqueueWakeup });
-      const latestRun = succeededRun(coderId);
+      const latestRun = await succeededRun({ companyId, agentId: coderId });
 
       // Both calls carry the same stale issue snapshot, simulating two
       // callers (e.g. the sweep and a direct heartbeat.ts caller) that both
