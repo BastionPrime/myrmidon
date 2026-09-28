@@ -36,6 +36,7 @@ const support = await getEmbeddedPostgresTestSupport();
   let companyId: string;
   let agentId: string;
   let gatewayAgentId: string;
+  let sentinelAgentId: string;
 
   beforeAll(async () => {
     process.env.PAPERCLIP_ADAPTER_MODELS = JSON.stringify({
@@ -47,6 +48,7 @@ const support = await getEmbeddedPostgresTestSupport();
     companyId = randomUUID();
     agentId = randomUUID();
     gatewayAgentId = randomUUID();
+    sentinelAgentId = randomUUID();
 
     await db
       .insert(authUsers)
@@ -81,6 +83,17 @@ const support = await getEmbeddedPostgresTestSupport();
       status: "idle",
       adapterType: "hermes_gateway",
       adapterConfig: {},
+    });
+    // A card whose own model/fallbacks are the adapter's "let it decide"
+    // sentinels (ADAPTER_SPECIAL_MODEL_VALUES) rather than real model names.
+    await db.insert(agents).values({
+      id: sentinelAgentId,
+      companyId,
+      name: "Agent C (sentinel card)",
+      role: "engineer",
+      status: "idle",
+      adapterType: "hermes_local",
+      adapterConfig: { model: "default", models: { fallbacks: ["auto", "model-b"] } },
     });
   }, 90_000);
 
@@ -178,6 +191,22 @@ const support = await getEmbeddedPostgresTestSupport();
     expect(text).toMatch(/1\)\s*model-a/);
     expect(text).toMatch(/2\)\s*model-b/);
     expect(text).toMatch(/3\)\s*model-c/);
+  });
+
+  it("1b. /model and /status never show the adapter's own 'default'/'auto' sentinels as a chosen model", async () => {
+    const { issue, boardUserId } = await createTelegramConversation({ agentId: sentinelAgentId });
+    const result = await runBridgedDirectMessageCommand(
+      baseInput({ conversationIssueId: issue.id, boardUserId, agentId: sentinelAgentId, text: "/model" }),
+    );
+    expect(result?.kind).toBe("reply");
+    const text = (result as { kind: "reply"; text: string }).text;
+    // Neither the card's "default" model nor its "auto" fallback is a real
+    // choice; only model-b (a real fallback) and model-c (discovered) are.
+    expect(text).toContain("Model: adapter default (adapter default)");
+    expect(text).not.toMatch(/\)\s*default\b/i);
+    expect(text).not.toMatch(/\)\s*auto\b/i);
+    expect(text).toMatch(/1\)\s*model-b/);
+    expect(text).toMatch(/2\)\s*model-c/);
   });
 
   it("2. /model model-b sets the override, keeps other override keys, drops the session and logs the change", async () => {
@@ -411,7 +440,9 @@ const support = await getEmbeddedPostgresTestSupport();
     );
     expect(unknown).toEqual({
       kind: "reply",
-      command: "foo",
+      // myrmidon(X8c): `command` is a fixed literal here, not the chat's
+      // own text — see the "12b" case below for why.
+      command: "unknown",
       text: "Unknown command /foo. Send /help for the list.",
     });
 
@@ -422,18 +453,48 @@ const support = await getEmbeddedPostgresTestSupport();
     expect(notACommand).toBeNull();
   });
 
+  it("12b. an unknown command's name never reaches the `command` result field, and is capped in reply text", async () => {
+    const { issue, boardUserId } = await createTelegramConversation();
+
+    // COMMAND_PATTERN allows digits and underscores in a command name, but
+    // the X8 contract requires `command` to match [a-z-]+ (it feeds a
+    // publication key); a fixed literal is used instead of echoing chat text.
+    const withDigits = await runBridgedDirectMessageCommand(
+      baseInput({ conversationIssueId: issue.id, boardUserId, text: "/aaa_123" }),
+    );
+    expect(withDigits).toEqual({
+      kind: "reply",
+      command: "unknown",
+      text: "Unknown command /aaa_123. Send /help for the list.",
+    });
+
+    // COMMAND_PATTERN also does not bound the command name's length; the
+    // reply must still stay well short of a single Telegram message.
+    const longName = "a".repeat(500);
+    const longResult = await runBridgedDirectMessageCommand(
+      baseInput({ conversationIssueId: issue.id, boardUserId, text: `/${longName}` }),
+    );
+    expect(longResult?.kind).toBe("reply");
+    expect((longResult as { command: string }).command).toBe("unknown");
+    const longText = (longResult as { kind: "reply"; text: string }).text;
+    expect(longText.length).toBeLessThan(150);
+    expect(longText).toContain("…");
+  });
+
   it("13. commands refuse a web conversation and another person's Telegram conversation, writing nothing", async () => {
     const web = await createWebConversation();
     const webResult = await runBridgedDirectMessageCommand(
       baseInput({ conversationIssueId: web.issue.id, boardUserId: web.boardUserId, text: "/model" }),
     );
-    expect(webResult).toEqual({ kind: "reply", command: "model", text: "This chat is not available." });
+    // myrmidon(X8c): `command` is a fixed literal ("not-available"), not the
+    // command that was typed — see the "13b" case below for why.
+    expect(webResult).toEqual({ kind: "reply", command: "not-available", text: "This chat is not available." });
 
     const { issue, boardUserId } = await createTelegramConversation();
     const impersonating = await runBridgedDirectMessageCommand(
       baseInput({ conversationIssueId: issue.id, boardUserId: randomUUID(), text: "/model model-b" }),
     );
-    expect(impersonating).toEqual({ kind: "reply", command: "model", text: "This chat is not available." });
+    expect(impersonating).toEqual({ kind: "reply", command: "not-available", text: "This chat is not available." });
     expect(await readOverrides(issue.id)).toBeNull();
 
     const activityForIssue = await db
@@ -441,5 +502,13 @@ const support = await getEmbeddedPostgresTestSupport();
       .from(activityLog)
       .where(and(eq(activityLog.companyId, companyId), eq(activityLog.entityId, issue.id)));
     expect(activityForIssue).toHaveLength(0);
+  });
+
+  it("13b. an unavailable chat's `command` result field ignores the (possibly malformed) command text", async () => {
+    const web = await createWebConversation();
+    const result = await runBridgedDirectMessageCommand(
+      baseInput({ conversationIssueId: web.issue.id, boardUserId: web.boardUserId, text: "/aaa_123 with args" }),
+    );
+    expect(result).toEqual({ kind: "reply", command: "not-available", text: "This chat is not available." });
   });
 });

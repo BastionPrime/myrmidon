@@ -71,6 +71,19 @@ const COMMAND_ALIASES: Readonly<Record<string, string>> = {
 const COMMAND_PATTERN = /^\/([a-zA-Z][a-zA-Z0-9_-]*)(?:@[a-zA-Z0-9_]+)?(?:\s+([\s\S]*))?$/;
 
 /**
+ * Longest command name echoed back in reply text (e.g. "Unknown command
+ * /<name>."). `parsed.name` is untrusted chat input and COMMAND_PATTERN
+ * does not bound its length, so it is truncated before display. This is
+ * separate from the `command` result field itself, which never carries
+ * unvalidated chat input at all — see the two call sites below.
+ */
+const MAX_DISPLAYED_COMMAND_NAME_LENGTH = 64;
+
+function truncateForDisplay(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
+}
+
+/**
  * Parses `/name[@bot] [args]`. Case-insensitive; `/home/x` is not a command
  * (a slash must be followed by whitespace or the end of the message).
  */
@@ -96,7 +109,11 @@ export async function runBridgedDirectMessageCommand(
     conversationIssueId: input.conversationIssueId,
   });
   if (!context) {
-    return { kind: "reply", command: name, text: CHAT_NOT_AVAILABLE_TEXT };
+    // myrmidon(X8c): `command` feeds the X8 contract's publication key
+    // (`control:x8-${command}:${deliveryId}`, required to match `[a-z-]+`).
+    // `name` is chat input at this point (COMMAND_ALIASES only rewrites
+    // known names), so a fixed literal is used here instead of it.
+    return { kind: "reply", command: "not-available", text: CHAT_NOT_AVAILABLE_TEXT };
   }
 
   switch (name) {
@@ -117,10 +134,14 @@ export async function runBridgedDirectMessageCommand(
     case "task":
       return { kind: "reply", command: "task", text: "In a direct chat just write your request." };
     default:
+      // myrmidon(X8c): same reasoning as the not-available branch above —
+      // `name` is unvalidated chat input here, so `command` gets a fixed
+      // literal; the original name is shown in `text` only, and truncated,
+      // since COMMAND_PATTERN does not bound its length.
       return {
         kind: "reply",
-        command: name,
-        text: `Unknown command /${parsed.name}. Send /help for the list.`,
+        command: "unknown",
+        text: `Unknown command /${truncateForDisplay(parsed.name, MAX_DISPLAYED_COMMAND_NAME_LENGTH)}. Send /help for the list.`,
       };
   }
 }

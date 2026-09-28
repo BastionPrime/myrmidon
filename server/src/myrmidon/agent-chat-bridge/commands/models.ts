@@ -2,7 +2,18 @@
 // /model and /think — candidate lists, argument resolution and formatting.
 
 import { listAdapterModels } from "../../../adapters/registry.js";
+import { ADAPTER_SPECIAL_MODEL_VALUES } from "../../agent-model-validation.js";
 import type { BridgedCommandAgentContext } from "./context.js";
+
+/**
+ * "default" / "auto" (ADAPTER_SPECIAL_MODEL_VALUES, agent-model-validation.ts)
+ * mean "let the adapter decide" on the card — they are a valid card value,
+ * not a real model name, so /model and /think must never list or report
+ * them as if a specific model were chosen.
+ */
+function isSpecialModelValue(value: string): boolean {
+  return ADAPTER_SPECIAL_MODEL_VALUES.includes(value.trim().toLowerCase());
+}
 
 export interface ChatModelCandidate {
   id: string;
@@ -67,12 +78,18 @@ function readStringField(config: Record<string, unknown>, key: string): string |
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+/** A named field's value, or null when unset or one of the "let the adapter decide" sentinels. */
+function readSpecificModelField(config: Record<string, unknown>, key: string): string | null {
+  const value = readStringField(config, key);
+  return value && !isSpecialModelValue(value) ? value : null;
+}
+
 /** The card's own value for this key, or the literal "adapter default" when the card sets none. */
 export function describeCardValue(
   cardAdapterConfig: Record<string, unknown>,
   key: "model" | "effort",
 ): string {
-  return readStringField(cardAdapterConfig, key) ?? "adapter default";
+  return readSpecificModelField(cardAdapterConfig, key) ?? "adapter default";
 }
 
 /** The value this chat actually uses right now, and who decided it. */
@@ -81,9 +98,9 @@ export function describeEffectiveChatValue(
   cardAdapterConfig: Record<string, unknown>,
   key: "model" | "effort",
 ): { value: string; source: "this chat" | "agent default" | "adapter default" } {
-  const override = readStringField(overrideAdapterConfig, key);
+  const override = readSpecificModelField(overrideAdapterConfig, key);
   if (override) return { value: override, source: "this chat" };
-  const card = readStringField(cardAdapterConfig, key);
+  const card = readSpecificModelField(cardAdapterConfig, key);
   return card ? { value: card, source: "agent default" } : { value: "adapter default", source: "adapter default" };
 }
 
@@ -93,7 +110,8 @@ function readModelFallbacks(cardAdapterConfig: Record<string, unknown>): string[
   const fallbacks = models.fallbacks;
   if (!Array.isArray(fallbacks)) return [];
   return fallbacks.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+    (entry): entry is string =>
+      typeof entry === "string" && entry.trim().length > 0 && !isSpecialModelValue(entry),
   );
 }
 
@@ -111,7 +129,7 @@ export async function listModelCandidates(
     candidates.push({ id: trimmedId, label: label.trim() || trimmedId });
   };
 
-  const cardModel = readStringField(cardAdapterConfig, "model");
+  const cardModel = readSpecificModelField(cardAdapterConfig, "model");
   if (cardModel) push(cardModel, cardModel);
   for (const fallback of readModelFallbacks(cardAdapterConfig)) push(fallback, fallback);
 
@@ -122,7 +140,11 @@ export async function listModelCandidates(
     // Model discovery failing must not make /model unusable; fall back to the card's own values.
     discovered = [];
   }
-  for (const entry of discovered) push(entry.id ?? "", entry.label ?? entry.id ?? "");
+  for (const entry of discovered) {
+    const id = entry.id ?? "";
+    if (!id || isSpecialModelValue(id)) continue;
+    push(id, entry.label ?? id);
+  }
 
   return candidates;
 }
