@@ -7827,11 +7827,14 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                     resumeHref: !activePauseHold.isRoot ? createIssueDetailPath(activePauseHoldRoot?.identifier ?? activePauseHold.rootIssueId) : undefined,
                   } : null}
                   composerDisabledReason={
-                    // myrmidon(X8f): the Telegram conversation is read-only on the board
-                    isTelegramConversationIssue(issue)
-                      ? "This conversation lives in Telegram. Reply to the bot there."
-                      : issue.conversationAgentId && !instanceExperimentalSettings?.enableAgentChat
-                        ? "Agent Chat is disabled in Experimental settings."
+                    issue.conversationAgentId && !instanceExperimentalSettings?.enableAgentChat
+                      ? "Agent Chat is disabled in Experimental settings."
+                      // myrmidon(X8f): the Telegram conversation is read-only on the board.
+                      // Checked after enableAgentChat, matching the server's check order
+                      // (routes/issues.ts), so a globally disabled Agent Chat still reports
+                      // as disabled rather than as "lives in Telegram".
+                      : isTelegramConversationIssue(issue)
+                        ? "This conversation lives in Telegram. Reply to the bot there."
                         : treeControlStateError
                           ? "Couldn’t check whether this task is paused. Refresh to try again."
                           : null

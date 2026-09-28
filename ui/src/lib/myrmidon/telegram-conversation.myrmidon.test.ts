@@ -40,4 +40,12 @@ describe("myrmidon(X8f) isTelegramConversationIssue", () => {
     expect(isTelegramConversationIssue(null)).toBe(false);
     expect(isTelegramConversationIssue(undefined)).toBe(false);
   });
+
+  it("is false for the bare prefix with no board user id after it", () => {
+    const issue = buildIssue({
+      conversationAgentId: "agent-a",
+      conversationUserId: TELEGRAM_CONVERSATION_USER_PREFIX,
+    });
+    expect(isTelegramConversationIssue(issue)).toBe(false);
+  });
 });

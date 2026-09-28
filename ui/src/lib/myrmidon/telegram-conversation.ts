@@ -17,6 +17,9 @@ export const TELEGRAM_CONVERSATION_USER_PREFIX = "telegram:";
  * conversation for someone's Telegram direct messages with an agent, as
  * opposed to their web conversation with the same agent (or a plain,
  * non-conversation issue).
+ *
+ * Mirrors X8a's `parseTelegramConversationUserId`: the prefix alone is not
+ * enough, there must be a non-empty board user id after it.
  */
 export function isTelegramConversationIssue(
   issue: Pick<Issue, "conversationAgentId" | "conversationUserId"> | null | undefined,
@@ -24,5 +27,9 @@ export function isTelegramConversationIssue(
   if (!issue?.conversationAgentId || !issue.conversationUserId) {
     return false;
   }
-  return issue.conversationUserId.startsWith(TELEGRAM_CONVERSATION_USER_PREFIX);
+  const userId = issue.conversationUserId;
+  return (
+    userId.startsWith(TELEGRAM_CONVERSATION_USER_PREFIX) &&
+    userId.length > TELEGRAM_CONVERSATION_USER_PREFIX.length
+  );
 }
