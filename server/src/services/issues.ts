@@ -192,6 +192,8 @@ import {
 } from "./activity-log.js";
 import { buildIssueChanges } from "./issue-change-receipt.js";
 import { projectSafeChatPublication } from "./chat-publication-projection.js";
+// myrmidon(X8g): absolute board links in the copy of an agent reply that reaches Telegram
+import { absolutizedTextByTelegramEndpoint } from "../myrmidon/agent-chat-bridge/links.js";
 import { issueThreadInteractionAttentionAgentAllowed } from "./issue-thread-interaction-resolution.js";
 
 const ALL_ISSUE_STATUSES = [
@@ -12520,6 +12522,15 @@ export function issueService(db: Db) {
                 createdByRunId,
               );
         const publicationCreatedAt = new Date();
+        // myrmidon(X8g): Telegram has no board origin of its own, so a relative
+        // board link in the agent's reply is absolutized only for Telegram
+        // publications; the board comment above already stored the original.
+        const boardLinkTextByEndpoint = await absolutizedTextByTelegramEndpoint(
+          dbOrTx,
+          issue.companyId,
+          bindings.map((binding) => binding.endpointId),
+          redactedBody,
+        );
         for (const binding of bindings) {
           await dbOrTx
             .insert(chatPublications)
@@ -12533,7 +12544,9 @@ export function issueService(db: Db) {
               payload: projectSafeChatPublication({
                 classification: "external",
                 source: "agent_comment",
-                text: redactedBody,
+                text:
+                  boardLinkTextByEndpoint.get(binding.endpointId) ??
+                  redactedBody,
               }),
               state: "pending",
               createdAt: publicationCreatedAt,
