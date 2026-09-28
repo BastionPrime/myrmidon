@@ -3,10 +3,12 @@ import {
   STRANDED_AUTO_POLICY_DEFAULT_RETRIES_PER_DAY,
   buildStrandedAutoPolicyManagerReviewComment,
   buildStrandedAutoPolicyManagerReviewPatch,
+  buildStrandedAutoPolicyRetryContext,
   buildStrandedAutoPolicyRetryInstruction,
   countAttemptsSince,
   decideStrandedAutoPolicy,
   isStrandedAutoPolicyCause,
+  readStrandedAutoPolicyEnabled,
   readStrandedAutoRetriesPerDay,
   resolveActiveManagerAgentId,
 } from "./stranded-autopolicy.js";
@@ -223,5 +225,51 @@ describe("buildStrandedAutoPolicyManagerReviewPatch", () => {
     const executionPolicy = patch.executionPolicy as { stages: Array<{ participants: Array<{ agentId: string | null }> }> };
     expect(executionPolicy.stages).toHaveLength(1);
     expect(executionPolicy.stages[0]?.participants[0]?.agentId).toBe(managerAgentId);
+  });
+});
+
+describe("readStrandedAutoPolicyEnabled", () => {
+  it("defaults to enabled when unset, blank or unrecognized", () => {
+    expect(readStrandedAutoPolicyEnabled({})).toBe(true);
+    expect(readStrandedAutoPolicyEnabled({ MYRMIDON_STRANDED_AUTOPOLICY_ENABLED: "  " })).toBe(true);
+    expect(readStrandedAutoPolicyEnabled({ MYRMIDON_STRANDED_AUTOPOLICY_ENABLED: "yes" })).toBe(true);
+    expect(readStrandedAutoPolicyEnabled({ MYRMIDON_STRANDED_AUTOPOLICY_ENABLED: "true" })).toBe(true);
+  });
+
+  it("disables on false or 0, case-insensitively", () => {
+    expect(readStrandedAutoPolicyEnabled({ MYRMIDON_STRANDED_AUTOPOLICY_ENABLED: "false" })).toBe(false);
+    expect(readStrandedAutoPolicyEnabled({ MYRMIDON_STRANDED_AUTOPOLICY_ENABLED: "FALSE" })).toBe(false);
+    expect(readStrandedAutoPolicyEnabled({ MYRMIDON_STRANDED_AUTOPOLICY_ENABLED: "0" })).toBe(false);
+  });
+});
+
+describe("buildStrandedAutoPolicyRetryContext", () => {
+  // Regression for a review finding: the retry wake's instruction was built
+  // but spread under a bare `instruction` key that `buildPaperclipWakePayload`
+  // (server/src/services/heartbeat.ts) never reads, so it never reached the
+  // agent's rendered prompt. These are the exact field names that function
+  // derives `livenessContinuation` from.
+  it("uses the livenessContinuation* field names buildPaperclipWakePayload reads, not a bare instruction key", () => {
+    const context = buildStrandedAutoPolicyRetryContext({
+      cause: "successful_run_missing_state",
+      attempt: 1,
+      maxAttemptsPerDay: 2,
+      sourceRunId: "run-1",
+    });
+
+    expect(context).not.toHaveProperty("instruction");
+    expect(context.livenessContinuationState).toBe("successful_run_missing_state");
+    expect(context.livenessContinuationAttempt).toBe(1);
+    expect(context.livenessContinuationMaxAttempts).toBe(2);
+    expect(context.livenessContinuationSourceRunId).toBe("run-1");
+    expect(typeof context.livenessContinuationInstruction).toBe("string");
+    expect(context.livenessContinuationInstruction).toContain("retry 1 of 2");
+    expect(context.livenessContinuationInstruction).toBe(
+      buildStrandedAutoPolicyRetryInstruction({
+        cause: "successful_run_missing_state",
+        attempt: 1,
+        maxAttemptsPerDay: 2,
+      }),
+    );
   });
 });

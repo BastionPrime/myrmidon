@@ -24,6 +24,12 @@
 // reprocessing the same issue on a later sweep tick naturally sees the
 // updated count instead of double-counting or double-waking: see
 // `countStrandedAutoPolicyAttemptsInWindow` below and its `*.myrmidon.test.ts`.
+//
+// `MYRMIDON_STRANDED_AUTOPOLICY_ENABLED=false` is a full kill switch back to
+// the vendor's own board escalation, for incident rollback without a code
+// revert (`MYRMIDON_STRANDED_AUTO_RETRIES_PER_DAY=0` alone still hands the
+// issue straight to a manager when one is configured — see
+// `readStrandedAutoPolicyEnabled` below).
 
 import { randomUUID } from "node:crypto";
 import { and, eq, gte, sql } from "drizzle-orm";
@@ -47,6 +53,7 @@ export const STRANDED_AUTO_POLICY_RETRY_SOURCE = "myrmidon.stranded_autopolicy_r
 export const STRANDED_AUTO_POLICY_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const STRANDED_AUTO_POLICY_RETRIES_PER_DAY_ENV = "MYRMIDON_STRANDED_AUTO_RETRIES_PER_DAY";
 export const STRANDED_AUTO_POLICY_DEFAULT_RETRIES_PER_DAY = 2;
+export const STRANDED_AUTO_POLICY_ENABLED_ENV = "MYRMIDON_STRANDED_AUTOPOLICY_ENABLED";
 
 /** Retries allowed per rolling 24h window; invalid or unset falls back to the default. */
 export function readStrandedAutoRetriesPerDay(env: NodeJS.ProcessEnv = process.env): number {
@@ -55,6 +62,17 @@ export function readStrandedAutoRetriesPerDay(env: NodeJS.ProcessEnv = process.e
   if (!/^\d+$/.test(raw)) return STRANDED_AUTO_POLICY_DEFAULT_RETRIES_PER_DAY;
   const parsed = Number(raw);
   return Number.isSafeInteger(parsed) ? parsed : STRANDED_AUTO_POLICY_DEFAULT_RETRIES_PER_DAY;
+}
+
+/**
+ * Full kill switch: `false` (or `0`) restores 100% vendor board escalation
+ * regardless of `MYRMIDON_STRANDED_AUTO_RETRIES_PER_DAY` or any agent's
+ * configured manager. Defaults to enabled; unset or unrecognized values are
+ * treated as enabled so a typo cannot silently disable the fix.
+ */
+export function readStrandedAutoPolicyEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[STRANDED_AUTO_POLICY_ENABLED_ENV]?.trim().toLowerCase();
+  return raw !== "false" && raw !== "0";
 }
 
 export type StrandedAutoPolicyDecision =
@@ -186,6 +204,35 @@ export function buildStrandedAutoPolicyRetryInstruction(input: {
     `After ${input.maxAttemptsPerDay} such automatic retries within 24 hours without a disposition, this issue moves ` +
       "to your manager's review instead of staying with you.",
   ].join("\n");
+}
+
+/**
+ * The retry wake's `enqueueStrandedIssueRecovery` call spreads this verbatim
+ * into the queued run's `contextSnapshot` via `extraContext`. It must use the
+ * exact field names `buildPaperclipWakePayload` (`server/src/services/
+ * heartbeat.ts`) reads to derive `livenessContinuation` for the rendered
+ * prompt — a bare `instruction` key is read nowhere and never reaches the
+ * agent. Mirrors the vendor's own analogous feature
+ * (`decideRunLivenessContinuation` in `server/src/services/recovery/
+ * run-liveness-continuations.ts`), which sets the same field names.
+ */
+export function buildStrandedAutoPolicyRetryContext(input: {
+  cause: StrandedAutoPolicyCause;
+  attempt: number;
+  maxAttemptsPerDay: number;
+  sourceRunId: string;
+}): Record<string, unknown> {
+  return {
+    livenessContinuationInstruction: buildStrandedAutoPolicyRetryInstruction({
+      cause: input.cause,
+      attempt: input.attempt,
+      maxAttemptsPerDay: input.maxAttemptsPerDay,
+    }),
+    livenessContinuationState: input.cause,
+    livenessContinuationAttempt: input.attempt,
+    livenessContinuationMaxAttempts: input.maxAttemptsPerDay,
+    livenessContinuationSourceRunId: input.sourceRunId,
+  };
 }
 
 export function buildStrandedAutoPolicyManagerReviewComment(input: {

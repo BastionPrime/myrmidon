@@ -145,11 +145,12 @@ import { filterAgentsOutsideMaintenance } from "../../myrmidon/maintenance/gate.
 import {
   buildStrandedAutoPolicyManagerReviewComment,
   buildStrandedAutoPolicyManagerReviewPatch,
-  buildStrandedAutoPolicyRetryInstruction,
+  buildStrandedAutoPolicyRetryContext,
   countStrandedAutoPolicyAttemptsInWindow,
   decideStrandedAutoPolicy,
   findActiveManagerAgentId,
   isStrandedAutoPolicyCause,
+  readStrandedAutoPolicyEnabled,
   readStrandedAutoRetriesPerDay,
   STRANDED_AUTO_POLICY_RETRY_SOURCE,
 } from "../../myrmidon/stranded-autopolicy.js";
@@ -3767,6 +3768,7 @@ export function recoveryService(
     // below (L1's concern). See ../../myrmidon/stranded-autopolicy.ts.
     const strandedAutoPolicyLatestRun = input.latestRun;
     if (
+      readStrandedAutoPolicyEnabled() &&
       strandedAutoPolicyLatestRun?.status === "succeeded" &&
       isStrandedAutoPolicyCause(recoveryCause) &&
       input.issue.assigneeAgentId &&
@@ -3797,13 +3799,16 @@ export function recoveryService(
           retryReason: "issue_continuation_needed",
           source: STRANDED_AUTO_POLICY_RETRY_SOURCE,
           retryOfRunId: latestRun.id,
-          extraContext: {
-            instruction: buildStrandedAutoPolicyRetryInstruction({
-              cause: recoveryCause,
-              attempt: autoPolicyDecision.attempt,
-              maxAttemptsPerDay: autoPolicyDecision.maxAttemptsPerDay,
-            }),
-          },
+          // myrmidon(L4): these field names (not a bare `instruction` key)
+          // are what `buildPaperclipWakePayload` reads to render the
+          // liveness-continuation section of the agent's prompt — see
+          // `buildStrandedAutoPolicyRetryContext`'s own doc comment.
+          extraContext: buildStrandedAutoPolicyRetryContext({
+            cause: recoveryCause,
+            attempt: autoPolicyDecision.attempt,
+            maxAttemptsPerDay: autoPolicyDecision.maxAttemptsPerDay,
+            sourceRunId: latestRun.id,
+          }),
         });
         if (queued) {
           await logActivity(db, {
@@ -3827,15 +3832,59 @@ export function recoveryService(
         // The guarded enqueue declined (e.g. a concurrent change raced it) —
         // fall through to the vendor's own board escalation below.
       } else if (autoPolicyDecision.kind === "reassign_to_manager") {
-        const patch = buildStrandedAutoPolicyManagerReviewPatch({
-          issue: input.issue,
-          managerAgentId: autoPolicyDecision.managerAgentId,
-          cause: recoveryCause,
-        });
-        const updated = await issuesSvc.update(
-          input.issue.id,
-          patch as Partial<typeof issues.$inferInsert>,
-        );
+        // myrmidon(L4): `issuesSvc.update` *throws* (not a falsy return) when
+        // the issue's assignee is locked — bound to a native conversation or
+        // an external chat channel — and this handoff would otherwise be the
+        // only uncaught exception among reconcileStrandedAssignedIssues's many
+        // `escalateStrandedAssignedIssue` call sites: left unguarded it would
+        // abort the whole sweep tick, and the very next tick would reach the
+        // same poisoned issue and die again. A conversation-bound issue is
+        // skipped up front (its identity is fixed, not just contested); any
+        // other lock (e.g. an external chat binding) is caught. Either way
+        // this falls through to the vendor's own board escalation below,
+        // same as a raced update. The lock also serializes concurrent
+        // handoffs for this issue — the sweep, the wake-queue module and
+        // direct heartbeat.ts callers can all reach it close together — by
+        // re-reading the row under a row lock and standing down if another
+        // caller already moved it, so two racing callers cannot both post a
+        // manager-review comment and wake for the same exhaustion event.
+        let updated: Awaited<ReturnType<typeof issuesSvc.update>> = null;
+        if (!input.issue.conversationAgentId) {
+          const patch = buildStrandedAutoPolicyManagerReviewPatch({
+            issue: input.issue,
+            managerAgentId: autoPolicyDecision.managerAgentId,
+            cause: recoveryCause,
+          });
+          try {
+            updated = await db.transaction(async (tx) => {
+              const [current] = await tx
+                .select()
+                .from(issues)
+                .where(
+                  and(
+                    eq(issues.id, input.issue.id),
+                    eq(issues.companyId, input.issue.companyId),
+                  ),
+                )
+                .for("update")
+                .limit(1);
+              if (
+                !current ||
+                current.status !== input.issue.status ||
+                current.assigneeAgentId !== input.issue.assigneeAgentId
+              ) {
+                return null;
+              }
+              return issuesSvc.update(
+                input.issue.id,
+                patch as Partial<typeof issues.$inferInsert>,
+                tx,
+              );
+            });
+          } catch {
+            updated = null;
+          }
+        }
         if (updated) {
           const managerAgent = await getAgent(autoPolicyDecision.managerAgentId);
           await issuesSvc.addComment(
@@ -3905,7 +3954,9 @@ export function recoveryService(
           });
           return updated;
         }
-        // The update raced a concurrent change — fall through below.
+        // The update raced a concurrent change, lost the row lock to another
+        // caller, threw (assignee locked), or was skipped up front
+        // (conversation-bound) — fall through below.
       }
       // autoPolicyDecision.kind === "vendor_default" falls through as-is.
     }
