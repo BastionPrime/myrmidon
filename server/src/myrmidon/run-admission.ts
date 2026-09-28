@@ -1,13 +1,15 @@
+import { readFileSync } from "node:fs";
+
 /**
  * Instance-wide run admission (myrmidon, stage 0 of per-project containers).
  *
  * The vendor limits concurrent runs per agent only. With local adapters every
  * run is a child process of the server container, so a mass wake of many agents
  * (35 hermes processes on 2026-09-28) exhausts the container memory and the
- * kernel kills the server together with every run. Admission adds two
- * instance-wide limits on top of the per-agent one:
+ * kernel kills the server together with every run. Admission adds instance-wide
+ * limits on top of the per-agent one:
  *
- * - MYRMIDON_MAX_CONCURRENT_RUNS: at most N runs in `running` at once;
+ * - MYRMIDON_MAX_CONCURRENT_RUNS: at most N runs started by this process at once;
  * - MYRMIDON_MAX_RUN_STARTS_PER_MINUTE: at most K run starts per sliding minute,
  *   so a restart or a bulk resolve does not start everything in one burst;
  * - MYRMIDON_MIN_FREE_MEMORY_MB: follow the server load. A run starts only if the
@@ -17,6 +19,9 @@
  *
  * Runs over a limit stay `queued`; the periodic queued-run sweep starts them
  * when a slot frees. Unset, empty or 0 disables a limit.
+ *
+ * No locks: the server is one Node.js thread, and `reserve` checks and counts
+ * without awaiting anything, so two agents cannot both take the last slot.
  */
 
 export const MAX_CONCURRENT_RUNS_ENV = "MYRMIDON_MAX_CONCURRENT_RUNS";
@@ -25,9 +30,10 @@ export const MIN_FREE_MEMORY_MB_ENV = "MYRMIDON_MIN_FREE_MEMORY_MB";
 export const RUN_MEMORY_ESTIMATE_MB_ENV = "MYRMIDON_RUN_MEMORY_ESTIMATE_MB";
 
 const DEFAULT_RUN_MEMORY_ESTIMATE_MB = 300;
-const MB = 1024 * 1024;
-
 const START_WINDOW_MS = 60_000;
+// A run started this recently has not grown into the cgroup memory yet.
+const MEMORY_SETTLE_MS = 30_000;
+const MB = 1024 * 1024;
 
 function readLimit(env: NodeJS.ProcessEnv, key: string): number | null {
   const raw = env[key]?.trim();
@@ -53,29 +59,22 @@ export function readRunAdmissionLimits(env: NodeJS.ProcessEnv = process.env): Ru
   };
 }
 
-function hasAnyLimit(limits: RunAdmissionLimits): boolean {
-  return (
-    limits.maxConcurrentRuns !== null || limits.maxStartsPerMinute !== null || limits.minFreeMemoryMb !== null
-  );
-}
-
 /**
  * Free memory of this process's cgroup (v2) in bytes, or null when unknown
  * (no limit, cgroup v1, not in a container). Inactive page cache is reclaimable
- * and does not count as used.
+ * and does not count as used. Synchronous on purpose: three tiny kernel files,
+ * and no await keeps `reserve` atomic.
  */
-export async function readCgroupFreeMemoryBytes(
+export function readCgroupFreeMemoryBytes(
   root = "/sys/fs/cgroup",
-  readFile: (path: string) => Promise<string> = async (path) =>
-    (await import("node:fs/promises")).readFile(path, "utf8"),
-): Promise<number | null> {
+  readFile: (path: string) => string = (path) => readFileSync(path, "utf8"),
+): number | null {
   try {
-    const maxRaw = (await readFile(`${root}/memory.max`)).trim();
+    const maxRaw = readFile(`${root}/memory.max`).trim();
     if (maxRaw === "max") return null;
     const max = Number(maxRaw);
-    const current = Number((await readFile(`${root}/memory.current`)).trim());
-    const stat = await readFile(`${root}/memory.stat`);
-    const inactive = Number(/^inactive_file (\d+)$/m.exec(stat)?.[1] ?? 0);
+    const current = Number(readFile(`${root}/memory.current`).trim());
+    const inactive = Number(/^inactive_file (\d+)$/m.exec(readFile(`${root}/memory.stat`))?.[1] ?? 0);
     if (!Number.isFinite(max) || !Number.isFinite(current)) return null;
     return max - Math.max(0, current - inactive);
   } catch {
@@ -85,68 +84,64 @@ export async function readCgroupFreeMemoryBytes(
 
 export interface RunAdmission {
   /**
-   * Run `claim` while holding the instance admission lock. `claim` receives the
-   * number of runs it may start (already capped by `wanted`) and returns how many
-   * it actually started.
+   * How many of `wanted` runs may start now; the slots are taken at once.
+   * Hand back the ones not started with `release(unused)`, and call
+   * `finish()` once for every started run when it ends.
    */
-  admit(wanted: number, claim: (allowed: number) => Promise<number>): Promise<number>;
+  reserve(wanted: number): number;
+  release(unused: number): void;
+  finish(): void;
 }
 
 export function createRunAdmission(options: {
   limits: RunAdmissionLimits;
-  countRunningRuns: () => Promise<number>;
-  freeMemoryBytes?: () => Promise<number | null>;
+  freeMemoryBytes?: () => number | null;
   now?: () => number;
 }): RunAdmission {
-  const { limits, countRunningRuns } = options;
+  const { limits } = options;
   const freeMemoryBytes = options.freeMemoryBytes ?? (() => readCgroupFreeMemoryBytes());
   const now = options.now ?? Date.now;
   const starts: number[] = [];
-  let tail: Promise<unknown> = Promise.resolve();
+  let active = 0;
 
-  function startsInWindow(at: number): number {
+  function prune(at: number) {
     while (starts.length > 0 && at - starts[0]! >= START_WINDOW_MS) starts.shift();
-    return starts.length;
-  }
-
-  async function allowedNow(wanted: number): Promise<number> {
-    let allowed = wanted;
-    if (limits.maxConcurrentRuns !== null) {
-      const running = await countRunningRuns();
-      allowed = Math.min(allowed, limits.maxConcurrentRuns - running);
-    }
-    if (limits.maxStartsPerMinute !== null) {
-      allowed = Math.min(allowed, limits.maxStartsPerMinute - startsInWindow(now()));
-    }
-    if (limits.minFreeMemoryMb !== null && allowed > 0) {
-      const free = await freeMemoryBytes();
-      // Unknown free memory (no cgroup limit) leaves the other limits in charge.
-      if (free !== null) {
-        const spare = free - limits.minFreeMemoryMb * MB;
-        allowed = Math.min(allowed, Math.floor(spare / (limits.runMemoryEstimateMb * MB)));
-      }
-    }
-    return Math.max(0, allowed);
   }
 
   return {
-    async admit(wanted, claim) {
+    reserve(wanted) {
       if (wanted <= 0) return 0;
-      if (!hasAnyLimit(limits)) {
-        return claim(wanted);
+      const at = now();
+      prune(at);
+      let allowed = wanted;
+      if (limits.maxConcurrentRuns !== null) {
+        allowed = Math.min(allowed, limits.maxConcurrentRuns - active);
       }
-      // Serialize count-and-claim across agents: the per-agent start lock does
-      // not stop two agents from both seeing the last free slot.
-      const run = tail.then(async () => {
-        const allowed = await allowedNow(wanted);
-        if (allowed <= 0) return 0;
-        const started = await claim(allowed);
-        const at = now();
-        for (let i = 0; i < started; i += 1) starts.push(at);
-        return started;
-      });
-      tail = run.catch(() => undefined);
-      return run;
+      if (limits.maxStartsPerMinute !== null) {
+        allowed = Math.min(allowed, limits.maxStartsPerMinute - starts.length);
+      }
+      if (limits.minFreeMemoryMb !== null && allowed > 0) {
+        const free = freeMemoryBytes();
+        // Unknown free memory (no cgroup limit) leaves the other limits in charge.
+        if (free !== null) {
+          const settling = starts.filter((startedAt) => at - startedAt < MEMORY_SETTLE_MS).length;
+          const estimate = limits.runMemoryEstimateMb * MB;
+          const spare = free - limits.minFreeMemoryMb * MB - settling * estimate;
+          allowed = Math.min(allowed, Math.floor(spare / estimate));
+        }
+      }
+      allowed = Math.max(0, allowed);
+      active += allowed;
+      for (let i = 0; i < allowed; i += 1) starts.push(at);
+      return allowed;
+    },
+    release(unused) {
+      if (unused <= 0) return;
+      active = Math.max(0, active - unused);
+      starts.splice(starts.length - Math.min(unused, starts.length), unused);
+    },
+    finish() {
+      active = Math.max(0, active - 1);
     },
   };
 }
@@ -155,11 +150,10 @@ let shared: RunAdmission | null = null;
 
 /**
  * One admission per server process: heartbeatService is instantiated by many
- * routes and services, and the lock and the start window must be shared by all
- * of them. The first caller's counter wins; every caller counts the same table.
+ * routes and services, and the counters must be shared by all of them.
  */
-export function sharedRunAdmission(countRunningRuns: () => Promise<number>): RunAdmission {
-  if (!shared) shared = createRunAdmission({ limits: readRunAdmissionLimits(), countRunningRuns });
+export function sharedRunAdmission(): RunAdmission {
+  if (!shared) shared = createRunAdmission({ limits: readRunAdmissionLimits() });
   return shared;
 }
 

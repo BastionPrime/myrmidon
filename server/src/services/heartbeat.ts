@@ -16775,15 +16775,6 @@ export function heartbeatService(
     return issuesSvc.listDependencyReadiness(companyId, issueIds);
   }
 
-  // myrmidon: running runs across the instance, for the admission cap
-  async function countRunningRunsInstance() {
-    const [{ count }] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(heartbeatRuns)
-      .where(eq(heartbeatRuns.status, "running"));
-    return Number(count ?? 0);
-  }
-
   async function countRunningRunsForAgent(agentId: string) {
     const [{ count }] = await db
       .select({ count: sql<number>`count(*)` })
@@ -19570,27 +19561,30 @@ export function heartbeatService(
       });
 
       const claimedRuns: Array<typeof heartbeatRuns.$inferSelect> = [];
-      // myrmidon: instance-wide cap and start rate on top of the per-agent slots
-      await sharedRunAdmission(countRunningRunsInstance).admit(
-        availableSlots,
-        async (allowed) => {
-          for (const queuedRun of prioritizedRuns) {
-            if (claimedRuns.length >= allowed) break;
-            const claimed = await claimQueuedRun(queuedRun, companyAgents);
-            if (claimed) claimedRuns.push(claimed);
-          }
-          return claimedRuns.length;
-        },
-      );
+      // myrmidon: instance-wide cap, start rate and free memory on top of the
+      // per-agent slots; slots are taken synchronously, so no lock is needed
+      const admission = sharedRunAdmission();
+      const admitted = admission.reserve(availableSlots);
+      try {
+        for (const queuedRun of prioritizedRuns) {
+          if (claimedRuns.length >= admitted) break;
+          const claimed = await claimQueuedRun(queuedRun, companyAgents);
+          if (claimed) claimedRuns.push(claimed);
+        }
+      } finally {
+        admission.release(admitted - claimedRuns.length);
+      }
       if (claimedRuns.length === 0) return [];
 
       for (const claimedRun of claimedRuns) {
-        const execution = executeRun(claimedRun.id).catch((err) => {
-          logger.error(
-            { err, runId: claimedRun.id },
-            "queued heartbeat execution failed",
-          );
-        });
+        const execution = executeRun(claimedRun.id)
+          .catch((err) => {
+            logger.error(
+              { err, runId: claimedRun.id },
+              "queued heartbeat execution failed",
+            );
+          })
+          .finally(() => admission.finish());
         // Register the in-flight execution so drainActiveRunExecutions() can await
         // it. executeRun resolves only after its finally block finishes flushing
         // run rows/events, so awaiting this promise guarantees the run's writes
