@@ -2469,7 +2469,11 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(checkoutReleasedIssue?.checkoutRunId).toBeNull();
   });
 
-  it("requires reconciliation for a lost monitor whose provider outcomes are unknown", async () => {
+  it("retries a lost monitor dispatch instead of holding it for reconciliation", async () => {
+    // myrmidon(L1): process_lost is infrastructure, not a failed provider
+    // attempt with unknown action outcomes; the monitor dispatch gets a
+    // retry (scheduled or immediate continuation) instead of an operator
+    // hold.
     const { agentId, runId, issueId } = await seedRunFixture({
       adapterType: "openclaw_gateway",
       agentStatus: "idle",
@@ -2483,23 +2487,19 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       runIds: [runId],
     });
     await heartbeat.reapOrphanedRuns();
-    expect(
-      await db
-        .select()
-        .from(heartbeatRuns)
-        .where(eq(heartbeatRuns.agentId, agentId)),
-    ).toHaveLength(1);
+    const runs = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs.find((run) => run.id === runId)).toMatchObject({
+      status: "failed",
+    });
+    expect(runs.filter((run) => run.retryOfRunId === runId)).toHaveLength(1);
     const actions = await db
       .select()
       .from(issueRecoveryActions)
       .where(eq(issueRecoveryActions.sourceIssueId, issueId));
-    expect(actions).toEqual([
-      expect.objectContaining({
-        ownerType: "board",
-        returnOwnerAgentId: agentId,
-        cause: "legacy_execution_requires_reconciliation",
-      }),
-    ]);
+    expect(actions).toHaveLength(0);
   });
 
   it("does not retry a lost monitor dispatch while another monitor wake remains scheduled", async () => {
@@ -3605,7 +3605,9 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     ).toEqual([
       expect.objectContaining({
         assigneeAgentId: agentId,
-        executionRunId: null,
+        // myrmidon(L1): the scheduled retry now owns execution instead of
+        // leaving the issue unowned until an operator resolves a hold.
+        executionRunId: result.retryRunIds[0]!,
         checkoutRunId: null,
       }),
     ]);
@@ -3718,7 +3720,10 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(wakeup?.status).toBe("claimed");
   });
 
-  it("does not duplicate a legacy reconciliation action across repeated shutdowns", async () => {
+  it("schedules exactly one retry across repeated shutdowns instead of duplicating a hold", async () => {
+    // myrmidon(L1): server_shutdown_interrupted retries once, not held;
+    // repeating the shutdown/reap sweep must not schedule a second retry
+    // or fall back to a reconciliation hold.
     const { agentId, runId, issueId } = await seedRunFixture({
       adapterType: "process",
       agentStatus: "running",
@@ -3727,18 +3732,20 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     await heartbeat.drainRunningRunsForShutdown("SIGTERM");
     await heartbeat.drainRunningRunsForShutdown("SIGTERM");
     await heartbeatService(db).reapOrphanedRuns();
-    expect(
-      await db
-        .select()
-        .from(heartbeatRuns)
-        .where(eq(heartbeatRuns.agentId, agentId)),
-    ).toEqual([expect.objectContaining({ id: runId, status: "interrupted" })]);
+    const runs = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs.find((run) => run.id === runId)).toMatchObject({
+      status: "interrupted",
+    });
+    expect(runs.filter((run) => run.retryOfRunId === runId)).toHaveLength(1);
     expect(
       await db
         .select()
         .from(issueRecoveryActions)
         .where(eq(issueRecoveryActions.sourceIssueId, issueId)),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
   });
 
   it("does not reset an exhausted incident budget on server restart", async () => {
@@ -3833,7 +3840,11 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     },
   );
 
-  it("does not bypass unknown process outcomes through immediate continuation recovery", async () => {
+  it("retries a lost process through immediate continuation instead of holding it for reconciliation", async () => {
+    // myrmidon(L1): process_lost is infrastructure, not a failed provider
+    // attempt with unknown action outcomes; once the reconciliation hold is
+    // gone, the normal immediate-continuation recovery path (queue_recovery)
+    // retries it once, the same as any other retryable failure.
     const { agentId, runId, issueId } = await seedRunFixture({
       adapterType: "process",
       agentStatus: "idle",
@@ -3844,23 +3855,20 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     await heartbeat.reapOrphanedRuns();
     await heartbeat.reconcileStrandedAssignedIssues();
     expect(mockAdapterExecute).not.toHaveBeenCalled();
-    expect(
-      await db
-        .select()
-        .from(heartbeatRuns)
-        .where(eq(heartbeatRuns.agentId, agentId)),
-    ).toEqual([expect.objectContaining({ id: runId, status: "failed" })]);
+    const runs = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs.find((run) => run.id === runId)).toMatchObject({
+      status: "failed",
+    });
+    expect(runs.filter((run) => run.retryOfRunId === runId)).toHaveLength(1);
     expect(
       await db
         .select()
         .from(issueRecoveryActions)
         .where(eq(issueRecoveryActions.sourceIssueId, issueId)),
-    ).toEqual([
-      expect.objectContaining({
-        cause: "legacy_execution_requires_reconciliation",
-        returnOwnerAgentId: agentId,
-      }),
-    ]);
+    ).toHaveLength(0);
   });
 
   it("blocks failed recovery work in place during immediate terminal-run cleanup instead of holding it", async () => {

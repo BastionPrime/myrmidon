@@ -82,7 +82,10 @@ import {
 } from "../legacy-execution-recovery.js";
 // myrmidon(L1): infrastructure interruptions do not create a stranded-issue
 // escalation while the original agent is only briefly non-invokable (paused)
-import { shouldSkipReconciliationForInfraInterrupt } from "../../myrmidon/infra-interrupts.js";
+import {
+  infraInterruptRetryBudgetExhausted,
+  isInfraInterruptErrorCode,
+} from "../../myrmidon/infra-interrupts.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
 import { isExternalChatPresentationContext } from "../heartbeat-run-summary.js";
 import {
@@ -4295,10 +4298,19 @@ export function recoveryService(
         issue.status !== "in_review" &&
         !agentInvokable &&
         agent?.status === "paused" &&
-        shouldSkipReconciliationForInfraInterrupt(latestRun ?? {})
+        isInfraInterruptErrorCode(latestRun?.errorCode ?? null)
       ) {
-        result.skipped += 1;
-        continue;
+        // getLatestIssueRun's projection omits scheduledRetryAttempt; read it
+        // directly for the one run this candidate already resolved.
+        const scheduledRetryAttempt = await db
+          .select({ scheduledRetryAttempt: heartbeatRuns.scheduledRetryAttempt })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, latestRun!.id))
+          .then((rows) => rows[0]?.scheduledRetryAttempt ?? null);
+        if (!infraInterruptRetryBudgetExhausted({ scheduledRetryAttempt })) {
+          result.skipped += 1;
+          continue;
+        }
       }
       if (issue.status !== "in_review" && !agentInvokable) {
         const classification = classifyContinuationFailure(latestRun);
