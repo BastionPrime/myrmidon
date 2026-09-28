@@ -80,6 +80,8 @@ const mockBudgetService = vi.hoisted(() => ({
 
 const mockHeartbeatService = vi.hoisted(() => ({
   cancelActiveForAgent: vi.fn(),
+  // myrmidon(L3): resume wakes stranded work; the route awaits it
+  resumeAgentAfterPause: vi.fn(),
 }));
 
 const mockIssueApprovalService = vi.hoisted(() => ({
@@ -340,6 +342,7 @@ function resetMockDefaults() {
   mockAccessService.ensureMembership.mockImplementation(async () => undefined);
   mockAccessService.setPrincipalPermission.mockImplementation(async () => undefined);
   mockHeartbeatService.cancelActiveForAgent.mockImplementation(async () => undefined);
+  mockHeartbeatService.resumeAgentAfterPause.mockImplementation(async () => undefined);
   mockLogActivity.mockImplementation(async () => undefined);
 }
 
