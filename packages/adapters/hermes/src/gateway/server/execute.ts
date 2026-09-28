@@ -18,6 +18,8 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import {
   ADAPTER_TYPE,
+  CREATE_CANCEL_GRACE_MS,
+  CREATE_REQUEST_TIMEOUT_MS,
   DEFAULT_EVENT_RECONNECT_MS,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_TIMEOUT_SEC,
@@ -77,6 +79,10 @@ type ExecutionState = {
    * args, not anything from the completion event. See
    * formatCompactToolCompletedLine. */
   toolPreviews: Map<string, string[]>;
+  /** myrmidon(G4): Date.now() of the last throttled onRuntimeProgress call
+   * (message.delta only — see RUNTIME_PROGRESS_DELTA_THROTTLE_MS), or null
+   * before the first one. */
+  lastRuntimeProgressAt: number | null;
 };
 
 type TextRedactor = (value: string) => string;
@@ -115,6 +121,13 @@ const HERMES_DASHBOARD_API_PATHS = new Set(["", "/", "/chat"]);
 // waiting_for_approval until the adapter timeout; auto-deny keeps it moving.
 const APPROVAL_REQUEST_EVENT = "approval.request";
 const APPROVAL_DENY_CHOICE = "deny";
+
+// myrmidon(G4): message.delta streams once per provider token; reporting
+// onRuntimeProgress on every one of them would cost the server a
+// heartbeat_runs SELECT plus a live-event broadcast per token (see
+// reportRuntimeProgress). Liveness (N4) works in minutes, so this window is
+// generous headroom, not a tight budget.
+const RUNTIME_PROGRESS_DELTA_THROTTLE_MS = 3_000;
 
 // myrmidon(G4): compact progress-log formatting, matching the shape
 // agent/display.py's _get_cute_tool_message() fallback renderer writes
@@ -449,6 +462,14 @@ async function fetchJson(input: RequestInfo | URL, init: RequestInit): Promise<u
   } catch (err) {
     const fetchErr = new Error(`Hermes gateway request failed: ${fetchFailureMessage(err)}`) as HermesHttpError;
     fetchErr.code = "hermes_gateway_connect_failed";
+    // myrmidon(G4): keep fetch()'s own thrown error reachable as `.cause` —
+    // it is an AbortError/TimeoutError DOMException when `init.signal` cut
+    // the request off, or (fetchFailureMessage's shape) a network error
+    // whose own `.cause` carries a code like ECONNREFUSED — so a caller that
+    // needs to tell "cut off by our own signal" apart from "Hermes is
+    // genuinely unreachable" does not have to string-match the message. See
+    // execute()'s create-request handling.
+    fetchErr.cause = err;
     throw fetchErr;
   }
   const body = await readResponseJson(response);
@@ -520,6 +541,7 @@ function createExecutionState(runId: string): ExecutionState {
     terminalPromise,
     deltaLineBuffer: "",
     toolPreviews: new Map(),
+    lastRuntimeProgressAt: null,
   };
 }
 
@@ -722,15 +744,24 @@ async function flushCompactDeltaLines(
  * closest fit for "the adapter is actively driving a remote run". */
 async function reportRuntimeProgress(input: {
   ctx: AdapterExecutionContext;
+  state: ExecutionState;
   eventName: string | null;
   record: Record<string, unknown> | null;
   redactText: TextRedactor;
 }): Promise<void> {
   if (!input.ctx.onRuntimeProgress) return;
-  const { eventName, record, redactText } = input;
+  const { state, eventName, record, redactText } = input;
   let message: string | null = null;
   let currentToolName: string | null = null;
   let lastAssistantSnippet: string | null = null;
+  // myrmidon(G4): message.delta fires once per streamed token (Hermes emits
+  // it for every provider stream chunk), and each onRuntimeProgress call
+  // costs the server a heartbeat_runs SELECT plus a live-event broadcast
+  // (recordCurrentHeartbeatRunRuntimeProgress) — the platform's own
+  // comparably chatty journal activity is throttled for exactly this reason
+  // ("to avoid churning the live event stream"). Tool/reasoning/approval
+  // events are comparatively rare and are still reported immediately.
+  let throttleKey = false;
 
   if (eventName === "tool.started" || eventName === "tool.completed") {
     currentToolName = toolNameFromEvent(record);
@@ -742,6 +773,7 @@ async function reportRuntimeProgress(input: {
     if (delta.trim().length > 0) {
       lastAssistantSnippet = redactText(delta);
       message = lastAssistantSnippet;
+      throttleKey = true;
     }
   } else if (eventName === "reasoning.available") {
     message = "Reasoning";
@@ -750,6 +782,15 @@ async function reportRuntimeProgress(input: {
   }
 
   if (!message) return;
+
+  if (throttleKey) {
+    const now = Date.now();
+    if (state.lastRuntimeProgressAt !== null && now - state.lastRuntimeProgressAt < RUNTIME_PROGRESS_DELTA_THROTTLE_MS) {
+      return;
+    }
+    state.lastRuntimeProgressAt = now;
+  }
+
   const update: RuntimeStatusUpdate = {
     phase: "adapter_startup",
     message,
@@ -820,7 +861,7 @@ async function handleEvent(input: {
     await logCompactEvent({ ctx, state, eventName, record, redactText });
   }
 
-  await reportRuntimeProgress({ ctx, eventName, record, redactText });
+  await reportRuntimeProgress({ ctx, state, eventName, record, redactText });
 
   const delta = nonEmpty(record?.delta) ?? nonEmpty(record?.text_delta);
   if (eventName === "message.delta" && delta) {
@@ -1152,6 +1193,66 @@ function errorResult(err: unknown, redactText: TextRedactor = sanitizeSensitiveT
   };
 }
 
+/** myrmidon(G4): a signal that aborts CREATE_CANCEL_GRACE_MS after `source`
+ * aborts (or never, if `source` is undefined or never aborts) — gives an
+ * in-flight create request a short window to resolve on its own (the
+ * response, with a run_id, may already be on the wire) once operator
+ * cancellation arrives, instead of cutting it off the instant `source`
+ * aborts. */
+function delayedAbortSignal(source: AbortSignal | undefined, delayMs: number): AbortSignal {
+  const controller = new AbortController();
+  const arm = () => {
+    // unref: if the create request already settled on its own (the common
+    // case — this grace timer firing is the exception, not the rule), this
+    // must not be the thing that keeps the process alive for delayMs.
+    setTimeout(() => controller.abort(source?.reason), delayMs).unref();
+  };
+  if (source) {
+    if (source.aborted) arm();
+    else source.addEventListener("abort", arm, { once: true });
+  }
+  return controller.signal;
+}
+
+/** myrmidon(G4): fetchJson preserves fetch()'s own thrown error as `.cause`
+ * (see fetchJson above) and that error's own `.cause` is where a network
+ * failure's code (e.g. "ECONNREFUSED") lives — the same one level
+ * fetchFailureMessage already reads to build the log message. Two hops from
+ * the error execute() catches: its `.cause` is fetch()'s error, and that
+ * error's `.cause` is the `{code}` record. */
+function connectErrorCode(err: unknown): string | null {
+  const outer = err instanceof Error ? (err as { cause?: unknown }).cause : null;
+  const inner = outer instanceof Error ? (outer as { cause?: unknown }).cause : null;
+  const code = inner && typeof inner === "object" ? (inner as { code?: unknown }).code : null;
+  return typeof code === "string" ? code : null;
+}
+
+// myrmidon(G4): network failures that unambiguously never reached Hermes at
+// all (refused, unresolvable, or unroutable host) — as opposed to e.g.
+// ECONNRESET or a timeout, either of which can happen after the request was
+// already sent and Hermes may have started acting on it.
+const UNAMBIGUOUS_PRE_SEND_CONNECT_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+  "ECONNRESET",
+]);
+
+/** myrmidon(G4): true only when a failed POST /v1/runs proves Hermes never
+ * admitted the run — either it answered outright (any 4xx, including 429),
+ * or the connection itself never reached it. Anything else (a 5xx, or our
+ * own create-request timeout/cancellation cutoff) is ambiguous: Hermes may
+ * already have accepted the run under this Idempotency-Key. See execute()'s
+ * create-request catch block. */
+function isUnambiguousCreateNonStart(err: unknown): boolean {
+  const hermesError = err as HermesHttpError;
+  if (typeof hermesError.status === "number") {
+    return hermesError.status >= 400 && hermesError.status < 500;
+  }
+  const code = connectErrorCode(err);
+  return code !== null && UNAMBIGUOUS_PRE_SEND_CONNECT_ERROR_CODES.has(code);
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const apiBaseUrlValue = asString(ctx.config.apiBaseUrl ?? ctx.config.url, "").trim();
   if (!apiBaseUrlValue) {
@@ -1323,6 +1424,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   let runId: string | null = null;
   let replayed = false;
+  // myrmidon(G4): bound the create request itself, the same way
+  // STOP_REQUEST_TIMEOUT_MS bounds the stop path — see CREATE_REQUEST_TIMEOUT_MS
+  // and CREATE_CANCEL_GRACE_MS. onCancellationReady has already been awaited
+  // above, so ctx.signal is live for the whole request; a cancellation that
+  // lands here now gets CREATE_CANCEL_GRACE_MS to let the request settle on
+  // its own before this cuts it off.
+  const createSignal = AbortSignal.any([
+    AbortSignal.timeout(CREATE_REQUEST_TIMEOUT_MS),
+    delayedAbortSignal(ctx.signal, CREATE_CANCEL_GRACE_MS),
+  ]);
   try {
     // This adapter has no local child process, so crossing into the first
     // remote create request is its dispatch boundary. Report it before the
@@ -1332,6 +1443,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       method: "POST",
       headers: runHeaders,
       body: JSON.stringify(body),
+      signal: createSignal,
     });
     runId = extractRunId(created);
     replayed = asRecord(created)?.replayed === true; // myrmidon(G4)
@@ -1346,6 +1458,56 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       };
     }
   } catch (err) {
+    if (createSignal.aborted) {
+      // myrmidon(G4): the create request was cut off by our own guard, not
+      // rejected or refused by Hermes — fetchJson would otherwise fold this
+      // into the generic hermes_gateway_connect_failed/transient_upstream
+      // bucket, which both misreports "Hermes is unreachable" and, if the
+      // branch below treated it as unambiguous, would wrongly tell the
+      // platform provider work never started even though Hermes may already
+      // have admitted the run under this Idempotency-Key.
+      const cancelled = Boolean(ctx.signal?.aborted);
+      return {
+        exitCode: 1,
+        signal: cancelled ? "SIGTERM" : null,
+        timedOut: !cancelled,
+        errorCode: "hermes_gateway_create_interrupted",
+        errorMessage: cancelled
+          ? "Hermes gateway run was cancelled while POST /v1/runs was still in flight; whether Hermes accepted it could not be confirmed."
+          : `Hermes /v1/runs did not respond within ${CREATE_REQUEST_TIMEOUT_MS}ms.`,
+        errorFamily: cancelled ? null : "transient_upstream",
+        provider: "hermes_gateway",
+        sessionParams: { strategy },
+        sessionDisplayId: sessionKey ? redactText(sessionKey) : null,
+      };
+    }
+    if (ctx.signal?.aborted && isUnambiguousCreateNonStart(err)) {
+      // myrmidon(G4): cancellation arrived while POST /v1/runs was in
+      // flight, and this failure (an HTTP 4xx/429 response, or a connection
+      // error from before any bytes could have been sent) proves Hermes
+      // never admitted the run — the same guarantee the before-dispatch
+      // abort branch above gives. Report the same acknowledged,
+      // provider-never-started outcome instead of leaving this run stuck on
+      // a 409 for manual reconciliation.
+      return {
+        exitCode: 1,
+        signal: "SIGTERM",
+        timedOut: false,
+        errorCode: "hermes_gateway_cancelled",
+        errorMessage: "Hermes gateway run was cancelled before it started.",
+        provider: "hermes_gateway",
+        executionRecovery: { kind: "bootstrap", providerWorkStarted: false },
+        resultJson: {
+          executionCancellation: {
+            state: "acknowledged",
+            acknowledgedAt: new Date().toISOString(),
+            forced: false,
+          },
+        },
+        sessionParams: { strategy },
+        sessionDisplayId: sessionKey ? redactText(sessionKey) : null,
+      };
+    }
     return errorResult(err, redactText);
   }
 
@@ -1460,6 +1622,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (outcome === "timeout") {
     await stopRun({ ctx, baseUrl, headers: eventHeaders, runId, redactText });
     const finalStatus = await fetchFinalStatus({ baseUrl, headers: eventHeaders, runId, deadlineMs: STOP_GRACE_MS });
+    // myrmidon(G4): operator cancellation can race in after Promise.race
+    // already picked "timeout" (during the stop/fetchFinalStatus calls
+    // above, or in the window right before them), or arrive concurrently
+    // with the timeout itself. A terminal Hermes status observed by
+    // fetchFinalStatus here is the same verified termination the
+    // "cancelled" branch above requires before it claims acknowledged, so
+    // give the same answer instead of leaving the platform's own Stop
+    // request to 409 on a run that in fact already stopped.
+    const cancelledToo = Boolean(ctx.signal?.aborted) && finalStatus !== null;
     return {
       exitCode: 1,
       signal: null,
@@ -1472,6 +1643,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         status: extractStatus(finalStatus) ?? "timeout",
         last_event: state.lastEventName,
         final_status: redactForLog(finalStatus, [], 0, redactText),
+        ...(cancelledToo
+          ? {
+              executionCancellation: {
+                state: "acknowledged",
+                acknowledgedAt: new Date().toISOString(),
+                forced: false,
+              },
+            }
+          : {}),
       },
       sessionParams: {
         hermesRunId: runId,
@@ -1481,11 +1661,32 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   }
 
-  return mapFinalResultForTest({
+  const finalResult = mapFinalResultForTest({
     terminal: outcome,
     outputChunks: state.outputChunks,
     sessionKey,
     strategy,
     redactText,
   });
+  // myrmidon(G4): outcome === terminal means state.terminalPromise won the
+  // race — Hermes reported completion — but ctx.signal may have been
+  // aborted concurrently, or in the window after the race resolved (e.g.
+  // during the flushCompactDeltaLines() await above). A terminal Hermes
+  // status is itself verified termination, so acknowledge cancellation the
+  // same way the "cancelled" branch does instead of returning a result the
+  // platform's cancelRun will 409 despite the run being genuinely done.
+  if (ctx.signal?.aborted) {
+    return {
+      ...finalResult,
+      resultJson: {
+        ...finalResult.resultJson,
+        executionCancellation: {
+          state: "acknowledged",
+          acknowledgedAt: new Date().toISOString(),
+          forced: false,
+        },
+      },
+    };
+  }
+  return finalResult;
 }

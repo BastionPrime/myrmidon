@@ -15,3 +15,17 @@ export const STOP_GRACE_MS = 10_000;
 // (server/services/adapter-execution-control.ts) instead of returning
 // within the STOP_GRACE_MS budget above.
 export const STOP_REQUEST_TIMEOUT_MS = 5_000;
+// myrmidon(G4): bounds the initial POST /v1/runs create request the same
+// way STOP_REQUEST_TIMEOUT_MS bounds the stop path — onCancellationReady is
+// awaited before this request goes out, but it previously carried no signal
+// at all, so a gateway that accepted the connection and never answered could
+// block execute() past waitForAdapterStop's 60s deadline even though the run
+// had never actually started.
+export const CREATE_REQUEST_TIMEOUT_MS = 15_000;
+// myrmidon(G4): once operator cancellation arrives while the create request
+// is still in flight, give it this much longer to settle on its own (the
+// response, with a run_id, may already be on the wire) before the create
+// request is cut off outright. Kept short so the total create-path budget
+// (this grace, plus the stop path's STOP_GRACE_MS) stays well under the
+// platform's 60s waitForAdapterStop deadline.
+export const CREATE_CANCEL_GRACE_MS = 5_000;

@@ -6,7 +6,12 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
 import { execute, mapFinalResultForTest, parseSseFramesForTest, resolveSessionKey } from "./execute.js";
 import { testEnvironment } from "./test.js";
-import { DEFAULT_TIMEOUT_SEC } from "../shared/constants.js";
+import {
+  CREATE_CANCEL_GRACE_MS,
+  DEFAULT_TIMEOUT_SEC,
+  STOP_GRACE_MS,
+  STOP_REQUEST_TIMEOUT_MS,
+} from "../shared/constants.js";
 // myrmidon(G4): parse compact log lines through the real shared parser
 // (rather than substring-matching the raw line) so a regression that changes
 // the line's *shape* without changing its substrings still fails this test —
@@ -53,6 +58,10 @@ function sseStream(text: string): ReadableStream<Uint8Array> {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // myrmidon(G4): a no-op when timers are already real — belt-and-braces so
+  // a test that uses vi.useFakeTimers() (the request-timeout tests below)
+  // can never leak fake timers into a later test if it exits early.
+  vi.useRealTimers();
 });
 
 describe("resolveSessionKey", () => {
@@ -920,44 +929,224 @@ describe("execute — operator cancellation (G4)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("bounds the stop and status-check requests with a request timeout", async () => {
+  it("bounds the stop and status-check requests with a request timeout, well inside the platform's 60s stop deadline", async () => {
     // myrmidon(G4): stopRun/fetchFinalStatus previously issued their POST
     // .../stop and GET .../{runId} requests with no signal at all, so a
     // gateway that accepted the TCP connection but never responded could
     // block execute()'s return past the platform's 60s waitForAdapterStop
     // deadline (adapter-execution-control.ts) instead of returning inside
-    // STOP_GRACE_MS.
-    const controller = new AbortController();
-    const requestSignals: Array<AbortSignal | undefined> = [];
+    // STOP_GRACE_MS. The previous version of this test only asserted that
+    // *some* AbortSignal was passed — a signal that is never aborted would
+    // satisfy that too — so it never actually redlined without the fix.
+    vi.useFakeTimers();
+    const opCancel = new AbortController();
+    const timeoutSignals: AbortSignal[] = [];
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      if (ms !== STOP_REQUEST_TIMEOUT_MS) return realTimeout(ms);
+      const requestController = new AbortController();
+      setTimeout(
+        () => requestController.abort(new DOMException("The operation timed out.", "TimeoutError")),
+        ms,
+      ).unref();
+      timeoutSignals.push(requestController.signal);
+      return requestController.signal;
+    });
+
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/v1/runs")) {
         return new Response(JSON.stringify({ run_id: "run-cancel-3", status: "started" }), { status: 200 });
       }
       if (url.endsWith("/events")) {
-        controller.abort();
+        opCancel.abort();
         return new Promise<Response>(() => {});
       }
-      if (url.endsWith("/stop") || init?.method === "GET") {
-        requestSignals.push(init?.signal ?? undefined);
-        return url.endsWith("/stop")
-          ? new Response(JSON.stringify({ status: "stopping" }), { status: 200 })
-          : new Response(JSON.stringify({ status: "cancelled" }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+      // /stop, fetchFinalStatus's GET, and pollStatus's own background GET
+      // all hang until their own signal fires — none of them get a response
+      // from this fixture.
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal!.reason ?? new DOMException("aborted", "AbortError")),
+          { once: true },
+        );
+      });
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
-    ctx.signal = controller.signal;
+    ctx.signal = opCancel.signal;
     ctx.onCancellationReady = vi.fn(async () => undefined);
 
-    await execute(ctx);
+    const before = Date.now();
+    const resultPromise = execute(ctx);
+    // First /stop's own request timeout, then fetchFinalStatus's GET's.
+    await vi.advanceTimersByTimeAsync(STOP_REQUEST_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(STOP_GRACE_MS);
+    const result = await resultPromise;
+    const elapsedMs = Date.now() - before;
 
-    expect(requestSignals.length).toBeGreaterThan(0);
-    for (const signal of requestSignals) {
-      expect(signal).toBeInstanceOf(AbortSignal);
+    timeoutSpy.mockRestore();
+    vi.useRealTimers();
+
+    expect(timeoutSignals.length).toBeGreaterThanOrEqual(2);
+    for (const signal of timeoutSignals) {
+      expect(signal.aborted).toBe(true);
+      expect((signal.reason as DOMException | undefined)?.name).toBe("TimeoutError");
     }
+    expect(elapsedMs).toBeLessThan(60_000);
+    expect(result.errorCode).toBe("hermes_gateway_cancelled");
+    // Every /stop and status-check request timed out — fetchFinalStatus
+    // never observed a terminal Hermes status, so termination is
+    // unverified and this must not claim acknowledged.
+    expect(result.resultJson?.executionCancellation).toBeUndefined();
+  });
+
+  it("cuts off an in-flight create request once cancellation arrives, without claiming the outcome verified", async () => {
+    // myrmidon(G4): POST /v1/runs previously carried no signal at all —
+    // onCancellationReady had already fired, but a hung gateway (TCP
+    // accepted, never answers) could still block execute()'s return past
+    // the platform's 60s waitForAdapterStop deadline. See
+    // CREATE_REQUEST_TIMEOUT_MS/CREATE_CANCEL_GRACE_MS.
+    vi.useFakeTimers();
+    const opCancel = new AbortController();
+    let createSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.endsWith("/v1/runs")) throw new Error(`unexpected request to ${url}`);
+      createSignal = init?.signal ?? undefined;
+      // The operator cancels while this request is still outstanding —
+      // Hermes never gets a chance to answer within this test.
+      opCancel.abort();
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal!.reason ?? new DOMException("aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+    ctx.signal = opCancel.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    const before = Date.now();
+    const resultPromise = execute(ctx);
+    await vi.advanceTimersByTimeAsync(CREATE_CANCEL_GRACE_MS);
+    const result = await resultPromise;
+    const elapsedMs = Date.now() - before;
+    vi.useRealTimers();
+
+    expect(createSignal?.aborted).toBe(true);
+    expect(elapsedMs).toBeLessThan(60_000);
+    expect(result.errorCode).toBe("hermes_gateway_create_interrupted");
+    // Hermes may already have admitted the run under this Idempotency-Key —
+    // this must not claim acknowledged cancellation or "never started".
+    expect(result.resultJson?.executionCancellation).toBeUndefined();
+    expect(result.executionRecovery).toBeUndefined();
+  });
+
+  it("treats a definite Hermes rejection during a cancelled create as provider-never-started", async () => {
+    // myrmidon(G4): unlike the "hung create" case above, an HTTP 4xx
+    // response proves Hermes answered and did not admit the run — the same
+    // guarantee the before-dispatch abort branch relies on.
+    const opCancel = new AbortController();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (!url.endsWith("/v1/runs")) throw new Error(`unexpected request to ${url}`);
+      opCancel.abort();
+      return new Response(JSON.stringify({ error: "bad request" }), { status: 400 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+    ctx.signal = opCancel.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    const result = await execute(ctx);
+
+    expect(result.errorCode).toBe("hermes_gateway_cancelled");
+    expect(result.executionRecovery).toEqual({ kind: "bootstrap", providerWorkStarted: false });
+    expect(result.resultJson?.executionCancellation).toMatchObject({
+      state: "acknowledged",
+      forced: false,
+    });
+  });
+
+  it("does not claim provider-never-started when a cancelled create fails ambiguously (5xx)", async () => {
+    // myrmidon(G4): the mirror image of the 4xx test above — a 5xx does not
+    // prove Hermes rejected the run outright (it may have accepted it and
+    // failed afterwards), so this must not claim "never started".
+    const opCancel = new AbortController();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (!url.endsWith("/v1/runs")) throw new Error(`unexpected request to ${url}`);
+      opCancel.abort();
+      return new Response(JSON.stringify({ error: "internal" }), { status: 503 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+    ctx.signal = opCancel.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    const result = await execute(ctx);
+
+    expect(result.errorCode).toBe("hermes_gateway_upstream_error");
+    expect(result.executionRecovery).toBeUndefined();
+    expect(result.resultJson?.executionCancellation).toBeUndefined();
+  });
+
+  it("acknowledges cancellation when a poll-detected terminal status wins the race and cancellation is observed only during the final buffer flush", async () => {
+    // myrmidon(G4): mirrors "flushes a trailing partial compact-progress
+    // line when polling..." (below), but has ctx.signal abort during that
+    // same final flush — i.e. strictly after state.terminalPromise has
+    // already resolved via pollStatus's markTerminal, and strictly before
+    // execute()'s own final return. A terminal Hermes status observed here
+    // is verified termination; the plain mapFinalResultForTest path
+    // (unconditionally, with no executionCancellation) would let the
+    // platform's cancelRun 409 a run that in fact already completed.
+    const opCancel = new AbortController();
+    let eventsCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-poll-race", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        eventsCalls += 1;
+        const sse = eventsCalls === 1
+          ? ["event: message.delta", "data: {\"delta\":\"trailing partial line\"}", ""].join("\n")
+          : "";
+        return new Response(sseStream(sse), { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      timeoutSec: 5,
+      pollIntervalMs: 250,
+      eventReconnectMs: 30_000,
+    });
+    ctx.signal = opCancel.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+    ctx.onLog = vi.fn(async (_stream: "stdout" | "stderr", line: string) => {
+      if (line.includes("trailing partial line")) opCancel.abort();
+    });
+
+    const result = await execute(ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.resultJson?.executionCancellation).toMatchObject({
+      state: "acknowledged",
+      forced: false,
+    });
   });
 });
 
@@ -1220,6 +1409,62 @@ describe("execute — compact progress logging (G4)", () => {
     expect(onRuntimeProgress).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "adapter_startup", lastAssistantSnippet: "Hello\n" }),
     );
+  });
+
+  it("throttles onRuntimeProgress for a burst of message.delta events, but never for tool events", async () => {
+    // myrmidon(G4): message.delta streams once per provider token (the real
+    // gateway emits it on every stream chunk); reporting onRuntimeProgress
+    // on every one of them would cost the server a heartbeat_runs SELECT
+    // plus a live-event broadcast per token — see
+    // RUNTIME_PROGRESS_DELTA_THROTTLE_MS. Tool events are comparatively rare
+    // and must still be reported immediately, never throttled.
+    const deltaFrames: string[] = [];
+    for (let i = 0; i < 100; i += 1) {
+      deltaFrames.push("event: message.delta", `data: {"delta":"tok${i} "}`, "");
+    }
+    const sse = [
+      "event: tool.started",
+      "data: {\"tool\":\"terminal\",\"preview\":\"curl example.com\"}",
+      "",
+      ...deltaFrames,
+      "event: tool.completed",
+      "data: {\"tool\":\"terminal\",\"duration\":1.2}",
+      "",
+      "event: run.completed",
+      "data: {\"status\":\"completed\",\"output\":\"done\"}",
+      "",
+    ].join("\n");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-throttle-1", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(sseStream(sse), { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    const onRuntimeProgress = vi.fn();
+    ctx.onRuntimeProgress = onRuntimeProgress;
+
+    await execute(ctx);
+
+    const toolCalls = onRuntimeProgress.mock.calls.filter(
+      ([update]) => (update as { currentToolName?: string }).currentToolName === "terminal",
+    );
+    const deltaCalls = onRuntimeProgress.mock.calls.filter(
+      ([update]) => typeof (update as { lastAssistantSnippet?: unknown }).lastAssistantSnippet === "string",
+    );
+
+    // tool.started + tool.completed — always reported, never throttled.
+    expect(toolCalls.length).toBe(2);
+    // 100 deltas, all delivered well inside one throttle window, must not
+    // turn into 100 (or even a handful of) onRuntimeProgress calls.
+    expect(deltaCalls.length).toBeGreaterThanOrEqual(1);
+    expect(deltaCalls.length).toBeLessThanOrEqual(2);
   });
 
   it("keeps the [done] line parseable when a tool.completed has no matching tool.started", async () => {
