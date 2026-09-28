@@ -50,24 +50,41 @@ describeEmbeddedPostgres("getExecutionBlocker explicitWake (L2)", () => {
   }
 
   async function seedAction(input: {
-    companyId: string; issueId: string; runId: string;
+    companyId: string; issueId: string; runId?: string | null;
     status: "active" | "resolved" | "escalated"; replay?: string;
   }) {
     await db.insert(issueRecoveryActions).values({
       companyId: input.companyId, sourceIssueId: input.issueId, kind: "execution_reconciliation",
       status: input.status, cause: "uncertain_provider_action", fingerprint: randomUUID(),
-      evidence: { runId: input.runId, ...(input.replay ? { automaticRecovery: { replay: input.replay } } : {}) },
+      evidence: {
+        ...(input.runId ? { runId: input.runId } : {}),
+        ...(input.replay ? { automaticRecovery: { replay: input.replay } } : {}),
+      },
       nextAction: "Automatic recovery stopped.",
     });
   }
 
-  it("bypasses a settled no-replay hold for an explicit wake, but not otherwise", async () => {
-    const { companyId, issueId, runId } = await seed();
-    await seedAction({ companyId, issueId, runId, status: "resolved", replay: "blocked" });
+  it("bypasses a settled no-replay hold for an explicit wake only when it names no run to verify", async () => {
+    const { companyId, issueId } = await seed();
+    // No evidence.runId/sourceRunId: nothing to verify has actually stopped,
+    // so an explicit wake may go straight through.
+    await seedAction({ companyId, issueId, status: "resolved", replay: "blocked" });
 
     expect(await getExecutionBlocker(db, companyId, issueId)).not.toBeNull();
     expect(await getExecutionBlocker(db, companyId, issueId, { explicitWake: false })).not.toBeNull();
     expect(await getExecutionBlocker(db, companyId, issueId, { explicitWake: true })).toBeNull();
+  });
+
+  it("keeps blocking an explicit wake when the settled no-replay hold names a run to verify", async () => {
+    const { companyId, issueId, runId } = await seed();
+    // evidence.runId is set: an explicit wake here must still go through the
+    // vendor's own process/lease-verified continuation path (or an operator
+    // clearing the hold via resolve), not this generic bypass.
+    await seedAction({ companyId, issueId, runId, status: "resolved", replay: "blocked" });
+
+    const blocked = await getExecutionBlocker(db, companyId, issueId, { explicitWake: true });
+    expect(blocked).not.toBeNull();
+    expect(blocked!.runId).toBe(runId);
   });
 
   it("still blocks an explicit wake on a genuinely active (unsettled) recovery action", async () => {
