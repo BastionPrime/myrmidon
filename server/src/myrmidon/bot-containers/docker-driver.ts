@@ -20,6 +20,12 @@
 // on) labels otherwise. This is an own-judgment-call item, not from the plan
 // document verbatim — see the PR description's "decisions made without the owner"
 // section.
+//
+// The marker is staged and swapped separately from every other profile file (see
+// `writeProfile`/`buildSwapScript`) and moved into place only as the script's last
+// step, after every other staged file has been confirmed moved — so a swap that
+// dies partway through (exec killed, timeout) can never leave the marker claiming
+// hashes are applied when some of the actual files are not.
 
 import http from "node:http";
 import type { BotContainerDriver, BotContainerSpec, BotContainerState, BotContainerStatus } from "./driver.js";
@@ -200,7 +206,27 @@ interface DockerInspect {
   Image: string;
   Config?: { Image?: string; Labels?: Record<string, string> };
   State?: { Status?: string };
-  HostConfig?: { Memory?: number; NanoCpus?: number; NetworkMode?: string };
+  HostConfig?: { Memory?: number; NanoCpus?: number; PidsLimit?: number; NetworkMode?: string };
+}
+
+/**
+ * Pure drift check used by `ensure()`: does `existing` (a container's live
+ * inspect) still match `body` (this reconcile pass's freshly built create-request)
+ * on every field that identifies the container's *template* — image and the three
+ * resource limits, plus network? Exported, alongside `buildCreateContainerRequestBody`,
+ * so this logic is covered without a Docker socket.
+ */
+export function containerTemplateDrifted(
+  existing: Pick<DockerInspect, "Config" | "HostConfig">,
+  body: DockerCreateContainerBody,
+): boolean {
+  return (
+    existing.Config?.Image !== body.Image ||
+    existing.HostConfig?.Memory !== body.HostConfig.Memory ||
+    existing.HostConfig?.NanoCpus !== body.HostConfig.NanoCpus ||
+    existing.HostConfig?.PidsLimit !== body.HostConfig.PidsLimit ||
+    existing.HostConfig?.NetworkMode !== body.HostConfig.NetworkMode
+  );
 }
 
 function checkBotHealth(botKey: string): Promise<boolean> {
@@ -365,11 +391,7 @@ export function dockerBotContainerDriver(config: DockerDriverConfig = readDocker
     const body = buildCreateContainerRequestBody(spec, profile, config);
     const existing = await inspect(spec.botKey);
     if (existing) {
-      const drifted =
-        existing.Config?.Image !== body.Image ||
-        existing.HostConfig?.Memory !== body.HostConfig.Memory ||
-        existing.HostConfig?.NanoCpus !== body.HostConfig.NanoCpus ||
-        existing.HostConfig?.NetworkMode !== body.HostConfig.NetworkMode;
+      const drifted = containerTemplateDrifted(existing, body);
       if (!drifted) {
         if (stateFromInspect(existing) !== "running") await startContainer(spec.botKey);
         return;
@@ -382,14 +404,8 @@ export function dockerBotContainerDriver(config: DockerDriverConfig = readDocker
 
   async function writeProfile(botKey: string, profile: CompiledProfile): Promise<void> {
     validateBotKey(botKey);
-    const marker: CompiledProfileFile = {
-      path: APPLIED_MARKER_PATH,
-      content: JSON.stringify({ restartHash: profile.restartHash, filesHash: profile.filesHash }),
-      mode: 0o644,
-      secret: false,
-    };
     const roots = new Set<string>();
-    const entries: UstarEntry[] = [...profile.files, marker].map((file) => {
+    const entries: UstarEntry[] = profile.files.map((file) => {
       const { mount, relativePath } = resolveProfileFileTarget(file);
       const root = mountRootSegment(mount); // e.g. "data/hermes", not the bind's "hermes" host suffix
       roots.add(root);
@@ -401,6 +417,30 @@ export function dockerBotContainerDriver(config: DockerDriverConfig = readDocker
         gid: BOT_CONTAINER_UID,
       };
     });
+
+    // The applied-state marker is staged under a *separate* directory
+    // (".myrmidon-marker-next", not ".myrmidon-next") so the generic per-root sweep
+    // below can never pick it up as just another profile file — it structurally
+    // cannot reach the marker's real destination until the dedicated final step
+    // below runs. That final step only executes after every root's `find | mv` loop
+    // has fully succeeded (the script's `set -e`), so the marker can never claim a
+    // profile is applied when part of it is still mid-swap or failed.
+    const marker: CompiledProfileFile = {
+      path: APPLIED_MARKER_PATH,
+      content: JSON.stringify({ restartHash: profile.restartHash, filesHash: profile.filesHash }),
+      mode: 0o644,
+      secret: false,
+    };
+    const { mount: markerMount, relativePath: markerRelativePath } = resolveProfileFileTarget(marker);
+    const markerRoot = mountRootSegment(markerMount);
+    entries.push({
+      path: `${markerRoot}/.myrmidon-marker-next/${markerRelativePath}`,
+      content: Buffer.from(marker.content, "utf8"),
+      mode: marker.mode & 0o777,
+      uid: BOT_CONTAINER_UID,
+      gid: BOT_CONTAINER_UID,
+    });
+
     const archive = buildUstarArchive(entries);
     const name = containerNameFor(botKey);
     const putRes = await dockerRequest(socketPath, {
@@ -416,8 +456,8 @@ export function dockerBotContainerDriver(config: DockerDriverConfig = readDocker
     // then this loop moves each one over its final path with `mv` (atomic within a
     // filesystem). Anything already on disk that the profile does not mention
     // (sessions, caches, skills the bot wrote itself) is left untouched — this never
-    // does a directory-level replace.
-    const script = buildSwapScript([...roots]);
+    // does a directory-level replace. The marker (if any) is moved last, see above.
+    const script = buildSwapScript([...roots], { root: markerRoot, relativePath: markerRelativePath });
     const exitCode = await execRun(botKey, ["/bin/sh", "-c", script]);
     if (exitCode !== 0) {
       throw new Error(`profile file swap failed in ${name} (exit ${exitCode})`);
@@ -458,8 +498,18 @@ export function dockerBotContainerDriver(config: DockerDriverConfig = readDocker
 
 /** Shell script run inside the container (via `/bin/sh -c`) to move every staged
  *  file from "<root>/.myrmidon-next/…" over its final path and clean the staging
- *  directory up. Built per writeProfile call from the mount roots actually staged. */
-export function buildSwapScript(roots: readonly string[]): string {
+ *  directory up. Built per writeProfile call from the mount roots actually staged.
+ *
+ *  When `marker` is given, its own staged file (under a distinct
+ *  "<root>/.myrmidon-marker-next/" directory, never ".myrmidon-next") is moved into
+ *  place in one final step, strictly after every root's loop above has completed —
+ *  `set -e` means the script would already have aborted if any of them failed. This
+ *  is what makes the applied-state marker a true "everything landed" signal instead
+ *  of a partial one: see docker-driver.ts's `writeProfile`. */
+export function buildSwapScript(
+  roots: readonly string[],
+  marker?: { root: string; relativePath: string } | null,
+): string {
   const lines: string[] = ["set -e"];
   for (const root of roots) {
     lines.push(
@@ -472,6 +522,15 @@ export function buildSwapScript(roots: readonly string[]): string {
       `  done`,
       `  rm -rf "$staging"`,
       `fi`,
+    );
+  }
+  if (marker) {
+    const markerStaging = `/${marker.root}/.myrmidon-marker-next/${marker.relativePath}`;
+    const markerDest = `/${marker.root}/${marker.relativePath}`;
+    lines.push(
+      `mkdir -p "$(dirname "${markerDest}")"`,
+      `mv -f "${markerStaging}" "${markerDest}"`,
+      `rm -rf "/${marker.root}/.myrmidon-marker-next"`,
     );
   }
   return lines.join("\n");

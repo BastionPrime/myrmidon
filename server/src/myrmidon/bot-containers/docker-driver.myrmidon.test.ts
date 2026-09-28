@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildCreateContainerRequestBody, buildSwapScript, type DockerDriverConfig } from "./docker-driver.js";
+import {
+  buildCreateContainerRequestBody,
+  buildSwapScript,
+  containerTemplateDrifted,
+  type DockerDriverConfig,
+} from "./docker-driver.js";
 import { BotContainerTemplateError } from "./template.js";
 import type { BotContainerSpec } from "./driver.js";
 
@@ -105,6 +110,51 @@ describe("buildCreateContainerRequestBody", () => {
   });
 });
 
+describe("containerTemplateDrifted", () => {
+  const body = buildCreateContainerRequestBody(spec(), PROFILE, CONFIG);
+  function matchingInspect(): { Config: { Image: string }; HostConfig: typeof body.HostConfig } {
+    return { Config: { Image: body.Image }, HostConfig: { ...body.HostConfig } };
+  }
+
+  it("is false when every template field still matches", () => {
+    expect(containerTemplateDrifted(matchingInspect(), body)).toBe(false);
+  });
+
+  it("is true when the image changed", () => {
+    const existing = matchingInspect();
+    existing.Config.Image = "myrmidon-hermes:0.9.0";
+    expect(containerTemplateDrifted(existing, body)).toBe(true);
+  });
+
+  it("is true when memory changed", () => {
+    const existing = matchingInspect();
+    existing.HostConfig.Memory = body.HostConfig.Memory + 1;
+    expect(containerTemplateDrifted(existing, body)).toBe(true);
+  });
+
+  it("is true when cpus (NanoCpus) changed", () => {
+    const existing = matchingInspect();
+    existing.HostConfig.NanoCpus = body.HostConfig.NanoCpus + 1;
+    expect(containerTemplateDrifted(existing, body)).toBe(true);
+  });
+
+  it("is true when pidsLimit changed — the field the original drift check omitted", () => {
+    const existing = matchingInspect();
+    existing.HostConfig.PidsLimit = body.HostConfig.PidsLimit + 1;
+    expect(containerTemplateDrifted(existing, body)).toBe(true);
+  });
+
+  it("is true when the network changed", () => {
+    const existing = matchingInspect();
+    existing.HostConfig.NetworkMode = "some-other-network";
+    expect(containerTemplateDrifted(existing, body)).toBe(true);
+  });
+
+  it("is true (not a throw) when the existing inspect has no HostConfig at all", () => {
+    expect(containerTemplateDrifted({ Config: { Image: body.Image } }, body)).toBe(true);
+  });
+});
+
 describe("buildSwapScript", () => {
   it("builds a script that moves staged files for each given root and skips missing staging dirs", () => {
     const script = buildSwapScript(["data/hermes", "workspace"]);
@@ -114,7 +164,36 @@ describe("buildSwapScript", () => {
     expect(script).toContain("rm -rf \"$staging\"");
   });
 
-  it("is empty-but-valid (just \"set -e\") for no roots", () => {
+  it("is empty-but-valid (just \"set -e\") for no roots and no marker", () => {
     expect(buildSwapScript([])).toBe("set -e");
+    expect(buildSwapScript([], null)).toBe("set -e");
+  });
+
+  it("moves the marker last, strictly after every root's own swap block", () => {
+    const script = buildSwapScript(["data/hermes", "workspace"], {
+      root: "data/hermes",
+      relativePath: ".myrmidon/applied.json",
+    });
+    const lines = script.split("\n");
+    const lastRootRmIndex = lines.lastIndexOf('  rm -rf "$staging"');
+    const markerMoveIndex = lines.findIndex((line) =>
+      line.includes('mv -f "/data/hermes/.myrmidon-marker-next/.myrmidon/applied.json"'),
+    );
+    expect(lastRootRmIndex).toBeGreaterThan(-1);
+    expect(markerMoveIndex).toBeGreaterThan(lastRootRmIndex);
+  });
+
+  it("stages the marker under a directory the generic per-root find loop never walks", () => {
+    // The marker's staging directory (".myrmidon-marker-next") is never
+    // ".myrmidon-next" (what `find . -type f` in the per-root block walks) — this
+    // is what makes it structurally impossible for the generic sweep to move the
+    // marker ahead of the rest of that root's files.
+    const script = buildSwapScript(["data/hermes"], { root: "data/hermes", relativePath: ".myrmidon/applied.json" });
+    const genericLoopBlock = script.split('mkdir -p "$(dirname "/data/hermes/.myrmidon/applied.json")"')[0];
+    expect(genericLoopBlock).not.toContain(".myrmidon-marker-next");
+  });
+
+  it("omitting the marker (undefined) behaves exactly like passing null", () => {
+    expect(buildSwapScript(["data/hermes"])).toBe(buildSwapScript(["data/hermes"], null));
   });
 });

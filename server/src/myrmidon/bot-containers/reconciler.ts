@@ -3,13 +3,25 @@
 // Applies a compiled hermes profile to one bot's container. Design:
 // containers-plan-senior-2026-09-28.md §2.2.
 //
-//   missing  -> ensure + writeProfile + restart (first boot needs the profile on
-//               disk before the gateway can come up cleanly, so it gets one restart
-//               right after `ensure` creates it)
-//   files    -> writeProfile only, no restart
-//   restart  -> pause admission for this agent alone (R3, scope "agent"), wait for
-//               its running work to drain, writeProfile, restart, then resume
-//   none     -> nothing to do
+//   missing        -> ensure + writeProfile + restart (first boot needs the profile
+//                     on disk before the gateway can come up cleanly, so it gets one
+//                     restart right after `ensure` creates it)
+//   anything else  -> `ensure` runs first, unconditionally, so a template change
+//                     (image, resource limits) on an already-existing container is
+//                     picked up even when the compiled profile's own files have not
+//                     changed (see driver.ts's `ensure` drift contract). This is
+//                     safe: a bot's profile files live on its host-mounted volume
+//                     (template.ts BOT_VOLUME_MOUNTS), so a drift-triggered recreate
+//                     reuses whatever writeProfile already put there.
+//   files          -> writeProfile only, no restart
+//   restart        -> pause admission for this agent alone (R3, scope "agent"),
+//                     wait for its running work to drain, writeProfile, restart,
+//                     then resume
+//   none           -> nothing to do, UNLESS the container itself is "stopped" or
+//                     "unhealthy": the profile on disk is already correct but the
+//                     process is not up (or not healthy), so restart() alone is
+//                     called to recover it — the case driver.ts's restart()
+//                     contract promises the reconciler retries.
 //
 // Errors never escape reconcileBot: every failure is caught, written to the
 // injected activity sink, and returned as `{kind: "error"}` — a bad reconcile pass
@@ -117,10 +129,36 @@ export async function reconcileBot(input: ReconcileBotInput): Promise<ReconcileO
     }
 
     const profile = await compile();
+
+    // Bring the container's own template (image, resource limits) back in line with
+    // `spec` even when no profile file has changed — see the module comment above.
+    // Idempotent: a no-op beyond starting an already-stopped container when nothing
+    // has drifted.
+    await driver.ensure(spec, profile);
+
     const applied: AppliedProfileState = { restartHash: status.restartHash, filesHash: status.filesHash };
     const changeClass = classifyProfileChange(applied, profile);
 
-    if (changeClass === "none") return { kind: "unchanged" };
+    if (changeClass === "none") {
+      if (status.state === "stopped" || status.state === "unhealthy") {
+        // `ensure` above only starts a container that Docker itself reports as not
+        // running — it never restarts a running-but-unhealthy one, and neither path
+        // waits for health. Take an explicit, health-checked restart here so a
+        // hung/crash-looping gateway with an already-correct profile actually gets
+        // retried instead of sitting down/unhealthy until an unrelated profile
+        // change happens to reconcile it.
+        await driver.restart(botKey);
+        await activity.record({
+          level: "info",
+          agentId,
+          botKey,
+          message: "bot container restarted to recover from a stopped/unhealthy state",
+          details: { previousState: status.state },
+        });
+        return { kind: "applied_restart" };
+      }
+      return { kind: "unchanged" };
+    }
 
     if (changeClass === "files") {
       await driver.writeProfile(botKey, profile);

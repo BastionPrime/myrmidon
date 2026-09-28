@@ -121,26 +121,41 @@ export function startBotContainerReconciliation(
   const intervalMs = opts.intervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
   let stopped = false;
 
-  async function tick(): Promise<void> {
-    let agents: BotContainerAgent[];
-    try {
-      agents = await listAgents();
-    } catch (err) {
-      await deps.activity?.record({
-        level: "error",
-        agentId: "*",
-        botKey: "*",
-        message: "bot container reconciliation sweep failed to list agents",
-        details: { error: err instanceof Error ? err.message : String(err) },
-      });
-      return;
-    }
-    for (const agent of agents) {
-      if (stopped) return;
-      // reconcileBot (inside applyBotContainerNow) never throws; this catch only
-      // guards the not-applicable/parsing path around it.
-      await applyBotContainerNow(agent, deps).catch(() => undefined);
-    }
+  // A single "restart" class reconcile can legitimately take minutes (maintenance
+  // drain timeout + grace + the restart's own health wait, see reconciler.ts /
+  // docker-driver.ts), well past `intervalMs` (default 60s). Without this guard, a
+  // slow sweep would still be running one or more bots when the next tick fires,
+  // and two overlapping passes over the same bot can race writeProfile/restart
+  // against each other. Mirrors maintenanceService's own tick() guard
+  // (server/src/myrmidon/maintenance/service.ts).
+  let tickInFlight: Promise<void> | null = null;
+
+  function tick(): Promise<void> {
+    if (tickInFlight) return tickInFlight;
+    tickInFlight = (async () => {
+      let agents: BotContainerAgent[];
+      try {
+        agents = await listAgents();
+      } catch (err) {
+        await deps.activity?.record({
+          level: "error",
+          agentId: "*",
+          botKey: "*",
+          message: "bot container reconciliation sweep failed to list agents",
+          details: { error: err instanceof Error ? err.message : String(err) },
+        });
+        return;
+      }
+      for (const agent of agents) {
+        if (stopped) return;
+        // reconcileBot (inside applyBotContainerNow) never throws; this catch only
+        // guards the not-applicable/parsing path around it.
+        await applyBotContainerNow(agent, deps).catch(() => undefined);
+      }
+    })().finally(() => {
+      tickInFlight = null;
+    });
+    return tickInFlight;
   }
 
   const timer = setInterval(() => void tick(), intervalMs);
