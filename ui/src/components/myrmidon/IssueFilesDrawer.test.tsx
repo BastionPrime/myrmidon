@@ -159,33 +159,15 @@ describe("IssueFilesDrawer", () => {
     expect(grip).toBeTruthy();
     expect(drawer?.style.width).toBe("420px");
 
-    // Raw-event diagnostic: if the width assertion below ever fails again,
-    // this prints what the grip's own listener actually received (bypassing
-    // React entirely), instead of leaving the next round to guess blind.
-    const seen: string[] = [];
-    grip?.addEventListener("pointerdown", (e) =>
-      seen.push(`down clientX=${(e as MouseEvent).clientX} pointerId=${(e as PointerEvent).pointerId}`),
-    );
-    grip?.addEventListener("pointermove", (e) => seen.push(`move clientX=${(e as MouseEvent).clientX}`));
-
     // The grip sits on the panel's left border: dragging left widens it.
     // Both events land in the same act(), matching SidebarShell.test.tsx's
-    // proven-working drag helper (separate act()s per event is untested
-    // there and not worth risking here).
+    // proven-working drag helper (a separate act() per event was flaky here).
     act(() => {
       if (grip) {
         firePointerEvent(grip, "pointerdown", 500);
         firePointerEvent(grip, "pointermove", 400);
       }
     });
-    if (drawer?.style.width !== "520px") {
-      // eslint-disable-next-line no-console
-      console.log("issue-files-drawer resize diagnostic:", {
-        seen,
-        width: drawer?.style.width,
-        gripAttached: grip ? document.body.contains(grip) : null,
-      });
-    }
     expect(drawer?.style.width).toBe("520px");
     // Not persisted until the drag ends.
     expect(window.localStorage.getItem(WIDTH_STORAGE_KEY)).toBeNull();
