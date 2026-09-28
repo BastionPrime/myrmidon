@@ -244,6 +244,12 @@ import {
   assertInheritProcessEnvChangeAllowed,
   assertMyrmidonAgentConfigChange,
 } from "../myrmidon/agent-self-update.js";
+// myrmidon(L3): operator pause drains instead of cancelling; resume wakes stranded work
+import {
+  readCancelActiveRequested,
+  readPauseDrainsEnabled,
+  shouldCancelActiveRunsOnOperatorPause,
+} from "../myrmidon/pause-drain.js";
 import {
   AGENT_PROFILE_CHANGE_CONSENT_FIELDS,
   agentInstructionsChangeTargetKey,
@@ -5382,7 +5388,19 @@ export function agentRoutes(
       return;
     }
 
-    await heartbeat.cancelActiveForAgent(id);
+    // myrmidon(L3): pause drains by default — active runs finish on their own
+    // instead of being cancelled with "agent_paused", which the vendor's
+    // legacy-execution reconciliation otherwise locks behind a board decision.
+    // An explicit cancelActive/force request, or MYRMIDON_PAUSE_DRAINS=0,
+    // still cancels immediately. Decision logic: myrmidon/pause-drain.ts.
+    if (
+      shouldCancelActiveRunsOnOperatorPause({
+        drainsEnabled: readPauseDrainsEnabled(),
+        cancelActiveRequested: readCancelActiveRequested({ body: req.body, forceQueryParam: req.query.force }),
+      })
+    ) {
+      await heartbeat.cancelActiveForAgent(id);
+    }
 
     await logActivity(db, {
       companyId: agent.companyId,
@@ -5414,6 +5432,14 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
+
+    // myrmidon(L3): a drained pause never cancelled anything, so resume must
+    // wake it back up itself — queued runs and any assigned todo/in_progress
+    // issue stranded without one. Best-effort: a wake failure must not fail
+    // the resume response itself. Logic: myrmidon/pause-drain.ts.
+    await heartbeat.resumeAgentAfterPause(id).catch((err) => {
+      logger.warn({ err, agentId: id }, "pause-resume wake failed after agent resume");
+    });
 
     const actor = getActorInfo(req);
     await logActivity(db, {
