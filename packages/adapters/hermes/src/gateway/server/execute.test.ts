@@ -7,6 +7,11 @@ import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
 import { execute, mapFinalResultForTest, parseSseFramesForTest, resolveSessionKey } from "./execute.js";
 import { testEnvironment } from "./test.js";
 import { DEFAULT_TIMEOUT_SEC } from "../shared/constants.js";
+// myrmidon(G4): parse compact log lines through the real shared parser
+// (rather than substring-matching the raw line) so a regression that changes
+// the line's *shape* without changing its substrings still fails this test —
+// see the tool.completed preview-caching test below.
+import { parseHermesStdoutLine } from "../../ui/parse-stdout.js";
 
 function makeCtx(config: Record<string, unknown>): AdapterExecutionContext {
   return {
@@ -1031,13 +1036,18 @@ describe("execute — managed instructions bundle (G4)", () => {
 });
 
 describe("execute — compact progress logging (G4)", () => {
+  // myrmidon(G4): tool.completed never carries preview/detail on the real wire
+  // (gateway/platforms/api_server_runs.py's _FIXED_EVENT_FIELDS:
+  // `"tool.completed": lambda tool, preview, kw: {"tool": tool, "duration":
+  // ..., "error": ...}` deliberately drops it) — a fixture that adds one back
+  // would hide a regression in the preview-caching path.
   function toolEventsSse(): string {
     return [
       "event: tool.started",
       "data: {\"tool\":\"terminal\",\"preview\":\"curl example.com\"}",
       "",
       "event: tool.completed",
-      "data: {\"tool\":\"terminal\",\"preview\":\"curl example.com\",\"duration\":1.2}",
+      "data: {\"tool\":\"terminal\",\"duration\":1.2}",
       "",
       "event: message.delta",
       "data: {\"delta\":\"Hello\\n\"}",
@@ -1072,9 +1082,25 @@ describe("execute — compact progress logging (G4)", () => {
 
     const logLines = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line));
     expect(logLines.some((line) => line.includes("[tool] terminal curl example.com"))).toBe(true);
-    expect(logLines.some((line) =>
-      line.includes("[done]") && line.includes("terminal") && line.includes("curl example.com") && line.includes("1.2s"),
-    )).toBe(true);
+
+    // myrmidon(G4): tool.completed carries no preview on the wire (see
+    // toolEventsSse above); the [done] line must still show the real tool
+    // name and the preview captured from the earlier tool.started line, and —
+    // critically — the shared parser (ui/parse-stdout.ts, also used by
+    // gateway/ui/parse-stdout.ts) must parse it back into a tool_call whose
+    // `name` is the real tool, not the "tool"/detail-swap that a
+    // whitespace-only gap between the name and the duration produces.
+    const doneLine = logLines.find((line) => line.startsWith("  [done]"));
+    expect(doneLine).toBeDefined();
+    expect(doneLine).toContain("terminal");
+    expect(doneLine).toContain("curl example.com");
+    expect(doneLine).toContain("1.2s");
+    const parsedDone = parseHermesStdoutLine(doneLine!, new Date().toISOString());
+    const toolCall = parsedDone.find((entry) => entry.kind === "tool_call");
+    const toolResult = parsedDone.find((entry) => entry.kind === "tool_result");
+    expect(toolCall).toMatchObject({ kind: "tool_call", name: "shell" });
+    expect(toolResult).toMatchObject({ kind: "tool_result", content: expect.stringContaining("curl example.com") });
+
     expect(logLines.some((line) => line.includes("┊ 💬 Hello"))).toBe(true);
     expect(logLines.some((line) => line.includes("💭") && line.includes("Weighing two options."))).toBe(true);
     expect(logLines.every((line) => !line.includes("[hermes-gateway:event]"))).toBe(true);
@@ -1088,6 +1114,88 @@ describe("execute — compact progress logging (G4)", () => {
     expect(onRuntimeProgress).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "adapter_startup", lastAssistantSnippet: "Hello\n" }),
     );
+  });
+
+  it("keeps the [done] line parseable when a tool.completed has no matching tool.started", async () => {
+    // myrmidon(G4): e.g. a reconnect mid-call drops the tool.started frame.
+    // The [done] line must still carry a non-whitespace token after the tool
+    // name so the shared parser's name/detail split does not collapse the
+    // real tool name into the generic "tool" bucket.
+    const sse = [
+      "event: tool.completed",
+      "data: {\"tool\":\"write_file\",\"duration\":0.4}",
+      "",
+      "event: run.completed",
+      "data: {\"status\":\"completed\",\"output\":\"done\"}",
+      "",
+    ].join("\n");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-compact-3", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(sseStream(sse), { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    await execute(ctx);
+
+    const logLines = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line));
+    const doneLine = logLines.find((line) => line.startsWith("  [done]"));
+    expect(doneLine).toBeDefined();
+    const parsedDone = parseHermesStdoutLine(doneLine!, new Date().toISOString());
+    const toolCall = parsedDone.find((entry) => entry.kind === "tool_call");
+    expect(toolCall).toMatchObject({ kind: "tool_call", name: "write_file" });
+  });
+
+  it("pairs concurrent same-name tool calls with their previews in start order", async () => {
+    // myrmidon(G4): the wire protocol has no call id, so two concurrent calls
+    // to the same tool (agent/tool_executor.py's execute_tool_calls_concurrent)
+    // can only be paired by start order (FIFO) — verify that pairing, not just
+    // that *a* preview shows up.
+    const sse = [
+      "event: tool.started",
+      "data: {\"tool\":\"terminal\",\"preview\":\"first command\"}",
+      "",
+      "event: tool.started",
+      "data: {\"tool\":\"terminal\",\"preview\":\"second command\"}",
+      "",
+      "event: tool.completed",
+      "data: {\"tool\":\"terminal\",\"duration\":0.1}",
+      "",
+      "event: tool.completed",
+      "data: {\"tool\":\"terminal\",\"duration\":0.2}",
+      "",
+      "event: run.completed",
+      "data: {\"status\":\"completed\",\"output\":\"done\"}",
+      "",
+    ].join("\n");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-compact-4", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(sseStream(sse), { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    await execute(ctx);
+
+    const logLines = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line));
+    const doneLines = logLines.filter((line) => line.startsWith("  [done]"));
+    expect(doneLines).toHaveLength(2);
+    expect(doneLines[0]).toContain("first command");
+    expect(doneLines[0]).toContain("0.1s");
+    expect(doneLines[1]).toContain("second command");
+    expect(doneLines[1]).toContain("0.2s");
   });
 
   it("logs raw redacted event JSON instead when adapterConfig.debugEvents is true", async () => {
@@ -1167,6 +1275,71 @@ describe("execute — idempotent retry attach (G4)", () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/run-original-1/events"))).toBe(true);
     const logText = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line)).join("\n");
     expect(logText).toContain("idempotent replay: attaching to existing run run-original-1 instead of starting a new one");
+  });
+
+  it("keeps the /v1/runs request body byte-identical across an original attempt and its retry", async () => {
+    // myrmidon(G4): Hermes fingerprints the *whole* POST body to decide
+    // whether a reused Idempotency-Key is a replay or a conflict
+    // (api_server_runs.py: idempotency_fingerprint = sha256({"body": body,
+    // "gateway_session_key": ...})). A process_lost retry runs with a brand
+    // new ctx.runId (a new heartbeat_runs row) while retryOfRunId points back
+    // at the original attempt's run id — if the request body embedded the raw
+    // per-attempt ctx.runId anywhere (buildInput's "Run ID:" line, or the
+    // session key for sessionKeyStrategy "run"), the retry's body would
+    // differ from the original and Hermes would answer 409 conflict instead
+    // of replayed:true, leaving the original run orphaned.
+    const bodies: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        bodies.push(String(init?.body));
+        return new Response(JSON.stringify({ run_id: "run-hermes-x", status: "started" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Original attempt: no retryOfRunId, so its own run id ("pc-run-1", from
+    // makeCtx) is the stable identity the body is built from.
+    const original = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    await execute(original);
+
+    // Its process_lost retry: a different ctx.runId, retryOfRunId pointing
+    // back at the original's run id.
+    const retry = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    retry.runId = "pc-run-2";
+    retry.context = { ...retry.context, retryOfRunId: original.runId };
+    await execute(retry);
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(JSON.parse(bodies[0]).input).toContain(`Run ID: ${original.runId}`);
+  });
+
+  it("keys sessionKeyStrategy 'run' session keys off the idempotency-stable id, not the per-attempt run id", async () => {
+    // myrmidon(G4): the fingerprint also covers gateway_session_key (derived
+    // from the X-Hermes-Session-Key header), so a retry's session key must be
+    // just as stable as its body for replay to work under this strategy.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/v1/runs") ? { run_id: "run-hermes-y", status: "started" } : { status: "completed", output: "done" },
+    ), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const retry = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      timeoutSec: 5,
+      sessionKeyStrategy: "run",
+    });
+    retry.runId = "pc-run-2";
+    retry.context = { ...retry.context, retryOfRunId: "pc-run-original" };
+    await execute(retry);
+
+    const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const init = calls.find(([input]) => String(input).endsWith("/v1/runs"))?.[1] as RequestInit;
+    expect((init.headers as Record<string, string>)["X-Hermes-Session-Key"]).toBe("paperclip:run:pc-run-original");
+    const body = JSON.parse(String(init.body));
+    expect(body.session_id).toBe("paperclip:run:pc-run-original");
   });
 
   it("classifies a 409 idempotency-key conflict distinctly from a generic protocol error", async () => {

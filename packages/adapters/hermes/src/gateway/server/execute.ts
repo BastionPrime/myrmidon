@@ -67,6 +67,15 @@ type ExecutionState = {
   terminalPromise: Promise<TerminalState>;
   /** myrmidon(G4): partial message.delta text not yet flushed as a "┊ 💬" line. */
   deltaLineBuffer: string;
+  /** myrmidon(G4): FIFO queue (per tool name) of previews captured from
+   * tool.started, popped by the matching tool.completed. The real gateway's
+   * tool.completed payload never carries a preview/detail field itself
+   * (api_server_runs.py's _FIXED_EVENT_FIELDS drops it — only tool.started
+   * keeps one), matching how the vendor CLI's own completion-line renderer
+   * (agent/display.py's _get_cute_tool_message) is handed the call's original
+   * args, not anything from the completion event. See
+   * formatCompactToolCompletedLine. */
+  toolPreviews: Map<string, string[]>;
 };
 
 type TextRedactor = (value: string) => string;
@@ -288,7 +297,7 @@ function buildHeaders(input: {
   };
 }
 
-function buildInput(ctx: AdapterExecutionContext, paperclipApiUrl: string | null): string {
+function buildInput(ctx: AdapterExecutionContext, paperclipApiUrl: string | null, idempotencyRunId: string): string {
   // Stable session keys (issue/agent strategy) resume the same remote Hermes
   // conversation across runs; a stored session id from a prior run means that
   // conversation already received the task brief, so pick the compact
@@ -315,7 +324,15 @@ function buildInput(ctx: AdapterExecutionContext, paperclipApiUrl: string | null
     "Paperclip runtime identity:",
     `- Agent ID: ${ctx.agent.id}`,
     `- Company ID: ${ctx.agent.companyId}`,
-    `- Run ID: ${ctx.runId}`,
+    // myrmidon(G4): the idempotency-stable id (retryOfRunId ?? ctx.runId), not
+    // the raw per-attempt ctx.runId — see the idempotencyKey comment in
+    // execute(). A process_lost retry's /v1/runs body must be byte-identical
+    // to the attempt it is retrying (Hermes fingerprints the whole body:
+    // api_server_runs.py's idempotency_fingerprint = sha256(body, ...)), or
+    // the shared Idempotency-Key header gets a 409 conflict instead of
+    // replayed:true. Using ctx.runId here would make every retry's body
+    // differ from the original it is supposed to match.
+    `- Run ID: ${idempotencyRunId}`,
     ...(paperclipApiUrl ? [`- Paperclip API URL: ${paperclipApiUrl}`] : []),
     ...(issueWorkMode ? [`- Issue work mode: ${issueWorkMode}`] : []),
     "",
@@ -358,13 +375,14 @@ function buildRunBody(
   ctx: AdapterExecutionContext,
   sessionKey: string | null,
   agentInstructionsBundle: string,
+  idempotencyRunId: string,
 ): Record<string, unknown> {
   const paperclipApiUrl = nonEmpty(ctx.config.paperclipApiUrl);
   const payloadTemplate = parseObject(ctx.config.payloadTemplate);
   const configuredInput = nonEmpty(payloadTemplate.input);
   const input = configuredInput && ctx.context.conversationMode === true
-    ? `${configuredInput}\n\n${buildInput(ctx, paperclipApiUrl)}`
-    : configuredInput ?? buildInput(ctx, paperclipApiUrl);
+    ? `${configuredInput}\n\n${buildInput(ctx, paperclipApiUrl, idempotencyRunId)}`
+    : configuredInput ?? buildInput(ctx, paperclipApiUrl, idempotencyRunId);
   const cardInstructions =
     nonEmpty(ctx.config.instructions) ??
     nonEmpty(payloadTemplate.instructions) ??
@@ -505,6 +523,7 @@ function createExecutionState(runId: string): ExecutionState {
     resolveTerminal,
     terminalPromise,
     deltaLineBuffer: "",
+    toolPreviews: new Map(),
   };
 }
 
@@ -590,27 +609,57 @@ function extractReasoningPreview(record: Record<string, unknown> | null): string
   return nested ? extractReasoningPreview(nested) : "";
 }
 
+/** myrmidon(G4): remembers a tool.started preview so the matching tool.completed
+ * (which carries none on the wire) can still render a rich [done] line — see
+ * ExecutionState.toolPreviews and formatCompactToolCompletedLine. */
+function pushToolPreview(state: ExecutionState, name: string, preview: string): void {
+  const queue = state.toolPreviews.get(name);
+  if (queue) {
+    queue.push(preview);
+  } else {
+    state.toolPreviews.set(name, [preview]);
+  }
+}
+
+/** myrmidon(G4): FIFO pop — concurrent tool batches (agent/tool_executor.py's
+ * execute_tool_calls_concurrent) can have more than one call to the same tool
+ * name in flight; the wire protocol gives us no call id to pair start/complete
+ * precisely, so call order is the best available approximation. Empty when no
+ * matching tool.started was ever observed (e.g. a reconnect mid-call). */
+function popToolPreview(state: ExecutionState, name: string): string {
+  const queue = state.toolPreviews.get(name);
+  return queue?.shift() ?? "";
+}
+
 /** `  [tool] <name> <preview>` — real hermes chat prints this per agent/display.py's
  * Spinner._animate(); parseHermesStdoutLine() deliberately discards it (the [done]
  * completion line below carries the structured data), so it exists for human log
  * tails only. */
-function formatCompactToolStartedLine(record: Record<string, unknown> | null, redactText: TextRedactor): string {
-  const name = toolNameFromEvent(record);
-  const preview = truncateForLog(toolPreviewFromEvent(record, redactText), COMPACT_TOOL_PREVIEW_MAX_CHARS);
+function formatCompactToolStartedLine(name: string, preview: string): string {
   return `  [tool] ${preview ? `${name} ${preview}` : name}\n`;
 }
 
 /** `  [done] ┊ ⚡ <name> <preview>  <duration>s[ [error]]` — the fallback shape
  * agent/display.py's _get_cute_tool_message() writes for a tool with no curated
  * renderer, which is all parseToolCompletionLine() in parseHermesStdoutLine()
- * needs to build a tool_call/tool_result pair. */
-function formatCompactToolCompletedLine(record: Record<string, unknown> | null, redactText: TextRedactor): string {
-  const name = padRight(toolNameFromEvent(record), COMPACT_TOOL_NAME_WIDTH);
-  const preview = truncateForLog(toolPreviewFromEvent(record, redactText), COMPACT_ASSISTANT_PREVIEW_MAX_CHARS);
+ * needs to build a tool_call/tool_result pair.
+ *
+ * myrmidon(G4): `capturedPreview` must come from that tool call's earlier
+ * tool.started line (see popToolPreview), never from `record` — the real
+ * gateway's tool.completed payload never carries a preview/detail field
+ * (api_server_runs.py's _FIXED_EVENT_FIELDS only keeps `tool`/`duration`/
+ * `error` for tool.completed). When no preview was captured, "·" keeps a
+ * non-whitespace token between the name and the duration: parseToolCompletionLine()
+ * in ui/parse-stdout.ts splits `verb + " " + detail` on the first run of
+ * whitespace, and a whitespace-only gap there makes it misparse the tool name
+ * itself as the generic "tool" and shove the real name into detail. */
+function formatCompactToolCompletedLine(record: Record<string, unknown> | null, name: string, capturedPreview: string): string {
+  const paddedName = padRight(name, COMPACT_TOOL_NAME_WIDTH);
+  const preview = capturedPreview || "·";
   const duration = toolDurationSeconds(record);
   const durationText = duration !== null ? `${duration.toFixed(1)}s` : "";
   const errorSuffix = toolHasError(record) ? " [error]" : "";
-  return `  [done] ${TOOL_OUTPUT_PREFIX} ⚡ ${name} ${preview}  ${durationText}${errorSuffix}\n`;
+  return `  [done] ${TOOL_OUTPUT_PREFIX} ⚡ ${paddedName} ${preview}  ${durationText}${errorSuffix}\n`;
 }
 
 /** One collapsed `  💭 <text>` line; parseHermesStdoutLine()'s isThinkingLine()
@@ -622,15 +671,21 @@ function formatCompactReasoningLine(text: string): string {
 
 async function logCompactEvent(input: {
   ctx: AdapterExecutionContext;
+  state: ExecutionState;
   eventName: string | null;
   record: Record<string, unknown> | null;
   redactText: TextRedactor;
 }): Promise<void> {
-  const { ctx, eventName, record, redactText } = input;
+  const { ctx, state, eventName, record, redactText } = input;
   if (eventName === "tool.started") {
-    await ctx.onLog("stdout", formatCompactToolStartedLine(record, redactText));
+    const name = toolNameFromEvent(record);
+    const preview = truncateForLog(toolPreviewFromEvent(record, redactText), COMPACT_TOOL_PREVIEW_MAX_CHARS);
+    pushToolPreview(state, name, preview);
+    await ctx.onLog("stdout", formatCompactToolStartedLine(name, preview));
   } else if (eventName === "tool.completed") {
-    await ctx.onLog("stdout", formatCompactToolCompletedLine(record, redactText));
+    const name = toolNameFromEvent(record);
+    const preview = popToolPreview(state, name);
+    await ctx.onLog("stdout", formatCompactToolCompletedLine(record, name, preview));
   } else if (eventName === "reasoning.available") {
     const reasoning = redactText(extractReasoningPreview(record));
     if (reasoning) await ctx.onLog("stdout", formatCompactReasoningLine(reasoning));
@@ -766,7 +821,7 @@ async function handleEvent(input: {
       `[hermes-gateway:event] run=${state.runId} event=${eventName ?? "message"} data=${stringifyForLog(redactForLog(parsed, [], 0, redactText), 8_000)}\n`,
     );
   } else {
-    await logCompactEvent({ ctx, eventName, record, redactText });
+    await logCompactEvent({ ctx, state, eventName, record, redactText });
   }
 
   await reportRuntimeProgress({ ctx, eventName, record, redactText });
@@ -1143,21 +1198,28 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const strategy = normalizeSessionKeyStrategy(ctx.config.sessionKeyStrategy);
   // myrmidon(G4): raw debug JSON is opt-in; see handleEvent/logCompactEvent.
   const debugEvents = ctx.config.debugEvents === true;
-  const sessionKey = resolveSessionKey({
-    strategy,
-    companyId: ctx.agent.companyId,
-    agentId: ctx.agent.id,
-    runId: ctx.runId,
-    issueId: issueIdFromContext(ctx),
-  });
   // myrmidon(G4): a process_lost retry keeps the *original* run's id as
   // retryOfRunId (heartbeat_runs.retry_of_run_id, surfaced on ctx.context —
   // see server/services/heartbeat.ts's contextSnapshot). Reusing it as the
   // Idempotency-Key lets Hermes recognize the duplicate create request
   // (api_server_run_idempotency.py's reserve/lookup) and reply
   // `replayed:true` with the original run instead of starting a second one.
+  // Computed before sessionKey/buildRunBody: both must key off this same
+  // stable id (not the per-attempt ctx.runId) so the retry's request body
+  // and X-Hermes-Session-Key stay byte-identical to the attempt it replays —
+  // Hermes's idempotency_fingerprint hashes body *and* gateway_session_key
+  // together (api_server_runs.py), and a "run"-strategy session key or a
+  // buildInput() "Run ID:" line built from ctx.runId would otherwise change
+  // on every retry and turn a should-be replay into a 409 conflict.
   const retryOfRunId = nonEmpty(ctx.context.retryOfRunId);
   const idempotencyKey = retryOfRunId ?? ctx.runId;
+  const sessionKey = resolveSessionKey({
+    strategy,
+    companyId: ctx.agent.companyId,
+    agentId: ctx.agent.id,
+    runId: idempotencyKey,
+    issueId: issueIdFromContext(ctx),
+  });
   const extraHeaders = parseHeaders(ctx.config.headers);
   const runHeaders = buildHeaders({
     apiKey,
@@ -1203,7 +1265,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
   }
 
-  const body = buildRunBody(ctx, sessionKey, agentInstructionsBundle);
+  const body = buildRunBody(ctx, sessionKey, agentInstructionsBundle, idempotencyKey);
   const createRunUrl = apiUrl(baseUrl, "/v1/runs");
 
   await ctx.onMeta?.({
