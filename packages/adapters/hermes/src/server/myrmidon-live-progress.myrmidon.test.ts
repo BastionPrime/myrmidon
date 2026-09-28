@@ -52,12 +52,14 @@ describe("session id — quiet vs. live progress format", () => {
 });
 
 /** A realistic non-quiet (`-Q`-less) `_print_exit_summary()` tail, as printed
- * to stdout after `chat()` returns (hermes_cli/cli_session_mixin.py). */
+ * to stdout after `chat()` returns (hermes_cli/cli_session_mixin.py:
+ * `print("Resume this session with:")` is immediately followed — no blank
+ * line — by `print(f"  hermes --resume {id}...")`; the blank line comes
+ * AFTER the resume hint(s), before the `Session:` field). */
 function buildExitSummary(sessionId: string): string {
   return [
     "",
     "Resume this session with:",
-    "",
     `  hermes --resume ${sessionId}`,
     "",
     `Session:        ${sessionId}`,
@@ -100,6 +102,22 @@ describe("extractLiveSessionId", () => {
     ].join("\n");
     expect(extractLiveSessionId(stdout)).toBeUndefined();
   });
+
+  it("does NOT anchor on a bare 'Resume this session with:' line inside the agent's own answer", () => {
+    // "Resume this session with:" is itself ordinary English a coding/ops assistant could write
+    // while discussing Hermes sessions (exactly this PR's own subject matter) — a lone line
+    // match must not be trusted; only the FULL skeleton (hint line, blank, Session:/Duration:/
+    // Messages:) that `_print_exit_summary()` actually prints identifies the real one.
+    const stdout = [
+      "Here's how session resume works in Hermes:",
+      "",
+      "Resume this session with:",
+      "  (this is just documentation prose, not a real exit summary)",
+      "",
+      "That's the whole mechanism.",
+    ].join("\n") + buildExitSummary("20260928_143022_ab12cd");
+    expect(extractLiveSessionId(stdout)).toBe("20260928_143022_ab12cd");
+  });
 });
 
 describe("stripExitSummary", () => {
@@ -113,6 +131,23 @@ describe("stripExitSummary", () => {
   it("is a no-op when there is no exit summary (killed run, or quiet mode)", () => {
     const stdout = "Just the final response, no CLI chrome after it.\n";
     expect(stripExitSummary(stdout)).toBe(stdout);
+  });
+
+  it("does NOT truncate at a bare 'Resume this session with:' line inside the answer — cuts at the real exit summary instead", () => {
+    // Regression for the critical false-positive: a lone `.exec()` match on the anchor line
+    // used to cut here, silently discarding the rest of the real answer below it.
+    const answerBody = [
+      "Here's how session resume works in Hermes:",
+      "",
+      "Resume this session with:",
+      "  (just documentation prose, not the real exit summary)",
+      "",
+      "That's the whole mechanism — verified by reading cli_session_mixin.py.",
+    ].join("\n");
+    const stdout = answerBody + buildExitSummary("20260928_143022_ab12cd");
+    const stripped = stripExitSummary(stdout);
+    expect(stripped).toBe(answerBody + "\n");
+    expect(stripped).toContain("verified by reading cli_session_mixin.py");
   });
 });
 
@@ -147,12 +182,33 @@ describe("stripQueryEcho", () => {
     expect(stripQueryEcho(stdout)).toBe(["╭─⚕ Hermes──────╮", "Done.", "╰──────╯"].join("\n"));
   });
 
-  it("also recognizes the exit summary and the box.HORIZONTALS panel title as boundaries", () => {
-    const exitSummaryStdout = ["Query: hi", "", "Resume this session with:", "  hermes --resume abc"].join("\n");
-    expect(stripQueryEcho(exitSummaryStdout)).toBe(["Resume this session with:", "  hermes --resume abc"].join("\n"));
-
+  it("recognizes the box.HORIZONTALS panel title as a boundary", () => {
     const panelStdout = ["Query: hi", "─ ⚕ Hermes ──────", "Done.", "─────────────────"].join("\n");
     expect(stripQueryEcho(panelStdout)).toBe(["─ ⚕ Hermes ──────", "Done.", "─────────────────"].join("\n"));
+  });
+
+  it("falls back to the validated exit summary as a boundary when no per-line marker (tool progress, answer frame) ever appears — a turn with no tool calls and, for whatever reason, no answer frame either", () => {
+    const stdout = "Query: hi" + buildExitSummary("20260928_143022_ab12cd");
+    expect(stripQueryEcho(stdout)).toBe(buildExitSummary("20260928_143022_ab12cd").replace(/^\n/, ""));
+  });
+
+  it("does NOT stop at a bare 'Resume this session with:' line inside the still-echoing prompt — keeps scanning to the real boundary", () => {
+    // Regression for the critical false-positive: `isTurnOutputBoundaryLine` used to treat a
+    // bare "Resume this session with:" line as a boundary on its own, so an echoed prompt that
+    // happened to quote that exact sentence (e.g. documentation about Hermes sessions — this
+    // PR's own subject matter) would end suppression right there, leaking the rest of the
+    // still-echoing prompt into the transcript/log as if it were real turn output.
+    const stdout = [
+      "Query: See the docs below for how sessions work.",
+      "Resume this session with:",
+      "  hermes --resume <id> (this is prompt text, not real CLI output)",
+      "That's the whole mechanism.",
+      '[tool] terminal: curl -s "https://example.com"',
+      "Done.",
+    ].join("\n");
+    expect(stripQueryEcho(stdout)).toBe(
+      ['[tool] terminal: curl -s "https://example.com"', "Done."].join("\n"),
+    );
   });
 
   it("is a no-op for quiet-mode stdout (no Query: line at all)", () => {

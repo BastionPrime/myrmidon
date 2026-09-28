@@ -29,6 +29,12 @@ describe("redactSecretsForLog", () => {
     expect(result).toContain("Authorization: Bearer [REDACTED]");
     expect(result).toContain("curl -s -H");
     expect(result).toContain("https://example.com");
+    // Exact match, not just toContain: AUTH_HEADER_RE's token group used to be a bare `\S+`,
+    // which is greedy over the closing `"` too — the redacted line came out one quote short
+    // (`"Authorization: Bearer [REDACTED] https://…`), a gap `toContain` alone cannot catch.
+    expect(result).toBe(
+      `┊ 💻 $         curl -s -H "Authorization: Bearer [REDACTED]" https://example.com  0.1s`,
+    );
   });
 
   it("masks a bare Bearer token outside an Authorization: header", () => {

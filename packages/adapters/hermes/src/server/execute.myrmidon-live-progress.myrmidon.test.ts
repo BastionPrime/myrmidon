@@ -95,11 +95,14 @@ function buildStreamBox(title: string, bodyLines: string[], width = 80): string 
   return ["", header, ...bodyLines, footer].join("\n");
 }
 
+/** See myrmidon-live-progress.myrmidon.test.ts's own `buildExitSummary` doc
+ * comment: `_print_exit_summary()` prints the resume hint immediately after
+ * the anchor line — no blank line between them; the blank line comes AFTER
+ * the hint(s), before the `Session:` field. */
 function buildExitSummary(sessionId: string): string {
   return [
     "",
     "Resume this session with:",
-    "",
     `  hermes --resume ${sessionId}`,
     "",
     `Session:        ${sessionId}`,

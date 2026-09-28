@@ -28,8 +28,13 @@
 
 const REDACTED = "[REDACTED]";
 
-/** `Authorization: <token>` / `Authorization: Bearer <token>` header text. */
-const AUTH_HEADER_RE = /\b(Authorization:\s*(?:Bearer\s+)?)(\S+)/gi;
+/** `Authorization: <token>` / `Authorization: Bearer <token>` header text.
+ * The token group excludes quote characters — a shell-quoted header, e.g.
+ * `curl -H "Authorization: Bearer <token>"`, is exactly the shape this
+ * module exists to redact (a `terminal` tool-progress line), and a bare
+ * `\S+` is greedy over the closing `"` too, silently dropping it from the
+ * redacted output. */
+const AUTH_HEADER_RE = /\b(Authorization:\s*(?:Bearer\s+)?)([^\s"']+)/gi;
 
 /** A bare `Bearer <token>` outside an `Authorization:` header, e.g. inside a
  * hand-built `curl -H "Bearer ..."` invocation. */

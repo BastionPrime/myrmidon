@@ -5,9 +5,14 @@
  * which makes execute.ts pass `-Q` to `hermes chat`. Hermes then nulls every
  * progress callback (cli.py `_configure_quiet_agent`, ~L4369-4381) and
  * prints only the final answer, so the Paperclip run view shows nothing
- * while hermes_local works. Without `-Q`, Hermes streams "[tool] …" /
- * "[done] ┊ …" lines that `ui/parse-stdout.ts` already understands — but two
- * things change shape:
+ * while hermes_local works. Without `-Q`, Hermes streams two lines per tool
+ * call — `┊ {emoji} preparing {tool}…` when the call starts
+ * (`_on_tool_gen_start`, hermes_cli/cli_stream_mixin.py), then
+ * `┊ {emoji} {verb} {detail}  {duration}s` when it completes
+ * (`get_cute_tool_message`, agent/display.py) — which `ui/parse-stdout.ts`
+ * drops and parses respectively (see its own `PREPARING_TOOL_LINE_RE`
+ * comment for why the originally assumed `[tool] …` shape is not what this
+ * adapter's invocation actually reaches). Two more things change shape:
  *
  *  - the final answer is wrapped in a Rich Panel (see
  *    ../shared/myrmidon-panel-frame.ts for the frame format and stripping);
@@ -57,11 +62,30 @@ import { isTurnOutputBoundaryLine } from "../shared/myrmidon-turn-output-boundar
  */
 export const LIVE_PROGRESS_ENV_VAR = "MYRMIDON_HERMES_LIVE_PROGRESS";
 
+const OFF_VALUES = ["0", "false", "no", "off"];
+const ON_VALUES = ["1", "true", "yes", "on"];
+let warnedAboutUnrecognizedValue = false;
+
+/**
+ * True for any value except an explicit off-list one — matches
+ * `resolveHermesQuietMode`'s "default on" contract (see `LIVE_PROGRESS_ENV_VAR`'s doc comment).
+ * A value that is neither a recognized off- nor on-spelling (a typo, e.g. `fasle`) still counts
+ * as "on" here, but is logged once so an operator trying to emergency-disable this feature via
+ * the env var does not have a silently-ignored typo leave live progress running.
+ */
 function envFlagDefaultOn(value: string | undefined): boolean {
   if (value === undefined) return true;
   const normalized = value.trim().toLowerCase();
   if (normalized === "") return true;
-  return !["0", "false", "no", "off"].includes(normalized);
+  const isOff = OFF_VALUES.includes(normalized);
+  if (isOff) return false;
+  if (!ON_VALUES.includes(normalized) && !warnedAboutUnrecognizedValue) {
+    warnedAboutUnrecognizedValue = true;
+    console.warn(
+      `[myrmidon] ${LIVE_PROGRESS_ENV_VAR}=${JSON.stringify(value)} is not one of ${JSON.stringify([...ON_VALUES, ...OFF_VALUES])} — treating it as "on" (live progress stays enabled). If you meant to disable it, check for a typo.`,
+    );
+  }
+  return true;
 }
 
 /**
@@ -90,27 +114,61 @@ export const QUIET_SESSION_ID_REGEX = /^session_id:\s*(\S+)/m;
  */
 export const LIVE_SESSION_ID_REGEX = /^Session:[ \t]+(\S+)/m;
 
-/** First line of the interactive exit summary — everything from here on is
- * CLI chrome, never part of the answer. */
-const EXIT_SUMMARY_START_RE = /^Resume this session with:[ \t]*$/m;
+/**
+ * The interactive exit summary's fixed skeleton (`_print_exit_summary()`,
+ * hermes_cli/cli_session_mixin.py): the anchor line, immediately followed by
+ * one or two `  hermes --resume <id>`/`  hermes -c "<title>"` hints, a blank
+ * separator line, then the `Session:` field:
+ *
+ *   Resume this session with:
+ *     hermes --resume <id>
+ *
+ *   Session:        <id>
+ *   Duration:       <elapsed>
+ *   Messages:       <n> (<u> user, <t> tool calls)
+ *
+ * myrmidon(G5): matching only the anchor line (`^Resume this session
+ * with:...$`) is NOT safe to cut on — it is an ordinary English sentence a
+ * prompt can legitimately contain (this very file's own doc comments do, and
+ * so does this PR's own test data), so a bare match could anchor on the
+ * prompt's own text instead of the real exit summary and truncate the real
+ * answer that follows it. Requiring the immediate follow-on structure makes
+ * an accidental match on free-form text effectively impossible: nothing but
+ * `_print_exit_summary()` itself prints a `hermes --resume <id>` hint
+ * followed by a blank line and a `Session:` field right after that phrase.
+ */
+const EXIT_SUMMARY_RE =
+  /^Resume this session with:[ \t]*\r?\n(?:[ \t]*hermes (?:--resume|-c)\b[^\r\n]*\r?\n){1,2}[ \t]*\r?\nSession:[ \t]+\S+/m;
+
+/**
+ * Index where the real exit summary starts in `stdout`, or undefined when no
+ * occurrence of the anchor line is followed by the rest of the fixed
+ * skeleton (e.g. a killed run, an unrecognized format, or a look-alike
+ * anchor line in the agent's own answer/prompt with no real summary after
+ * it). See `EXIT_SUMMARY_RE`'s doc comment for why the whole skeleton, not
+ * just the anchor, is required.
+ */
+function findExitSummaryStart(stdout: string): number | undefined {
+  return EXIT_SUMMARY_RE.exec(stdout)?.index;
+}
 
 /**
  * Session id from a non-quiet (no `-Q`) run's stdout, or undefined when the
  * exit summary is missing (e.g. a killed run, or an unrecognized format).
  *
- * myrmidon(G5): scoped to the exit-summary tail (from `EXIT_SUMMARY_START_RE`
+ * myrmidon(G5): scoped to the exit-summary tail (from `findExitSummaryStart`
  * onward), not the whole stdout. The agent's own answer is free-form text
  * the model wrote — a coding/ops assistant plausibly discussing sessions,
  * auth, or status fields could produce a line shaped like `Session:   foo`,
  * and a non-global regex's `.match()` returns the FIRST hit in the string.
  * Searching the whole stdout risked matching that instead of the real id
- * from `_print_exit_summary()`, which only ever appears after `Resume this
- * session with:`.
+ * from `_print_exit_summary()`, which only ever appears after the validated
+ * exit-summary skeleton.
  */
 export function extractLiveSessionId(stdout: string): string | undefined {
-  const summaryStart = EXIT_SUMMARY_START_RE.exec(stdout);
-  if (!summaryStart) return undefined;
-  return stdout.slice(summaryStart.index).match(LIVE_SESSION_ID_REGEX)?.[1];
+  const summaryStart = findExitSummaryStart(stdout);
+  if (summaryStart === undefined) return undefined;
+  return stdout.slice(summaryStart).match(LIVE_SESSION_ID_REGEX)?.[1];
 }
 
 /**
@@ -119,8 +177,8 @@ export function extractLiveSessionId(stdout: string): string | undefined {
  * `cleanResponse()`/`stripRichPanelFrames()` to reduce to the plain answer.
  */
 export function stripExitSummary(stdout: string): string {
-  const match = EXIT_SUMMARY_START_RE.exec(stdout);
-  return match ? stdout.slice(0, match.index) : stdout;
+  const start = findExitSummaryStart(stdout);
+  return start === undefined ? stdout : stdout.slice(0, start);
 }
 
 /** The vendor CLI's prompt echo, first line only (cli.py `_run_single_query_mode`). */
@@ -147,7 +205,26 @@ export function stripQueryEcho(stdout: string): string {
 
   let end = start + 1;
   while (end < lines.length && !isTurnOutputBoundaryLine(lines[end].trim())) end++;
-  if (end >= lines.length) return stdout; // no recognized boundary: leave it alone
+
+  if (end >= lines.length) {
+    // myrmidon(G5): `isTurnOutputBoundaryLine` deliberately only recognizes
+    // visually-unique, per-line markers (tool progress, the answer's frame)
+    // — it does NOT treat a bare "Resume this session with:" line as
+    // sufficient on its own, because that sentence is ordinary English the
+    // echoed prompt can legitimately contain (see EXIT_SUMMARY_RE's doc
+    // comment). Unlike the shared per-line check, this function sees the
+    // WHOLE captured stdout up front (it runs after the child process has
+    // already exited, not while it streams), so it can afford the one thing
+    // the per-line scan cannot: validating the exit summary's full
+    // multi-line skeleton before trusting it as a boundary. This only
+    // matters for a turn that reached no tool call and — for whatever
+    // reason — never printed the answer's own frame either; in every other
+    // case the loop above already found a real boundary before running off
+    // the end of `lines`.
+    const exitSummaryStart = findExitSummaryStart(stdout);
+    if (exitSummaryStart === undefined) return stdout; // no recognized boundary: leave it alone
+    end = stdout.slice(0, exitSummaryStart).split("\n").length - 1;
+  }
 
   return [...lines.slice(0, start), ...lines.slice(end)].join("\n");
 }
@@ -180,6 +257,19 @@ export { stripRichPanelFrames };
  *
  * Construct one instance per run (per `execute()` call) — the suppression
  * flag and the per-stream buffers are run-scoped state, never module-level.
+ *
+ * myrmidon(G5): unlike `stripQueryEcho`, this processes lines one at a time
+ * as they arrive and can never look ahead — so, per `isTurnOutputBoundaryLine`'s
+ * doc comment, it does NOT treat a bare exit-summary anchor line as a
+ * boundary on its own (only `stripQueryEcho`, which sees the whole captured
+ * stdout up front, can safely validate that). The one turn shape this can't
+ * recover from is one with no tool call AND, for whatever reason, no
+ * Panel/streaming-box frame either — everything after `Query:` would then
+ * stay suppressed in this live/persisted log stream for the rest of the
+ * run (the STORED response is unaffected: `parseHermesOutput`'s post-hoc
+ * `stripQueryEcho` still finds the real, validated exit summary). Accepted:
+ * every real turn's final answer is wrapped in one of those two frames
+ * (see ../shared/myrmidon-panel-frame.ts), so this is not the normal case.
  */
 export interface LiveLogSanitizer {
   /**

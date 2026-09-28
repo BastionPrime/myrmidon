@@ -55,6 +55,26 @@ function isAssistantToolLine(stripped: string): boolean {
   return /^┊\s*💬/.test(stripped);
 }
 
+/**
+ * The vendor CLI's real tool-START line in live-progress mode (non-quiet,
+ * `display.streaming` on — the vendor's own default, and untouched by this
+ * repo's hermes config generation): `_on_tool_gen_start`
+ * (hermes_cli/cli_stream_mixin.py) prints
+ * `  ┊ {emoji} preparing {tool_name}…` unconditionally, right before the
+ * model's tool call actually runs — well before the `┊ {emoji} {verb} …
+ * {duration}` completion line the SAME call later produces via
+ * `get_cute_tool_message`. It carries `TOOL_OUTPUT_PREFIX` ("┊") but is not
+ * a completion line: handing it to `parseToolCompletionLine` used to
+ * fabricate a bogus tool_call/tool_result pair (verb="preparing",
+ * detail="{tool_name}…"), so every real tool call rendered as TWO cards —
+ * a fake "preparing" one immediately followed by the genuine completion.
+ *
+ * (`_configure_quiet_agent`, cli.py, nulls `tool_gen_callback` for `-Q`
+ * quiet-mode runs, so this line never appears there — only in the
+ * live-progress mode this PR turns on by default.)
+ */
+const PREPARING_TOOL_LINE_RE = /^┊\s*\S+\s+preparing\s+\S/;
+
 /** Extract assistant text from a ┊ 💬 line. */
 function extractAssistantText(line: string): string {
   return line.replace(/^[\s┊]*💬\s*/, "").trim();
@@ -243,6 +263,24 @@ export function parseHermesStdoutLine(
     // Assistant message: ┊ 💬 {text}
     if (isAssistantToolLine(trimmed)) {
       return [{ kind: "assistant", ts, text: extractAssistantText(trimmed) }];
+    }
+
+    // myrmidon(G5): the REAL non-quiet (live-progress) tool-START line —
+    // `_on_tool_gen_start` (hermes_cli/cli_stream_mixin.py), wired whenever
+    // `display.streaming` is on (the vendor's own default; nothing in this
+    // repo's hermes config generation overrides it) — is
+    // `┊ {emoji} preparing {tool_name}…`, printed once per tool call BEFORE
+    // that same call's `┊ {emoji} {verb} {detail} {duration}` completion
+    // line below. It is NOT the `[tool]`-prefixed shape this file skips
+    // above (that belongs to a different, unrelated fallback path — the
+    // quiet-mode `KawaiiSpinner` — this adapter's invocation of the CLI
+    // never actually reaches, since `tool_progress_callback` is always
+    // wired here). Without this check, `parseToolCompletionLine` parsed
+    // "preparing" as the verb and fabricated a fake completion, so every
+    // real tool call rendered as TWO cards. See PREPARING_TOOL_LINE_RE's
+    // doc comment for the verified vendor source references.
+    if (PREPARING_TOOL_LINE_RE.test(trimmed)) {
+      return [];
     }
 
     // Tool completion: ┊ {emoji} {verb} {detail} {duration}

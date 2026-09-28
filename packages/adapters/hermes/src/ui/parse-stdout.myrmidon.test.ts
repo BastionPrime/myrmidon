@@ -62,6 +62,43 @@ describe("parseHermesStdoutLine — G5: Rich Panel frame around the live-progres
   });
 });
 
+describe("parseHermesStdoutLine — G5: real vendor tool-start line ('preparing') vs. the completion line", () => {
+  // Real shapes verified by reading the installed Hermes Agent CLI sources (not the originally
+  // assumed "[tool] name: args", which this adapter's invocation never actually reaches — see
+  // PREPARING_TOOL_LINE_RE's doc comment in parse-stdout.ts):
+  //   start:      _on_tool_gen_start (hermes_cli/cli_stream_mixin.py):
+  //                 f"  ┊ {emoji} preparing {tool_name}…"
+  //   completion: get_cute_tool_message (agent/display.py) via _on_tool_progress:
+  //                 f"┊ 💻 $         {command}  {duration}s"
+
+  it("drops the real 'preparing' start line instead of emitting it as assistant garbage", () => {
+    expect(parseHermesStdoutLine("  ┊ ⚡ preparing terminal…", TS)).toEqual([]);
+  });
+
+  it("a real tool call (preparing line, then its completion line) emits exactly ONE tool_call/tool_result pair, not two", () => {
+    const prepared = parseHermesStdoutLine("  ┊ ⚡ preparing terminal…", TS);
+    expect(prepared).toEqual([]);
+
+    const completed = parseHermesStdoutLine('┊ 💻 $         curl -s "https://example.com"  0.2s', TS);
+    expect(completed).toHaveLength(2);
+    expect(completed[0]).toMatchObject({ kind: "tool_call", name: "shell" });
+    expect(completed[1]).toMatchObject({ kind: "tool_result" });
+    // The bug this regresses: before recognizing the "preparing" line, it fell through to
+    // parseToolCompletionLine and ALSO produced a bogus tool_call/tool_result pair
+    // (name: "preparing"), i.e. two pairs total for this one tool call.
+  });
+
+  it("recognizes 'preparing' for tool names other than terminal (e.g. a multi-word cute-message tool)", () => {
+    expect(parseHermesStdoutLine("  ┊ 🔍 preparing web_search…", TS)).toEqual([]);
+  });
+
+  it("does not drop a real assistant message that happens to start with the word 'preparing'", () => {
+    expect(parseHermesStdoutLine("┊ 💬 preparing the release notes now.", TS)).toEqual([
+      { kind: "assistant", ts: TS, text: "preparing the release notes now." },
+    ]);
+  });
+});
+
 describe("parseHermesStdoutLine — G5: streaming box (display.streaming: true, the vendor default)", () => {
   it("drops the streaming box's rounded-corner header", () => {
     expect(parseHermesStdoutLine("╭─⚕ Hermes──────────────────────────────────────────────────────────────╮", TS)).toEqual([]);
