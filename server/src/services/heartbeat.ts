@@ -614,6 +614,7 @@ import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/main
 import { createStaleActiveLeaseSweep } from "../myrmidon/leases-stale-sweep.js";
 // myrmidon(M3): skip idle timer heartbeats
 import { hasOtherActionableWork, skipIdleHeartbeatsEnabled } from "../myrmidon/heartbeat-idle-skip.js";
+import { sharedRunAdmission } from "../myrmidon/run-admission.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -16774,6 +16775,15 @@ export function heartbeatService(
     return issuesSvc.listDependencyReadiness(companyId, issueIds);
   }
 
+  // myrmidon: running runs across the instance, for the admission cap
+  async function countRunningRunsInstance() {
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.status, "running"));
+    return Number(count ?? 0);
+  }
+
   async function countRunningRunsForAgent(agentId: string) {
     const [{ count }] = await db
       .select({ count: sql<number>`count(*)` })
@@ -19132,7 +19142,9 @@ export function heartbeatService(
           eq(companies.status, "active"),
           cutoff ? gte(heartbeatRuns.createdAt, cutoff) : undefined,
         ),
-      );
+      )
+      // myrmidon: oldest waiting run first, so capped admission stays fair
+      .orderBy(asc(heartbeatRuns.createdAt));
 
     const agentIds = [...new Set(queuedRuns.map((r) => r.agentId))];
     for (const agentId of agentIds) {
@@ -19558,11 +19570,18 @@ export function heartbeatService(
       });
 
       const claimedRuns: Array<typeof heartbeatRuns.$inferSelect> = [];
-      for (const queuedRun of prioritizedRuns) {
-        if (claimedRuns.length >= availableSlots) break;
-        const claimed = await claimQueuedRun(queuedRun, companyAgents);
-        if (claimed) claimedRuns.push(claimed);
-      }
+      // myrmidon: instance-wide cap and start rate on top of the per-agent slots
+      await sharedRunAdmission(countRunningRunsInstance).admit(
+        availableSlots,
+        async (allowed) => {
+          for (const queuedRun of prioritizedRuns) {
+            if (claimedRuns.length >= allowed) break;
+            const claimed = await claimQueuedRun(queuedRun, companyAgents);
+            if (claimed) claimedRuns.push(claimed);
+          }
+          return claimedRuns.length;
+        },
+      );
       if (claimedRuns.length === 0) return [];
 
       for (const claimedRun of claimedRuns) {
