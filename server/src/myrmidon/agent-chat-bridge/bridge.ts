@@ -11,7 +11,10 @@ import {
   issues,
   type Db,
 } from "@paperclipai/db";
-import type { SafeChatPublicationPayload } from "@paperclipai/shared";
+import type {
+  IssueComment,
+  SafeChatPublicationPayload,
+} from "@paperclipai/shared";
 
 import { logger } from "../../middleware/logger.js";
 import {
@@ -37,6 +40,10 @@ import {
 import { telegramDmConversationsEnabled } from "./settings.js";
 
 type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+// myrmidon(X8b): mirrors chat-channels.ts's own local `DbOrTransaction` alias
+// so a caller mid-transaction (`taskTx: Db | DbTransaction` there) can pass
+// its handle straight through without a cast.
+type DbOrTx = Db | DbTransaction;
 type EndpointRow = typeof chatEndpoints.$inferSelect;
 type ConversationRow = typeof chatConversations.$inferSelect;
 type IssueRow = typeof issues.$inferSelect;
@@ -169,7 +176,7 @@ export async function decideTelegramDmBinding(
 
 /** Gets or creates the standing Telegram conversation issue for (agent, boardUserId). */
 export async function ensureTelegramDmConversation(
-  tx: DbTransaction,
+  tx: DbOrTx,
   deps: TelegramDmBridgeDeps,
   input: {
     companyId: string;
@@ -204,7 +211,7 @@ export async function ensureTelegramDmConversation(
     tx,
   );
   await deps.logActivity(
-    tx as Db,
+    tx as unknown as Db,
     {
       companyId: input.companyId,
       actorType: "user",
@@ -225,7 +232,7 @@ export async function ensureTelegramDmConversation(
  * issue for (agent, boardUserId).
  */
 export async function ensureTelegramDmBinding(
-  tx: DbTransaction,
+  tx: DbOrTx,
   deps: TelegramDmBridgeDeps,
   input: {
     endpoint: EndpointRow;
@@ -377,7 +384,7 @@ export async function handleTelegramDmCommand(input: {
         updatedAt: new Date(),
       })
       .where(eq(chatDeliveries.id, input.deliveryId));
-    await input.deps.stageTaskControlPublication(tx as Db, {
+    await input.deps.stageTaskControlPublication(tx as unknown as Db, {
       companyId: input.endpoint.companyId,
       endpointId: input.endpoint.id,
       conversationId: bound.conversation.id,
@@ -447,7 +454,12 @@ export async function refuseUnlinkedTelegramDm(
 export async function afterTelegramDmMessage(input: {
   db: Db;
   deps: TelegramDmBridgeDeps;
-  comment: Parameters<typeof resumeConversationForReset>[1];
+  // myrmidon(X8b): the caller's `comment` is `issuesSvc.addComment`'s return
+  // value (the shared `IssueComment` API shape), not the raw drizzle select
+  // row `resumeConversationForReset` takes; the two differ only in which
+  // optional columns are typed `| undefined`, so the forwarding call below
+  // casts rather than widening the vendor helper's own parameter type.
+  comment: IssueComment;
   agentId: string;
   companyId: string;
   endpointId: string;
@@ -459,11 +471,16 @@ export async function afterTelegramDmMessage(input: {
   migratedFromIssueId?: string;
 }): Promise<void> {
   if (input.comment.body.trim() === "/new") {
-    await resumeConversationForReset(input.db, input.comment);
+    await resumeConversationForReset(
+      input.db,
+      input.comment as unknown as Parameters<
+        typeof resumeConversationForReset
+      >[1],
+    );
   }
   if (input.notice) {
     await input.db.transaction((tx) =>
-      input.deps.stageTaskControlPublication(tx as Db, {
+      input.deps.stageTaskControlPublication(tx as unknown as Db, {
         companyId: input.companyId,
         endpointId: input.endpointId,
         conversationId: input.conversationId,
@@ -486,7 +503,7 @@ export async function afterTelegramDmMessage(input: {
     const link = safeChatTaskUrl(input.deps.publicBaseUrl, input.migratedFromIssueId);
     const text = `This chat is now a standing conversation with ${agent?.name ?? "this agent"}. Earlier tasks stay on the board${link ? `: ${link}` : "."}`;
     await input.db.transaction((tx) =>
-      input.deps.stageTaskControlPublication(tx as Db, {
+      input.deps.stageTaskControlPublication(tx as unknown as Db, {
         companyId: input.companyId,
         endpointId: input.endpointId,
         conversationId: input.conversationId,

@@ -1068,7 +1068,7 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
     userId: string;
     messageId: number;
   }) {
-    const { thread } = telegramDm({ channelId: input.channelId });
+    const { thread, post } = telegramDm({ channelId: input.channelId });
     await deliverMessage({
       callbacks: input.callbacks,
       endpointId: input.endpointId,
@@ -1088,6 +1088,12 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
       }),
       trigger: "direct_message",
     });
+    // myrmidon(X8b): the delivered message's own thread double is what a
+    // safe-notice provider effect posts to (chat-channels.ts passes this
+    // exact `thread` as `processProviderEffect`'s live target) — distinct
+    // from the endpoint runtime's own `thread()` mock, which a webhook
+    // delivery never goes through.
+    return { post };
   }
 
   async function conversationRow(endpointId: string, channelId: string) {
@@ -1234,7 +1240,12 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
     const telegramIssue = await db
       .select()
       .from(issues)
-      .where(eq(issues.conversationUserId, telegramConversationUserId("owner-user")))
+      .where(
+        and(
+          eq(issues.companyId, fixture.companyId),
+          eq(issues.conversationUserId, telegramConversationUserId("owner-user")),
+        ),
+      )
       .then((rows) => rows[0]);
     expect(telegramIssue.id).not.toBe(webIssue.id);
   });
@@ -1262,7 +1273,12 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
     const telegramConversations = await db
       .select()
       .from(issues)
-      .where(eq(issues.conversationUserId, telegramConversationUserId("owner-user")));
+      .where(
+        and(
+          eq(issues.companyId, fixture.companyId),
+          eq(issues.conversationUserId, telegramConversationUserId("owner-user")),
+        ),
+      );
     expect(telegramConversations).toHaveLength(0);
     const chatChannelTasks = await db
       .select()
@@ -1423,7 +1439,7 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
 
   it("refuses an unlinked account once a day, without creating a task or comment", async () => {
     const fixture = await seedCompany();
-    const { callbacks, endpoint, runtime } = await configuredTelegramEndpoint(fixture);
+    const { callbacks, endpoint } = await configuredTelegramEndpoint(fixture);
     // Default endpoints sponsor unlinked senders as low-trust guests; this
     // scenario is specifically the workspace that turned that off (F21/spec #9).
     await db
@@ -1431,7 +1447,11 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
       .set({ allowUnlinkedPeople: false })
       .where(eq(chatEndpoints.id, endpoint.id));
 
-    await sendTelegramDm({
+    // The refusal notice is deduped per (endpoint, principal, day):
+    // `stageProviderEffect` finds the first delivery's row already
+    // `processed` on the second and skips posting again, so only the first
+    // delivery's own thread double ever receives the `.post()` call.
+    const { post: firstPost } = await sendTelegramDm({
       callbacks,
       endpointId: endpoint.id,
       channelId: "700007",
@@ -1468,9 +1488,10 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
     );
     expect(refusals).toHaveLength(1);
 
-    const providerRuntime = runtime.endpoints.get(endpoint.id)!;
     await vi.waitFor(() =>
-      expect(providerRuntime.posts.some((post) => post.text.includes("Ask an administrator"))).toBe(true),
+      expect(
+        firstPost.mock.calls.some(([text]) => text.includes("Ask an administrator")),
+      ).toBe(true),
     );
   });
 
@@ -1505,7 +1526,12 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
     const [issue] = await db
       .select()
       .from(issues)
-      .where(eq(issues.conversationUserId, telegramConversationUserId("owner-user")));
+      .where(
+        and(
+          eq(issues.companyId, fixture.companyId),
+          eq(issues.conversationUserId, telegramConversationUserId("owner-user")),
+        ),
+      );
     const comments = await db
       .select()
       .from(issueComments)
@@ -1567,7 +1593,12 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
       const [issue] = await db
         .select()
         .from(issues)
-        .where(eq(issues.conversationUserId, telegramConversationUserId("owner-user")));
+        .where(
+          and(
+            eq(issues.companyId, fixture.companyId),
+            eq(issues.conversationUserId, telegramConversationUserId("owner-user")),
+          ),
+        );
       expect(issue).toBeDefined();
       const comments = await db
         .select()
@@ -1620,7 +1651,12 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
       const [issue] = await db
         .select()
         .from(issues)
-        .where(eq(issues.conversationUserId, telegramConversationUserId("owner-user")));
+        .where(
+          and(
+            eq(issues.companyId, fixture.companyId),
+            eq(issues.conversationUserId, telegramConversationUserId("owner-user")),
+          ),
+        );
       const [comment] = await db
         .select()
         .from(issueComments)
