@@ -184,8 +184,8 @@ import { useStreamlinedUiEnabled } from "../hooks/useStreamlinedUiEnabled";
 import { workModeMetaFor } from "../lib/work-mode-meta";
 import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff";
 import { IssueAttachmentsSection } from "../components/IssueAttachmentsSection";
-// myrmidon(U3)
-import { IssueFilesPanel } from "@/components/myrmidon/IssueFilesPanel";
+// myrmidon(U1): files trigger + on-demand drawer, replacing the fixed U3 panel below.
+import { IssueFilesDrawer } from "@/components/myrmidon/IssueFilesDrawer";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { IssuePlanDecompositionsSection } from "../components/IssuePlanDecompositionsSection";
 import { IssueOutputSection } from "../components/issue-output/IssueOutputSection";
@@ -6832,6 +6832,26 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     />
   );
 
+  // myrmidon(U1): trigger for the on-demand task files drawer (replaces the
+  // fixed IssueFilesPanel card the chat shell used to render below the
+  // thread). Rendered inline in issueHeaderBlock's action row when that
+  // block exists; the conversationAgentId branch (issueHeaderBlock is null
+  // for direct agent chats, which have no classic header row) falls back to
+  // a standalone slot in taskChatThreadHeader below so files stay reachable
+  // there too.
+  const filesDrawerTrigger = taskChatShellEnabled ? (
+    <IssueFilesDrawer
+      attachments={attachments ?? []}
+      workProducts={workProducts ?? []}
+      resolveAuthor={(entry) =>
+        (entry.createdByAgentId ? agentMap.get(entry.createdByAgentId)?.name : null) ??
+        (entry.createdByUserId ? userLabelMap.get(entry.createdByUserId) : null) ??
+        null
+      }
+      isMobile={isMobile}
+    />
+  ) : null;
+
   const issueHeaderBlock = issue.conversationAgentId ? null : (
     <div
       data-testid="issue-detail-header"
@@ -7107,6 +7127,8 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                 "absolute right-0 top-0 flex h-7 items-center",
             )}
           >
+            {/* myrmidon(U1): files drawer trigger, next to the existing task actions */}
+            {filesDrawerTrigger}
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
               <PopoverTrigger asChild>
                 <Button
@@ -7328,6 +7350,11 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     <>
       {ancestorsNav}
       {issueHeaderBlock}
+      {/* myrmidon(U1): issueHeaderBlock is null for direct agent-chat issues
+      (issue.conversationAgentId) — keep the files trigger reachable there too. */}
+      {issue.conversationAgentId ? (
+        <div className="flex justify-end">{filesDrawerTrigger}</div>
+      ) : null}
       {pluginOutletsBlock}
     </>
   ) : undefined;
@@ -7508,18 +7535,9 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
             />
           )}
 
-          {/* myrmidon(U3): the chat shell hides the attachment section; list every task file here */}
-          {taskChatShellEnabled ? (
-            <IssueFilesPanel
-              attachments={attachments ?? []}
-              workProducts={workProducts ?? []}
-              resolveAuthor={(entry) =>
-                (entry.createdByAgentId ? agentMap.get(entry.createdByAgentId)?.name : null) ??
-                (entry.createdByUserId ? userLabelMap.get(entry.createdByUserId) : null) ??
-                null
-              }
-            />
-          ) : null}
+          {/* myrmidon(U3 → U1): the chat shell hides the attachment section;
+          every task file is reachable from the "Files (N)" drawer trigger in
+          the task header (filesDrawerTrigger) instead of a fixed card here. */}
           {taskChatShellEnabled ? null : attachmentsInitialLoading ? (
             <IssueSectionSkeleton titleWidth="w-24" rows={2} />
           ) : hasAttachments ? (
