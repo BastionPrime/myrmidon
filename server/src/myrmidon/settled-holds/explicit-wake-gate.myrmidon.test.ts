@@ -24,6 +24,6 @@ describe("bypassesSettledHold", () => {
 
   it("only the exact value \"1\" turns the setting on", () => {
     process.env[ENV_KEY] = "true";
-    expect(bypassesSettledHold({ source: "on_demand" })).toBe(true);
+    expect(bypassesSettledHold({ source: "on_demand", triggerDetail: "manual" })).toBe(true);
   });
 });

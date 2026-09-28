@@ -26707,7 +26707,7 @@ export function heartbeatService(
             { conversationResetCommentId: opts.requestedByActorType === "user" ? wakeCommentId : null,
               // myrmidon(L2): an explicitly authorized wake ignores a settled
               // "do not replay" hold.
-              explicitWake: bypassesSettledHold({ source, triggerDetail, reason }) },
+              explicitWake: bypassesSettledHold({ source, triggerDetail, reason, commentId: wakeCommentId }) },
           );
           // Prove eligibility without retiring the hold. Later gates can still
           // decline this wake; hold retirement and successor creation stay atomic.
@@ -27525,7 +27525,7 @@ export function heartbeatService(
             !isConversation(issue) && opts.allowRunCoalescing !== false &&
             // myrmidon(L2): keep this consistent with the admission check above.
             !(await getExecutionBlocker(tx as unknown as Db, issue.companyId, issue.id,
-              { explicitWake: bypassesSettledHold({ source, triggerDetail, reason }) }))
+              { explicitWake: bypassesSettledHold({ source, triggerDetail, reason, commentId: wakeCommentId }) }))
               ? await tx
                   .select()
                   .from(agentWakeupRequests)

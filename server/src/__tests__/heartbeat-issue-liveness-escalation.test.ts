@@ -620,11 +620,7 @@ describeEmbeddedPostgres("heartbeat resolved dependency wake reconciliation", ()
   });
 
   it("preserves distinct comments through a hold and adopts them on the next eligible wake", async () => {
-    // myrmidon(L2): an "active" hold, not the default "resolved" no-replay
-    // one — since L2, a settled no-replay disposition that names no run to
-    // verify (this fixture's evidence has none) no longer defers an explicit
-    // comment wake, so it can't stand in for a still-open hold here anymore.
-    const { companyId, agentId, blockedIssueId, action } = await seedExecutionWait("active");
+    const { companyId, agentId, blockedIssueId, action } = await seedExecutionWait();
     const heartbeat = heartbeatService(db);
     const commentIds: string[] = [];
     for (let i = 0; i < 2; i++) {
@@ -643,10 +639,7 @@ describeEmbeddedPostgres("heartbeat resolved dependency wake reconciliation", ()
     expect(deferred).toHaveLength(2);
     expect(deferred.every((row) => row.status === "deferred_issue_execution" && row.runId === null)).toBe(true);
     expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId))).toHaveLength(0);
-    // myrmidon(L2): releases the hold by moving off "active" status too — a
-    // plain `evidence: {}` reset alone would not, since "active" status by
-    // itself still blocks, explicit wake or not.
-    await db.update(issueRecoveryActions).set({ status: "resolved", evidence: {} }).where(eq(issueRecoveryActions.id, action.id));
+    await db.update(issueRecoveryActions).set({ evidence: {} }).where(eq(issueRecoveryActions.id, action.id));
     const resumed = await heartbeat.wakeup(agentId, {
       source: "on_demand", triggerDetail: "manual", reason: "issue_resumed",
       requestedByActorType: "user", requestedByActorId: "board-user",

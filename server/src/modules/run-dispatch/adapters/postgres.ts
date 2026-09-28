@@ -930,6 +930,7 @@ export function createPostgresRunDispatchAdapter(
       explicitWake: bypassesSettledHold({
         source: run.invocationSource, triggerDetail: run.triggerDetail,
         reason: readNonEmptyString(contextSnapshot.wakeReason),
+        commentId: deriveCommentId(contextSnapshot),
       }),
     });
     if (recovery) return { issueId, facts: null, decision: { stale: true as const,
