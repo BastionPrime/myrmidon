@@ -3863,7 +3863,11 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     ]);
   });
 
-  it("blocks failed recovery work in place during immediate terminal-run cleanup", async () => {
+  it("blocks failed recovery work in place during immediate terminal-run cleanup instead of holding it", async () => {
+    // myrmidon(L1): process_lost is an infrastructure interruption, not a
+    // failed provider attempt; it no longer holds this run for board
+    // reconciliation. The recovery issue's own guard against nested
+    // stranded_issue_recovery issues still blocks it in place.
     const sourceIssueId = randomUUID();
     const { companyId, agentId, runId, issueId } = await seedRunFixture({
       adapterType: "process",
@@ -3915,6 +3919,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .from(issues)
       .where(eq(issues.id, issueId));
     expect(recoveryIssue).toMatchObject({
+      status: "blocked",
       assigneeAgentId: agentId,
       originKind: "stranded_issue_recovery",
       originId: sourceIssueId,
@@ -3925,13 +3930,13 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .select()
       .from(issueRecoveryActions)
       .where(eq(issueRecoveryActions.sourceIssueId, issueId));
-    expect(actions).toEqual([
-      expect.objectContaining({
-        cause: "legacy_execution_requires_reconciliation",
-        ownerType: "board",
-      }),
-    ]);
-    expect(JSON.stringify(actions)).not.toContain("sk-test-recovery-secret");
+    expect(actions).toHaveLength(0);
+    const comments = await db
+      .select()
+      .from(issueComments)
+      .where(eq(issueComments.issueId, issueId));
+    expect(comments.length).toBeGreaterThan(0);
+    expect(comments.map((c) => c.body).join("\n")).not.toContain("sk-test-recovery-secret");
     expect(
       await db
         .select()
