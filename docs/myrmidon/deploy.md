@@ -26,7 +26,7 @@
 строка `Digest`. Или:
 
 ```sh
-docker buildx imagetools inspect ghcr.io/itkadr-git/myrmidon:2026.916.1-myr.1 --format '{{json .Manifest.Digest}}'
+docker buildx imagetools inspect ghcr.io/itkadr-git/myrmidon:1.0.0 --format '{{json .Manifest.Digest}}'
 ```
 
 Версию и коммит, которые должен показать `/api/health`, скрипт берёт из меток образа

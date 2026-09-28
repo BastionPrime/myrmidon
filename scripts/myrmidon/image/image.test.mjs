@@ -55,9 +55,11 @@ describe("myrmidon-image.yml", () => {
     assert.doesNotMatch(workflow, /paperclipai\/paperclip|ghcr\.io\/\$\{\{ github\.repository \}\}/);
   });
 
-  it("tags sha-<short>, main and <vendor>-myr.<N> release tags", () => {
+  it("tags sha-<short>, main and the own semver release tag (myr-vX.Y.Z -> X.Y.Z)", () => {
     assert.match(workflow, /type=sha,prefix=sha-,format=short/);
     assert.match(workflow, /type=raw,value=main,enable=\$\{\{ github\.ref == 'refs\/heads\/main' \}\}/);
-    assert.match(workflow, /tags: \["\*-myr\.\*"\]/);
+    assert.match(workflow, /tags: \["myr-v\*"\]/);
+    assert.match(workflow, /type=raw,value=\$\{\{ steps\.version\.outputs\.image_tag \}\}/);
+    assert.doesNotMatch(workflow, /-myr\./);
   });
 });
