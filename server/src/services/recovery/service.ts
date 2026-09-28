@@ -141,6 +141,18 @@ import {
 } from "../../modules/active-run-watchdog/index.js";
 // myrmidon(R3): maintenance mode holds watchdog sweeps
 import { filterAgentsOutsideMaintenance } from "../../myrmidon/maintenance/gate.js";
+// myrmidon(L4): a successful run without a disposition resolves by policy, not an owner card
+import {
+  buildStrandedAutoPolicyManagerReviewComment,
+  buildStrandedAutoPolicyManagerReviewPatch,
+  buildStrandedAutoPolicyRetryInstruction,
+  countStrandedAutoPolicyAttemptsInWindow,
+  decideStrandedAutoPolicy,
+  findActiveManagerAgentId,
+  isStrandedAutoPolicyCause,
+  readStrandedAutoRetriesPerDay,
+  STRANDED_AUTO_POLICY_RETRY_SOURCE,
+} from "../../myrmidon/stranded-autopolicy.js";
 
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = [
   "queued",
@@ -3747,6 +3759,157 @@ export function recoveryService(
       input.latestRun,
       input.recoveryCause,
     );
+
+    // myrmidon(L4): a successful run that leaves the issue without a
+    // disposition resolves by bounded auto-retry, then manager review,
+    // instead of escalating straight to an owner card. Only the last-run-
+    // succeeded causes are in scope; a failed run stays on the vendor path
+    // below (L1's concern). See ../../myrmidon/stranded-autopolicy.ts.
+    const strandedAutoPolicyLatestRun = input.latestRun;
+    if (
+      strandedAutoPolicyLatestRun?.status === "succeeded" &&
+      isStrandedAutoPolicyCause(recoveryCause) &&
+      input.issue.assigneeAgentId &&
+      !isPluginManagedIssueLifecycle(input.issue)
+    ) {
+      const latestRun = strandedAutoPolicyLatestRun;
+      const assigneeAgentId = input.issue.assigneeAgentId;
+      const maxAttemptsPerDay = readStrandedAutoRetriesPerDay();
+      const [attemptsInWindow, managerAgentId] = await Promise.all([
+        countStrandedAutoPolicyAttemptsInWindow(db, {
+          companyId: input.issue.companyId,
+          issueId: input.issue.id,
+          agentId: assigneeAgentId,
+        }),
+        findActiveManagerAgentId(db, assigneeAgentId),
+      ]);
+      const autoPolicyDecision = decideStrandedAutoPolicy({
+        attemptsInWindow,
+        maxAttemptsPerDay,
+        managerAgentId,
+      });
+
+      if (autoPolicyDecision.kind === "retry") {
+        const queued = await enqueueStrandedIssueRecovery({
+          issueId: input.issue.id,
+          agentId: assigneeAgentId,
+          reason: "issue_continuation_needed",
+          retryReason: "issue_continuation_needed",
+          source: STRANDED_AUTO_POLICY_RETRY_SOURCE,
+          retryOfRunId: latestRun.id,
+          extraContext: {
+            instruction: buildStrandedAutoPolicyRetryInstruction({
+              cause: recoveryCause,
+              attempt: autoPolicyDecision.attempt,
+              maxAttemptsPerDay: autoPolicyDecision.maxAttemptsPerDay,
+            }),
+          },
+        });
+        if (queued) {
+          await logActivity(db, {
+            companyId: input.issue.companyId,
+            actorType: "system",
+            actorId: "system",
+            agentId: null,
+            runId: latestRun.id,
+            action: "issue.stranded_autopolicy_retried",
+            entityType: "issue",
+            entityId: input.issue.id,
+            details: {
+              identifier: input.issue.identifier,
+              recoveryCause,
+              attempt: autoPolicyDecision.attempt,
+              maxAttemptsPerDay: autoPolicyDecision.maxAttemptsPerDay,
+            },
+          });
+          return input.issue;
+        }
+        // The guarded enqueue declined (e.g. a concurrent change raced it) —
+        // fall through to the vendor's own board escalation below.
+      } else if (autoPolicyDecision.kind === "reassign_to_manager") {
+        const patch = buildStrandedAutoPolicyManagerReviewPatch({
+          issue: input.issue,
+          managerAgentId: autoPolicyDecision.managerAgentId,
+          cause: recoveryCause,
+        });
+        const updated = await issuesSvc.update(
+          input.issue.id,
+          patch as Partial<typeof issues.$inferInsert>,
+        );
+        if (updated) {
+          const managerAgent = await getAgent(autoPolicyDecision.managerAgentId);
+          await issuesSvc.addComment(
+            input.issue.id,
+            buildStrandedAutoPolicyManagerReviewComment({
+              cause: recoveryCause,
+              attemptsInWindow: autoPolicyDecision.attemptsInWindow,
+              maxAttemptsPerDay: autoPolicyDecision.maxAttemptsPerDay,
+            }),
+            {},
+            {
+              authorType: "system",
+              presentation: compactRecoveryPresentation("Handed to manager for review"),
+              metadata: recoveryNoticeMetadata({
+                cause: recoveryCause,
+                latestRun,
+                previousStatus: input.previousStatus,
+                recoveryOwner: managerAgent
+                  ? { id: managerAgent.id, name: managerAgent.name }
+                  : null,
+              }),
+            },
+          );
+          // The vendor's own review-stage wake is dispatched from the PATCH
+          // route (`executionStageWakeup`); this direct service-layer update
+          // bypasses that, so the new reviewer is woken explicitly here —
+          // mirrors `enqueueInitialAssignedTodoDispatch` above.
+          await deps.enqueueWakeup(autoPolicyDecision.managerAgentId, {
+            source: "assignment",
+            triggerDetail: "system",
+            reason: "issue_assigned",
+            payload: withRecoveryContext(
+              {
+                issueId: input.issue.id,
+                mutation: "myrmidon_stranded_autopolicy_manager_review",
+              },
+              "normal_model",
+            ),
+            requestedByActorType: "system",
+            requestedByActorId: null,
+            contextSnapshot: withRecoveryContext(
+              {
+                issueId: input.issue.id,
+                taskId: input.issue.id,
+                wakeReason: "issue_assigned",
+                source: "myrmidon.stranded_autopolicy_manager_review",
+              },
+              "normal_model",
+            ),
+          });
+          await logActivity(db, {
+            companyId: input.issue.companyId,
+            actorType: "system",
+            actorId: "system",
+            agentId: null,
+            runId: latestRun.id,
+            action: "issue.stranded_autopolicy_reassigned_to_manager",
+            entityType: "issue",
+            entityId: input.issue.id,
+            details: {
+              identifier: input.issue.identifier,
+              recoveryCause,
+              managerAgentId: autoPolicyDecision.managerAgentId,
+              attemptsInWindow: autoPolicyDecision.attemptsInWindow,
+              maxAttemptsPerDay: autoPolicyDecision.maxAttemptsPerDay,
+            },
+          });
+          return updated;
+        }
+        // The update raced a concurrent change — fall through below.
+      }
+      // autoPolicyDecision.kind === "vendor_default" falls through as-is.
+    }
+
     const recoveryAction = await ensureSourceScopedStrandedRecoveryAction({
       issue: input.issue,
       previousStatus: input.previousStatus,

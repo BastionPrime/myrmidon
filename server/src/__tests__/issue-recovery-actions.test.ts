@@ -663,7 +663,24 @@ describeEmbeddedPostgres("issue recovery actions", () => {
           preservesSourceAssignee: true,
         }),
       });
-      expect(enqueueWakeup).not.toHaveBeenCalled();
+      // myrmidon(L4): a succeeded run with `successful_run_missing_state` is
+      // the auto-policy's scope (stranded-autopolicy.ts). With the seeded
+      // coder having zero prior attempts today, it first tries one more
+      // continuation retry through this same `enqueueWakeup`; this fixture's
+      // mock declines every wake (`async () => null`), so the policy falls
+      // back to the vendor's own board escalation unchanged — but the retry
+      // is still attempted once before that fallback.
+      if (errorCode === "adapter_failed" && explicitCause === "successful_run_missing_state") {
+        expect(enqueueWakeup).toHaveBeenCalledTimes(1);
+        expect(enqueueWakeup).toHaveBeenCalledWith(
+          coderId,
+          expect.objectContaining({
+            contextSnapshot: expect.objectContaining({ source: "myrmidon.stranded_autopolicy_retry" }),
+          }),
+        );
+      } else {
+        expect(enqueueWakeup).not.toHaveBeenCalled();
+      }
     },
   );
 
