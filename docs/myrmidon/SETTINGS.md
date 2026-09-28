@@ -70,6 +70,12 @@
 |---|---|---|---|---|
 | `MYRMIDON_RUN_ENV_ALLOW` | S2 | пусто | Дополнительные имена переменных окружения сервера (через запятую, без значений), которые передаются в процесс прогона сверх базового списка | Базовый список: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TERM`, `TMPDIR`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTP(S)_PROXY`, `NO_PROXY` (и строчные), Windows: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`. Несекретные указатели сервера: `PAPERCLIP_RUNTIME_API_URL`, `PAPERCLIP_LISTEN_HOST`, `PAPERCLIP_LISTEN_PORT`, `PAPERCLIP_RUNTIME_API_CANDIDATES_JSON`. Указатели каталогов CLI: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CURSOR_HOME`, `GROK_HOME`, `HERMES_HOME`, `KIMI_CODE_HOME`, `PI_CODING_AGENT_DIR`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`. Плюс учётные переменные провайдера самого адаптера (`MYRMIDON_RUN_ENV_PROVIDER_ALLOW` в `myrmidon-run-env.ts`): `claude_local` — `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`; `codex_local` — `OPENAI_API_KEY`, `OPENROUTER_API_KEY`; `cursor` — `CURSOR_API_KEY`; `gemini_local` — `GEMINI_API_KEY`, `GOOGLE_API_KEY`; `grok_local` — `XAI_API_KEY`; `kimi_local` — `KIMI_API_KEY`, `KIMI_MODEL_API_KEY`; `opencode_local` — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`; `pi_local` — `ANTHROPIC_API_KEY`, `XAI_API_KEY`; `hermes_local` — `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `KIMI_API_KEY`, `MINIMAX_API_KEY`, `ZAI_API_KEY`. Полное наследование — только флагом агента `adapterConfig.inheritProcessEnv: true` |
 
+## G1 — образ контейнера бота (bot runtime image)
+
+| Переменная | Функция | По умолчанию | Что делает | Как выключить / особое |
+|---|---|---|---|---|
+| `MYRMIDON_BOT_YOLO` | G1 | `1` (включено) | Образ `docker/bot-runtime`: `1` переводится в `HERMES_YOLO_MODE=1` для процесса `hermes gateway run` — approvals на опасные команды пропускаются, потому что у этого шлюза нет подключённого человека, который мог бы ответить на запрос | `0`/`false`/`no`/`off` — approvals идут по `approvals.mode` в `config.yaml` профиля (по умолчанию у hermes `smart`); на неуправляемых платформах (`api_server` — этот случай) approvals без ответа по умолчанию `deny`. Полезно только для стенда, где ответить есть кому |
+
 ## Настройки вендора, которые важны для Myrmidon
 
 Здесь — вендорские переключатели, которые нужно знать при развёртывании Myrmidon: например, как
