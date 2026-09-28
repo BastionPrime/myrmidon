@@ -5,18 +5,23 @@
 //
 //   missing        -> ensure + writeProfile + restart (first boot needs the profile
 //                     on disk before the gateway can come up cleanly, so it gets one
-//                     restart right after `ensure` creates it)
-//   anything else  -> `ensure` runs first, unconditionally, so a template change
-//                     (image, resource limits) on an already-existing container is
-//                     picked up even when the compiled profile's own files have not
-//                     changed (see driver.ts's `ensure` drift contract). This is
-//                     safe: a bot's profile files live on its host-mounted volume
-//                     (template.ts BOT_VOLUME_MOUNTS), so a drift-triggered recreate
-//                     reuses whatever writeProfile already put there.
+//                     restart right after `ensure` creates it). Never paused: there
+//                     is no running container, so nothing to drain.
+//   template drift -> checked via `driver.templateDrift` BEFORE anything else touches
+//                     an already-existing container: a card edit to image/memoryMb/
+//                     cpus/pidsLimit forces `ensure` to remove-and-recreate the
+//                     container (see driver.ts), which is exactly as disruptive to
+//                     in-flight work as a profile "restart" class change below — so
+//                     it goes through the *same* pause-this-agent-and-drain gate,
+//                     never an immediate `ensure()` call. (Before this gate existed,
+//                     `ensure` ran unconditionally on every pass, so a routine card
+//                     edit — even one made through the "apply now" button right after
+//                     a card save — would hard-kill the running container with no
+//                     drain at all; see the PR's "Review" section.)
 //   files          -> writeProfile only, no restart
-//   restart        -> pause admission for this agent alone (R3, scope "agent"),
-//                     wait for its running work to drain, writeProfile, restart,
-//                     then resume
+//   restart        -> profile restartHash changed; pause admission for this agent
+//                     alone (R3, scope "agent"), wait for its running work to drain,
+//                     writeProfile, restart, then resume
 //   none           -> nothing to do, UNLESS the container itself is "stopped" or
 //                     "unhealthy": the profile on disk is already correct but the
 //                     process is not up (or not healthy), so restart() alone is
@@ -104,6 +109,50 @@ function realSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Runs `apply` with admission paused for `agentId` alone (R3, scope "agent"),
+ * waiting for its running work to drain first. Shared by the two reconcile paths
+ * that must never touch a container while its agent has in-flight work: a
+ * template-drift recreate and a profile "restart" class change. Always exits the
+ * maintenance window on the way out, even when `apply` (or the drain wait) throws.
+ */
+async function withAgentPaused<T>(
+  params: {
+    agentId: string;
+    botKey: string;
+    reason: string;
+    maintenance: BotMaintenancePort;
+    drainTimeoutSec: number;
+    sleep: (ms: number) => Promise<void>;
+    activity: BotContainerActivitySink;
+  },
+  apply: () => Promise<T>,
+): Promise<T> {
+  const { agentId, botKey, reason, maintenance, drainTimeoutSec, sleep, activity } = params;
+  let entered = false;
+  try {
+    await maintenance.enter(agentId, reason, drainTimeoutSec);
+    entered = true;
+    const drained = await waitForZeroRunning(maintenance, agentId, drainTimeoutSec, sleep);
+    if (!drained) {
+      throw new Error(`agent ${agentId} still had running work after the maintenance drain timeout`);
+    }
+    return await apply();
+  } finally {
+    if (entered) {
+      await maintenance.exit(agentId, reason).catch((err: unknown) => {
+        void activity.record({
+          level: "error",
+          agentId,
+          botKey,
+          message: "failed to exit bot container maintenance window",
+          details: { error: err instanceof Error ? err.message : String(err) },
+        });
+      });
+    }
+  }
+}
+
 export async function reconcileBot(input: ReconcileBotInput): Promise<ReconcileOutcome> {
   const { agentId, botKey, spec, compile, driver, maintenance } = input;
   const activity = input.activity ?? noopActivitySink;
@@ -130,10 +179,31 @@ export async function reconcileBot(input: ReconcileBotInput): Promise<ReconcileO
 
     const profile = await compile();
 
-    // Bring the container's own template (image, resource limits) back in line with
-    // `spec` even when no profile file has changed — see the module comment above.
-    // Idempotent: a no-op beyond starting an already-stopped container when nothing
-    // has drifted.
+    // Side-effect-free: does calling `ensure` next force a remove-and-recreate of
+    // this already-existing container? Checked BEFORE anything mutates it, so a
+    // "yes" can be routed through the same pause-and-drain gate as a profile
+    // "restart" class change instead of hitting the container immediately — see
+    // the module comment above and driver.ts's `templateDrift` contract.
+    const drifted = await driver.templateDrift(spec, profile);
+    if (drifted) {
+      const reason = `bot container template update (${botKey})`;
+      await withAgentPaused({ agentId, botKey, reason, maintenance, drainTimeoutSec, sleep, activity }, async () => {
+        await driver.ensure(spec, profile);
+        await driver.writeProfile(botKey, profile);
+        await driver.restart(botKey); // resolves once the gateway reports healthy, or throws
+      });
+      await activity.record({
+        level: "info",
+        agentId,
+        botKey,
+        message: "bot container recreated for a template change (image or resource limits); profile reapplied",
+        details: { restartHash: profile.restartHash, filesHash: profile.filesHash },
+      });
+      return { kind: "applied_restart" };
+    }
+
+    // Not drifted: `ensure` here can only create-if-missing (already ruled out
+    // above) or start-if-stopped — never a recreate, that path is handled above.
     await driver.ensure(spec, profile);
 
     const applied: AppliedProfileState = { restartHash: status.restartHash, filesHash: status.filesHash };
@@ -175,29 +245,10 @@ export async function reconcileBot(input: ReconcileBotInput): Promise<ReconcileO
     // changeClass === "restart": pause admission for this agent only, never the
     // whole instance or company.
     const reason = `bot container profile update (${botKey})`;
-    let entered = false;
-    try {
-      await maintenance.enter(agentId, reason, drainTimeoutSec);
-      entered = true;
-      const drained = await waitForZeroRunning(maintenance, agentId, drainTimeoutSec, sleep);
-      if (!drained) {
-        throw new Error(`agent ${agentId} still had running work after the maintenance drain timeout`);
-      }
+    await withAgentPaused({ agentId, botKey, reason, maintenance, drainTimeoutSec, sleep, activity }, async () => {
       await driver.writeProfile(botKey, profile);
       await driver.restart(botKey); // resolves once the gateway reports healthy, or throws
-    } finally {
-      if (entered) {
-        await maintenance.exit(agentId, reason).catch((err: unknown) => {
-          void activity.record({
-            level: "error",
-            agentId,
-            botKey,
-            message: "failed to exit bot container maintenance window",
-            details: { error: err instanceof Error ? err.message : String(err) },
-          });
-        });
-      }
-    }
+    });
     await activity.record({
       level: "info",
       agentId,

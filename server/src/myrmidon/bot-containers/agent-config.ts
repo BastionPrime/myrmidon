@@ -92,3 +92,52 @@ export function botContainerSpec(botKey: string, config: BotContainerAgentConfig
     network,
   };
 }
+
+/** Do two agents' container configs describe the same container template? Compares
+ *  only the fields that feed `botContainerSpec` (not `group` itself, which is what
+ *  made them land in the same group in the first place). Used to detect agents that
+ *  share a `container.group` (containers-plan-senior-2026-09-28.md §1.2's "shared
+ *  project container") but whose cards disagree on image/resources — see
+ *  `pickCanonicalGroupMember`. */
+export function botContainerConfigsMatch(a: BotContainerAgentConfig, b: BotContainerAgentConfig): boolean {
+  return a.image === b.image && a.memoryMb === b.memoryMb && a.cpus === b.cpus && a.pidsLimit === b.pidsLimit;
+}
+
+export interface BotContainerGroupMember<A extends { agentId: string }> {
+  agent: A;
+  config: BotContainerAgentConfig;
+}
+
+/**
+ * Groups parsed agent configs by resolved botKey. Two or more `hermes_gateway`
+ * agents can share a `container.group` and therefore the same botKey — grouping
+ * them here (instead of reconciling each agent independently) is what lets a
+ * sweep reconcile a shared container exactly once per tick rather than once per
+ * member agent, each racing to impose its own card's spec on it.
+ */
+export function groupByBotKey<A extends { agentId: string }>(
+  members: readonly BotContainerGroupMember<A>[],
+): Map<string, BotContainerGroupMember<A>[]> {
+  const groups = new Map<string, BotContainerGroupMember<A>[]>();
+  for (const member of members) {
+    const botKey = botKeyForAgent(member.agent.agentId, member.config);
+    const group = groups.get(botKey);
+    if (group) group.push(member);
+    else groups.set(botKey, [member]);
+  }
+  return groups;
+}
+
+/**
+ * Deterministically picks one member of a botKey group to reconcile: the one
+ * whose `agentId` sorts first. Deterministic (not "whichever the sweep loop
+ * reached last") so the same member wins every tick regardless of iteration
+ * order or listAgents' own ordering — the property that stops a mismatched
+ * shared-container group from oscillating between its members' specs on every
+ * pass (see index.ts's sweep).
+ */
+export function pickCanonicalGroupMember<A extends { agentId: string }>(
+  members: readonly BotContainerGroupMember<A>[],
+): BotContainerGroupMember<A> {
+  return members.reduce((a, b) => (a.agent.agentId <= b.agent.agentId ? a : b));
+}

@@ -47,11 +47,29 @@ export interface BotContainerDriver {
   status(botKey: string): Promise<BotContainerStatus>;
   /** All bots the driver currently manages (used for orphan/inventory sweeps). */
   list(): Promise<BotContainerStatus[]>;
+  /**
+   * Side-effect-free check: would calling `ensure(spec, profile)` right now force
+   * a running (or stopped/unhealthy) container to be removed and recreated? True
+   * only when a container already exists for `spec.botKey` and its live template
+   * (image, resource limits, network) no longer matches `spec`. False when no
+   * container exists yet (ensure would just create one — nothing to lose) or when
+   * the existing one's template already matches.
+   *
+   * Callers MUST check this before calling `ensure` on anything other than a
+   * freshly-`missing` bot, and gate a `true` result behind the same
+   * maintenance-pause-and-drain flow used for a profile "restart" class change
+   * (see reconciler.ts) — `ensure`'s own recreate is as disruptive to in-flight
+   * work as a restart, but unlike a profile change it is not visible in
+   * `BotContainerStatus`'s hashes, so the reconciler cannot detect it any other
+   * way without first mutating the container.
+   */
+  templateDrift(spec: BotContainerSpec, profile: CompiledProfile): Promise<boolean>;
   /** Idempotent create-and-start: creates the container from `spec` when missing,
    *  starts it when stopped, and recreates it when the running container's template
-   *  (image, resource limits) has drifted from `spec`. Sets the driver's own
-   *  identification labels from `profile`'s hashes at creation time; does not write
-   *  profile files itself — call `writeProfile` next. */
+   *  (image, resource limits) has drifted from `spec` — see `templateDrift`'s
+   *  contract for when that recreate must be gated behind maintenance first. Sets
+   *  the driver's own identification labels from `profile`'s hashes at creation
+   *  time; does not write profile files itself — call `writeProfile` next. */
   ensure(spec: BotContainerSpec, profile: CompiledProfile): Promise<void>;
   /** Lays the compiled profile's files down in the bot's volumes without touching
    *  the running process. Safe to call on a running container; the reconciler uses

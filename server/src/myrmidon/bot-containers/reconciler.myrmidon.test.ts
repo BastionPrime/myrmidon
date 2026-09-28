@@ -26,7 +26,10 @@ interface FakeDriver extends BotContainerDriver {
   calls: string[];
 }
 
-function fakeDriver(initial: BotContainerStatus, opts: { failRestart?: boolean; failWriteProfile?: boolean } = {}): FakeDriver {
+function fakeDriver(
+  initial: BotContainerStatus,
+  opts: { failRestart?: boolean; failWriteProfile?: boolean; drift?: boolean } = {},
+): FakeDriver {
   const calls: string[] = [];
   let current = initial;
   return {
@@ -38,6 +41,10 @@ function fakeDriver(initial: BotContainerStatus, opts: { failRestart?: boolean; 
     async list() {
       return [current];
     },
+    async templateDrift() {
+      calls.push("templateDrift");
+      return opts.drift ?? false;
+    },
     async ensure(_spec, compiled) {
       calls.push("ensure");
       if (current.state === "missing") {
@@ -48,9 +55,13 @@ function fakeDriver(initial: BotContainerStatus, opts: { failRestart?: boolean; 
         // hashes are untouched, since they live on the host-mounted volume, not on
         // the container itself.
         current = { ...current, state: "running" };
+      } else if (opts.drift) {
+        // Mirrors ensure()'s "drifted -> remove and recreate" branch: a fresh
+        // container has no applied-marker yet, exactly like a "missing" create.
+        current = { ...current, state: "running", restartHash: undefined, filesHash: undefined };
       }
-      // "unhealthy": the real driver's Docker-level state is already "running", so
-      // ensure() does not touch it — matches leaving `current` alone here too.
+      // "unhealthy", not drifted: the real driver's Docker-level state is already
+      // "running", so ensure() does not touch it — matches leaving `current` alone.
     },
     async writeProfile(_botKey, compiled) {
       calls.push("writeProfile");
@@ -155,46 +166,158 @@ describe("reconcileBot", () => {
       activity,
     });
     expect(outcome).toEqual({ kind: "unchanged" });
-    // `ensure` always runs first so a template (image/resource) drift is picked up
-    // even when the profile's own files have not changed (see driver.ts's `ensure`
-    // contract) — it is a no-op here since nothing has drifted and the container is
-    // already running.
-    expect(driver.calls).toEqual(["status", "ensure"]);
+    // `templateDrift` is always checked first so a template (image/resource) drift
+    // is picked up even when the profile's own files have not changed (see
+    // driver.ts's `templateDrift` contract); `ensure` then runs as a no-op here
+    // since nothing has drifted and the container is already running.
+    expect(driver.calls).toEqual(["status", "templateDrift", "ensure"]);
     expect(maintenance.enterCalls).toBe(0);
     expect(activity.records).toEqual([]);
   });
 
-  it("a spec that has drifted (e.g. image/resources changed on the card) recreates a running container via ensure()", async () => {
-    // The fake's ensure() itself is a no-op for a "running" container beyond
-    // logging the call, exactly like the real driver's own idempotent no-drift
-    // path — this test only proves `ensure` is actually reached (unlike before the
-    // fix, where it was skipped for every non-"missing" state) and that its
-    // argument is `spec`, not some derived value.
-    const applied = profile();
-    const driver = fakeDriver({
-      botKey: "agent-a",
-      state: "running",
-      restartHash: applied.restartHash,
-      filesHash: applied.filesHash,
+  describe("template drift (image/resources changed on the card)", () => {
+    it("goes through the same pause-this-agent-and-drain gate as a profile restart, not an immediate recreate", async () => {
+      const applied = profile();
+      const driver = fakeDriver(
+        { botKey: "agent-a", state: "running", restartHash: applied.restartHash, filesHash: applied.filesHash },
+        { drift: true },
+      );
+      const maintenance = fakeMaintenance([0]);
+      const activity = fakeActivity();
+      const outcome = await reconcileBot({
+        agentId: "agent-a",
+        botKey: "agent-a",
+        spec: SPEC,
+        compile: async () => applied,
+        driver,
+        maintenance,
+        activity,
+      });
+      expect(outcome).toEqual({ kind: "applied_restart" });
+      expect(driver.calls).toEqual(["status", "templateDrift", "ensure", "writeProfile", "restart"]);
+      expect(maintenance.enterCalls).toBe(1);
+      expect(maintenance.exitCalls).toEqual(["agent-a:bot container template update (agent-a)"]);
+      expect(activity.records.at(-1)).toEqual({
+        level: "info",
+        message: "bot container recreated for a template change (image or resource limits); profile reapplied",
+      });
     });
-    let ensureSpec: BotContainerSpec | undefined;
-    const realEnsure = driver.ensure.bind(driver);
-    driver.ensure = async (spec, compiled) => {
-      ensureSpec = spec;
-      return realEnsure(spec, compiled);
-    };
-    await reconcileBot({
-      agentId: "agent-a",
-      botKey: "agent-a",
-      spec: SPEC,
-      compile: async () => applied,
-      driver,
-      maintenance: fakeMaintenance([0]),
+
+    it("passes `spec` (not a derived value) to the recreate", async () => {
+      const applied = profile();
+      const driver = fakeDriver(
+        { botKey: "agent-a", state: "running", restartHash: applied.restartHash, filesHash: applied.filesHash },
+        { drift: true },
+      );
+      let ensureSpec: BotContainerSpec | undefined;
+      const realEnsure = driver.ensure.bind(driver);
+      driver.ensure = async (spec, compiled) => {
+        ensureSpec = spec;
+        return realEnsure(spec, compiled);
+      };
+      await reconcileBot({
+        agentId: "agent-a",
+        botKey: "agent-a",
+        spec: SPEC,
+        compile: async () => applied,
+        driver,
+        maintenance: fakeMaintenance([0]),
+      });
+      expect(ensureSpec).toEqual(SPEC);
     });
-    expect(ensureSpec).toEqual(SPEC);
+
+    it("never calls ensure() until the agent's in-flight work has actually drained to zero — the critical-severity regression this fixes", async () => {
+      // Before this fix, `ensure()` (and the hard `DELETE …?force=true` recreate it
+      // triggers on drift) ran unconditionally on every reconcile pass, BEFORE any
+      // maintenance pause — a routine card edit (image/memoryMb/cpus/pidsLimit)
+      // would hard-kill a running container with in-flight work still on it. This
+      // proves `ensure` is only reached after the drain loop has actually observed
+      // zero running runs.
+      const applied = profile();
+      const driver = fakeDriver(
+        { botKey: "agent-a", state: "running", restartHash: applied.restartHash, filesHash: applied.filesHash },
+        { drift: true },
+      );
+      const maintenance = fakeMaintenance([1, 0]); // one run in flight, then drained
+      let callsAtFirstDrainPoll: string[] | undefined;
+      const outcome = await reconcileBot({
+        agentId: "agent-a",
+        botKey: "agent-a",
+        spec: SPEC,
+        compile: async () => applied,
+        driver,
+        maintenance,
+        sleep: async () => {
+          callsAtFirstDrainPoll ??= [...driver.calls];
+        },
+      });
+      expect(outcome).toEqual({ kind: "applied_restart" });
+      expect(callsAtFirstDrainPoll).toEqual(["status", "templateDrift"]); // ensure not yet reached
+      expect(driver.calls).toEqual(["status", "templateDrift", "ensure", "writeProfile", "restart"]);
+    });
+
+    it("gives up and still exits maintenance when running work never drains — never recreates the container", async () => {
+      let fakeNow = 0;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
+      try {
+        const applied = profile();
+        const driver = fakeDriver(
+          { botKey: "agent-a", state: "running", restartHash: applied.restartHash, filesHash: applied.filesHash },
+          { drift: true },
+        );
+        const maintenance = fakeMaintenance([3]); // always 3 running, never drains
+        const activity = fakeActivity();
+        const outcome = await reconcileBot({
+          agentId: "agent-a",
+          botKey: "agent-a",
+          spec: SPEC,
+          compile: async () => applied,
+          driver,
+          maintenance,
+          activity,
+          maintenanceDrainTimeoutSec: 5,
+          sleep: async (ms) => {
+            fakeNow += ms;
+          },
+        });
+        expect(outcome.kind).toBe("error");
+        expect(driver.calls).not.toContain("ensure");
+        expect(driver.calls).not.toContain("writeProfile");
+        expect(driver.calls).not.toContain("restart");
+        expect(maintenance.exitCalls).toHaveLength(1); // still cleaned up
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("propagates an ensure() failure inside the paused window as an error outcome, and still exits maintenance", async () => {
+      const applied = profile();
+      const driver = fakeDriver(
+        { botKey: "agent-a", state: "running", restartHash: applied.restartHash, filesHash: applied.filesHash },
+        { drift: true },
+      );
+      driver.ensure = async () => {
+        throw new Error("image not in allowlist");
+      };
+      const maintenance = fakeMaintenance([0]);
+      const activity = fakeActivity();
+      const outcome = await reconcileBot({
+        agentId: "agent-a",
+        botKey: "agent-a",
+        spec: SPEC,
+        compile: async () => applied,
+        driver,
+        maintenance,
+        activity,
+      });
+      expect(outcome.kind).toBe("error");
+      if (outcome.kind === "error") expect(outcome.message).toContain("image not in allowlist");
+      expect(activity.records.at(-1)).toEqual({ level: "error", message: "bot container reconcile failed" });
+      expect(maintenance.exitCalls).toHaveLength(1);
+    });
   });
 
-  it("propagates an ensure() failure (e.g. a rejected template) as an error outcome", async () => {
+  it("propagates an ensure() failure on the non-drifted path (e.g. a rejected template) as an error outcome, without pausing the agent", async () => {
     const applied = profile();
     const driver = fakeDriver({
       botKey: "agent-a",
@@ -205,6 +328,7 @@ describe("reconcileBot", () => {
     driver.ensure = async () => {
       throw new Error("image not in allowlist");
     };
+    const maintenance = fakeMaintenance([0]);
     const activity = fakeActivity();
     const outcome = await reconcileBot({
       agentId: "agent-a",
@@ -212,12 +336,13 @@ describe("reconcileBot", () => {
       spec: SPEC,
       compile: async () => applied,
       driver,
-      maintenance: fakeMaintenance([0]),
+      maintenance,
       activity,
     });
     expect(outcome.kind).toBe("error");
     if (outcome.kind === "error") expect(outcome.message).toContain("image not in allowlist");
     expect(activity.records.at(-1)).toEqual({ level: "error", message: "bot container reconcile failed" });
+    expect(maintenance.enterCalls).toBe(0); // not a drift path: never paused the agent
   });
 
   it("none: a stopped container with matching hashes gets ensure()d and explicitly restarted, not left down", async () => {
@@ -239,7 +364,7 @@ describe("reconcileBot", () => {
       activity,
     });
     expect(outcome).toEqual({ kind: "applied_restart" });
-    expect(driver.calls).toEqual(["status", "ensure", "restart"]);
+    expect(driver.calls).toEqual(["status", "templateDrift", "ensure", "restart"]);
     expect(driver.calls).not.toContain("writeProfile"); // the profile on disk is already correct
     expect(activity.records).toEqual([
       { level: "info", message: "bot container restarted to recover from a stopped/unhealthy state" },
@@ -265,7 +390,7 @@ describe("reconcileBot", () => {
       activity,
     });
     expect(outcome).toEqual({ kind: "applied_restart" });
-    expect(driver.calls).toEqual(["status", "ensure", "restart"]);
+    expect(driver.calls).toEqual(["status", "templateDrift", "ensure", "restart"]);
     expect(driver.calls).not.toContain("writeProfile");
   });
 
@@ -303,7 +428,7 @@ describe("reconcileBot", () => {
       activity,
     });
     expect(outcome).toEqual({ kind: "applied_files" });
-    expect(driver.calls).toEqual(["status", "ensure", "writeProfile"]);
+    expect(driver.calls).toEqual(["status", "templateDrift", "ensure", "writeProfile"]);
     expect(maintenance.enterCalls).toBe(0);
   });
 
@@ -321,7 +446,7 @@ describe("reconcileBot", () => {
       activity,
     });
     expect(outcome).toEqual({ kind: "applied_restart" });
-    expect(driver.calls).toEqual(["status", "ensure", "writeProfile", "restart"]);
+    expect(driver.calls).toEqual(["status", "templateDrift", "ensure", "writeProfile", "restart"]);
     expect(maintenance.enterCalls).toBe(1);
     expect(maintenance.exitCalls).toEqual(["agent-a:bot container profile update (agent-a)"]);
   });
@@ -345,7 +470,7 @@ describe("reconcileBot", () => {
     expect(outcome).toEqual({ kind: "applied_restart" });
     // enter() consumes the first value (2); the poll loop then reads 1 (sleeps), then 0 (stops).
     expect(sleepCalls.length).toBeGreaterThanOrEqual(1);
-    expect(driver.calls).toEqual(["status", "ensure", "writeProfile", "restart"]);
+    expect(driver.calls).toEqual(["status", "templateDrift", "ensure", "writeProfile", "restart"]);
   });
 
   it("restart: gives up and still exits maintenance when running work never drains", async () => {
@@ -448,6 +573,9 @@ describe("reconcileBot", () => {
       },
       async list() {
         return [];
+      },
+      async templateDrift() {
+        return false;
       },
       async ensure() {},
       async writeProfile() {},

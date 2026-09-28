@@ -101,6 +101,31 @@ describe("resolveProfileFileTarget", () => {
     expect(() => resolveProfileFileTarget(file("etc/passwd"))).toThrow(BotContainerTemplateError);
     expect(() => resolveProfileFileTarget(file("hermes"))).toThrow(BotContainerTemplateError); // no relative path
   });
+
+  it("rejects a '..' segment anywhere in the relative path, not just as the whole prefix", () => {
+    // This is the module's own claimed enforcement boundary — it must not rely on
+    // compileHermesProfile (G2) to have sanitized its output first.
+    expect(() => resolveProfileFileTarget(file("hermes/../../etc/passwd"))).toThrow(BotContainerTemplateError);
+    expect(() => resolveProfileFileTarget(file("hermes/../.myrmidon/applied.json"))).toThrow(BotContainerTemplateError);
+    expect(() => resolveProfileFileTarget(file("hermes/config/../../../etc/passwd"))).toThrow(BotContainerTemplateError);
+  });
+
+  it("rejects a '.' segment and an empty segment (double slash) in the relative path", () => {
+    expect(() => resolveProfileFileTarget(file("hermes/./config.yaml"))).toThrow(BotContainerTemplateError);
+    expect(() => resolveProfileFileTarget(file("hermes//config.yaml"))).toThrow(BotContainerTemplateError);
+  });
+
+  it("rejects a relative path that starts with a leading slash", () => {
+    expect(() => resolveProfileFileTarget({ path: "hermes//etc/passwd", content: "", mode: 0o644, secret: false })).toThrow(
+      BotContainerTemplateError,
+    );
+  });
+
+  it("still accepts an ordinary nested relative path with dots inside a segment name", () => {
+    // ".." as a whole segment is rejected above; a dot that is merely part of a
+    // filename (not a path-traversal segment) must still work.
+    expect(resolveProfileFileTarget(file("workspace/notes.v2.md")).relativePath).toBe("notes.v2.md");
+  });
 });
 
 describe("buildLabels", () => {

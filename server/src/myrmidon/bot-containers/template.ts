@@ -109,9 +109,22 @@ export function buildLabels(
   };
 }
 
+/** True when `rest` (the part of a profile file's path after its "hermes/" /
+ *  "workspace/" / "scratch/" prefix) has no "." or ".." segment and no leading
+ *  "/" — the only shapes that could carry it outside the staging directory it is
+ *  written under once it reaches the tar entry path and the swap script's `mv`
+ *  destination in docker-driver.ts. */
+function isSafeRelativePath(rest: string): boolean {
+  if (rest.startsWith("/")) return false;
+  return rest.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
 /** Which mount a compiled profile file belongs under, and its path inside that
- *  mount. Throws on anything that is not "hermes/…", "workspace/…" or "scratch/…" —
- *  compileHermesProfile (G2) is expected to only ever emit those. */
+ *  mount. Throws on anything that is not "hermes/…", "workspace/…" or "scratch/…",
+ *  or whose remainder contains a "." / ".." segment — this function is the
+ *  enforcement boundary for what reaches the Docker API (see the module comment
+ *  above), so it does not trust compileHermesProfile (G2, a separate PR this
+ *  module has no dependency on) to have sanitized its own output first. */
 export function resolveProfileFileTarget(file: CompiledProfileFile): {
   mount: BotVolumeMount;
   relativePath: string;
@@ -120,9 +133,9 @@ export function resolveProfileFileTarget(file: CompiledProfileFile): {
   const prefix = slash === -1 ? file.path : file.path.slice(0, slash);
   const rest = slash === -1 ? "" : file.path.slice(slash + 1);
   const mount = BOT_VOLUME_MOUNTS.find((candidate) => candidate.hostSuffix === prefix);
-  if (!mount || rest.length === 0) {
+  if (!mount || rest.length === 0 || !isSafeRelativePath(rest)) {
     throw new BotContainerTemplateError(
-      `profile file path "${file.path}" must start with "hermes/", "workspace/" or "scratch/"`,
+      `profile file path "${file.path}" must start with "hermes/", "workspace/" or "scratch/" and contain no "." or ".." path segment`,
     );
   }
   return { mount, relativePath: rest };

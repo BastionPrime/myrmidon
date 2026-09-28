@@ -26,6 +26,14 @@
 // step, after every other staged file has been confirmed moved — so a swap that
 // dies partway through (exec killed, timeout) can never leave the marker claiming
 // hashes are applied when some of the actual files are not.
+//
+// `ensure()` recreates a running container whose template (image, resource limits)
+// has drifted from `spec` — that recreate is a hard `DELETE …?force=true` (see
+// `removeContainer`), as disruptive to in-flight work as a profile "restart" class
+// change. `templateDrift()` exists so a caller (reconciler.ts) can check for that
+// *before* calling `ensure`, and gate a `true` result behind the same
+// maintenance-pause-and-drain flow — `ensure` itself does not pause anything, it
+// only enforces the template once told to proceed.
 
 import http from "node:http";
 import type { BotContainerDriver, BotContainerSpec, BotContainerState, BotContainerStatus } from "./driver.js";
@@ -386,6 +394,16 @@ export function dockerBotContainerDriver(config: DockerDriverConfig = readDocker
     return results;
   }
 
+  /** See driver.ts's `templateDrift` contract. Shares `buildCreateContainerRequestBody`
+   *  and `containerTemplateDrifted` with `ensure()` below so the two can never
+   *  disagree on what counts as drifted. */
+  async function templateDrift(spec: BotContainerSpec, profile: CompiledProfile): Promise<boolean> {
+    const body = buildCreateContainerRequestBody(spec, profile, config);
+    const existing = await inspect(spec.botKey);
+    if (!existing) return false;
+    return containerTemplateDrifted(existing, body);
+  }
+
   async function ensure(spec: BotContainerSpec, profile: CompiledProfile): Promise<void> {
     const name = containerNameFor(spec.botKey);
     const body = buildCreateContainerRequestBody(spec, profile, config);
@@ -493,7 +511,7 @@ export function dockerBotContainerDriver(config: DockerDriverConfig = readDocker
     }
   }
 
-  return { status, list, ensure, writeProfile, restart, stop };
+  return { status, list, templateDrift, ensure, writeProfile, restart, stop };
 }
 
 /** Shell script run inside the container (via `/bin/sh -c`) to move every staged
