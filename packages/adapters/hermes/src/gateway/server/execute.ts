@@ -22,6 +22,7 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_TIMEOUT_SEC,
   STOP_GRACE_MS,
+  STOP_REQUEST_TIMEOUT_MS,
 } from "../shared/constants.js";
 import {
   allowsInsecureRemoteHttp,
@@ -324,14 +325,9 @@ function buildInput(ctx: AdapterExecutionContext, paperclipApiUrl: string | null
     "Paperclip runtime identity:",
     `- Agent ID: ${ctx.agent.id}`,
     `- Company ID: ${ctx.agent.companyId}`,
-    // myrmidon(G4): the idempotency-stable id (retryOfRunId ?? ctx.runId), not
-    // the raw per-attempt ctx.runId — see the idempotencyKey comment in
-    // execute(). A process_lost retry's /v1/runs body must be byte-identical
-    // to the attempt it is retrying (Hermes fingerprints the whole body:
-    // api_server_runs.py's idempotency_fingerprint = sha256(body, ...)), or
-    // the shared Idempotency-Key header gets a 409 conflict instead of
-    // replayed:true. Using ctx.runId here would make every retry's body
-    // differ from the original it is supposed to match.
+    // myrmidon(G4): this attempt's own ctx.runId (passed in as
+    // idempotencyRunId) — see the idempotencyKey comment in execute() for
+    // why it is never ctx.context.retryOfRunId.
     `- Run ID: ${idempotencyRunId}`,
     ...(paperclipApiUrl ? [`- Paperclip API URL: ${paperclipApiUrl}`] : []),
     ...(issueWorkMode ? [`- Issue work mode: ${issueWorkMode}`] : []),
@@ -1085,9 +1081,13 @@ async function stopRun(input: {
   redactText?: TextRedactor;
 }): Promise<Record<string, unknown> | null> {
   try {
+    // myrmidon(G4): bound this request so a hung gateway cannot block
+    // execute()'s return past the platform's own stop-verification deadline
+    // — see STOP_REQUEST_TIMEOUT_MS.
     const stopped = await fetchJson(apiUrl(input.baseUrl, `/v1/runs/${encodeURIComponent(input.runId)}/stop`), {
       method: "POST",
       headers: input.headers,
+      signal: AbortSignal.timeout(STOP_REQUEST_TIMEOUT_MS),
     });
     await input.ctx.onLog("stdout", `[hermes-gateway] stop requested for run ${input.runId}\n`);
     return asRecord(stopped);
@@ -1106,9 +1106,13 @@ async function fetchFinalStatus(input: {
   const deadline = Date.now() + input.deadlineMs;
   while (Date.now() < deadline) {
     try {
+      // myrmidon(G4): same request-timeout reasoning as stopRun above — this
+      // loop's own Date.now() deadline check cannot bound a single hung
+      // request.
       const status = await fetchJson(apiUrl(input.baseUrl, `/v1/runs/${encodeURIComponent(input.runId)}`), {
         method: "GET",
         headers: input.headers,
+        signal: AbortSignal.timeout(STOP_REQUEST_TIMEOUT_MS),
       });
       const record = asRecord(status);
       const normalized = extractStatus(status);
@@ -1198,21 +1202,26 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const strategy = normalizeSessionKeyStrategy(ctx.config.sessionKeyStrategy);
   // myrmidon(G4): raw debug JSON is opt-in; see handleEvent/logCompactEvent.
   const debugEvents = ctx.config.debugEvents === true;
-  // myrmidon(G4): a process_lost retry keeps the *original* run's id as
-  // retryOfRunId (heartbeat_runs.retry_of_run_id, surfaced on ctx.context —
-  // see server/services/heartbeat.ts's contextSnapshot). Reusing it as the
-  // Idempotency-Key lets Hermes recognize the duplicate create request
-  // (api_server_run_idempotency.py's reserve/lookup) and reply
-  // `replayed:true` with the original run instead of starting a second one.
-  // Computed before sessionKey/buildRunBody: both must key off this same
-  // stable id (not the per-attempt ctx.runId) so the retry's request body
-  // and X-Hermes-Session-Key stay byte-identical to the attempt it replays —
-  // Hermes's idempotency_fingerprint hashes body *and* gateway_session_key
-  // together (api_server_runs.py), and a "run"-strategy session key or a
-  // buildInput() "Run ID:" line built from ctx.runId would otherwise change
-  // on every retry and turn a should-be replay into a 409 conflict.
-  const retryOfRunId = nonEmpty(ctx.context.retryOfRunId);
-  const idempotencyKey = retryOfRunId ?? ctx.runId;
+  // myrmidon(G4): the Idempotency-Key, the "run" session-key strategy, and
+  // buildInput()'s "Run ID:" line are all keyed on this attempt's own
+  // ctx.runId — never on ctx.context.retryOfRunId, even when it is set.
+  // heartbeat.ts sets retryOfRunId on far more than a process-lost retry:
+  // enqueueMissingIssueCommentRetry and the planned-continuation paths
+  // (around heartbeat.ts:15671/:15721, covering missing_issue_comment and
+  // transient_failure among others) all chain retryOfRunId to the
+  // predecessor's run id, and each such retry carries its own
+  // wakeReason/paperclipWake, so its /v1/runs body legitimately differs
+  // from the predecessor's. Keying off the predecessor's id would fingerprint
+  // that different body against the predecessor's stored one and get a 409
+  // conflict (api_server_runs.py's idempotency reserve/lookup) instead of a
+  // fresh run — or, once the predecessor's 24h idempotency record has
+  // expired, silently try to attach to a run this adapter has no live
+  // process for (SESSIONED_LOCAL_ADAPTERS omits hermes_gateway, so the
+  // pid-tracked process_lost retry this was originally written for never
+  // actually reaches this adapter). ctx.runId is unique per attempt, so a
+  // `replayed:true` response from Hermes is now only ever a genuine
+  // duplicate create for this very attempt; that handling is kept below.
+  const idempotencyKey = ctx.runId;
   const sessionKey = resolveSessionKey({
     strategy,
     companyId: ctx.agent.companyId,
@@ -1283,6 +1292,35 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   await ctx.onLog("stdout", `[hermes-gateway] creating run at ${createRunUrl} (timeout=${timeoutSec}s, session=${strategy})\n`);
   await ctx.onLog("stdout", `[hermes-gateway] request headers (redacted): ${stringifyForLog(redactForLog(runHeaders, [], 0, redactText), 3_000)}\n`);
 
+  // myrmidon(G4): opt into signal-based cancellation before any provider
+  // work starts (types.ts's AdapterExecutionContext.onCancellationReady:
+  // "Opt in to signal-based cancellation before starting provider work"),
+  // matching acpx-engine/execute.ts's own opt-in-then-check-aborted shape.
+  // Registering only after POST /v1/runs (the previous order) let an abort
+  // that arrived during or before that request race past this check and
+  // still create a Hermes run for an already-cancelled Paperclip run.
+  await ctx.onCancellationReady?.();
+  if (ctx.signal?.aborted) {
+    return {
+      exitCode: 1,
+      signal: "SIGTERM",
+      timedOut: false,
+      errorCode: "hermes_gateway_cancelled",
+      errorMessage: "Hermes gateway run was cancelled before it started.",
+      provider: "hermes_gateway",
+      executionRecovery: { kind: "bootstrap", providerWorkStarted: false },
+      resultJson: {
+        executionCancellation: {
+          state: "acknowledged",
+          acknowledgedAt: new Date().toISOString(),
+          forced: false,
+        },
+      },
+      sessionParams: { strategy },
+      sessionDisplayId: sessionKey ? redactText(sessionKey) : null,
+    };
+  }
+
   let runId: string | null = null;
   let replayed = false;
   try {
@@ -1320,10 +1358,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? `[hermes-gateway] idempotent replay: attaching to existing run ${runId} instead of starting a new one\n`
       : `[hermes-gateway] run created: ${runId}\n`,
   );
-
-  // myrmidon(G4): register for operator cancellation once there is a run to
-  // stop; ctx.signal firing after this resolves races the stop below.
-  await ctx.onCancellationReady?.();
 
   const state = createExecutionState(runId);
   const controller = new AbortController();
@@ -1380,6 +1414,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (outcome === "cancelled") {
     await stopRun({ ctx, baseUrl, headers: eventHeaders, runId, redactText });
     const finalStatus = await fetchFinalStatus({ baseUrl, headers: eventHeaders, runId, deadlineMs: STOP_GRACE_MS });
+    // myrmidon(G4): only claim the cancellation acknowledged once
+    // fetchFinalStatus actually observed a terminal Hermes status. The
+    // platform's own cancelRun (heartbeat.ts) writes
+    // resultJson.executionCancellation.state="requested" the moment it asks
+    // this adapter to stop, then 409s the pause request
+    // ("provider termination could not be verified") unless this run's
+    // final resultJson later confirms "acknowledged" — omitting the field
+    // whenever termination was verified (the previous behavior, unconditional
+    // on the outcome of fetchFinalStatus) meant even a clean stop 409'd.
+    // When fetchFinalStatus comes back null (stop request failed, or no
+    // terminal status inside STOP_GRACE_MS), leave the field out rather than
+    // claim something unverified.
+    const terminationVerified = finalStatus !== null;
     return {
       exitCode: 1,
       signal: "SIGTERM",
@@ -1392,6 +1439,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         status: extractStatus(finalStatus) ?? "cancelled",
         last_event: state.lastEventName,
         final_status: redactForLog(finalStatus, [], 0, redactText),
+        ...(terminationVerified
+          ? {
+              executionCancellation: {
+                state: "acknowledged",
+                acknowledgedAt: new Date().toISOString(),
+                forced: false,
+              },
+            }
+          : {}),
       },
       sessionParams: {
         hermesRunId: runId,

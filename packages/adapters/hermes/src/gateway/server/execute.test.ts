@@ -786,7 +786,10 @@ describe("gateway defaults (G4)", () => {
 });
 
 describe("execute — operator cancellation (G4)", () => {
-  it("registers onCancellationReady only after the run exists, then stops and reports cancellation on operator abort", async () => {
+  it("registers onCancellationReady before POST /v1/runs, then stops and reports a verified cancellation on operator abort", async () => {
+    // myrmidon(G4): types.ts's contract is "opt in ... before starting
+    // provider work" — onCancellationReady must fire before the create
+    // request, not after it.
     const controller = new AbortController();
     const callOrder: string[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -795,7 +798,13 @@ describe("execute — operator cancellation (G4)", () => {
         callOrder.push("create");
         return new Response(JSON.stringify({ run_id: "run-cancel-1", status: "started" }), { status: 200 });
       }
-      if (url.endsWith("/events")) return new Promise<Response>(() => {}); // never resolves
+      if (url.endsWith("/events")) {
+        // The operator's abort arrives once the run is under way (after
+        // create, while the adapter is listening for events) — not during
+        // onCancellationReady's own handshake.
+        controller.abort();
+        return new Promise<Response>(() => {}); // never resolves
+      }
       if (url.endsWith("/stop")) {
         callOrder.push("stop");
         return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
@@ -810,38 +819,95 @@ describe("execute — operator cancellation (G4)", () => {
     const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
     ctx.signal = controller.signal;
     ctx.onCancellationReady = vi.fn(async () => {
-      // The run must already exist (the create call already fired) before the
-      // adapter opts into signal-based cancellation.
-      expect(callOrder).toEqual(["create"]);
+      expect(callOrder).toEqual([]);
       callOrder.push("ready");
-      controller.abort();
     });
 
     const result = await execute(ctx);
 
-    expect(callOrder).toEqual(["create", "ready", "stop"]);
+    expect(callOrder).toEqual(["ready", "create", "stop"]);
     expect(ctx.onCancellationReady).toHaveBeenCalledTimes(1);
     expect(result.exitCode).toBe(1);
     expect(result.timedOut).toBe(false);
     expect(result.errorCode).toBe("hermes_gateway_cancelled");
+    // myrmidon(G4): the platform's cancelRun (heartbeat.ts) 409s the pause
+    // request unless the adapter's own resultJson confirms
+    // executionCancellation.state === "acknowledged"; omitting it (the
+    // previous behavior, unconditionally) made every clean stop 409 anyway.
+    expect(result.resultJson?.executionCancellation).toMatchObject({
+      state: "acknowledged",
+      forced: false,
+    });
+  });
+
+  it("does not claim cancellation acknowledged when the post-stop status check cannot verify termination", async () => {
+    // The mirror image of the test above: fetchFinalStatus never observes a
+    // terminal Hermes status (the GET keeps failing), so the adapter must
+    // not claim "acknowledged" — an honest "unverified" lets the platform's
+    // own 409 stand instead of a false all-clear.
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-cancel-2", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        controller.abort();
+        return new Promise<Response>(() => {});
+      }
+      if (url.endsWith("/stop")) return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      if (init?.method === "GET") return new Response(JSON.stringify({ error: "unreachable" }), { status: 503 });
+      return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+    ctx.signal = controller.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    const result = await execute(ctx);
+
+    expect(result.errorCode).toBe("hermes_gateway_cancelled");
+    expect(result.resultJson?.executionCancellation).toBeUndefined();
+  });
+
+  it("acknowledges cancellation without creating a run when ctx.signal is already aborted", async () => {
+    // myrmidon(G4): a signal aborted before or during onCancellationReady
+    // must stop the adapter from ever creating a Hermes run for a Paperclip
+    // run that is already cancelled.
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.fn(async () => {
+      throw new Error("must not call the Hermes gateway once the run is already cancelled");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+    ctx.signal = controller.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    const result = await execute(ctx);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(ctx.onCancellationReady).toHaveBeenCalledTimes(1);
+    expect(result.errorCode).toBe("hermes_gateway_cancelled");
+    expect(result.executionRecovery).toEqual({ kind: "bootstrap", providerWorkStarted: false });
+    expect(result.resultJson?.executionCancellation).toMatchObject({
+      state: "acknowledged",
+      forced: false,
+    });
   });
 
   it("still honors an already-aborted ctx.signal when the caller supplies no onCancellationReady", async () => {
     // ctx.signal is the actual cancellation mechanism; onCancellationReady is
     // only the readiness handshake back to the platform. A caller that sets
     // ctx.signal without also providing onCancellationReady (unusual, but the
-    // field is optional) still gets a clean cancellation, not a hang or crash.
+    // field is optional) still gets a clean, immediate cancellation instead
+    // of a hang, a crash, or an orphaned Hermes run.
     const controller = new AbortController();
     controller.abort();
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith("/v1/runs")) {
-        return new Response(JSON.stringify({ run_id: "run-x", status: "started" }), { status: 200 });
-      }
-      if (url.endsWith("/events")) return new Promise<Response>(() => {});
-      if (url.endsWith("/stop")) return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
-      if (init?.method === "GET") return new Response(JSON.stringify({ status: "cancelled" }), { status: 200 });
-      return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+    const fetchMock = vi.fn(async () => {
+      throw new Error("must not call the Hermes gateway once the run is already cancelled");
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -851,7 +917,47 @@ describe("execute — operator cancellation (G4)", () => {
 
     const result = await execute(ctx);
     expect(result.errorCode).toBe("hermes_gateway_cancelled");
-    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/stop"))).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds the stop and status-check requests with a request timeout", async () => {
+    // myrmidon(G4): stopRun/fetchFinalStatus previously issued their POST
+    // .../stop and GET .../{runId} requests with no signal at all, so a
+    // gateway that accepted the TCP connection but never responded could
+    // block execute()'s return past the platform's 60s waitForAdapterStop
+    // deadline (adapter-execution-control.ts) instead of returning inside
+    // STOP_GRACE_MS.
+    const controller = new AbortController();
+    const requestSignals: Array<AbortSignal | undefined> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-cancel-3", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        controller.abort();
+        return new Promise<Response>(() => {});
+      }
+      if (url.endsWith("/stop") || init?.method === "GET") {
+        requestSignals.push(init?.signal ?? undefined);
+        return url.endsWith("/stop")
+          ? new Response(JSON.stringify({ status: "stopping" }), { status: 200 })
+          : new Response(JSON.stringify({ status: "cancelled" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+    ctx.signal = controller.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    await execute(ctx);
+
+    expect(requestSignals.length).toBeGreaterThan(0);
+    for (const signal of requestSignals) {
+      expect(signal).toBeInstanceOf(AbortSignal);
+    }
   });
 });
 
@@ -1266,23 +1372,39 @@ describe("execute — compact progress logging (G4)", () => {
   });
 });
 
-describe("execute — idempotent retry attach (G4)", () => {
-  it("uses retryOfRunId as the Idempotency-Key so Hermes can dedupe the retry", async () => {
+describe("execute — idempotency key (G4)", () => {
+  it("ignores retryOfRunId and keys the Idempotency-Key off this attempt's own ctx.runId, even for a realistic continuation retry", async () => {
+    // myrmidon(G4): heartbeat.ts sets retryOfRunId on plain continuation
+    // wakes (issue_continuation_needed, missing_issue_comment, ...), not
+    // only after a lost process, and each carries its own wakeReason /
+    // paperclipWake — so its body legitimately differs from the run it
+    // points back at. Keying the Idempotency-Key off retryOfRunId would
+    // fingerprint-mismatch that different body against the predecessor's
+    // stored one and 409 instead of creating a fresh run.
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).endsWith("/v1/runs") ? { run_id: "run-hermes-1", status: "started" } : { status: "completed", output: "done" },
     ), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
-    ctx.context = { ...ctx.context, retryOfRunId: "pc-run-original" };
+    ctx.runId = "pc-run-2";
+    ctx.context = {
+      ...ctx.context,
+      retryOfRunId: "pc-run-original",
+      wakeReason: "issue_continuation_needed",
+      retryReason: "issue_continuation_needed",
+      paperclipWake: { issue: { identifier: "PAP-1", title: "Do the thing", description: "Continuation-specific detail not in the original wake" } },
+    };
     await execute(ctx);
 
     const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
     const init = calls.find(([input]) => String(input).endsWith("/v1/runs"))?.[1] as RequestInit;
-    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe("pc-run-original");
+    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe("pc-run-2");
+    expect(JSON.parse(String(init.body)).input).toContain("Run ID: pc-run-2");
+    expect(JSON.parse(String(init.body)).input).not.toContain("Run ID: pc-run-original");
   });
 
-  it("falls back to the Paperclip run id when this run is not a retry", async () => {
+  it("keys the Idempotency-Key off ctx.runId when this run is not a retry", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).endsWith("/v1/runs") ? { run_id: "run-hermes-2", status: "started" } : { status: "completed", output: "done" },
     ), { status: 200 }));
@@ -1312,8 +1434,10 @@ describe("execute — idempotent retry attach (G4)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
+    // No retryOfRunId here: with the Idempotency-Key now always ctx.runId
+    // (unique per attempt), a replayed:true response is a genuine duplicate
+    // create for this same attempt, not something retryOfRunId drives.
     const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
-    ctx.context = { ...ctx.context, retryOfRunId: "pc-run-original" };
     const result = await execute(ctx);
 
     expect(result.exitCode).toBe(0);
@@ -1322,49 +1446,53 @@ describe("execute — idempotent retry attach (G4)", () => {
     expect(logText).toContain("idempotent replay: attaching to existing run run-original-1 instead of starting a new one");
   });
 
-  it("keeps the /v1/runs request body byte-identical across an original attempt and its retry", async () => {
-    // myrmidon(G4): Hermes fingerprints the *whole* POST body to decide
-    // whether a reused Idempotency-Key is a replay or a conflict
-    // (api_server_runs.py: idempotency_fingerprint = sha256({"body": body,
-    // "gateway_session_key": ...})). A process_lost retry runs with a brand
-    // new ctx.runId (a new heartbeat_runs row) while retryOfRunId points back
-    // at the original attempt's run id — if the request body embedded the raw
-    // per-attempt ctx.runId anywhere (buildInput's "Run ID:" line, or the
-    // session key for sessionKeyStrategy "run"), the retry's body would
-    // differ from the original and Hermes would answer 409 conflict instead
-    // of replayed:true, leaving the original run orphaned.
+  it("gives an original attempt and its retry distinct request bodies and keys, each matching its own ctx.runId", async () => {
+    // myrmidon(G4): the inverse of the old (buggy) assumption that a retry's
+    // body must byte-match its predecessor's. A continuation retry has its
+    // own wakeReason/paperclipWake, so forcing the predecessor's id onto its
+    // Idempotency-Key/session-key/"Run ID:" line only fingerprint-mismatches
+    // it against the wrong stored request. Each attempt must stand on its
+    // own ctx.runId.
     const bodies: string[] = [];
+    const keys: string[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/v1/runs")) {
         bodies.push(String(init?.body));
+        keys.push((init?.headers as Record<string, string>)["Idempotency-Key"]);
         return new Response(JSON.stringify({ run_id: "run-hermes-x", status: "started" }), { status: 200 });
       }
       return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    // Original attempt: no retryOfRunId, so its own run id ("pc-run-1", from
-    // makeCtx) is the stable identity the body is built from.
     const original = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
     await execute(original);
 
-    // Its process_lost retry: a different ctx.runId, retryOfRunId pointing
-    // back at the original's run id.
+    // A realistic continuation retry: a different ctx.runId, retryOfRunId
+    // pointing back at the original's run id, and its own wakeReason/
+    // paperclipWake (heartbeat.ts's enqueueMissingIssueCommentRetry and the
+    // planned-continuation paths all shape retries this way).
     const retry = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
     retry.runId = "pc-run-2";
-    retry.context = { ...retry.context, retryOfRunId: original.runId };
+    retry.context = {
+      ...retry.context,
+      retryOfRunId: original.runId,
+      wakeReason: "missing_issue_comment",
+      retryReason: "missing_issue_comment",
+      paperclipWake: { issue: { identifier: "PAP-1", title: "Do the thing", description: "Reminder: comment was missing" } },
+    };
     await execute(retry);
 
+    expect(keys).toEqual(["pc-run-1", "pc-run-2"]);
     expect(bodies).toHaveLength(2);
-    expect(bodies[1]).toBe(bodies[0]);
+    expect(bodies[1]).not.toBe(bodies[0]);
     expect(JSON.parse(bodies[0]).input).toContain(`Run ID: ${original.runId}`);
+    expect(JSON.parse(bodies[1]).input).toContain(`Run ID: ${retry.runId}`);
+    expect(JSON.parse(bodies[1]).input).not.toContain(`Run ID: ${original.runId}`);
   });
 
-  it("keys sessionKeyStrategy 'run' session keys off the idempotency-stable id, not the per-attempt run id", async () => {
-    // myrmidon(G4): the fingerprint also covers gateway_session_key (derived
-    // from the X-Hermes-Session-Key header), so a retry's session key must be
-    // just as stable as its body for replay to work under this strategy.
+  it("keys sessionKeyStrategy 'run' session keys off this attempt's own ctx.runId, not retryOfRunId", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).endsWith("/v1/runs") ? { run_id: "run-hermes-y", status: "started" } : { status: "completed", output: "done" },
     ), { status: 200 }));
@@ -1382,9 +1510,9 @@ describe("execute — idempotent retry attach (G4)", () => {
 
     const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
     const init = calls.find(([input]) => String(input).endsWith("/v1/runs"))?.[1] as RequestInit;
-    expect((init.headers as Record<string, string>)["X-Hermes-Session-Key"]).toBe("paperclip:run:pc-run-original");
+    expect((init.headers as Record<string, string>)["X-Hermes-Session-Key"]).toBe("paperclip:run:pc-run-2");
     const body = JSON.parse(String(init.body));
-    expect(body.session_id).toBe("paperclip:run:pc-run-original");
+    expect(body.session_id).toBe("paperclip:run:pc-run-2");
   });
 
   it("classifies a 409 idempotency-key conflict distinctly from a generic protocol error", async () => {
