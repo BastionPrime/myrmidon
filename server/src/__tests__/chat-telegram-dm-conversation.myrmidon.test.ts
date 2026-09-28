@@ -21,7 +21,6 @@ import {
   chatEndpoints,
   chatExternalPrincipals,
   chatIdentityLinks,
-  chatMessageLinks,
   chatPublications,
   companies,
   companyMemberships,
