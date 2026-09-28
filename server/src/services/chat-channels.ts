@@ -124,6 +124,8 @@ import {
   normalizeUploadAttachmentContentType,
 } from "../attachment-types.js";
 import { isUniqueViolation } from "../db-errors.js";
+import { coalescedOwnerId } from "../myrmidon/chat-reconciliation/owner-join.js";
+import { nextSweepCursor } from "../myrmidon/chat-reconciliation/sweep-cursor.js";
 import {
   bindTeamsPersonalRecipient,
   deriveTeamsPersonalRecipient,
@@ -13776,12 +13778,14 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     if (shuttingDown) return 0;
     const retryInserted = await enqueueFailedChatRetryPublications(limit);
     const owner = alias(agentWakeupRequests, "chat_notice_owner");
+    // myrmidon(D1): a real join instead of a repeated correlated EXISTS —
+    // the three spots below that used to each write their own
+    // `exists (select 1 from issue_comments removed_comment ...)` made
+    // Postgres rebuild the same lookup three times per candidate row. See
+    // docs/myrmidon/DIVERGENCE.md.
+    const removedComment = alias(issueComments, "removed_comment");
+    const sourceRemoved = isNotNull(removedComment.id);
     const cursor = inboundWakeNoticeCursor;
-    const sourceRemoved = sql`exists (select 1 from issue_comments removed_comment
-      where removed_comment.company_id = ${chatActions.companyId}
-        and removed_comment.issue_id::text = ${chatActions.payload}->>'issueId'
-        and removed_comment.id::text = ${chatActions.payload}->>'commentId'
-        and removed_comment.deleted_at is not null)`;
     const hasVisibleQueue = sql`exists (select 1 from chat_publications queued_notice
       join chat_message_links visible_queue on visible_queue.publication_id = queued_notice.id
         and visible_queue.company_id = queued_notice.company_id
@@ -13805,7 +13809,22 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       )
       .innerJoin(
         owner,
-        sql`${owner.id}::text = coalesce(${agentWakeupRequests.payload}->>'coalescedIntoWakeupRequestId', ${agentWakeupRequests.id}::text)`,
+        // myrmidon(D1): uuid-typed comparison instead of `owner.id::text =
+        // coalesce(...)::text`. Comparing as text stopped Postgres using the
+        // uuid primary key index on `owner`, forcing a hash/sort-merge join
+        // over the entire agent_wakeup_requests table on every call — the
+        // dominant cost of this sweep. See coalescedOwnerId's doc comment
+        // and docs/myrmidon/DIVERGENCE.md.
+        sql`${owner.id} = ${coalescedOwnerId(agentWakeupRequests.payload, agentWakeupRequests.id)}`,
+      )
+      .leftJoin(
+        removedComment,
+        and(
+          eq(removedComment.companyId, chatActions.companyId),
+          sql`${removedComment.issueId}::text = ${chatActions.payload}->>'issueId'`,
+          sql`${removedComment.id}::text = ${chatActions.payload}->>'commentId'`,
+          isNotNull(removedComment.deletedAt),
+        ),
       )
       .where(
         and(
@@ -13842,10 +13861,14 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       .orderBy(asc(chatActions.createdAt), asc(chatActions.id))
       .limit(Math.max(1, Math.min(limit, 200)));
     const last = candidates.at(-1)?.action;
-    inboundWakeNoticeCursor =
-      candidates.length >= Math.max(1, Math.min(limit, 200)) && last
-        ? { createdAt: last.createdAt, id: last.id }
-        : null;
+    // myrmidon(D1): advance to the last row a non-empty page returned
+    // (whether or not the page was full), and otherwise keep the previous
+    // cursor instead of resetting to the very start of chat_actions. See
+    // nextSweepCursor's doc comment and docs/myrmidon/DIVERGENCE.md.
+    inboundWakeNoticeCursor = nextSweepCursor(
+      inboundWakeNoticeCursor,
+      candidates.map(({ action }) => ({ createdAt: action.createdAt, id: action.id })),
+    );
     let inserted = retryInserted;
     for (const { action } of candidates) {
       try {
