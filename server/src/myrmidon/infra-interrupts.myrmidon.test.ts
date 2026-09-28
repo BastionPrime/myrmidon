@@ -1,6 +1,8 @@
 import { expect, it, describe } from "vitest";
 import {
   DEFAULT_INFRA_INTERRUPT_ERROR_CODES,
+  INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY,
+  infraInterruptAttemptCount,
   infraInterruptRetryBudgetExhausted,
   isInfraInterruptErrorCode,
   parseInfraInterruptCodes,
@@ -50,6 +52,40 @@ describe("isInfraInterruptErrorCode", () => {
   });
 });
 
+describe("infraInterruptAttemptCount", () => {
+  it("falls back to scheduledRetryAttempt when no carried-forward context is present", () => {
+    expect(infraInterruptAttemptCount({ scheduledRetryAttempt: 1 })).toBe(1);
+    expect(infraInterruptAttemptCount({ scheduledRetryAttempt: 0, contextSnapshot: null })).toBe(0);
+  });
+
+  it("reads the count pause-drain.ts's resumeAgentAfterPause carries forward across a resume", () => {
+    expect(
+      infraInterruptAttemptCount({
+        scheduledRetryAttempt: 0,
+        contextSnapshot: { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: 1 },
+      }),
+    ).toBe(1);
+  });
+
+  it("takes whichever of the two sources is higher", () => {
+    expect(
+      infraInterruptAttemptCount({
+        scheduledRetryAttempt: 3,
+        contextSnapshot: { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: 1 },
+      }),
+    ).toBe(3);
+  });
+
+  it("ignores a malformed or negative carried-forward value", () => {
+    expect(
+      infraInterruptAttemptCount({ scheduledRetryAttempt: 0, contextSnapshot: { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: -1 } }),
+    ).toBe(0);
+    expect(
+      infraInterruptAttemptCount({ scheduledRetryAttempt: 0, contextSnapshot: { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: "2" } }),
+    ).toBe(0);
+  });
+});
+
 describe("infraInterruptRetryBudgetExhausted", () => {
   it("is not exhausted below the default budget of 2", () => {
     expect(infraInterruptRetryBudgetExhausted({ scheduledRetryAttempt: 0 })).toBe(false);
@@ -63,6 +99,26 @@ describe("infraInterruptRetryBudgetExhausted", () => {
 
   it("honors an explicit budget override", () => {
     expect(infraInterruptRetryBudgetExhausted({ scheduledRetryAttempt: 1 }, 1)).toBe(true);
+  });
+
+  it("is exhausted from the pause/resume carried-forward count alone, even with scheduledRetryAttempt still at 0", () => {
+    // The shape a run created by resumeAgentAfterPause actually has: it is a
+    // brand-new heartbeat run (scheduledRetryAttempt defaults to 0), not a
+    // scheduleBoundedRetryForRun continuation, so only the carried-forward
+    // context field reflects how many pause/resume cycles this issue has
+    // already been through.
+    expect(
+      infraInterruptRetryBudgetExhausted({
+        scheduledRetryAttempt: 0,
+        contextSnapshot: { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: 2 },
+      }),
+    ).toBe(true);
+    expect(
+      infraInterruptRetryBudgetExhausted({
+        scheduledRetryAttempt: 0,
+        contextSnapshot: { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: 1 },
+      }),
+    ).toBe(false);
   });
 });
 
@@ -89,6 +145,20 @@ describe("shouldSkipReconciliationForInfraInterrupt", () => {
     const env = { MYRMIDON_INFRA_INTERRUPT_CODES: "off" } as NodeJS.ProcessEnv;
     expect(
       shouldSkipReconciliationForInfraInterrupt({ errorCode: "agent_paused", scheduledRetryAttempt: 0 }, env),
+    ).toBe(false);
+  });
+
+  it("keeps the hold once a pause/resume cycle's carried-forward count alone exhausts the budget", () => {
+    // The exact shape legacy-execution-recovery.ts and recovery/service.ts
+    // see for a run created by resumeAgentAfterPause after two prior
+    // pause/resume cycles: a fresh run (scheduledRetryAttempt: 0) whose
+    // contextSnapshot carries the count forward instead.
+    expect(
+      shouldSkipReconciliationForInfraInterrupt({
+        errorCode: "agent_paused",
+        scheduledRetryAttempt: 0,
+        contextSnapshot: { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: 2 },
+      }),
     ).toBe(false);
   });
 });

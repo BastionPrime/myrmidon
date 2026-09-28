@@ -20,6 +20,11 @@ vi.mock("../middleware/logger.js", () => ({
 
 import { logger } from "../middleware/logger.ts";
 import { resumeAgentAfterPause } from "../myrmidon/pause-drain.ts";
+import {
+  DEFAULT_INFRA_INTERRUPT_RETRY_BUDGET,
+  infraInterruptRetryBudgetExhausted,
+  shouldSkipReconciliationForInfraInterrupt,
+} from "../myrmidon/infra-interrupts.ts";
 
 // L3: resume wakes queued runs and stranded assigned issues a drained pause left idle.
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -95,6 +100,31 @@ describeEmbeddedPostgres("resumeAgentAfterPause (L3)", () => {
       status: input.status,
       invocationSource: "automation",
       contextSnapshot: { issueId: input.issueId },
+    });
+  }
+
+  // myrmidon(L1): a stranded issue's most recent run -- the one the agent's
+  // pause left it stuck behind -- carries the shared infra-interrupt retry
+  // budget forward into the wake resumeAgentAfterPause issues for it.
+  async function seedTerminalRun(input: {
+    companyId: string;
+    agentId: string;
+    issueId: string;
+    errorCode: string | null;
+    contextSnapshot?: Record<string, unknown>;
+    scheduledRetryAttempt?: number;
+    createdAt: Date;
+  }) {
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(),
+      companyId: input.companyId,
+      agentId: input.agentId,
+      status: "cancelled",
+      invocationSource: "automation",
+      errorCode: input.errorCode,
+      scheduledRetryAttempt: input.scheduledRetryAttempt ?? 0,
+      contextSnapshot: { issueId: input.issueId, ...input.contextSnapshot },
+      createdAt: input.createdAt,
     });
   }
 
@@ -240,5 +270,147 @@ describeEmbeddedPostgres("resumeAgentAfterPause (L3)", () => {
 
     expect(result.strandedIssuesWoken).toBe(0);
     expect(deps.enqueueWakeup).not.toHaveBeenCalled();
+  });
+
+  describe("L1: carries the infra-interrupt retry budget across the pause/resume cycle", () => {
+    it("carries attempt 1 forward from a fresh agent_paused cancellation with no prior count", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const issueId = await seedIssue({ companyId, agentId, status: "in_progress" });
+      await seedTerminalRun({ companyId, agentId, issueId, errorCode: "agent_paused", createdAt: new Date() });
+      const deps = fakeDeps();
+
+      await resumeAgentAfterPause(deps, agentId);
+
+      expect(deps.enqueueWakeup).toHaveBeenCalledWith(
+        agentId,
+        expect.objectContaining({
+          contextSnapshot: { issueId, taskKey: issueId, resumeIntent: true, infraInterruptAttempt: 1 },
+        }),
+      );
+    });
+
+    it("adds the carried-forward count on top of a predecessor's own count", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const issueId = await seedIssue({ companyId, agentId, status: "in_progress" });
+      await seedTerminalRun({
+        companyId,
+        agentId,
+        issueId,
+        errorCode: "agent_paused",
+        contextSnapshot: { infraInterruptAttempt: 1 },
+        createdAt: new Date(),
+      });
+      const deps = fakeDeps();
+
+      await resumeAgentAfterPause(deps, agentId);
+
+      expect(deps.enqueueWakeup).toHaveBeenCalledWith(
+        agentId,
+        expect.objectContaining({
+          contextSnapshot: { issueId, taskKey: issueId, resumeIntent: true, infraInterruptAttempt: 2 },
+        }),
+      );
+    });
+
+    it("does not carry a count forward when the stranded run's own errorCode is not an infra interrupt", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const issueId = await seedIssue({ companyId, agentId, status: "in_progress" });
+      await seedTerminalRun({ companyId, agentId, issueId, errorCode: "adapter_failed", createdAt: new Date() });
+      const deps = fakeDeps();
+
+      await resumeAgentAfterPause(deps, agentId);
+
+      expect(deps.enqueueWakeup).toHaveBeenCalledWith(
+        agentId,
+        expect.objectContaining({
+          contextSnapshot: { issueId, taskKey: issueId, resumeIntent: true },
+        }),
+      );
+    });
+
+    it("reads the most recent run when an issue has an older run under a different agent and a newer one under this one", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const issueId = await seedIssue({ companyId, agentId, status: "in_progress" });
+      await seedTerminalRun({
+        companyId,
+        agentId,
+        issueId,
+        errorCode: "adapter_failed",
+        createdAt: new Date(Date.now() - 60_000),
+      });
+      await seedTerminalRun({
+        companyId,
+        agentId,
+        issueId,
+        errorCode: "agent_paused",
+        contextSnapshot: { infraInterruptAttempt: 1 },
+        createdAt: new Date(),
+      });
+      const deps = fakeDeps();
+
+      await resumeAgentAfterPause(deps, agentId);
+
+      expect(deps.enqueueWakeup).toHaveBeenCalledWith(
+        agentId,
+        expect.objectContaining({
+          contextSnapshot: { issueId, taskKey: issueId, resumeIntent: true, infraInterruptAttempt: 2 },
+        }),
+      );
+    });
+
+    it("real cycles of pause-cancel-then-resume advance the shared budget until it is exhausted", async () => {
+      // Simulates DEFAULT_INFRA_INTERRUPT_RETRY_BUDGET + 1 real pause/resume
+      // cycles through the actual resumeAgentAfterPause carry-forward path
+      // (not a synthetic scheduledRetryAttempt), and checks that the vendor's
+      // hold -- suppressed by shouldSkipReconciliationForInfraInterrupt for
+      // every cycle within budget -- stops being suppressed once it isn't:
+      // this is the loop-termination guarantee the L1 exception depends on.
+      const { companyId, agentId } = await seedAgent();
+      const issueId = await seedIssue({ companyId, agentId, status: "in_progress" });
+
+      let latestContextSnapshot: Record<string, unknown> | undefined;
+      const deps = fakeDeps({
+        enqueueWakeup: async (...args: unknown[]) => {
+          const opts = args[1] as { contextSnapshot?: Record<string, unknown> };
+          latestContextSnapshot = opts.contextSnapshot;
+          return { id: randomUUID() };
+        },
+      });
+
+      for (let cycle = 0; cycle <= DEFAULT_INFRA_INTERRUPT_RETRY_BUDGET; cycle += 1) {
+        // The agent pauses and its one active run for this issue is cancelled
+        // with the infra-interrupt error code, carrying forward whatever this
+        // same wake loop last handed it (nothing, the first time around).
+        await seedTerminalRun({
+          companyId,
+          agentId,
+          issueId,
+          errorCode: "agent_paused",
+          contextSnapshot: latestContextSnapshot,
+          createdAt: new Date(Date.now() + cycle * 1000),
+        });
+
+        // shouldSkipReconciliationForInfraInterrupt is exactly what
+        // legacy-execution-recovery.ts and recovery/service.ts evaluate on
+        // this same cancelled run right after cancellation / on the next
+        // sweep. Within budget, it must keep suppressing the vendor hold.
+        const runAsCancelled = {
+          errorCode: "agent_paused",
+          scheduledRetryAttempt: 0,
+          contextSnapshot: latestContextSnapshot ?? null,
+        };
+        const withinBudget = cycle < DEFAULT_INFRA_INTERRUPT_RETRY_BUDGET;
+        expect(shouldSkipReconciliationForInfraInterrupt(runAsCancelled)).toBe(withinBudget);
+        expect(infraInterruptRetryBudgetExhausted(runAsCancelled)).toBe(!withinBudget);
+
+        if (!withinBudget) break;
+
+        // The operator resumes the agent; the stranded issue is woken again,
+        // carrying the budget count one step further.
+        await resumeAgentAfterPause(deps, agentId);
+      }
+
+      expect(latestContextSnapshot?.infraInterruptAttempt).toBe(DEFAULT_INFRA_INTERRUPT_RETRY_BUDGET);
+    });
   });
 });

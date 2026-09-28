@@ -48,6 +48,47 @@ export const REASSIGNMENT_INTERRUPT_ERROR_CODE = "issue_reassigned";
  */
 export const DEFAULT_INFRA_INTERRUPT_RETRY_BUDGET = 2;
 
+type RetryBudgetRun = Parameters<typeof executionFailureRetryCount>[0];
+
+/**
+ * contextSnapshot field carrying the infra-interrupt attempt count forward
+ * across a pause/resume cycle (pause-drain.ts's resumeAgentAfterPause). A
+ * resumed agent's stranded issue gets an entirely new heartbeat run, not a
+ * scheduled continuation of the run the pause cancelled -- so
+ * heartbeat_runs.scheduledRetryAttempt, which defaults to 0 on that new row,
+ * cannot carry the shared budget by itself, and the budget could never
+ * exhaust for a repeatedly paused-and-resumed issue. This mirrors the
+ * vendor's own fix for the identical problem under a different retry reason
+ * (failureRetriesBeforeWorkspaceWait / failureRetriesBeforeAiConnectionWait,
+ * carried the same way in heartbeat.ts's scheduleBoundedRetryForRun): the
+ * durable count is read off the run this issue is actually resuming from and
+ * carried into the new run's contextSnapshot.
+ */
+export const INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY = "infraInterruptAttempt";
+
+function readInfraInterruptContextAttempt(
+  contextSnapshot: Record<string, unknown> | null | undefined,
+): number {
+  const value = contextSnapshot?.[INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY];
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+/**
+ * The infra-interrupt attempt count a run carries: whichever is higher of
+ * the vendor's own scheduledRetryAttempt-based accounting
+ * (executionFailureRetryCount) and the pause/resume carry-forward field
+ * above. Used both to decide whether this run's own interruption is still
+ * within the shared budget, and -- by resumeAgentAfterPause, reading the
+ * *predecessor* run -- to compute the count the next run after it should
+ * carry.
+ */
+export function infraInterruptAttemptCount(run: RetryBudgetRun): number {
+  return Math.max(
+    executionFailureRetryCount(run),
+    readInfraInterruptContextAttempt(run.contextSnapshot),
+  );
+}
+
 /** Parses a MYRMIDON_INFRA_INTERRUPT_CODES value into the set of configured codes. `undefined`/empty/"off" means "disabled" (vendor behavior). */
 export function parseInfraInterruptCodes(raw: string | undefined): ReadonlySet<string> {
   if (raw === undefined) return new Set(DEFAULT_INFRA_INTERRUPT_ERROR_CODES);
@@ -75,14 +116,12 @@ export function isInfraInterruptErrorCode(
   return readInfraInterruptCodes(env).has(errorCode);
 }
 
-type RetryBudgetRun = Parameters<typeof executionFailureRetryCount>[0];
-
 /** True once a run has already used the shared infra-interrupt retry budget. */
 export function infraInterruptRetryBudgetExhausted(
   run: RetryBudgetRun,
   maxAttempts: number = DEFAULT_INFRA_INTERRUPT_RETRY_BUDGET,
 ): boolean {
-  return executionFailureRetryCount(run) >= maxAttempts;
+  return infraInterruptAttemptCount(run) >= maxAttempts;
 }
 
 /**
