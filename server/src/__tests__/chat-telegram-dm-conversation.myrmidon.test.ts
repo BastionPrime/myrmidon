@@ -1616,10 +1616,12 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
       .from(issueComments)
       .where(eq(issueComments.issueId, issue.id))
       .orderBy(issueComments.createdAt);
-    // The stored comment keeps the sender's literal text; only the copy fed
-    // to the vendor's reset check is normalized (see bridge.ts's own comment
-    // on this call site).
-    expect(comments.at(-1)!.body).toBe("/new@TestBot");
+    // The canonical command dispatcher (commands/index.ts, X8a) already
+    // normalizes "/new@<bot>" to a literal "/new" before chat-channels.ts
+    // persists the comment, so the stored body is the normalized form, not
+    // the sender's literal text (see bridge.ts's own comment on this call
+    // site).
+    expect(comments.at(-1)!.body).toBe("/new");
 
     const holdAfter = await db
       .select()

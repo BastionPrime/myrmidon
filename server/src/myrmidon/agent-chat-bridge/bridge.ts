@@ -550,20 +550,21 @@ export async function afterTelegramDmMessage(input: {
   notice?: string;
   migratedFromIssueId?: string;
 }): Promise<void> {
-  // myrmidon(X8b): recognize both "/new" and "/new@<bot username>" — Telegram
-  // clients append the bot's username in a group, and a person may paste it
-  // into a DM out of habit too. `resumeConversationForReset` itself compares
-  // the comment's raw `body` against a literal "/new" (agent-conversations.ts,
-  // not ours to change), so the mention suffix must be stripped from the copy
-  // passed in rather than from the stored comment.
-  const resetCommand = parseBridgedCommand(input.comment.body);
-  if (resetCommand && resetCommand.name === "new" && resetCommand.args === "") {
-    await resumeConversationForReset(input.db, {
-      ...(input.comment as unknown as Parameters<
-        typeof resumeConversationForReset
-      >[1]),
-      body: "/new",
-    });
+  // myrmidon(X8a/X8b): the bridged command dispatcher (commands/index.ts,
+  // canon from X8a) already recognizes both "/new" and "/new@<bot username>"
+  // — Telegram clients append the bot's username in a group, and a person
+  // may paste it into a DM out of habit too — and normalizes either one to
+  // a literal "/new" *before* chat-channels.ts persists the comment (the
+  // `x8MessageBody` override there). So by the time this runs, a reset
+  // always shows up as an exact "/new"; `resumeConversationForReset` itself
+  // compares the comment's raw `body` against that literal
+  // (agent-conversations.ts, not ours to change), so a plain equality check
+  // is enough here.
+  if (input.comment.body === "/new") {
+    await resumeConversationForReset(
+      input.db,
+      input.comment as unknown as Parameters<typeof resumeConversationForReset>[1],
+    );
   }
   if (input.notice) {
     await input.db.transaction((tx) =>
