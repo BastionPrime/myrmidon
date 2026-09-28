@@ -20612,7 +20612,7 @@ export function heartbeatService(
           ...taskMarkdownInput,
           taskPlan,
           includeDescription: false,
-        }),
+        }) ?? "", // myrmidon(X8d): buildPaperclipTaskMarkdown can return null; appendCrossChannelDelta requires string
         x8CrossChannel,
       ); // myrmidon(X8d)
       if (issueRef) {

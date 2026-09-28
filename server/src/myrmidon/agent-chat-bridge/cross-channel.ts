@@ -20,7 +20,7 @@
  * low-trust quarantined. Any query failure is caught and logged; a turn must
  * never fail because this context could not be built.
  */
-import { and, desc, eq, gte, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { issueComments, issues, type Db } from "@paperclipai/db";
 
 import { logger } from "../../middleware/logger.js";
@@ -128,6 +128,25 @@ async function countNeighborRows(
     .select({ count: sql<number>`count(*)::int` })
     .from(issueComments)
     .where(neighborRowsCondition(input));
+  return row?.count ?? 0;
+}
+
+/**
+ * Same eligible-row count as `countNeighborRows`, further restricted to rows
+ * newer than `after` (strict). Used to size the delta's "not shown" note
+ * exactly: the fetch-limit overflow counted by `countNeighborRows` can be
+ * entirely newer than the delta cursor (a burst of sibling messages since
+ * this conversation's last turn), and undercounting that would silently
+ * drop new messages from the delta with no notice.
+ */
+async function countNeighborRowsAfter(
+  db: Db,
+  input: { companyId: string; neighbor: ConversationRow; lookbackSince: Date; after: Date },
+): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(issueComments)
+    .where(and(neighborRowsCondition(input), gt(issueComments.createdAt, input.after)));
   return row?.count ?? 0;
 }
 
@@ -297,9 +316,28 @@ async function buildCrossChannelContextUnsafe(
     input.settings.totalChars,
   );
   // Without a cursor this is the first turn of the session: delta mirrors full,
-  // including its message-limit truncation notice. With a cursor, messages
-  // before it were excluded by design, not dropped for budget reasons.
-  const deltaK = cursor ? deltaDroppedByChars : droppedByLimit + deltaDroppedByChars;
+  // including its message-limit truncation notice. With a cursor, `overflow`
+  // may still hide messages newer than the cursor (a burst of sibling
+  // messages since this conversation's last turn can by itself exceed the
+  // fetch limit, so `droppedByLimit` is not necessarily all pre-cursor) —
+  // count exactly how many eligible messages after the cursor are missing
+  // from deltaChronological rather than assume droppedByLimit means "before
+  // the cursor, by design".
+  const deltaDroppedByLimit =
+    cursor && overflow
+      ? Math.max(
+          0,
+          (await countNeighborRowsAfter(db, {
+            companyId: input.companyId,
+            neighbor,
+            lookbackSince,
+            after: cursor.createdAt,
+          })) - deltaChronological.length,
+        )
+      : cursor
+        ? 0
+        : droppedByLimit;
+  const deltaK = deltaDroppedByLimit + deltaDroppedByChars;
   const delta = renderBlock("delta", neighborChannel, renderContent(deltaLines, deltaK));
 
   if (!full && !delta) return null;

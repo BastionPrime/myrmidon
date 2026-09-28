@@ -15,7 +15,12 @@ import { telegramConversationUserId } from "./identity.js";
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
-const BASE_TIME = new Date("2026-01-10T12:00:00.000Z");
+// Anchored to the real clock, not a fixed calendar date: most tests below
+// call buildCrossChannelContext without an explicit `now`, so it defaults to
+// the real wall clock and only sees messages within the default lookback
+// window (168h). A fixed past BASE_TIME would drift out of that window as
+// the calendar moves on and silently turn every such test's result null.
+const BASE_TIME = new Date();
 
 function at(minutesFromBase: number): Date {
   return new Date(BASE_TIME.getTime() + minutesFromBase * 60_000);
@@ -311,6 +316,71 @@ describeEmbeddedPostgres("cross-channel context (X8d)", () => {
     expect(markdown).toBe(`task markdown\n\n${continued!.delta}`);
     expect(appendCrossChannelDelta("task markdown", null)).toBe("task markdown");
     expect(appendCrossChannelDelta("task markdown", { delta: "" })).toBe("task markdown");
+  });
+
+  it("delta's missing-count note stays accurate when the fetch-limit overflow is itself newer than the cursor", async () => {
+    // Regression: a burst of sibling messages since this conversation's last
+    // own message can by itself exceed MESSAGES. That overflow must still be
+    // reported in the delta's "not shown" note, not silently dropped just
+    // because a cursor is set (the fix must count what is actually missing
+    // *after* the cursor, not assume overflow means "before the cursor").
+    const { companyId, tg, web, webUserId, tgUserId } = await seedPair(db);
+    const tgFirst = await userMsg(db, tg.id, tgUserId, "telegram turn 1", at(0));
+    const tgSecond = await userMsg(db, tg.id, tgUserId, "telegram turn 2", at(20));
+    for (let i = 1; i <= 5; i += 1) {
+      await userMsg(db, web.id, webUserId, `web overflow ${i}`, at(i));
+    }
+
+    const context = await buildCrossChannelContext(db, {
+      companyId,
+      issueId: tg.id,
+      wakeCommentId: tgSecond.id,
+      env: { MYRMIDON_CHAT_CROSS_CHANNEL_MESSAGES: "3" },
+    });
+
+    expect(context).not.toBeNull();
+    // Cursor is telegram turn 1 (the last own message before the wake
+    // comment); all 5 web messages are newer than it, so all of them are
+    // candidates for the delta, but only the newest 3 fit MESSAGES=3.
+    expect(context!.delta).toContain("web overflow 3");
+    expect(context!.delta).toContain("web overflow 4");
+    expect(context!.delta).toContain("web overflow 5");
+    expect(context!.delta).not.toContain("web overflow 1");
+    expect(context!.delta).not.toContain("web overflow 2");
+    expect(context!.delta).toContain("(2 earlier messages not shown)");
+    void tgFirst;
+  });
+
+  it("delta's missing-count note does not fire when every message after the cursor is shown, even though older sibling messages were dropped by the fetch limit", async () => {
+    // The fetch-limit overflow reported for `full` (droppedByLimit) can be
+    // entirely made up of messages *before* the cursor. The delta must not
+    // reuse that count as-is (it would falsely claim messages are missing
+    // from a delta that in fact shows everything new).
+    const { companyId, tg, web, webUserId, tgUserId } = await seedPair(db);
+    for (let i = 1; i <= 5; i += 1) {
+      await userMsg(db, web.id, webUserId, `web old ${i}`, at(-10 * (6 - i)));
+    }
+    const tgFirst = await userMsg(db, tg.id, tgUserId, "telegram turn 1", at(0));
+    await userMsg(db, web.id, webUserId, "web new 1", at(1));
+    await userMsg(db, web.id, webUserId, "web new 2", at(2));
+    const tgSecond = await userMsg(db, tg.id, tgUserId, "telegram turn 2", at(20));
+
+    const context = await buildCrossChannelContext(db, {
+      companyId,
+      issueId: tg.id,
+      wakeCommentId: tgSecond.id,
+      env: { MYRMIDON_CHAT_CROSS_CHANNEL_MESSAGES: "3" },
+    });
+
+    expect(context).not.toBeNull();
+    // full is dropping older "web old" messages, so it does carry a note.
+    expect(context!.full).toContain("earlier messages not shown");
+    // delta only ever had 2 candidates (both after the cursor) and both fit
+    // within MESSAGES=3, so nothing is actually missing from it.
+    expect(context!.delta).toContain("web new 1");
+    expect(context!.delta).toContain("web new 2");
+    expect(context!.delta).not.toContain("earlier messages not shown");
+    void tgFirst;
   });
 
   it("returns null when this conversation is low-trust quarantined", async () => {
