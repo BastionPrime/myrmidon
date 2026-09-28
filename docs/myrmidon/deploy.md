@@ -13,9 +13,12 @@
   override (`COMPOSE_OVERRIDE_FILE`). Скрипт меняет в нём только строку `image:`;
 - команда дампа БД (`DUMP_COMMAND`) и, для отката с восстановлением, команда восстановления
   (`RESTORE_COMMAND`). Обе получают путь в переменной `DUMP_FILE`;
-- в режиме `authenticated` анонимный `/api/health` показывает коммит, но не версию. Чтобы
-  проверялась и версия, положите ключ доски в файл с правами `0600` и укажите его в
-  `HEALTH_TOKEN_FILE`.
+- в режиме `authenticated` анонимный `/api/health` показывает коммит, но не версию. Ключ доски
+  в файле с правами `0600` в `HEALTH_TOKEN_FILE` **обязателен**: без него проверка версии на
+  шаге 7 не проходит и выкат считается неудачным (так задумано — версия проверяется всегда);
+- как считать идущие прогоны: `RUNNING_RUNS_COMMAND` или `MAINTENANCE_MODE=api`. Если счётчик
+  не сработал (ошибка или пустой вывод), выкат останавливается до смены образа. Пропустить
+  ожидание можно только явно: `ALLOW_UNKNOWN_RUNS=1`.
 
 ## Где взять digest
 
@@ -40,7 +43,9 @@ scripts/myrmidon/deploy/deploy.sh --config /path/to/deploy.env --digest sha256:<
 Порядок:
 
 1. `docker pull` образа по digest. Не тянется — выкат не начинается.
-2. Текущий digest из файла override запоминается как предыдущий (`$STATE_DIR/previous-digest`).
+2. Текущий образ из файла override запоминается как предыдущий: полная ссылка — в
+   `$STATE_DIR/previous-image` (так работает и первый переход с вендорского образа), digest
+   форка — ещё и в `$STATE_DIR/previous-digest`.
 3. Дамп БД командой `DUMP_COMMAND` в `DUMP_DIR`. Файла нет или он меньше `DUMP_MIN_BYTES` —
    отказ, образ не меняется.
 4. Вход в режим обслуживания (`MAINTENANCE_MODE`):
@@ -50,7 +55,7 @@ scripts/myrmidon/deploy/deploy.sh --config /path/to/deploy.env --digest sha256:<
    - `pause` — пока API режима нет: пауза `MAINTENANCE_PAUSE_SEC` секунд.
 5. Ожидание, пока идущих прогонов не станет 0: `RUNNING_RUNS_COMMAND` или, в режиме `api`,
    `instance.runningRuns` из API. Таймаут `RUNS_WAIT_TIMEOUT_SEC` — выкат прерывается до смены
-   образа.
+   образа. Счётчик не сработал — тоже прерывается (кроме `ALLOW_UNKNOWN_RUNS=1`).
 6. Новая строка `image:` в override и `docker compose up -d --no-deps <сервис>`: пересоздаётся
    только сервис сервера.
 7. Проверка `/api/health` (`verify-health.sh`): `status` = `ok`, версия и коммит совпадают.
@@ -65,11 +70,14 @@ scripts/myrmidon/deploy/deploy.sh --config /path/to/deploy.env --digest sha256:<
 ## Откат
 
 ```sh
-scripts/myrmidon/deploy/rollback.sh --config /path/to/deploy.env            # на предыдущий digest
+scripts/myrmidon/deploy/rollback.sh --config /path/to/deploy.env            # на предыдущий образ
 scripts/myrmidon/deploy/rollback.sh --config /path/to/deploy.env --to sha256:<64 hex>
+scripts/myrmidon/deploy/rollback.sh --config /path/to/deploy.env --to-image ghcr.io/paperclipai/paperclip:2026.916.1
 ```
 
-Откат возвращает образ и проверяет health по меткам старого образа. **БД не восстанавливается.**
+Без `--to`/`--to-image` откат берёт образ, запомненный при последнем выкате, — в том числе
+вендорский при первом переходе на форк. Откат возвращает образ и проверяет health по меткам
+старого образа. **БД не восстанавливается.**
 Миграции вендора односторонние: старый образ обычно работает на новой схеме, а восстановление
 дампа стирает всё, что записано после него. Если старый образ на новой схеме не стартует,
 восстановление — отдельным явным шагом:

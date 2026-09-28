@@ -57,6 +57,7 @@ load_config() {
   : "${MAINTENANCE_PAUSE_SEC:=0}"
   : "${RUNNING_RUNS_COMMAND:=}"
   : "${RUNS_WAIT_TIMEOUT_SEC:=1800}"
+  : "${ALLOW_UNKNOWN_RUNS:=0}"
   : "${POLL_INTERVAL_SEC:=5}"
   case "$MAINTENANCE_MODE" in
     api|hook|pause) ;;
@@ -67,6 +68,7 @@ load_config() {
   fi
   OVERRIDE_PATH="$COMPOSE_DIR/$COMPOSE_OVERRIDE_FILE"
   PREVIOUS_FILE="$STATE_DIR/previous-digest"
+  PREVIOUS_IMAGE_FILE="$STATE_DIR/previous-image"
   HISTORY_FILE="$STATE_DIR/history.log"
 }
 
@@ -85,18 +87,27 @@ current_digest() {
   grep -Eo '@sha256:[0-9a-f]{64}' "$OVERRIDE_PATH" | head -n1 | cut -c2- || true
 }
 
+# Full image reference currently in the override file (any repository, tag or
+# digest), or empty. myrmidon(R4): lets the first deploy remember a vendor image.
+current_image() {
+  [[ -f "$OVERRIDE_PATH" ]] || return 0
+  sed -nE 's/^[[:space:]]*image:[[:space:]]*([^[:space:]#]+).*/\1/p' "$OVERRIDE_PATH" | head -n1
+}
+
 # Writes the override file: the only line that changes between deploys is `image:`.
-write_override() {
-  local digest="$1" tmp
+write_override_ref() {
+  local ref="$1" tmp
   tmp="$(mktemp "$OVERRIDE_PATH.XXXXXX")"
   {
     echo "# Managed by scripts/myrmidon/deploy. Only the image line changes."
     echo "services:"
     echo "  $COMPOSE_SERVICE:"
-    echo "    image: $MYRMIDON_IMAGE@$digest"
+    echo "    image: $ref"
   } >"$tmp"
   mv -f "$tmp" "$OVERRIDE_PATH"
 }
+
+write_override() { write_override_ref "$MYRMIDON_IMAGE@$1"; }
 
 auth_header_args() {
   local file="$1"
@@ -170,12 +181,18 @@ running_runs() {
 }
 
 wait_for_idle_runs() {
-  local deadline=$((SECONDS + RUNS_WAIT_TIMEOUT_SEC)) count
+  local deadline=$((SECONDS + RUNS_WAIT_TIMEOUT_SEC)) count rc
   while :; do
-    count="$(running_runs || true)"
-    if [[ -z "$count" ]]; then
-      log "runs: no way to count running runs (set RUNNING_RUNS_COMMAND or MAINTENANCE_MODE=api); not waiting"
-      return 0
+    # myrmidon(R4): a broken counter must not let the image switch cut live runs.
+    rc=0
+    count="$(running_runs)" || rc=$?
+    count="$(tr -d '[:space:]' <<<"$count")"
+    if ((rc != 0)) || [[ -z "$count" ]]; then
+      if [[ "$ALLOW_UNKNOWN_RUNS" == "1" ]]; then
+        log "runs: cannot count running runs (exit $rc); ALLOW_UNKNOWN_RUNS=1, not waiting"
+        return 0
+      fi
+      die "runs: cannot count running runs (exit $rc, output '${count}'); fix RUNNING_RUNS_COMMAND / MAINTENANCE_MODE=api or set ALLOW_UNKNOWN_RUNS=1; image not changed"
     fi
     [[ "$count" =~ ^[0-9]+$ ]] || die "running runs count is not a number: $count"
     if ((count == 0)); then

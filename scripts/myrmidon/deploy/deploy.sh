@@ -36,6 +36,7 @@ require_cmd docker curl jq
 
 ref="$MYRMIDON_IMAGE@$digest"
 previous="$(current_digest)"
+previous_image="$(current_image)"
 
 if [[ "$previous" == "$digest" && "$force" != "1" ]]; then
   log "already running $ref; nothing to do (use --force to redeploy)"
@@ -45,7 +46,7 @@ fi
 if [[ "$DRY_RUN" == "1" ]]; then
   log "dry run: nothing will be changed. Plan:"
   plan "1. docker pull $ref"
-  plan "2. remember previous digest: ${previous:-<none>} -> $PREVIOUS_FILE"
+  plan "2. remember previous image: ${previous_image:-<none>} -> $PREVIOUS_IMAGE_FILE"
   plan "3. dump database with DUMP_COMMAND into $DUMP_DIR (refuse if smaller than $DUMP_MIN_BYTES bytes)"
   plan "4. enter maintenance (MAINTENANCE_MODE=$MAINTENANCE_MODE)"
   plan "5. wait for zero running runs (timeout ${RUNS_WAIT_TIMEOUT_SEC}s)"
@@ -61,10 +62,14 @@ docker pull --quiet "$ref" >/dev/null || die "cannot pull $ref"
 [[ -n "$expect_commit" ]] || expect_commit="$(image_label "$ref" org.opencontainers.image.revision)"
 [[ -n "$expect_version" || -n "$expect_commit" ]] || die "image has no version/revision labels; pass --expect-version and --expect-commit"
 
-log "2/8 previous digest: ${previous:-<none>}"
+log "2/8 previous image: ${previous_image:-<none>}"
 mkdir -p "$STATE_DIR"
 if [[ -n "$previous" ]]; then
   printf '%s\n' "$previous" >"$PREVIOUS_FILE"
+fi
+# myrmidon(R4): the full reference, so rollback also works from a vendor image.
+if [[ -n "$previous_image" ]]; then
+  printf '%s\n' "$previous_image" >"$PREVIOUS_IMAGE_FILE"
 fi
 
 log "3/8 database dump"
