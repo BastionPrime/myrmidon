@@ -3,6 +3,8 @@ import { z } from "zod";
 import { MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
 import { guardedRemoteHttpFetch } from "./remote-http-fetch.js";
 import { getSecretProvider } from "../secrets/provider-registry.js";
+// myrmidon(B1): product name in the consent card text below; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 
 // Protocol building blocks only: no publication worker or runtime registration
 // is enabled here. The private codec authenticates persisted capabilities, while
@@ -263,6 +265,10 @@ export function teamsFileConsentProgress(phase: TeamsFileConsentPhase) {
   };
 }
 
+// myrmidon(B1): single literal shared by the builder below and its parser's
+// z.literal(...) validator, so the two descriptions cannot drift apart again.
+const TEAMS_FILE_CONSENT_CARD_DESCRIPTION = `Allow ${PRODUCT_NAME} to upload this file to your OneDrive.`;
+
 export function buildTeamsFileConsentCard(binding: TeamsFileConsentBinding) {
   const validated = parseTeamsFileConsentBinding(binding);
   if (!validated) throw new Error("Invalid Teams file consent binding");
@@ -270,7 +276,7 @@ export function buildTeamsFileConsentCard(binding: TeamsFileConsentBinding) {
     contentType: "application/vnd.microsoft.teams.card.file.consent" as const,
     name: validated.filename,
     content: {
-      description: "Allow Paperclip to upload this file to your OneDrive.",
+      description: TEAMS_FILE_CONSENT_CARD_DESCRIPTION,
       sizeInBytes: validated.byteSize,
       acceptContext: {
         schema: SCHEMA,
@@ -1130,9 +1136,7 @@ export function parseTeamsFileConsentCard(
       name: filename,
       content: z
         .object({
-          description: z.literal(
-            "Allow Paperclip to upload this file to your OneDrive.",
-          ),
+          description: z.literal(TEAMS_FILE_CONSENT_CARD_DESCRIPTION),
           sizeInBytes: z
             .number()
             .int()

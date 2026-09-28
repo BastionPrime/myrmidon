@@ -3,9 +3,21 @@ import type { ActivityEvent, Issue, SuccessfulRunHandoffState } from "@paperclip
 export const SUCCESSFUL_RUN_HANDOFF_REQUIRED_ACTION = "issue.successful_run_handoff_required";
 export const SUCCESSFUL_RUN_HANDOFF_RESOLVED_ACTION = "issue.successful_run_handoff_resolved";
 export const SUCCESSFUL_RUN_HANDOFF_ESCALATED_ACTION = "issue.successful_run_handoff_escalated";
+// myrmidon(B1): server/src/services/recovery/successful-run-handoff.ts renamed
+// these notice bodies from "Paperclip ..." to "Myrmidon ..." (see
+// server/src/myrmidon/product.ts). This file keeps its own literal copy for
+// exact-string comment-type detection in the board UI (a pre-existing
+// pattern, not introduced by this rename), so both the current and the
+// pre-rename bodies must stay recognized below, or an issue carrying the old
+// comment silently loses its alert-card treatment.
 export const SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY =
-  "Paperclip needs a disposition before this issue can continue.";
+  "Myrmidon needs a disposition before this issue can continue.";
 export const SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY =
+  "Myrmidon could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.";
+// myrmidon(B1): pre-rename bodies, still possibly stored on older comments.
+const LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_BODY_PAPERCLIP =
+  "Paperclip needs a disposition before this issue can continue.";
+const LEGACY_SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY_PAPERCLIP =
   "Paperclip could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.";
 
 export function isSuccessfulRunHandoffActivity(action: string) {
@@ -70,6 +82,8 @@ export function successfulRunHandoffFromActivity(event: ActivityEvent): Successf
 export function isSuccessfulRunHandoffComment(text: string) {
   const trimmed = text.trim();
   return trimmed === SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY
+    // myrmidon(B1): recognize the pre-rename body too (see the constant above).
+    || trimmed === LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_BODY_PAPERCLIP
     || /^##\s+(This issue still needs a next step|Run finished without a next step|Successful run missing issue disposition)/i.test(trimmed)
     || isSuccessfulRunHandoffEscalationComment(trimmed);
 }
@@ -77,6 +91,8 @@ export function isSuccessfulRunHandoffComment(text: string) {
 export function isSuccessfulRunHandoffEscalationComment(text: string) {
   const trimmed = text.trim();
   return trimmed === SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY
+    // myrmidon(B1): recognize the pre-rename body too (see the constant above).
+    || trimmed === LEGACY_SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY_PAPERCLIP
     || /^Paperclip exhausted the bounded successful-run handoff correction\b/i.test(trimmed);
 }
 

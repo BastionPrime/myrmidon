@@ -4,6 +4,7 @@ import {
   createDiscordCommandRegistration,
   discordPaperclipCommandDefinition,
   parseDiscordCommandRegistration,
+  priorCloseCopyDefinition,
   reconcileDiscordCommandRegistration,
   type DiscordCommandRegistration,
   type ReconcileDiscordCommandRegistrationOptions,
@@ -113,8 +114,8 @@ describe("Discord owned native-command registration", () => {
   async function priorCopyFixture() {
     const f = fixture();
     await reconcileDiscordCommandRegistration(f.options());
-    const prior = discordPaperclipCommandDefinition(f.stored.ownerId);
-    prior.options[2]!.description = "Close the current Paperclip task";
+    // myrmidon(B1): the known prior definition, not the current (renamed) one.
+    const prior = priorCloseCopyDefinition(f.stored.ownerId);
     if (f.stored.phase !== "registered") throw new Error("Missing receipt");
     f.stored = {
       ...f.stored,

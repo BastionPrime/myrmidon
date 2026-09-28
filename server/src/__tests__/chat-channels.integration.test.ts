@@ -118,6 +118,7 @@ import {
   type TeamsPersonalRecipientAdmission,
 } from "../services/chat-teams-personal-recipient.js";
 import * as discordQuestionForms from "../services/chat-discord-question-forms.js";
+import { priorCloseCopyDefinition } from "../services/chat-discord-command-registration.js";
 import { issueService } from "../services/issues.js";
 import { getExternalChannelBindingSummary } from "../services/chat-channel-binding.js";
 import { PaperclipRunnerToolAuthority } from "../services/native-runtime/paperclip-runner-tool-authority.js";
@@ -44537,9 +44538,21 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             .then((rows) => rows[0]!);
           let priorRegistration = registration.payload.registration;
           if (legacyCopy) {
-            const prior = structuredClone(remoteCommands[0]!);
-            (prior.options as Array<{ description: string }>)[2]!.description =
-              "Close the current Myrmidon task";
+            // myrmidon(B1): the known prior definition — the exact shape once
+            // actually registered on Discord, all fields included — not a
+            // clone of the current (renamed) remote command with only the
+            // close text overridden. Cloning the current command stopped
+            // representing a real historical registration once its base
+            // text changed under this rename.
+            const priorOwnerId = (priorRegistration as { ownerId: string })
+              .ownerId;
+            const remoteShape = remoteCommands[0]!;
+            const prior = {
+              ...priorCloseCopyDefinition(priorOwnerId),
+              id: remoteShape.id,
+              application_id: remoteShape.application_id,
+              version: remoteShape.version,
+            };
             remoteCommands[0] = prior;
             const {
               id: _id,

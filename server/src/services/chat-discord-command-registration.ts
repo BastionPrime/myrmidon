@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { DiscordBotIdentity } from "./chat-discord.js";
+// myrmidon(B1): product name in the live command descriptions below; see product.ts.
+import { PRODUCT_NAME, productSaid } from "../myrmidon/product.js";
 
 // https://docs.discord.com/developers/interactions/application-commands
 // Global commands are required for BOT_DM. Never bulk overwrite an app's
@@ -103,12 +105,13 @@ export function discordPaperclipCommandDefinition(publicOwnerId: string) {
   return {
     type: 1,
     name: "paperclip",
-    description: `Paperclip session controls [pc:${publicOwnerId}]`,
+    // myrmidon(B1): live text Discord shows in its "/" command picker.
+    description: productSaid(`session controls [pc:${publicOwnerId}]`),
     options: [
       {
         type: 1,
         name: "status",
-        description: "Show the current Paperclip task",
+        description: `Show the current ${PRODUCT_NAME} task`,
       },
       {
         type: 1,
@@ -130,10 +133,43 @@ export function discordPaperclipCommandDefinition(publicOwnerId: string) {
 
 // One explicitly shipped prior definition. This is maintenance evidence only:
 // it never enables command handling before a current definition is confirmed.
-function priorCloseCopyDefinition(id: string) {
-  const definition = discordPaperclipCommandDefinition(id);
-  definition.options[2]!.description = "Close the current Paperclip task";
-  return definition;
+// myrmidon(B1): kept as an independent, frozen snapshot of the exact shape
+// once actually registered on Discord — not derived from
+// discordPaperclipCommandDefinition() above, which now returns the current
+// (renamed) text. Deriving from it here would silently retarget this known
+// prior definition to a hybrid that was never actually live, breaking
+// recognition of the real historical registration. Never edit this snapshot
+// for a future product-name change either; add a new prior-definition
+// snapshot instead.
+export function priorCloseCopyDefinition(id: string) {
+  if (!ownerId.safeParse(id).success)
+    throw new Error("Invalid Discord command owner identifier");
+  return {
+    type: 1,
+    name: "paperclip",
+    description: `Paperclip session controls [pc:${id}]`,
+    options: [
+      {
+        type: 1,
+        name: "status",
+        description: "Show the current Paperclip task",
+      },
+      {
+        type: 1,
+        name: "new",
+        description: "Start a new task in a DM or show new-thread guidance",
+      },
+      {
+        type: 1,
+        name: "close",
+        description: "Close the current Paperclip task",
+      },
+    ],
+    default_member_permissions: null,
+    integration_types: [0],
+    contexts: [0, 1],
+    nsfw: false,
+  };
 }
 
 function definitionDigest(id: string, priorCloseCopy = false): string {

@@ -29,6 +29,29 @@ describe("successful run handoff UI helpers", () => {
     expect(isSuccessfulRunHandoffComment("Ordinary issue comment")).toBe(false);
   });
 
+  // myrmidon(B1): these two bodies are fixed pre-rename literals (comments the
+  // server posted before the Paperclip -> Myrmidon rename), not the live
+  // constants above, so this test keeps giving a real signal if the legacy
+  // match is ever accidentally dropped, unlike asserting a constant against
+  // itself.
+  it("still recognizes pre-rename comments so old issues keep their alert-card treatment", () => {
+    expect(
+      isSuccessfulRunHandoffComment(
+        "Paperclip needs a disposition before this issue can continue.",
+      ),
+    ).toBe(true);
+    expect(
+      isSuccessfulRunHandoffComment(
+        "Paperclip could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.",
+      ),
+    ).toBe(true);
+    expect(
+      isSuccessfulRunHandoffEscalationComment(
+        "Paperclip could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.",
+      ),
+    ).toBe(true);
+  });
+
   it("returns shared tones for required, escalated, and neutral activity", () => {
     expect(successfulRunHandoffActivityTone(SUCCESSFUL_RUN_HANDOFF_REQUIRED_ACTION).className).toContain("amber");
     expect(successfulRunHandoffActivityTone(SUCCESSFUL_RUN_HANDOFF_ESCALATED_ACTION).className).toContain("red");
