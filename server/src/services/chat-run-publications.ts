@@ -152,7 +152,8 @@ export function safeMilestoneText(input: {
   if (input.milestone === "working") return `${input.agentName} is working…`;
   if (input.milestone === "completed")
     return `${input.agentName} completed this turn.`;
-  if (input.errorCode === "slack_session_stopped")
+  // myrmidon(X8c): a bridged Telegram chat's own /stop reads the same as Slack's.
+  if (input.errorCode === "slack_session_stopped" || input.errorCode === "chat_session_stopped")
     return `${input.agentName} stopped at your request.`;
   const taskUrl = safeChatTaskUrl(input.publicBaseUrl, input.issueId);
   const recovery =
