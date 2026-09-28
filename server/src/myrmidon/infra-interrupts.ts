@@ -13,10 +13,26 @@
  * retry, and a reassigned issue is simply released for its new assignee to
  * pick up on its own.
  *
+ * This relies on the retry (or the immediate continuation) being safe to
+ * issue blindly, without knowing what the interrupted attempt already did.
+ * That is only true for the run's own adapter, so every entry point here is
+ * gated by adapterQualifiesForInfraInterruptRelief: a conversation adapter
+ * (services/conversation-continuation.ts's CONVERSATION_ADAPTER_TYPES) hands
+ * a fresh turn to the provider and lets it decide what remains, so a repeat
+ * invocation is not a replay of the original action. A process/webhook-style
+ * adapter (process, http, openclaw_gateway, …) has no such contract -- the
+ * vendor's own CONVERSATION_ADAPTER_TYPES comment is explicit that retrying
+ * one of those "can replay the action itself" -- so this exception leaves the
+ * vendor's hold in place for them until they carry an idempotency key of
+ * their own (see IDEMPOTENT_INFRA_INTERRUPT_ADAPTER_TYPES). An unclaimed or
+ * unknown adapter type is treated the same as a non-qualifying one: this
+ * exception never assumes a safety it cannot see.
+ *
  * Setting: MYRMIDON_INFRA_INTERRUPT_CODES, docs/myrmidon/SETTINGS.md.
  */
 
 import { executionFailureRetryCount } from "../services/execution-recovery-attempt.js";
+import { CONVERSATION_ADAPTER_TYPES, claimedAdapterType } from "../services/conversation-continuation.js";
 
 export const INFRA_INTERRUPT_CODES_ENV = "MYRMIDON_INFRA_INTERRUPT_CODES";
 
@@ -125,17 +141,52 @@ export function infraInterruptRetryBudgetExhausted(
 }
 
 /**
+ * Adapters whose recovery is already keyed by an idempotency token, so a
+ * blind retry of the run cannot replay its external action a second time.
+ * Empty today -- track G4 (hermes_gateway's Idempotency-Key attach) is
+ * expected to add hermes_gateway here once its wakeup carries one. Until
+ * then, a non-conversation adapter keeps the vendor's hold for every
+ * infra-interrupt code, not only the ones this PR happened to add tests for.
+ */
+export const IDEMPOTENT_INFRA_INTERRUPT_ADAPTER_TYPES: readonly string[] = [];
+
+type AdapterClaimingRun = { runnerProfileJson?: Record<string, unknown> | null };
+
+/**
+ * True when this run's own claimed adapter (claimedAdapterType,
+ * services/conversation-continuation.ts -- a pure read of
+ * runnerProfileJson.adapterDispatch, the value the server persists when it
+ * claims the run) can safely take a blind retry or immediate continuation:
+ * either it is a conversation adapter, which hands the provider a fresh turn
+ * instead of replaying whatever the interrupted attempt already did, or it
+ * carries its own idempotency key (IDEMPOTENT_INFRA_INTERRUPT_ADAPTER_TYPES).
+ * An unclaimed/unknown adapter type is conservative: false, the vendor hold
+ * stays in place, exactly as for a known non-qualifying adapter.
+ */
+export function adapterQualifiesForInfraInterruptRelief(run: AdapterClaimingRun): boolean {
+  const adapterType = claimedAdapterType({ runnerProfileJson: run.runnerProfileJson ?? null });
+  if (!adapterType) return false;
+  return (
+    (CONVERSATION_ADAPTER_TYPES as readonly string[]).includes(adapterType) ||
+    IDEMPOTENT_INFRA_INTERRUPT_ADAPTER_TYPES.includes(adapterType)
+  );
+}
+
+/**
  * True when a run terminated by an infrastructure interruption should skip
  * the vendor's reconciliation hold: legacyExecutionNeedsReconciliation
  * (legacy-execution-recovery.ts) and the stranded-assigned-issue escalation
  * (services/recovery/service.ts) both call this with the same run shape.
+ * Gated by adapterQualifiesForInfraInterruptRelief -- see the module comment
+ * above for why a non-conversation adapter never qualifies here.
  */
 export function shouldSkipReconciliationForInfraInterrupt(
-  run: RetryBudgetRun & { errorCode?: string | null },
+  run: RetryBudgetRun & AdapterClaimingRun & { errorCode?: string | null },
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return (
     isInfraInterruptErrorCode(run.errorCode, env) &&
+    adapterQualifiesForInfraInterruptRelief(run) &&
     !infraInterruptRetryBudgetExhausted(run, DEFAULT_INFRA_INTERRUPT_RETRY_BUDGET)
   );
 }
@@ -149,7 +200,7 @@ export function shouldSkipReconciliationForInfraInterrupt(
  * above, never for this.
  */
 export function shouldRetryOriginalExecutorForInfraInterrupt(
-  run: RetryBudgetRun & { errorCode?: string | null },
+  run: RetryBudgetRun & AdapterClaimingRun & { errorCode?: string | null },
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (run.errorCode === REASSIGNMENT_INTERRUPT_ERROR_CODE) return false;

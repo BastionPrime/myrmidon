@@ -28682,7 +28682,12 @@ export function heartbeatService(
           : undefined;
       // myrmidon(L1): services/recovery/service.ts retries this issue once the
       // agent is invokable again; suppress the immediate escalation this
-      // release would otherwise fire while it is merely paused
+      // release would otherwise fire while it is merely paused. Gated to
+      // this run's own claimed adapter (runnerProfileJson.adapterDispatch,
+      // already present on `run`) qualifying -- see infra-interrupts.ts's
+      // module comment: a process/webhook-style adapter still escalates
+      // immediately, same as the vendor, since a blind retry of it could
+      // replay whatever external action the paused run already took.
       const suppressImmediateRecoveryForInfraInterrupt =
         shouldRetryOriginalExecutorForInfraInterrupt({ ...run, errorCode });
       try {

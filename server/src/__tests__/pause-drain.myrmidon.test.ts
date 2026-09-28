@@ -394,10 +394,14 @@ describeEmbeddedPostgres("resumeAgentAfterPause (L3)", () => {
         // legacy-execution-recovery.ts and recovery/service.ts evaluate on
         // this same cancelled run right after cancellation / on the next
         // sweep. Within budget, it must keep suppressing the vendor hold.
+        // myrmidon(L1, senior review round 1): only for the run's own
+        // claimed adapter qualifying (here codex_local, the conversation
+        // adapter seedAgent() itself uses) -- see infra-interrupts.ts.
         const runAsCancelled = {
           errorCode: "agent_paused",
           scheduledRetryAttempt: 0,
           contextSnapshot: latestContextSnapshot ?? null,
+          runnerProfileJson: { adapterDispatch: { adapterType: "codex_local" } },
         };
         const withinBudget = cycle < DEFAULT_INFRA_INTERRUPT_RETRY_BUDGET;
         expect(shouldSkipReconciliationForInfraInterrupt(runAsCancelled)).toBe(withinBudget);

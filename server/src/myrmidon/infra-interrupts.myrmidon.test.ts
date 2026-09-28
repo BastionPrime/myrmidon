@@ -1,5 +1,6 @@
 import { expect, it, describe } from "vitest";
 import {
+  adapterQualifiesForInfraInterruptRelief,
   DEFAULT_INFRA_INTERRUPT_ERROR_CODES,
   INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY,
   infraInterruptAttemptCount,
@@ -9,6 +10,17 @@ import {
   shouldRetryOriginalExecutorForInfraInterrupt,
   shouldSkipReconciliationForInfraInterrupt,
 } from "./infra-interrupts.js";
+
+// A conversation adapter (services/conversation-continuation.ts's
+// CONVERSATION_ADAPTER_TYPES) hands the provider a fresh turn instead of
+// blindly replaying whatever the interrupted attempt already did, so this
+// exception only applies to a run claimed by one of these.
+function runnerProfileFor(adapterType: string): Record<string, unknown> {
+  return { adapterDispatch: { adapterType } };
+}
+const dialogAdapterRun = { runnerProfileJson: runnerProfileFor("hermes_local") };
+const gatewayAdapterRun = { runnerProfileJson: runnerProfileFor("openclaw_gateway") };
+const processAdapterRun = { runnerProfileJson: runnerProfileFor("process") };
 
 describe("parseInfraInterruptCodes", () => {
   it("defaults to the four documented codes when unset", () => {
@@ -123,28 +135,43 @@ describe("infraInterruptRetryBudgetExhausted", () => {
 });
 
 describe("shouldSkipReconciliationForInfraInterrupt", () => {
-  it("skips the reconciliation hold for a fresh infra-interrupted run", () => {
+  it("skips the reconciliation hold for a fresh infra-interrupted run claimed by a conversation adapter", () => {
     expect(
-      shouldSkipReconciliationForInfraInterrupt({ errorCode: "agent_paused", scheduledRetryAttempt: 0 }),
+      shouldSkipReconciliationForInfraInterrupt({
+        errorCode: "agent_paused",
+        scheduledRetryAttempt: 0,
+        ...dialogAdapterRun,
+      }),
     ).toBe(true);
   });
 
   it("keeps the hold once the shared retry budget is exhausted", () => {
     expect(
-      shouldSkipReconciliationForInfraInterrupt({ errorCode: "agent_paused", scheduledRetryAttempt: 2 }),
+      shouldSkipReconciliationForInfraInterrupt({
+        errorCode: "agent_paused",
+        scheduledRetryAttempt: 2,
+        ...dialogAdapterRun,
+      }),
     ).toBe(false);
   });
 
   it("keeps the hold for a run that failed for a non-infrastructure reason", () => {
     expect(
-      shouldSkipReconciliationForInfraInterrupt({ errorCode: "adapter_failed", scheduledRetryAttempt: 0 }),
+      shouldSkipReconciliationForInfraInterrupt({
+        errorCode: "adapter_failed",
+        scheduledRetryAttempt: 0,
+        ...dialogAdapterRun,
+      }),
     ).toBe(false);
   });
 
   it("falls back to the vendor behavior when the setting is turned off", () => {
     const env = { MYRMIDON_INFRA_INTERRUPT_CODES: "off" } as NodeJS.ProcessEnv;
     expect(
-      shouldSkipReconciliationForInfraInterrupt({ errorCode: "agent_paused", scheduledRetryAttempt: 0 }, env),
+      shouldSkipReconciliationForInfraInterrupt(
+        { errorCode: "agent_paused", scheduledRetryAttempt: 0, ...dialogAdapterRun },
+        env,
+      ),
     ).toBe(false);
   });
 
@@ -158,29 +185,110 @@ describe("shouldSkipReconciliationForInfraInterrupt", () => {
         errorCode: "agent_paused",
         scheduledRetryAttempt: 0,
         contextSnapshot: { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: 2 },
+        ...dialogAdapterRun,
       }),
+    ).toBe(false);
+  });
+
+  // Senior review, round 1: the exception must not apply to an adapter the
+  // vendor forbids a blind retry for (process/webhook-style: retrying one
+  // "can replay the action itself", CONVERSATION_ADAPTER_TYPES's own
+  // comment) -- regardless of which infra-interrupt code ended the run.
+  it.each(["agent_paused", "process_lost", "server_shutdown_interrupted", "issue_reassigned"])(
+    "keeps the vendor hold for a non-conversation adapter (openclaw_gateway) even within budget, for %s",
+    (errorCode) => {
+      expect(
+        shouldSkipReconciliationForInfraInterrupt({
+          errorCode,
+          scheduledRetryAttempt: 0,
+          ...gatewayAdapterRun,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["agent_paused", "process_lost", "server_shutdown_interrupted", "issue_reassigned"])(
+    "keeps the vendor hold for a non-conversation adapter (process) even within budget, for %s",
+    (errorCode) => {
+      expect(
+        shouldSkipReconciliationForInfraInterrupt({
+          errorCode,
+          scheduledRetryAttempt: 0,
+          ...processAdapterRun,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("keeps the vendor hold when the run's adapter was never claimed (no runnerProfileJson)", () => {
+    expect(
+      shouldSkipReconciliationForInfraInterrupt({ errorCode: "agent_paused", scheduledRetryAttempt: 0 }),
     ).toBe(false);
   });
 });
 
+describe("adapterQualifiesForInfraInterruptRelief", () => {
+  it("qualifies every conversation adapter", () => {
+    for (const adapterType of [
+      "claude_local", "codex_local", "cursor", "gemini_local", "opencode_local",
+      "pi_local", "grok_local", "kimi_local", "hermes_local",
+    ]) {
+      expect(
+        adapterQualifiesForInfraInterruptRelief({ runnerProfileJson: runnerProfileFor(adapterType) }),
+      ).toBe(true);
+    }
+  });
+
+  it("does not qualify a process/webhook-style adapter", () => {
+    expect(adapterQualifiesForInfraInterruptRelief(gatewayAdapterRun)).toBe(false);
+    expect(adapterQualifiesForInfraInterruptRelief(processAdapterRun)).toBe(false);
+  });
+
+  it("does not qualify when no adapter was claimed", () => {
+    expect(adapterQualifiesForInfraInterruptRelief({})).toBe(false);
+    expect(adapterQualifiesForInfraInterruptRelief({ runnerProfileJson: null })).toBe(false);
+  });
+});
+
 describe("shouldRetryOriginalExecutorForInfraInterrupt", () => {
-  it("retries the original executor for a pause, a lost process, or a shutdown", () => {
+  it("retries the original executor for a pause, a lost process, or a shutdown, on a conversation adapter", () => {
     for (const errorCode of ["agent_paused", "process_lost", "server_shutdown_interrupted"]) {
       expect(
-        shouldRetryOriginalExecutorForInfraInterrupt({ errorCode, scheduledRetryAttempt: 0 }),
+        shouldRetryOriginalExecutorForInfraInterrupt({ errorCode, scheduledRetryAttempt: 0, ...dialogAdapterRun }),
       ).toBe(true);
     }
   });
 
   it("never schedules the original executor a retry on reassignment: the new assignee wakes itself", () => {
     expect(
-      shouldRetryOriginalExecutorForInfraInterrupt({ errorCode: "issue_reassigned", scheduledRetryAttempt: 0 }),
+      shouldRetryOriginalExecutorForInfraInterrupt({
+        errorCode: "issue_reassigned",
+        scheduledRetryAttempt: 0,
+        ...dialogAdapterRun,
+      }),
     ).toBe(false);
   });
 
   it("keeps the vendor behavior once the retry budget is exhausted", () => {
     expect(
-      shouldRetryOriginalExecutorForInfraInterrupt({ errorCode: "agent_paused", scheduledRetryAttempt: 2 }),
+      shouldRetryOriginalExecutorForInfraInterrupt({
+        errorCode: "agent_paused",
+        scheduledRetryAttempt: 2,
+        ...dialogAdapterRun,
+      }),
+    ).toBe(false);
+  });
+
+  // Senior review, round 1: a paused process/webhook-style adapter must not
+  // get a blind retry of its original executor -- that would replay the
+  // external action the interrupted run may already have taken.
+  it("does not retry a paused non-conversation adapter (process, http, openclaw_gateway, …)", () => {
+    expect(
+      shouldRetryOriginalExecutorForInfraInterrupt({
+        errorCode: "agent_paused",
+        scheduledRetryAttempt: 0,
+        ...gatewayAdapterRun,
+      }),
     ).toBe(false);
   });
 });

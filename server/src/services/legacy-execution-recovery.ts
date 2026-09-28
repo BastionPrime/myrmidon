@@ -10,7 +10,8 @@ import { isSupersededConversationRun } from "./agent-conversations.js";
 // myrmidon(R3): runs interrupted by maintenance mode are retried, not held
 import { MAINTENANCE_INTERRUPT_ERROR_CODE } from "../myrmidon/maintenance/domain.js";
 // myrmidon(L1): infrastructure interruptions (pause, process loss, shutdown,
-// reassignment) are retried or released, not held
+// reassignment) are retried or released, not held -- only for a conversation
+// adapter or one with its own idempotency key, see infra-interrupts.ts
 import { shouldSkipReconciliationForInfraInterrupt } from "../myrmidon/infra-interrupts.js";
 
 type Run = typeof heartbeatRuns.$inferSelect;
@@ -18,7 +19,7 @@ export const LEGACY_RECOVERY_CAUSE = "legacy_execution_requires_reconciliation";
 
 /** Error families describe availability, not whether earlier actions happened. */
 export function legacyExecutionNeedsReconciliation(
-  run: Pick<Run, "runtimeMode" | "status" | "errorCode" | "resultJson"> & Partial<Pick<Run, "scheduledRetryAttempt" | "scheduledRetryReason" | "contextSnapshot">>,
+  run: Pick<Run, "runtimeMode" | "status" | "errorCode" | "resultJson"> & Partial<Pick<Run, "scheduledRetryAttempt" | "scheduledRetryReason" | "contextSnapshot" | "runnerProfileJson">>,
 ): boolean {
   if (
     run.runtimeMode === "native" ||
