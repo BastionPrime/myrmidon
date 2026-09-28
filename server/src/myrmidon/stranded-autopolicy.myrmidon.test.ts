@@ -4,6 +4,7 @@ import {
   STRANDED_AUTO_POLICY_RETRY_SOURCE,
   buildStrandedAutoPolicyManagerReviewComment,
   buildStrandedAutoPolicyManagerReviewPatch,
+  buildStrandedAutoPolicyManagerReviewWakeContext,
   buildStrandedAutoPolicyRetryContext,
   buildStrandedAutoPolicyRetryIdempotencyKey,
   buildStrandedAutoPolicyRetryInstruction,
@@ -12,6 +13,7 @@ import {
   isStrandedAutoPolicyCause,
   isStrandedAutoPolicyManagerHandoffAlreadyApplied,
   issueExecutionPolicyHasManagerReviewStage,
+  issueHasExistingExecutionWorkflow,
   readStrandedAutoPolicyEnabled,
   readStrandedAutoRetriesPerDay,
   resolveActiveManagerAgentId,
@@ -194,6 +196,120 @@ describe("buildStrandedAutoPolicyRetryInstruction / buildStrandedAutoPolicyManag
     expect(text).toContain("stranded_assigned_issue");
     expect(text).toContain("2 automatic continuation attempts");
   });
+
+  // Review finding: this comment used to claim the source assignment was
+  // "unchanged" and "resumes once the review clears" — false, since
+  // approving a single-stage review closes the issue as done and only
+  // requesting changes returns it to the original assignee.
+  it("does not claim the assignment is unchanged, and states the actual outcome of each review decision", () => {
+    const text = buildStrandedAutoPolicyManagerReviewComment({
+      cause: "stranded_assigned_issue",
+      attemptsInWindow: 1,
+      maxAttemptsPerDay: 2,
+    });
+    expect(text).not.toContain("unchanged");
+    expect(text).not.toContain("resumes once the review clears");
+    expect(text).toContain("closes the issue as done");
+    expect(text).toContain("sends it back to the original assignee");
+  });
+});
+
+describe("issueHasExistingExecutionWorkflow", () => {
+  it("is false for an issue with no policy and no state at all", () => {
+    expect(issueHasExistingExecutionWorkflow({})).toBe(false);
+    expect(issueHasExistingExecutionWorkflow({ executionPolicy: null, executionState: null })).toBe(false);
+  });
+
+  it("is true when an execution policy already has configured stages, even before any stage has started", () => {
+    // An owner-configured approval policy sits on the issue from creation but
+    // only *runs* on a transition to in_review/done
+    // (`applyIssueExecutionStageTransition`'s `shouldStartWorkflow` gate), so
+    // an in-progress issue can carry a non-empty policy with a still-null
+    // executionState.
+    expect(
+      issueHasExistingExecutionWorkflow({
+        executionPolicy: { mode: "normal", commentRequired: true, stages: [{ id: "s1", type: "approval", participants: [] }] },
+        executionState: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("is false when the policy has no stages (monitor-only or empty)", () => {
+    expect(
+      issueHasExistingExecutionWorkflow({
+        executionPolicy: { mode: "normal", commentRequired: true, stages: [] },
+        executionState: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("is true for a non-idle execution state (pending, changes_requested or completed)", () => {
+    for (const status of ["pending", "changes_requested", "completed"]) {
+      expect(
+        issueHasExistingExecutionWorkflow({ executionPolicy: null, executionState: { status } }),
+      ).toBe(true);
+    }
+  });
+
+  it("is false for an idle execution state (e.g. a monitor with no review stage)", () => {
+    expect(
+      issueHasExistingExecutionWorkflow({ executionPolicy: null, executionState: { status: "idle", monitor: {} } }),
+    ).toBe(false);
+  });
+
+  it("is true for the exact shape this module's own manager-review handoff persists — a repeat handoff must see its own earlier one", () => {
+    const assigneeAgentId = "00000000-0000-4000-8000-000000000001";
+    const managerAgentId = "00000000-0000-4000-8000-000000000002";
+    const patch = buildStrandedAutoPolicyManagerReviewPatch({
+      issue: { status: "in_progress", assigneeAgentId, assigneeUserId: null },
+      managerAgentId,
+      cause: "stranded_assigned_issue",
+    });
+    expect(
+      issueHasExistingExecutionWorkflow({
+        executionPolicy: patch.executionPolicy,
+        executionState: patch.executionState,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("buildStrandedAutoPolicyManagerReviewWakeContext", () => {
+  it("carries the reviewer role, allowed actions and the stage fields straight off the persisted execution state", () => {
+    const context = buildStrandedAutoPolicyManagerReviewWakeContext({
+      executionState: {
+        currentStageId: "stage-1",
+        currentStageType: "review",
+        currentParticipant: { type: "agent", agentId: "manager-1", userId: null },
+        returnAssignee: { type: "agent", agentId: "coder-1", userId: null },
+        reviewRequest: { instructions: "Approve only if actually complete." },
+        lastDecisionOutcome: null,
+      },
+    });
+    expect(context).toEqual({
+      wakeRole: "reviewer",
+      stageId: "stage-1",
+      stageType: "review",
+      currentParticipant: { type: "agent", agentId: "manager-1", userId: null },
+      returnAssignee: { type: "agent", agentId: "coder-1", userId: null },
+      reviewRequest: { instructions: "Approve only if actually complete." },
+      lastDecisionOutcome: null,
+      allowedActions: ["approve", "request_changes"],
+    });
+  });
+
+  it("tolerates a missing or malformed execution state", () => {
+    expect(buildStrandedAutoPolicyManagerReviewWakeContext({ executionState: {} })).toEqual({
+      wakeRole: "reviewer",
+      stageId: null,
+      stageType: null,
+      currentParticipant: null,
+      returnAssignee: null,
+      reviewRequest: null,
+      lastDecisionOutcome: null,
+      allowedActions: ["approve", "request_changes"],
+    });
+  });
 });
 
 describe("buildStrandedAutoPolicyManagerReviewPatch", () => {
@@ -229,6 +345,14 @@ describe("buildStrandedAutoPolicyManagerReviewPatch", () => {
     const executionPolicy = patch.executionPolicy as { stages: Array<{ participants: Array<{ agentId: string | null }> }> };
     expect(executionPolicy.stages).toHaveLength(1);
     expect(executionPolicy.stages[0]?.participants[0]?.agentId).toBe(managerAgentId);
+
+    // Review finding: the reviewRequest text used to tell the manager
+    // "Approve to send the issue back to the original assignee" — the
+    // opposite of what approving a single-stage review actually does
+    // (closes the issue as done; only requesting changes returns it).
+    const reviewRequest = (patch.executionState as { reviewRequest?: { instructions?: string } }).reviewRequest;
+    expect(reviewRequest?.instructions).toContain("closes the issue as done");
+    expect(reviewRequest?.instructions).not.toContain("Approve to send the issue back to the original assignee");
   });
 });
 

@@ -15,9 +15,23 @@
 //  2. Once that window's retries are used up, hand the issue to the
 //     assignee's direct manager (`agents.reportsTo`) as the `in_review`
 //     reviewer, if that manager exists, belongs to the same company and is
-//     invokable. A system comment explains why.
-//  3. No eligible manager — fall back to the vendor's own board escalation
-//     unchanged (`vendor_default`).
+//     invokable, *and* the issue does not already carry an execution
+//     workflow (see `issueHasExistingExecutionWorkflow` below — this covers
+//     both an owner-configured review/approval policy and a repeat handoff
+//     attempt on an issue this policy already handed off once). A system
+//     comment explains why. Approving the review closes the issue as done;
+//     requesting changes sends it back to the original assignee.
+//  3. No eligible manager, or an execution workflow is already in effect —
+//     fall back to the vendor's own board escalation unchanged
+//     (`vendor_default`).
+//
+// A `paused` assignee is exempt from all of the above: pausing is not
+// stranding. L3's pause-drain (`../../myrmidon/pause-drain.ts`) leaves
+// in-progress work exactly where it is and wakes it itself
+// (`resumeAgentAfterPause`) once the agent resumes, so this policy takes no
+// action at all — no retry wake (which would just throw: paused is not
+// invokable), no manager handoff, no board card — while the assignee is
+// paused.
 //
 // The attempt count is derived from persisted heartbeat runs tagged with
 // `STRANDED_AUTO_POLICY_RETRY_SOURCE`, not a separate mutable counter, so
@@ -266,8 +280,48 @@ export function buildStrandedAutoPolicyManagerReviewComment(input: {
     `Paperclip's automatic policy moved this issue to review: ${input.attemptsInWindow} automatic continuation ` +
       `${attemptWord} within 24 hours (cause \`${input.cause}\`) produced no final disposition ` +
       `(limit: ${input.maxAttemptsPerDay} per day).`,
-    "The assignee's manager is now the reviewer; the source assignment is unchanged and resumes once the review clears.",
+    // myrmidon(L4): review finding — this used to say the assignment was
+    // "unchanged" and would "resume once the review clears". Neither is
+    // true: the manager is the issue's assignee for as long as the review is
+    // pending, approving it closes the issue as done (this is a single-stage
+    // policy — there is no further stage to resume into), and only
+    // *requesting changes* sends it back to the original assignee.
+    "The assignee's manager is now the reviewer and the issue's assignee while this is pending. Approving it " +
+      "closes the issue as done; requesting changes sends it back to the original assignee to continue the work.",
   ].join("\n");
+}
+
+/**
+ * True when the issue already has an execution workflow in effect: either a
+ * configured review/approval policy (an owner set one up before this
+ * stranding — its stages may not have started yet, since a policy only
+ * *runs* on a transition to `in_review`/`done`, see
+ * `applyIssueExecutionStageTransition`'s `shouldStartWorkflow` gate), or a
+ * non-idle execution state (already mid-flight, including our own earlier
+ * `buildStrandedAutoPolicyManagerReviewPatch` handoff on a repeat stranding).
+ * Review findings (round 1), #1 and #2: handing such an issue to the
+ * manager as a brand-new single-stage policy
+ * (`buildStrandedAutoPolicyManagerReviewPatch`) discards whatever was
+ * already there — an owner's required human approval, or (on a repeat
+ * handoff) the review-round counter that is supposed to bound agent↔manager
+ * ping-pong before the vendor's own human escalation. Both fold into the
+ * same rule: when this is true, do not build a fresh handoff patch — stand
+ * down to the vendor's own board escalation instead.
+ */
+export function issueHasExistingExecutionWorkflow(issue: {
+  executionPolicy?: unknown;
+  executionState?: unknown;
+}): boolean {
+  const policy = issue.executionPolicy;
+  const stages = policy && typeof policy === "object" ? (policy as { stages?: unknown }).stages : undefined;
+  if (Array.isArray(stages) && stages.length > 0) return true;
+
+  const state = issue.executionState;
+  if (state && typeof state === "object") {
+    const status = (state as { status?: unknown }).status;
+    if (typeof status === "string" && status !== "idle") return true;
+  }
+  return false;
 }
 
 /**
@@ -364,9 +418,49 @@ export function buildStrandedAutoPolicyManagerReviewPatch(input: {
     reviewRequest: {
       instructions:
         `Automatic policy handoff (\`${input.cause}\`): the assignee used up its automatic continuation ` +
-        "retries without recording a disposition. Approve to send the issue back to the original assignee, " +
-        "or request changes / record a different disposition yourself.",
+        "retries without recording a disposition. Approve only if the work is actually complete — that " +
+        "closes the issue as done. Request changes to send it back to the original assignee with what " +
+        "still needs to happen.",
     },
   });
   return { ...transition.patch, executionPolicy: policy };
+}
+
+export interface StrandedAutoPolicyManagerReviewWakeContext {
+  wakeRole: "reviewer";
+  stageId: string | null;
+  stageType: string | null;
+  currentParticipant: unknown;
+  returnAssignee: unknown;
+  reviewRequest: unknown;
+  lastDecisionOutcome: unknown;
+  allowedActions: string[];
+}
+
+/**
+ * Mirrors the vendor's own `buildExecutionStageWakeContext` /
+ * `buildExecutionStageWakeup` (`server/src/routes/issues.ts`) shape for a
+ * pending review stage, built from the exact `executionState` this module's
+ * own handoff persisted (the caller passes the freshly-updated issue row's
+ * `executionState`, not a re-derivation) so it can never disagree with what
+ * was actually written. Review finding: the manager's wake used to carry a
+ * generic `issue_assigned` reason with no stage context at all, so the
+ * agent's rendered prompt had neither a reviewer role nor the allowed
+ * actions — the vendor's normal PATCH-triggered review wake always includes
+ * both.
+ */
+export function buildStrandedAutoPolicyManagerReviewWakeContext(input: {
+  executionState: Record<string, unknown>;
+}): StrandedAutoPolicyManagerReviewWakeContext {
+  const state = input.executionState;
+  return {
+    wakeRole: "reviewer",
+    stageId: typeof state.currentStageId === "string" ? state.currentStageId : null,
+    stageType: typeof state.currentStageType === "string" ? state.currentStageType : null,
+    currentParticipant: state.currentParticipant ?? null,
+    returnAssignee: state.returnAssignee ?? null,
+    reviewRequest: state.reviewRequest ?? null,
+    lastDecisionOutcome: state.lastDecisionOutcome ?? null,
+    allowedActions: ["approve", "request_changes"],
+  };
 }

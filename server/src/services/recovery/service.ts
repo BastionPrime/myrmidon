@@ -145,6 +145,7 @@ import { filterAgentsOutsideMaintenance } from "../../myrmidon/maintenance/gate.
 import {
   buildStrandedAutoPolicyManagerReviewComment,
   buildStrandedAutoPolicyManagerReviewPatch,
+  buildStrandedAutoPolicyManagerReviewWakeContext,
   buildStrandedAutoPolicyRetryContext,
   buildStrandedAutoPolicyRetryIdempotencyKey,
   countStrandedAutoPolicyAttemptsInWindow,
@@ -152,6 +153,7 @@ import {
   findActiveManagerAgentId,
   isStrandedAutoPolicyCause,
   isStrandedAutoPolicyManagerHandoffAlreadyApplied,
+  issueHasExistingExecutionWorkflow,
   readStrandedAutoPolicyEnabled,
   readStrandedAutoRetriesPerDay,
   STRANDED_AUTO_POLICY_RETRY_SOURCE,
@@ -3822,14 +3824,31 @@ export function recoveryService(
       const latestRun = strandedAutoPolicyLatestRun;
       const assigneeAgentId = input.issue.assigneeAgentId;
       const maxAttemptsPerDay = readStrandedAutoRetriesPerDay();
-      const [attemptsInWindow, managerAgentId] = await Promise.all([
+      const [attemptsInWindow, managerAgentId, assigneeAgent] = await Promise.all([
         countStrandedAutoPolicyAttemptsInWindow(db, {
           companyId: input.issue.companyId,
           issueId: input.issue.id,
           agentId: assigneeAgentId,
         }),
         findActiveManagerAgentId(db, assigneeAgentId),
+        getAgent(assigneeAgentId),
       ]);
+
+      // myrmidon(L4): a paused assignee is not stranded — L3's pause-drain
+      // (`../../myrmidon/pause-drain.ts`) leaves this exact in-progress work
+      // where it is and wakes it itself once the agent resumes
+      // (`resumeAgentAfterPause`). Neither branch below is appropriate here:
+      // an auto-retry wake would just throw (paused is not invokable), and a
+      // manager handoff would move someone else's actively-paused work under
+      // review over something that isn't actually stuck. Stand down as a
+      // true no-op — no wake, no handoff, no board card — and leave the
+      // resume to L3. A terminated or pending_approval assignee is a
+      // genuinely different case (the work really is abandoned) and keeps
+      // going through the branches below.
+      if (assigneeAgent?.companyId === input.issue.companyId && assigneeAgent.status === "paused") {
+        return input.issue;
+      }
+
       const autoPolicyDecision = decideStrandedAutoPolicy({
         attemptsInWindow,
         maxAttemptsPerDay,
@@ -3994,6 +4013,21 @@ export function recoveryService(
                 current.status === input.issue.status &&
                 current.assigneeAgentId === input.issue.assigneeAgentId
               ) {
+                // myrmidon(L4): review findings #1 and #2 — checked against
+                // the freshly row-locked `current`, not the caller's
+                // possibly-stale `input.issue`, so a workflow installed in
+                // the narrow window since this function's own read is still
+                // caught. A brand-new single-stage policy must never
+                // overwrite an execution workflow that is already in effect:
+                // an owner-configured review/approval policy (whose stages
+                // may not have started yet), or — on a repeat stranding of
+                // an issue this same policy already handed off once — our
+                // own earlier manager-review policy and its round counter.
+                // Stand down to the vendor's own board escalation instead of
+                // building the patch.
+                if (issueHasExistingExecutionWorkflow(current)) {
+                  return { outcome: "blocked" as const };
+                }
                 const applied = await issuesSvc.update(
                   input.issue.id,
                   patch as Partial<typeof issues.$inferInsert>,
@@ -4069,15 +4103,26 @@ export function recoveryService(
           // correctly-owned `in_review` item the manager's own normal
           // heartbeat/board visibility will still pick up, just not
           // proactively woken this instant.
+          // myrmidon(L4): review finding — the wake used to carry a generic
+          // `issue_assigned` reason with no execution-stage context, so the
+          // manager's rendered prompt had neither a reviewer role nor the
+          // allowed actions. Build the same `executionStage` shape the
+          // vendor's own PATCH-triggered review wake sends
+          // (`buildExecutionStageWakeup` in `../../routes/issues.ts`), read
+          // straight off the row this handoff just persisted.
+          const managerReviewExecutionStage = buildStrandedAutoPolicyManagerReviewWakeContext({
+            executionState: updated.executionState ?? {},
+          });
           try {
             await deps.enqueueWakeup(autoPolicyDecision.managerAgentId, {
               source: "assignment",
               triggerDetail: "system",
-              reason: "issue_assigned",
+              reason: "execution_review_requested",
               payload: withRecoveryContext(
                 {
                   issueId: input.issue.id,
                   mutation: "myrmidon_stranded_autopolicy_manager_review",
+                  executionStage: managerReviewExecutionStage,
                 },
                 "normal_model",
               ),
@@ -4087,8 +4132,9 @@ export function recoveryService(
                 {
                   issueId: input.issue.id,
                   taskId: input.issue.id,
-                  wakeReason: "issue_assigned",
+                  wakeReason: "execution_review_requested",
                   source: "myrmidon.stranded_autopolicy_manager_review",
+                  executionStage: managerReviewExecutionStage,
                 },
                 "normal_model",
               ),
