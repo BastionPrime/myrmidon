@@ -1,7 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BOT_CONTAINERS_ENV } from "./agent-config.js";
+import { BOT_CONTAINERS_ENV, CONTAINER_GROUP_UNSUPPORTED_REASON } from "./agent-config.js";
+import { createBotKeyLock } from "./bot-key-lock.js";
 import type { BotContainerDriver, BotContainerStatus } from "./driver.js";
-import { startBotContainerReconciliation, type BotContainerAgent, type BotContainerRuntimeDeps } from "./index.js";
+import {
+  BOT_CONTAINER_ACTOR,
+  applyBotContainerNow,
+  botMaintenancePortFromService,
+  startBotContainerReconciliation,
+  type BotContainerAgent,
+  type BotContainerRuntimeDeps,
+  type BotMaintenanceServiceSlice,
+} from "./index.js";
+
+const ENABLED = { [BOT_CONTAINERS_ENV]: "1" };
 
 function agent(overrides: Partial<BotContainerAgent> = {}, containerOverrides: Record<string, unknown> = {}): BotContainerAgent {
   return {
@@ -23,28 +34,160 @@ function agent(overrides: Partial<BotContainerAgent> = {}, containerOverrides: R
 
 function fakeMaintenance() {
   return {
-    enter: async () => ({ state: "on" as const, runningRuns: 0 }),
+    enter: async () => ({ state: "on" as const, runningRuns: 0, owned: true }),
     status: async () => ({ state: "on" as const, runningRuns: 0 }),
     exit: async () => {},
   };
 }
 
-/** A driver whose every non-status call is a fire-and-forget no-op, and whose
- *  `status`/`templateDrift` are supplied per test — enough for tests that only
- *  care which agents/botKeys get reconciled, not the reconcile's own mechanics
- *  (reconciler.myrmidon.test.ts covers those in depth). */
+/** A driver whose every call is a no-op unless overridden per test — enough for
+ *  tests that only care which bots get reconciled and when, not the reconcile's
+ *  own mechanics (reconciler.myrmidon.test.ts covers those in depth). */
 function minimalDriver(overrides: Partial<BotContainerDriver> = {}): BotContainerDriver {
   return {
-    status: async () => ({ botKey: "unused", state: "running" }),
+    status: async (botKey) => ({ botKey, state: "running", restartHash: "r", filesHash: "f" }),
     list: async () => [],
     templateDrift: async () => false,
-    ensure: async () => {},
+    create: async () => {},
+    recreate: async () => {},
     writeProfile: async () => {},
+    start: async () => {},
     restart: async () => {},
     stop: async () => {},
     ...overrides,
   };
 }
+
+function deps(driver: BotContainerDriver, extra: Partial<BotContainerRuntimeDeps> = {}): BotContainerRuntimeDeps {
+  return {
+    driver,
+    compile: async (_agentId, botKey) => ({ botKey, files: [], restartHash: "r", filesHash: "f" }),
+    maintenance: fakeMaintenance(),
+    network: "myrmidon-bots",
+    lock: createBotKeyLock(),
+    ...extra,
+  };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+const flush = async (times = 5) => {
+  for (let i = 0; i < times; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+};
+
+describe("applyBotContainerNow", () => {
+  it("is not applicable, and touches nothing, while MYRMIDON_BOT_CONTAINERS is off", async () => {
+    const driver = minimalDriver({
+      status: async () => {
+        throw new Error("the driver must not be called while the feature is off");
+      },
+    });
+    const compile = vi.fn(async () => ({ botKey: "agent-a", files: [], restartHash: "r", filesHash: "f" }));
+    for (const env of [{}, { [BOT_CONTAINERS_ENV]: "0" }]) {
+      const outcome = await applyBotContainerNow(agent(), deps(driver, { compile }), { env });
+      expect(outcome).toEqual({ kind: "not_applicable", reason: `${BOT_CONTAINERS_ENV} is not enabled` });
+    }
+    expect(compile).not.toHaveBeenCalled();
+  });
+
+  it("reconciles when the flag is on", async () => {
+    const outcome = await applyBotContainerNow(agent(), deps(minimalDriver()), { env: ENABLED });
+    expect(outcome).toEqual({ kind: "unchanged" });
+  });
+
+  it("refuses a shared container.group card as not applicable", async () => {
+    const statusCalls: string[] = [];
+    const driver = minimalDriver({
+      status: async (botKey) => {
+        statusCalls.push(botKey);
+        return { botKey, state: "running" };
+      },
+    });
+    const outcome = await applyBotContainerNow(agent({}, { group: "team-b" }), deps(driver), { env: ENABLED });
+    expect(outcome).toEqual({ kind: "not_applicable", reason: CONTAINER_GROUP_UNSUPPORTED_REASON });
+    expect(statusCalls).toEqual([]);
+  });
+
+  it("never overlaps with a sweep's reconcile of the same bot: it waits for it to finish", async () => {
+    // Without a shared per-bot lock, "apply now" during a slow sweep reconcile of
+    // the same bot would run a second writeProfile/restart concurrently (same
+    // helper container, same marker) and could exit the other's maintenance window.
+    const events: string[] = [];
+    const gate = deferred();
+    let statusCalls = 0;
+    const driver = minimalDriver({
+      async status(botKey): Promise<BotContainerStatus> {
+        statusCalls++;
+        events.push(`status#${statusCalls}`);
+        if (statusCalls === 1) await gate.promise;
+        return { botKey, state: "running", restartHash: "r", filesHash: "f" };
+      },
+      async templateDrift() {
+        events.push("drift");
+        return false;
+      },
+    });
+    const shared = deps(driver);
+    const stop = startBotContainerReconciliation(async () => [agent()], shared, { env: ENABLED });
+    try {
+      await flush();
+      expect(events).toEqual(["status#1"]); // the sweep's reconcile is in flight
+      const applied = applyBotContainerNow(agent(), shared, { env: ENABLED });
+      await flush();
+      expect(events).toEqual(["status#1"]); // "apply now" is queued, not running
+      gate.resolve();
+      expect(await applied).toEqual({ kind: "unchanged" });
+      expect(events).toEqual(["status#1", "drift", "status#2", "drift"]);
+    } finally {
+      stop();
+    }
+  });
+});
+
+describe("botMaintenancePortFromService", () => {
+  function fakeService(enterResult: { changed: boolean; startedBy: { actorType: string; actorId: string } | null }) {
+    const exits: unknown[] = [];
+    const service: BotMaintenanceServiceSlice = {
+      enter: async () => ({ state: "on", runningRuns: 0, ...enterResult }),
+      status: async () => ({ windows: [] }),
+      exit: async (scope, actor, reason) => {
+        exits.push({ scope, actor, reason });
+      },
+    };
+    return { service, exits };
+  }
+
+  it("owns a window its own enter() opened", async () => {
+    const { service } = fakeService({ changed: true, startedBy: BOT_CONTAINER_ACTOR });
+    expect((await botMaintenancePortFromService(service).enter("agent-a", "r", 60)).owned).toBe(true);
+  });
+
+  it("does not own a window that was already open and opened by someone else (changed: false)", async () => {
+    const { service } = fakeService({ changed: false, startedBy: { actorType: "user", actorId: "operator-a" } });
+    expect((await botMaintenancePortFromService(service).enter("agent-a", "r", 60)).owned).toBe(false);
+  });
+
+  it("does not own an already-open window with no recorded starter", async () => {
+    const { service } = fakeService({ changed: false, startedBy: null });
+    expect((await botMaintenancePortFromService(service).enter("agent-a", "r", 60)).owned).toBe(false);
+  });
+
+  it("adopts a window its own actor opened on an earlier, interrupted pass, so it can be closed", async () => {
+    const { service } = fakeService({ changed: false, startedBy: { ...BOT_CONTAINER_ACTOR } });
+    expect((await botMaintenancePortFromService(service).enter("agent-a", "r", 60)).owned).toBe(true);
+  });
+
+  it("reports 'off' with no running work when the agent has no window", async () => {
+    const { service } = fakeService({ changed: true, startedBy: BOT_CONTAINER_ACTOR });
+    expect(await botMaintenancePortFromService(service).status("agent-a")).toEqual({ state: "off", runningRuns: 0 });
+  });
+});
 
 describe("startBotContainerReconciliation", () => {
   afterEach(() => {
@@ -53,75 +196,36 @@ describe("startBotContainerReconciliation", () => {
 
   it("disabled by default: never calls listAgents and returns a no-op stop", async () => {
     const listAgents = vi.fn(async () => [agent()]);
-    const stop = startBotContainerReconciliation(listAgents, {
-      driver: {} as BotContainerDriver,
-      compile: async () => ({ botKey: "agent-a", files: [], restartHash: "r", filesHash: "f" }),
-      maintenance: fakeMaintenance(),
-      network: "myrmidon-bots",
-    });
+    const stop = startBotContainerReconciliation(listAgents, deps({} as BotContainerDriver));
     stop();
     expect(listAgents).not.toHaveBeenCalled();
   });
 
   it("never starts a second sweep while the previous one is still in flight, and resumes once it finishes", async () => {
-    // Reproduces the race two independent reviewers flagged: a "restart"-class
-    // reconcile (drain + restart health wait) can run well past `intervalMs`
-    // (default 60s), and without a guard the next `setInterval` firing would start
-    // an overlapping sweep over the same bot. Here `driver.status` for the FIRST
-    // call hangs on `gate` — standing in for a slow in-flight reconcile — while
-    // several interval ticks fire; without the fix, each of those would call
-    // `listAgents`/`driver.status` again concurrently.
     vi.useFakeTimers();
-    let releaseFirstCall!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      releaseFirstCall = resolve;
-    });
+    const gate = deferred();
     let statusCalls = 0;
-    const driver: BotContainerDriver = {
-      async status(): Promise<BotContainerStatus> {
+    const driver = minimalDriver({
+      async status(botKey): Promise<BotContainerStatus> {
         statusCalls++;
-        if (statusCalls === 1) await gate;
-        return { botKey: "agent-a", state: "missing" };
+        if (statusCalls === 1) await gate.promise;
+        return { botKey, state: "running", restartHash: "r", filesHash: "f" };
       },
-      async list() {
-        return [];
-      },
-      async templateDrift() {
-        return false;
-      },
-      async ensure() {},
-      async writeProfile() {},
-      async restart() {},
-      async stop() {},
-    };
-    const listAgents = vi.fn(async () => [agent()]);
-    const deps: BotContainerRuntimeDeps = {
-      driver,
-      compile: async () => ({ botKey: "agent-a", files: [], restartHash: "r", filesHash: "f" }),
-      maintenance: fakeMaintenance(),
-      network: "myrmidon-bots",
-    };
-    const stop = startBotContainerReconciliation(listAgents, deps, {
-      intervalMs: 1_000,
-      env: { [BOT_CONTAINERS_ENV]: "1" },
     });
+    const listAgents = vi.fn(async () => [agent()]);
+    const stop = startBotContainerReconciliation(listAgents, deps(driver), { intervalMs: 1_000, env: ENABLED });
     try {
-      // Let the initial `void tick()` (fired synchronously by the call above) reach
-      // and suspend on `gate` before advancing any interval.
       await vi.advanceTimersByTimeAsync(0);
       expect(statusCalls).toBe(1);
 
-      // Five interval firings while the first sweep is still stuck: a second sweep
-      // must NOT start.
+      // Five interval firings while the first sweep is still stuck: no second sweep.
       await vi.advanceTimersByTimeAsync(5_000);
       expect(listAgents).toHaveBeenCalledTimes(1);
       expect(statusCalls).toBe(1);
 
-      // Unblock the first sweep and let it finish.
-      releaseFirstCall();
+      gate.resolve();
       await vi.advanceTimersByTimeAsync(0);
 
-      // The next interval firing now starts a fresh sweep.
       await vi.advanceTimersByTimeAsync(1_000);
       expect(listAgents.mock.calls.length).toBeGreaterThan(1);
       expect(statusCalls).toBeGreaterThan(1);
@@ -131,156 +235,59 @@ describe("startBotContainerReconciliation", () => {
   });
 
   it("reconciles independent bots concurrently: a slow bot's reconcile does not block a fast bot's in the same sweep", async () => {
-    // Reproduces the major-severity finding: the original sweep loop awaited each
-    // agent fully before moving to the next, so one bot stuck draining (which can
-    // legitimately take minutes) delayed every other bot behind it. Here
-    // "agent-slow"'s `status` call hangs indefinitely on `slowGate`; "agent-fast"
-    // must still be reconciled (proven by its own `writeProfile` call resolving)
-    // without waiting for the slow one.
-    let releaseSlow!: () => void;
-    const slowGate = new Promise<void>((resolve) => {
-      releaseSlow = resolve;
-    });
-    let fastBotDone!: () => void;
-    const fastBotDonePromise = new Promise<void>((resolve) => {
-      fastBotDone = resolve;
-    });
-    const driver: BotContainerDriver = {
+    const slowGate = deferred();
+    const fastBotDone = deferred();
+    const driver = minimalDriver({
       async status(botKey) {
         if (botKey === "agent-slow") {
-          await slowGate;
+          await slowGate.promise;
           return { botKey, state: "missing" };
         }
         return { botKey, state: "running", restartHash: "old", filesHash: "old" };
       },
-      async list() {
-        return [];
-      },
-      async templateDrift() {
-        return false;
-      },
-      async ensure() {},
       async writeProfile(botKey) {
-        if (botKey === "agent-fast") fastBotDone();
+        if (botKey === "agent-fast") fastBotDone.resolve();
       },
-      async restart() {},
-      async stop() {},
-    };
+    });
     const listAgents = vi.fn(async () => [agent({ agentId: "agent-slow" }), agent({ agentId: "agent-fast" })]);
-    const deps: BotContainerRuntimeDeps = {
-      driver,
-      compile: async (_agentId, botKey) => ({ botKey, files: [], restartHash: "new", filesHash: "new" }),
-      maintenance: fakeMaintenance(),
-      network: "myrmidon-bots",
-    };
-    const stop = startBotContainerReconciliation(listAgents, deps, { env: { [BOT_CONTAINERS_ENV]: "1" } });
+    const stop = startBotContainerReconciliation(
+      listAgents,
+      deps(driver, { compile: async (_agentId, botKey) => ({ botKey, files: [], restartHash: "new", filesHash: "new" }) }),
+      { env: ENABLED },
+    );
     try {
       await Promise.race([
-        fastBotDonePromise,
+        fastBotDone.promise,
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error("agent-fast never reconciled — it was blocked behind agent-slow")), 2_000),
         ),
       ]);
     } finally {
-      releaseSlow();
+      slowGate.resolve();
       stop();
     }
   });
 
-  describe("shared container.group (containers-plan-senior-2026-09-28.md §1.2)", () => {
-    it("reconciles the group's container exactly once per sweep, not once per member agent", async () => {
-      const statusCalls: string[] = [];
-      const driver = minimalDriver({
-        async status(botKey) {
-          statusCalls.push(botKey);
-          return { botKey, state: "running", restartHash: "r", filesHash: "f" };
-        },
-      });
-      const listAgents = vi.fn(async () => [
-        agent({ agentId: "agent-b" }, { group: "team-b" }),
-        agent({ agentId: "agent-a" }, { group: "team-b" }),
-      ]);
-      const deps: BotContainerRuntimeDeps = {
-        driver,
-        compile: async (_agentId, botKey) => ({ botKey, files: [], restartHash: "r", filesHash: "f" }),
-        maintenance: fakeMaintenance(),
-        network: "myrmidon-bots",
-      };
-      const stop = startBotContainerReconciliation(listAgents, deps, { env: { [BOT_CONTAINERS_ENV]: "1" } });
-      try {
-        await vi.waitFor(() => expect(statusCalls.length).toBeGreaterThan(0));
-        // Give any (incorrect) second reconcile a chance to also fire before asserting.
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        expect(statusCalls).toEqual(["team-b"]); // once, not twice
-      } finally {
-        stop();
-      }
+  it("skips agents asking for a shared container.group instead of reconciling the shared container per member", async () => {
+    const statusCalls: string[] = [];
+    const driver = minimalDriver({
+      async status(botKey) {
+        statusCalls.push(botKey);
+        return { botKey, state: "running", restartHash: "r", filesHash: "f" };
+      },
     });
-
-    it("picks the same, lexicographically-first member deterministically — no oscillation across ticks", async () => {
-      const specsSeen: number[] = [];
-      const driver = minimalDriver({
-        async status(botKey) {
-          return { botKey, state: "running", restartHash: "r", filesHash: "f" };
-        },
-      });
-      // "agent-a" sorts before "agent-b" regardless of listAgents' own order.
-      const listAgents = vi.fn(async () => [
-        agent({ agentId: "agent-b" }, { group: "team-b", memoryMb: 999 }),
-        agent({ agentId: "agent-a" }, { group: "team-b", memoryMb: 512 }),
-      ]);
-      const deps: BotContainerRuntimeDeps = {
-        driver,
-        compile: async (agentId, botKey) => {
-          specsSeen.push(agentId === "agent-a" ? 512 : 999);
-          return { botKey, files: [], restartHash: "r", filesHash: "f" };
-        },
-        maintenance: fakeMaintenance(),
-        network: "myrmidon-bots",
-      };
-      const stop = startBotContainerReconciliation(listAgents, deps, { env: { [BOT_CONTAINERS_ENV]: "1" } });
-      try {
-        await vi.waitFor(() => expect(specsSeen.length).toBeGreaterThan(0));
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        expect(specsSeen).toEqual([512]); // agent-a's card, not agent-b's
-      } finally {
-        stop();
-      }
-    });
-
-    it("flags (does not silently apply) a member whose config disagrees with the group's canonical member", async () => {
-      const records: Array<{ level: string; message: string; agentId: string }> = [];
-      const driver = minimalDriver({
-        async status(botKey) {
-          return { botKey, state: "running", restartHash: "r", filesHash: "f" };
-        },
-      });
-      const listAgents = vi.fn(async () => [
-        agent({ agentId: "agent-a" }, { group: "team-b", memoryMb: 512 }),
-        agent({ agentId: "agent-b" }, { group: "team-b", memoryMb: 999 }), // disagrees
-      ]);
-      const deps: BotContainerRuntimeDeps = {
-        driver,
-        compile: async (_agentId, botKey) => ({ botKey, files: [], restartHash: "r", filesHash: "f" }),
-        maintenance: fakeMaintenance(),
-        network: "myrmidon-bots",
-        activity: {
-          record: (entry) => {
-            records.push({ level: entry.level, message: entry.message, agentId: entry.agentId });
-          },
-        },
-      };
-      const stop = startBotContainerReconciliation(listAgents, deps, { env: { [BOT_CONTAINERS_ENV]: "1" } });
-      try {
-        await vi.waitFor(() =>
-          expect(records.some((r) => r.message.includes("disagree on image/memoryMb/cpus/pidsLimit"))).toBe(true),
-        );
-        const mismatch = records.find((r) => r.message.includes("disagree on image/memoryMb/cpus/pidsLimit"));
-        expect(mismatch?.level).toBe("error");
-        expect(mismatch?.agentId).toBe("agent-b"); // the non-canonical member is named, not agent-a
-      } finally {
-        stop();
-      }
-    });
+    const listAgents = vi.fn(async () => [
+      agent({ agentId: "agent-b" }, { group: "team-b" }),
+      agent({ agentId: "agent-a" }, { group: "team-b" }),
+      agent({ agentId: "agent-c" }),
+    ]);
+    const stop = startBotContainerReconciliation(listAgents, deps(driver), { env: ENABLED });
+    try {
+      await vi.waitFor(() => expect(statusCalls.length).toBeGreaterThan(0));
+      await flush();
+      expect(statusCalls).toEqual(["agent-c"]); // only the ungrouped bot, keyed by its own agent id
+    } finally {
+      stop();
+    }
   });
 });

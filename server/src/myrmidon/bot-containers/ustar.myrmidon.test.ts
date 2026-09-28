@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildUstarArchive, UstarError, type UstarEntry } from "./ustar.js";
+import { buildUstarArchive, parseUstarArchive, UstarError, type UstarEntry } from "./ustar.js";
 
 const FIXED_MTIME = new Date("2026-01-01T00:00:00Z");
 
@@ -110,5 +110,76 @@ describe("buildUstarArchive", () => {
     const archive = buildUstarArchive([baseEntry({ path })]);
     expect(readCString(archive, 0, 100)).toBe(path);
     expect(readCString(archive, 345, 155)).toBe("");
+  });
+
+  it("writes a directory entry as typeflag '5' with a trailing '/', its owner and mode, and no content", () => {
+    const archive = buildUstarArchive([
+      baseEntry({ path: ".myrmidon-next-00aa/skills-board", type: "directory", content: Buffer.alloc(0), mode: 0o700 }),
+    ]);
+    expect(readCString(archive, 0, 100)).toBe(".myrmidon-next-00aa/skills-board/");
+    expect(archive[156]).toBe(0x35); // typeflag '5'
+    expect(readOctal(archive, 100, 8)).toBe(0o700);
+    expect(readOctal(archive, 108, 8)).toBe(10001);
+    expect(readOctal(archive, 116, 8)).toBe(10001);
+    expect(readOctal(archive, 124, 12)).toBe(0);
+    expect(archive.length).toBe(512 + 1024); // header only, no content blocks
+  });
+
+  it("keeps the trailing '/' of a long directory path inside the name field", () => {
+    const path = `${"a".repeat(90)}/${"b".repeat(20)}`;
+    const archive = buildUstarArchive([baseEntry({ path, type: "directory", content: Buffer.alloc(0) })]);
+    expect(readCString(archive, 0, 100)).toBe(`${"b".repeat(20)}/`);
+    expect(readCString(archive, 345, 155)).toBe("a".repeat(90));
+  });
+
+  it("rejects a directory with content, and absolute or trailing-slash paths", () => {
+    expect(() => buildUstarArchive([baseEntry({ type: "directory" })])).toThrow(UstarError);
+    expect(() => buildUstarArchive([baseEntry({ path: "/etc/passwd" })])).toThrow(UstarError);
+    expect(() => buildUstarArchive([baseEntry({ path: "dir/" })])).toThrow(UstarError);
+  });
+});
+
+describe("parseUstarArchive", () => {
+  it("round-trips files and directories written by buildUstarArchive, in order", () => {
+    const archive = buildUstarArchive([
+      baseEntry({ path: "a", type: "directory", content: Buffer.alloc(0), mode: 0o700 }),
+      baseEntry({ path: "a/config.yaml", content: Buffer.from("x: 1\n"), mode: 0o600 }),
+      baseEntry({ path: `${"d".repeat(90)}/${"f".repeat(30)}`, content: Buffer.from("long") }),
+    ]);
+    const entries = parseUstarArchive(archive);
+    expect(entries.map((e) => [e.path, e.type, e.mode, e.uid, e.gid, e.content.toString("utf8")])).toEqual([
+      ["a", "directory", 0o700, 10001, 10001, ""],
+      ["a/config.yaml", "file", 0o600, 10001, 10001, "x: 1\n"],
+      [`${"d".repeat(90)}/${"f".repeat(30)}`, "file", 0o644, 10001, 10001, "long"],
+    ]);
+  });
+
+  it("applies a PAX 'path' record to the entry that follows it", () => {
+    const longName = `${"p".repeat(120)}.json`;
+    const record = (key: string, value: string) => {
+      const body = ` ${key}=${value}\n`;
+      let length = body.length + 1;
+      while (`${length}${body}`.length !== length) length = `${length}${body}`.length;
+      return `${length}${body}`;
+    };
+    const pax = Buffer.from(record("path", longName), "utf8");
+    const archive = buildUstarArchive([baseEntry({ path: "PaxHeaders/x", content: pax }), baseEntry({ path: "short.json" })]);
+    // Turn the first entry into a PAX extended header ('x') and fix its checksum.
+    archive[156] = 0x78;
+    archive.fill(0x20, 148, 156);
+    let sum = 0;
+    for (let i = 0; i < 512; i++) sum += archive[i];
+    archive.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "ascii");
+    const entries = parseUstarArchive(archive);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].path).toBe(longName);
+  });
+
+  it("rejects a corrupted header checksum and a truncated stream", () => {
+    const archive = buildUstarArchive([baseEntry()]);
+    const corrupted = Buffer.from(archive);
+    corrupted[0] = corrupted[0] + 1;
+    expect(() => parseUstarArchive(corrupted)).toThrow(UstarError);
+    expect(() => parseUstarArchive(archive.subarray(0, 512 + 100))).toThrow(UstarError);
   });
 });

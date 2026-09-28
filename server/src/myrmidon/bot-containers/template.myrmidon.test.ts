@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOT_KEY_PATTERN,
   BOT_LABEL_KEYS,
   BotContainerTemplateError,
   buildBinds,
   buildLabels,
   containerNameFor,
+  helperContainerNameFor,
   isImageAllowed,
+  isUnderManagedDir,
   mountRootSegment,
   parseImageAllowlist,
+  replacementContainerNameFor,
   resolveProfileFileTarget,
   validateBotKey,
 } from "./template.js";
@@ -26,6 +30,24 @@ describe("validateBotKey / containerNameFor", () => {
       expect(() => validateBotKey(botKey)).toThrow(BotContainerTemplateError);
     },
   );
+});
+
+describe("helperContainerNameFor / replacementContainerNameFor", () => {
+  it("can never equal another bot's own container name", () => {
+    // "myrmidon-bot-<key>-helper" would collide with bot key "<key>-helper"; a
+    // "." cannot appear in a bot key, so these names are outside that space.
+    expect(helperContainerNameFor("agent-a")).toBe("myrmidon-bot-agent-a.helper");
+    expect(replacementContainerNameFor("agent-a")).toBe("myrmidon-bot-agent-a.next");
+    for (const name of [helperContainerNameFor("agent-a"), replacementContainerNameFor("agent-a")]) {
+      const suffix = name.slice("myrmidon-bot-".length);
+      expect(BOT_KEY_PATTERN.test(suffix)).toBe(false);
+    }
+  });
+
+  it("rejects an invalid bot key", () => {
+    expect(() => helperContainerNameFor("../x")).toThrow(BotContainerTemplateError);
+    expect(() => replacementContainerNameFor("A")).toThrow(BotContainerTemplateError);
+  });
 });
 
 describe("parseImageAllowlist / isImageAllowed", () => {
@@ -100,54 +122,83 @@ describe("resolveProfileFileTarget", () => {
   it("rejects any other top-level segment (a compiler bug, not user input)", () => {
     expect(() => resolveProfileFileTarget(file("etc/passwd"))).toThrow(BotContainerTemplateError);
     expect(() => resolveProfileFileTarget(file("hermes"))).toThrow(BotContainerTemplateError); // no relative path
+    expect(() => resolveProfileFileTarget(file("hermes/"))).toThrow(BotContainerTemplateError);
   });
 
-  it("rejects a '..' segment anywhere in the relative path, not just as the whole prefix", () => {
-    // This is the module's own claimed enforcement boundary — it must not rely on
-    // compileHermesProfile (G2) to have sanitized its output first.
-    expect(() => resolveProfileFileTarget(file("hermes/../../etc/passwd"))).toThrow(BotContainerTemplateError);
-    expect(() => resolveProfileFileTarget(file("hermes/../.myrmidon/applied.json"))).toThrow(BotContainerTemplateError);
-    expect(() => resolveProfileFileTarget(file("hermes/config/../../../etc/passwd"))).toThrow(BotContainerTemplateError);
+  it.each([
+    "hermes/../../etc/passwd",
+    "hermes/../.myrmidon/applied.json", // would land on the live marker once Docker cleans the staged path
+    "hermes/../../workspace/x", // would reach another volume, past the staging directory
+    "hermes/config/../../../etc/passwd",
+    "workspace/..",
+    "hermes/./config.yaml",
+    "hermes/.",
+    "hermes//config.yaml",
+    "hermes/config.yaml/",
+  ])("rejects a '..' / '.' / empty segment anywhere in the relative path: %j", (path) => {
+    expect(() => resolveProfileFileTarget(file(path))).toThrow(BotContainerTemplateError);
   });
 
-  it("rejects a '.' segment and an empty segment (double slash) in the relative path", () => {
-    expect(() => resolveProfileFileTarget(file("hermes/./config.yaml"))).toThrow(BotContainerTemplateError);
-    expect(() => resolveProfileFileTarget(file("hermes//config.yaml"))).toThrow(BotContainerTemplateError);
+  it("rejects a backslash, a NUL and other control characters", () => {
+    expect(() => resolveProfileFileTarget(file("hermes/..\\..\\etc"))).toThrow(/backslash/);
+    expect(() => resolveProfileFileTarget(file("hermes/skills\\x.md"))).toThrow(/backslash/);
+    expect(() => resolveProfileFileTarget(file("hermes/config.yaml\u0000.png"))).toThrow(/control character/);
+    expect(() => resolveProfileFileTarget(file("hermes/a\nhermes/.env"))).toThrow(/control character/);
+    expect(() => resolveProfileFileTarget(file("hermes/a\u007f"))).toThrow(/control character/);
   });
 
-  it("rejects a relative path that starts with a leading slash", () => {
-    expect(() => resolveProfileFileTarget({ path: "hermes//etc/passwd", content: "", mode: 0o644, secret: false })).toThrow(
-      BotContainerTemplateError,
-    );
+  it.each([
+    "hermes/.myrmidon/applied.json", // the applied-state marker itself
+    "hermes/.myrmidon",
+    "hermes/.myrmidon-next-0011223344556677/config.yaml", // another apply's staging
+    "hermes/.myrmidon-apply-0011223344556677/applied.json",
+    "hermes/.myrmidon-old-0011223344556677/0",
+    "hermes/.myrmidon-marker-next/x",
+    "workspace/.myrmidon-next-ab/AGENTS.md",
+    "hermes/skills-board/x/.myrmidon/y", // reserved anywhere, not only at the mount root
+  ])("rejects a path into the driver's reserved bookkeeping: %j", (path) => {
+    expect(() => resolveProfileFileTarget(file(path))).toThrow(/reserved/);
   });
 
-  it("still accepts an ordinary nested relative path with dots inside a segment name", () => {
-    // ".." as a whole segment is rejected above; a dot that is merely part of a
-    // filename (not a path-traversal segment) must still work.
+  it("still accepts ordinary names that merely contain dots, including a leading dot", () => {
     expect(resolveProfileFileTarget(file("workspace/notes.v2.md")).relativePath).toBe("notes.v2.md");
+    expect(resolveProfileFileTarget(file("hermes/.env")).relativePath).toBe(".env");
+    expect(resolveProfileFileTarget(file("hermes/skills-board/a..b/SKILL.md")).relativePath).toBe("skills-board/a..b/SKILL.md");
+  });
+});
+
+describe("isUnderManagedDir", () => {
+  it("covers the compiler-owned skills directory and everything under it, nothing else", () => {
+    expect(isUnderManagedDir("hermes/skills-board")).toBe(true);
+    expect(isUnderManagedDir("hermes/skills-board/a/SKILL.md")).toBe(true);
+    expect(isUnderManagedDir("hermes/skills-board-other/a")).toBe(false);
+    expect(isUnderManagedDir("hermes/skills/a/SKILL.md")).toBe(false);
+    expect(isUnderManagedDir("workspace/AGENTS.md")).toBe(false);
   });
 });
 
 describe("buildLabels", () => {
-  it("always wins over caller-supplied labels for the four identification keys", () => {
-    const labels = buildLabels(
-      {
-        botKey: "agent-a",
-        image: "myrmidon-hermes:1.1.0",
-        labels: {
-          [BOT_LABEL_KEYS.bot]: "someone-else",
-          [BOT_LABEL_KEYS.image]: "evil:latest",
-          group: "team-b",
-        },
+  it("always wins over caller-supplied labels for the identification keys, and cannot be tagged a helper", () => {
+    const labels = buildLabels({
+      botKey: "agent-a",
+      image: "myrmidon-hermes:1.1.0",
+      labels: {
+        [BOT_LABEL_KEYS.bot]: "someone-else",
+        [BOT_LABEL_KEYS.image]: "evil:latest",
+        [BOT_LABEL_KEYS.helper]: "agent-a",
+        group: "team-b",
       },
-      { restartHash: "r1", filesHash: "f1" },
-    );
+    });
     expect(labels).toEqual({
       group: "team-b",
       [BOT_LABEL_KEYS.bot]: "agent-a",
-      [BOT_LABEL_KEYS.restartHash]: "r1",
-      [BOT_LABEL_KEYS.filesHash]: "f1",
       [BOT_LABEL_KEYS.image]: "myrmidon-hermes:1.1.0",
     });
+  });
+
+  it("carries no profile hashes: a label is fixed at creation and can never mean 'applied'", () => {
+    const labels = buildLabels({ botKey: "agent-a", image: "myrmidon-hermes:1.1.0" });
+    expect(Object.keys(labels).sort()).toEqual([BOT_LABEL_KEYS.bot, BOT_LABEL_KEYS.image].sort());
+    expect(Object.keys(labels).some((key) => key.includes("hash"))).toBe(false);
   });
 });

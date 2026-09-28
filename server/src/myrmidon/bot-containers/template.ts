@@ -3,10 +3,12 @@
 // Pure helpers for the docker-driver's fixed container template
 // (containers-plan-senior-2026-09-28.md §1.4: "fleetd is not a Docker API proxy, it
 // is a service with a fixed template"). Everything here is deterministic and does no
-// I/O, so docker-driver.myrmidon.test.ts covers it directly without a Docker socket.
+// I/O, so the driver's tests cover it directly without a Docker socket.
 // This is also the enforcement boundary: a BotContainerSpec coming from an agent's
 // adapterConfig (index.ts) cannot smuggle in an arbitrary image, bind mount or
-// network — only what these functions accept ever reaches the Docker API.
+// network, and a compiled profile file cannot address anything outside its own
+// volume or the driver's reserved bookkeeping paths — only what these functions
+// accept ever reaches the Docker API.
 
 import type { BotContainerSpec } from "./driver.js";
 import type { CompiledProfileFile } from "./types.js";
@@ -26,6 +28,20 @@ export function validateBotKey(botKey: string): void {
 export function containerNameFor(botKey: string): string {
   validateBotKey(botKey);
   return `myrmidon-bot-${botKey}`;
+}
+
+/** Name of the short-lived helper container the driver uses to prepare a bot's
+ *  volumes and to lay its profile down. The "." separator cannot occur in a bot
+ *  key (BOT_KEY_PATTERN), so this can never collide with another bot's own
+ *  container name ("myrmidon-bot-<key>-helper" could: bot key "<key>-helper"). */
+export function helperContainerNameFor(botKey: string): string {
+  return `${containerNameFor(botKey)}.helper`;
+}
+
+/** Name a replacement container is created under during a template-drift
+ *  recreate, before it is renamed over the old one. Same "." reasoning as above. */
+export function replacementContainerNameFor(botKey: string): string {
+  return `${containerNameFor(botKey)}.next`;
 }
 
 /** MYRMIDON_BOT_IMAGE_ALLOWLIST: comma-separated globs. `*` matches any run of
@@ -78,54 +94,102 @@ export function buildBinds(volumeRoot: string, botKey: string): string[] {
 
 /** `mount.containerPath` without its leading "/", e.g. "data/hermes". This is the
  *  path segment to use for anything addressed *inside* the container relative to
- *  its root (tar entry paths, exec script paths) — never `mount.hostSuffix`, which
- *  only names the bind's source directory under MYRMIDON_BOT_VOLUME_ROOT and does
- *  not match the mount point for "hermes" (host suffix "hermes" mounts to
+ *  its root (the apply script's paths) — never `mount.hostSuffix`, which only
+ *  names the bind's source directory under MYRMIDON_BOT_VOLUME_ROOT and does not
+ *  match the mount point for "hermes" (host suffix "hermes" mounts to
  *  "/data/hermes", not "/hermes"). */
 export function mountRootSegment(mount: BotVolumeMount): string {
   return mount.containerPath.replace(/^\//, "");
 }
 
+/**
+ * Directories (as profile paths) that the profile compiler owns outright: on
+ * every apply their whole content is replaced by exactly what the new profile
+ * carries under them — including nothing at all — instead of being merged file
+ * by file. "hermes/skills-board" is the compiler's copy of the card's skills
+ * (Hermes reads the whole directory through `skills.external_dirs`), so a skill
+ * removed from the card must disappear from it; a per-file merge never removes
+ * anything. The bot's own skills live elsewhere under hermes/ and are untouched.
+ */
+export const BOT_MANAGED_DIRS: readonly string[] = ["hermes/skills-board"];
+
+/** True when a profile path is a managed directory itself or lies under one. */
+export function isUnderManagedDir(profilePath: string): boolean {
+  return BOT_MANAGED_DIRS.some((dir) => profilePath === dir || profilePath.startsWith(`${dir}/`));
+}
+
+/** Prefix of every path segment the driver reserves for its own bookkeeping at a
+ *  mount root: the applied-state marker (".myrmidon/"), the per-apply staging
+ *  (".myrmidon-next-<nonce>/"), the apply metadata (".myrmidon-apply-<nonce>/")
+ *  and the set-aside copy of a replaced managed directory (".myrmidon-old-<nonce>/"). */
+export const RESERVED_SEGMENT_PREFIX = ".myrmidon";
+
 export const BOT_LABEL_KEYS = {
   bot: "myrmidon.bot",
-  restartHash: "myrmidon.restart_hash",
-  filesHash: "myrmidon.files_hash",
   image: "myrmidon.image",
+  /** Set on the driver's helper containers instead of `bot`, so they never show
+   *  up as a bot in `list()`. */
+  helper: "myrmidon.bot-helper",
 } as const;
 
-/** The driver's own identification labels always win over anything in
- *  `spec.labels` — a caller cannot use that field to spoof `myrmidon.bot` and hide
- *  a container from `list()`'s orphan scan. */
-export function buildLabels(
-  spec: Pick<BotContainerSpec, "botKey" | "image" | "labels">,
-  profile: { restartHash: string; filesHash: string },
-): Record<string, string> {
+/**
+ * Identification labels for a bot container. Deliberately carries no profile
+ * hashes: Docker cannot change a container's labels after creation, so a hash
+ * label would only ever mean "desired when the container was created", never
+ * "applied" — and treating it as applied state is exactly what let a failed
+ * first profile write look like a finished one. Applied state lives only in the
+ * marker file writeProfile moves into place last (docker-driver.ts).
+ *
+ * The driver's own keys always win over anything in `spec.labels` — a caller
+ * cannot use that field to spoof `myrmidon.bot` and hide a container from
+ * `list()`'s orphan scan, nor tag one as a helper.
+ */
+export function buildLabels(spec: Pick<BotContainerSpec, "botKey" | "image" | "labels">): Record<string, string> {
+  const labels: Record<string, string> = { ...spec.labels };
+  delete labels[BOT_LABEL_KEYS.helper];
   return {
-    ...spec.labels,
+    ...labels,
     [BOT_LABEL_KEYS.bot]: spec.botKey,
-    [BOT_LABEL_KEYS.restartHash]: profile.restartHash,
-    [BOT_LABEL_KEYS.filesHash]: profile.filesHash,
     [BOT_LABEL_KEYS.image]: spec.image,
   };
 }
 
-/** True when `rest` (the part of a profile file's path after its "hermes/" /
- *  "workspace/" / "scratch/" prefix) has no "." or ".." segment and no leading
- *  "/" — the only shapes that could carry it outside the staging directory it is
- *  written under once it reaches the tar entry path and the swap script's `mv`
- *  destination in docker-driver.ts. */
-function isSafeRelativePath(rest: string): boolean {
-  if (rest.startsWith("/")) return false;
-  return rest.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+/** ASCII control characters (NUL, newline, ...) and DEL. A newline would also
+ *  split an entry of the apply script's removal list in two. */
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/** Why `rest` (the part of a profile file's path after its "hermes/" /
+ *  "workspace/" / "scratch/" prefix) is unsafe, or null when it is safe. */
+function unsafeRelativePathReason(rest: string): string | null {
+  if (rest.length === 0) return "has no path inside the volume";
+  if (hasControlCharacter(rest)) return "contains a control character";
+  if (rest.includes("\\")) return "contains a backslash";
+  if (rest.startsWith("/")) return 'starts with "/"';
+  for (const segment of rest.split("/")) {
+    if (segment.length === 0) return "has an empty path segment";
+    if (segment === "." || segment === "..") return `has a "${segment}" path segment`;
+    if (segment.startsWith(RESERVED_SEGMENT_PREFIX)) {
+      return `has a segment starting with "${RESERVED_SEGMENT_PREFIX}", which is reserved for the driver's own bookkeeping`;
+    }
+  }
+  return null;
 }
 
 /** Which mount a compiled profile file belongs under, and its path inside that
- *  mount. Throws on anything that is not "hermes/…", "workspace/…" or "scratch/…",
- *  or whose remainder contains a "." / ".." segment — this function is the
- *  enforcement boundary for what reaches the Docker API (see the module comment
- *  above), so it does not trust compileHermesProfile (G2, a separate PR this
- *  module has no dependency on) to have sanitized its own output first. */
-export function resolveProfileFileTarget(file: CompiledProfileFile): {
+ *  mount. Throws on anything that is not "hermes/…", "workspace/…" or
+ *  "scratch/…", or whose remainder could leave that mount, alias another path
+ *  or reach the driver's reserved paths: empty/"."/".." segments, a leading
+ *  "/", a backslash, a control character, or any segment starting with
+ *  ".myrmidon". This function is the enforcement boundary for what reaches the
+ *  Docker API (see the module comment above), so it does not trust
+ *  compileHermesProfile (G2) to have sanitized its own output first. */
+export function resolveProfileFileTarget(file: Pick<CompiledProfileFile, "path">): {
   mount: BotVolumeMount;
   relativePath: string;
 } {
@@ -133,10 +197,14 @@ export function resolveProfileFileTarget(file: CompiledProfileFile): {
   const prefix = slash === -1 ? file.path : file.path.slice(0, slash);
   const rest = slash === -1 ? "" : file.path.slice(slash + 1);
   const mount = BOT_VOLUME_MOUNTS.find((candidate) => candidate.hostSuffix === prefix);
-  if (!mount || rest.length === 0 || !isSafeRelativePath(rest)) {
+  if (!mount) {
     throw new BotContainerTemplateError(
-      `profile file path "${file.path}" must start with "hermes/", "workspace/" or "scratch/" and contain no "." or ".." path segment`,
+      `profile file path ${JSON.stringify(file.path)} must start with "hermes/", "workspace/" or "scratch/"`,
     );
+  }
+  const reason = unsafeRelativePathReason(rest);
+  if (reason) {
+    throw new BotContainerTemplateError(`profile file path ${JSON.stringify(file.path)} ${reason}`);
   }
   return { mount, relativePath: rest };
 }

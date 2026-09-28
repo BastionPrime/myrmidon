@@ -16,9 +16,9 @@ export interface CompiledProfileFile {
 export interface CompiledProfile {
   botKey: string;
   files: CompiledProfileFile[];
-  /** Hash over files that need a gateway restart to apply (config.yaml, .env, hindsight config). */
+  /** Hash over files that need a gateway restart to apply (config.yaml, .env, hindsight config, skill files — the gateway's skills index is cached in-process and does not watch the skills dir). */
   restartHash: string;
-  /** Hash over files a running gateway picks up without restart (skills, AGENTS.md). */
+  /** Hash over files a running gateway picks up without restart (AGENTS.md). */
   filesHash: string;
 }
 

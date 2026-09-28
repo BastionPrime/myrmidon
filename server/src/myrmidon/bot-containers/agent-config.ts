@@ -19,9 +19,6 @@ export function isBotContainersEnabled(env: NodeJS.ProcessEnv = process.env): bo
 const HERMES_GATEWAY_ADAPTER_TYPE = "hermes_gateway";
 
 export interface BotContainerAgentConfig {
-  /** Container this bot shares with the rest of its project; unset = its own
-   *  container, keyed by agent id (containers-plan-senior-2026-09-28.md §1.2). */
-  group?: string;
   image: string;
   memoryMb: number;
   cpus: number;
@@ -32,12 +29,22 @@ export type BotContainerAgentConfigResult =
   | { ok: true; config: BotContainerAgentConfig }
   | { ok: false; reason: string };
 
+/** Why `container.group` is refused for now. A container shared by a project's
+ *  bots (containers-plan-senior-2026-09-28.md §1.2) needs one spec and one
+ *  profile for the whole group and a maintenance window over every member agent
+ *  before its gateway restarts (§2.2 p.4); reconciling it per agent, from each
+ *  member's own card, would recreate and rewrite the shared container from
+ *  different cards and restart it under the other members' running work. */
+export const CONTAINER_GROUP_UNSUPPORTED_REASON =
+  "container.group (a container shared by several agents) is not supported yet: it needs one spec, one profile and a maintenance window over every member agent, which this reconciler does not provide";
+
 /**
  * Reads `adapterConfig.container` off an agent's card. Only `hermes_gateway`
  * agents are eligible (containers-plan-senior-2026-09-28.md's G3 scope); anything
  * else, or a missing/incomplete/`enabled !== true` block, is reported as
  * not-applicable rather than thrown — a malformed card must not take a sweep of
- * other agents down.
+ * other agents down. A card asking for a shared `group` container is refused the
+ * same way (see CONTAINER_GROUP_UNSUPPORTED_REASON).
  */
 export function readBotContainerAgentConfig(
   adapterType: string,
@@ -52,8 +59,9 @@ export function readBotContainerAgentConfig(
   }
   const c = raw as Record<string, unknown>;
   if (c.enabled !== true) return { ok: false, reason: "adapterConfig.container.enabled is not true" };
+  if (c.group !== undefined && c.group !== null) return { ok: false, reason: CONTAINER_GROUP_UNSUPPORTED_REASON };
 
-  const { image, memoryMb, cpus, pidsLimit, group } = c;
+  const { image, memoryMb, cpus, pidsLimit } = c;
   if (typeof image !== "string" || image.trim().length === 0) {
     return { ok: false, reason: "container.image must be a non-empty string" };
   }
@@ -66,20 +74,13 @@ export function readBotContainerAgentConfig(
   if (typeof pidsLimit !== "number" || !Number.isInteger(pidsLimit) || pidsLimit <= 0) {
     return { ok: false, reason: "container.pidsLimit must be a positive integer" };
   }
-  let groupValue: string | undefined;
-  if (group !== undefined) {
-    if (typeof group !== "string" || !BOT_KEY_PATTERN.test(group)) {
-      return { ok: false, reason: "container.group must match the bot key pattern (lowercase letters, digits, hyphens)" };
-    }
-    groupValue = group;
-  }
-  return { ok: true, config: { group: groupValue, image, memoryMb, cpus, pidsLimit } };
+  return { ok: true, config: { image, memoryMb, cpus, pidsLimit } };
 }
 
-/** A container-per-bot by default; `container.group` opts an agent into a shared
- *  project container instead. */
-export function botKeyForAgent(agentId: string, config: BotContainerAgentConfig): string {
-  return config.group ?? agentId;
+/** One container per bot, keyed by its agent id; null when the id cannot be a
+ *  bot key (agent ids are lowercase uuids, which always can). */
+export function botKeyForAgent(agentId: string): string | null {
+  return BOT_KEY_PATTERN.test(agentId) ? agentId : null;
 }
 
 export function botContainerSpec(botKey: string, config: BotContainerAgentConfig, network: string): BotContainerSpec {
@@ -91,53 +92,4 @@ export function botContainerSpec(botKey: string, config: BotContainerAgentConfig
     pidsLimit: config.pidsLimit,
     network,
   };
-}
-
-/** Do two agents' container configs describe the same container template? Compares
- *  only the fields that feed `botContainerSpec` (not `group` itself, which is what
- *  made them land in the same group in the first place). Used to detect agents that
- *  share a `container.group` (containers-plan-senior-2026-09-28.md §1.2's "shared
- *  project container") but whose cards disagree on image/resources — see
- *  `pickCanonicalGroupMember`. */
-export function botContainerConfigsMatch(a: BotContainerAgentConfig, b: BotContainerAgentConfig): boolean {
-  return a.image === b.image && a.memoryMb === b.memoryMb && a.cpus === b.cpus && a.pidsLimit === b.pidsLimit;
-}
-
-export interface BotContainerGroupMember<A extends { agentId: string }> {
-  agent: A;
-  config: BotContainerAgentConfig;
-}
-
-/**
- * Groups parsed agent configs by resolved botKey. Two or more `hermes_gateway`
- * agents can share a `container.group` and therefore the same botKey — grouping
- * them here (instead of reconciling each agent independently) is what lets a
- * sweep reconcile a shared container exactly once per tick rather than once per
- * member agent, each racing to impose its own card's spec on it.
- */
-export function groupByBotKey<A extends { agentId: string }>(
-  members: readonly BotContainerGroupMember<A>[],
-): Map<string, BotContainerGroupMember<A>[]> {
-  const groups = new Map<string, BotContainerGroupMember<A>[]>();
-  for (const member of members) {
-    const botKey = botKeyForAgent(member.agent.agentId, member.config);
-    const group = groups.get(botKey);
-    if (group) group.push(member);
-    else groups.set(botKey, [member]);
-  }
-  return groups;
-}
-
-/**
- * Deterministically picks one member of a botKey group to reconcile: the one
- * whose `agentId` sorts first. Deterministic (not "whichever the sweep loop
- * reached last") so the same member wins every tick regardless of iteration
- * order or listAgents' own ordering — the property that stops a mismatched
- * shared-container group from oscillating between its members' specs on every
- * pass (see index.ts's sweep).
- */
-export function pickCanonicalGroupMember<A extends { agentId: string }>(
-  members: readonly BotContainerGroupMember<A>[],
-): BotContainerGroupMember<A> {
-  return members.reduce((a, b) => (a.agent.agentId <= b.agent.agentId ? a : b));
 }

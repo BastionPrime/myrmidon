@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   BOT_CONTAINERS_ENV,
-  botContainerConfigsMatch,
+  CONTAINER_GROUP_UNSUPPORTED_REASON,
   botContainerSpec,
   botKeyForAgent,
-  groupByBotKey,
   isBotContainersEnabled,
-  pickCanonicalGroupMember,
   readBotContainerAgentConfig,
-  type BotContainerAgentConfig,
 } from "./agent-config.js";
 
 describe("isBotContainersEnabled", () => {
@@ -48,16 +45,22 @@ describe("readBotContainerAgentConfig", () => {
     const result = readBotContainerAgentConfig("hermes_gateway", { container: VALID_CONTAINER_CONFIG });
     expect(result).toEqual({
       ok: true,
-      config: { group: undefined, image: "myrmidon-hermes:1.1.0", memoryMb: 1536, cpus: 1, pidsLimit: 256 },
+      config: { image: "myrmidon-hermes:1.1.0", memoryMb: 1536, cpus: 1, pidsLimit: 256 },
     });
   });
 
-  it("accepts an optional group for a shared project container", () => {
-    const result = readBotContainerAgentConfig("hermes_gateway", {
-      container: { ...VALID_CONTAINER_CONFIG, group: "team-b" },
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.config.group).toBe("team-b");
+  it.each(["team-b", "Not-Lowercase", "", 42])(
+    "refuses a shared container.group (%j) as not applicable instead of reconciling it per agent",
+    (group) => {
+      // A shared container reconciled from each member's own card would be
+      // recreated/rewritten by every member and restarted under the others' runs.
+      const result = readBotContainerAgentConfig("hermes_gateway", { container: { ...VALID_CONTAINER_CONFIG, group } });
+      expect(result).toEqual({ ok: false, reason: CONTAINER_GROUP_UNSUPPORTED_REASON });
+    },
+  );
+
+  it("treats an explicit null group like no group", () => {
+    expect(readBotContainerAgentConfig("hermes_gateway", { container: { ...VALID_CONTAINER_CONFIG, group: null } }).ok).toBe(true);
   });
 
   it.each([
@@ -67,8 +70,6 @@ describe("readBotContainerAgentConfig", () => {
     { ...VALID_CONTAINER_CONFIG, memoryMb: "1536" },
     { ...VALID_CONTAINER_CONFIG, cpus: -1 },
     { ...VALID_CONTAINER_CONFIG, pidsLimit: 1.5 },
-    { ...VALID_CONTAINER_CONFIG, group: "Not-Lowercase" },
-    { ...VALID_CONTAINER_CONFIG, group: "has spaces" },
   ])("rejects an invalid container block: %j", (container) => {
     const result = readBotContainerAgentConfig("hermes_gateway", { container });
     expect(result.ok).toBe(false);
@@ -76,9 +77,14 @@ describe("readBotContainerAgentConfig", () => {
 });
 
 describe("botKeyForAgent / botContainerSpec", () => {
-  it("defaults the bot key to the agent id, and uses the group when set", () => {
-    expect(botKeyForAgent("agent-a", { image: "x", memoryMb: 1, cpus: 1, pidsLimit: 1 })).toBe("agent-a");
-    expect(botKeyForAgent("agent-a", { group: "team-b", image: "x", memoryMb: 1, cpus: 1, pidsLimit: 1 })).toBe("team-b");
+  it("keys every bot by its own agent id", () => {
+    expect(botKeyForAgent("agent-a")).toBe("agent-a");
+    expect(botKeyForAgent("3adb3ce4-40a4-4b1e-9c2a-000000000001")).toBe("3adb3ce4-40a4-4b1e-9c2a-000000000001");
+  });
+
+  it("returns null for an id that cannot be a bot key", () => {
+    expect(botKeyForAgent("Agent_A")).toBeNull();
+    expect(botKeyForAgent("../x")).toBeNull();
   });
 
   it("builds a spec that carries the driver's network through unchanged", () => {
@@ -91,64 +97,5 @@ describe("botKeyForAgent / botContainerSpec", () => {
       pidsLimit: 256,
       network: "myrmidon-bots",
     });
-  });
-});
-
-describe("botContainerConfigsMatch", () => {
-  function config(overrides: Partial<BotContainerAgentConfig> = {}): BotContainerAgentConfig {
-    return { image: "myrmidon-hermes:1.1.0", memoryMb: 512, cpus: 1, pidsLimit: 128, ...overrides };
-  }
-
-  it("is true for two configs with identical image/memoryMb/cpus/pidsLimit", () => {
-    expect(botContainerConfigsMatch(config(), config())).toBe(true);
-  });
-
-  it("ignores `group` — two configs in the same group with different group spellings still match on template", () => {
-    expect(botContainerConfigsMatch(config({ group: "team-a" }), config({ group: "team-b" }))).toBe(true);
-  });
-
-  it.each([
-    { image: "myrmidon-hermes:1.2.0" },
-    { memoryMb: 1024 },
-    { cpus: 2 },
-    { pidsLimit: 256 },
-  ])("is false when %j differs", (overrides) => {
-    expect(botContainerConfigsMatch(config(), config(overrides))).toBe(false);
-  });
-});
-
-describe("groupByBotKey / pickCanonicalGroupMember", () => {
-  interface FakeAgent {
-    agentId: string;
-  }
-
-  function member(agentId: string, config: Partial<BotContainerAgentConfig> = {}): { agent: FakeAgent; config: BotContainerAgentConfig } {
-    return {
-      agent: { agentId },
-      config: { image: "myrmidon-hermes:1.1.0", memoryMb: 512, cpus: 1, pidsLimit: 128, ...config },
-    };
-  }
-
-  it("groups agents with the same resolved botKey (shared container.group) together, and keeps unrelated agents in their own singleton groups", () => {
-    const groups = groupByBotKey([
-      member("agent-a", { group: "team-b" }),
-      member("agent-c"), // no group: keyed by its own agentId
-      member("agent-b", { group: "team-b" }),
-    ]);
-    expect([...groups.keys()].sort()).toEqual(["agent-c", "team-b"]);
-    expect(groups.get("team-b")?.map((m) => m.agent.agentId).sort()).toEqual(["agent-a", "agent-b"]);
-    expect(groups.get("agent-c")?.map((m) => m.agent.agentId)).toEqual(["agent-c"]);
-  });
-
-  it("picks the member whose agentId sorts first, regardless of input order", () => {
-    const membersInOrderB = [member("agent-b", { group: "g" }), member("agent-a", { group: "g" })];
-    const membersInOrderA = [member("agent-a", { group: "g" }), member("agent-b", { group: "g" })];
-    expect(pickCanonicalGroupMember(membersInOrderB).agent.agentId).toBe("agent-a");
-    expect(pickCanonicalGroupMember(membersInOrderA).agent.agentId).toBe("agent-a");
-  });
-
-  it("is a no-op for a group of one", () => {
-    const solo = member("agent-a", { group: "g" });
-    expect(pickCanonicalGroupMember([solo])).toBe(solo);
   });
 });
