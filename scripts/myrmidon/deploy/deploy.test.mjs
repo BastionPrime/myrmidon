@@ -33,7 +33,9 @@ echo "curl $*" >> "$SANDBOX/calls.log"
 cat "$SANDBOX/health.json"
 `;
 
-function sandbox({ health, dumpBytes = 2048, labelVersion = VERSION, labelRevision = COMMIT, current = OLD } = {}) {
+const VENDOR = "ghcr.io/paperclipai/paperclip:2026.916.1";
+
+function sandbox({ health, dumpBytes = 2048, labelVersion = VERSION, labelRevision = COMMIT, current = OLD, currentImage } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myrmidon-deploy-"));
   const bin = path.join(dir, "bin");
   const composeDir = path.join(dir, "compose");
@@ -49,7 +51,9 @@ function sandbox({ health, dumpBytes = 2048, labelVersion = VERSION, labelRevisi
     JSON.stringify(health ?? { status: "ok", version: VERSION, commit: COMMIT }),
   );
   const override = path.join(composeDir, "docker-compose.myrmidon-image.yml");
-  if (current) {
+  if (currentImage) {
+    fs.writeFileSync(override, `services:\n  server:\n    image: ${currentImage}\n`);
+  } else if (current) {
     fs.writeFileSync(override, `services:\n  server:\n    image: ghcr.io/itkadr-git/myrmidon@${current}\n`);
   }
   const config = path.join(dir, "deploy.env");
@@ -147,6 +151,27 @@ describe("deploy.sh", () => {
     assert.match(out, /sha256/);
   });
 
+  it("aborts before the image switch when running runs cannot be counted", () => {
+    const sb = sandbox();
+    fs.appendFileSync(sb.config, "RUNNING_RUNS_COMMAND='exit 3'\n");
+    const before = read(sb.override);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.notEqual(code, 0);
+    assert.match(out, /cannot count running runs/);
+    assert.equal(read(sb.override), before);
+    assert.doesNotMatch(calls(sb), /up -d/);
+  });
+
+  it("aborts when the run counter prints nothing, unless ALLOW_UNKNOWN_RUNS=1", () => {
+    const sb = sandbox();
+    fs.appendFileSync(sb.config, "RUNNING_RUNS_COMMAND='true'\n");
+    assert.notEqual(run(sb, "deploy.sh", ["--digest", NEW]).code, 0);
+    fs.appendFileSync(sb.config, "ALLOW_UNKNOWN_RUNS=1\n");
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.equal(code, 0, out);
+    assert.match(out, /ALLOW_UNKNOWN_RUNS=1, not waiting/);
+  });
+
   it("aborts when runs do not finish in time", () => {
     const sb = sandbox();
     fs.appendFileSync(sb.config, "RUNNING_RUNS_COMMAND='echo 3'\nRUNS_WAIT_TIMEOUT_SEC=0\n");
@@ -166,6 +191,31 @@ describe("rollback.sh", () => {
     assert.equal(code, 0, out);
     assert.match(read(sb.override), new RegExp(`@${OLD}`));
     assert.match(out, /database not restored/);
+  });
+
+  it("returns to a vendor image after the first deploy from it", () => {
+    const sb = sandbox({ currentImage: VENDOR });
+    assert.equal(run(sb, "deploy.sh", ["--digest", NEW]).code, 0);
+    assert.equal(read(path.join(sb.dir, "state/previous-image")).trim(), VENDOR);
+    const { code, out } = run(sb, "rollback.sh", []);
+    assert.equal(code, 0, out);
+    assert.match(read(sb.override), new RegExp(`image: ${VENDOR.replace(/[.]/g, "\\.")}\\n`));
+    assert.match(calls(sb), new RegExp(`docker pull --quiet ${VENDOR.replace(/[.]/g, "\\.")}`));
+    assert.equal(read(path.join(sb.dir, "state/previous-image")).trim(), `ghcr.io/itkadr-git/myrmidon@${NEW}`);
+  });
+
+  it("--to-image rolls back to any image reference", () => {
+    const sb = sandbox({ current: NEW });
+    const { code, out } = run(sb, "rollback.sh", ["--to-image", VENDOR]);
+    assert.equal(code, 0, out);
+    assert.match(read(sb.override), new RegExp(`image: ${VENDOR.replace(/[.]/g, "\\.")}`));
+  });
+
+  it("refuses --to together with --to-image", () => {
+    const sb = sandbox();
+    const { code, out } = run(sb, "rollback.sh", ["--to", OLD, "--to-image", VENDOR]);
+    assert.notEqual(code, 0);
+    assert.match(out, /not both/);
   });
 
   it("does not restore a dump without confirmation", () => {
