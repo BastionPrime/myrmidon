@@ -312,7 +312,7 @@ function ConnectFlowPreview({
             lede={
               done
                 ? "The step advances straight to Review — there is no success screen."
-                : "Paperclip works with your existing subscription or API keys."
+                : "Myrmidon works with your existing subscription or API keys."
             }
           />
         </div>

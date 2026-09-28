@@ -95,7 +95,7 @@ describe("PaperclipCloudOAuthHandoffPage", () => {
     await act(async () => root.render(<PaperclipCloudOAuthHandoffPage />));
     await flushReact();
 
-    expect(container.textContent).toContain("Paperclip couldn’t refresh this sign-in. Try again to continue.");
+    expect(container.textContent).toContain("Myrmidon couldn’t refresh this sign-in. Try again to continue.");
     expect(navigateTopLevel).not.toHaveBeenCalled();
   });
 });

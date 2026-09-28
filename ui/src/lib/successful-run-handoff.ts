@@ -4,9 +4,9 @@ export const SUCCESSFUL_RUN_HANDOFF_REQUIRED_ACTION = "issue.successful_run_hand
 export const SUCCESSFUL_RUN_HANDOFF_RESOLVED_ACTION = "issue.successful_run_handoff_resolved";
 export const SUCCESSFUL_RUN_HANDOFF_ESCALATED_ACTION = "issue.successful_run_handoff_escalated";
 export const SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY =
-  "Paperclip needs a disposition before this issue can continue.";
+  "Myrmidon needs a disposition before this issue can continue.";
 export const SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY =
-  "Paperclip could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.";
+  "Myrmidon could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.";
 
 export function isSuccessfulRunHandoffActivity(action: string) {
   return action === SUCCESSFUL_RUN_HANDOFF_REQUIRED_ACTION
@@ -77,7 +77,7 @@ export function isSuccessfulRunHandoffComment(text: string) {
 export function isSuccessfulRunHandoffEscalationComment(text: string) {
   const trimmed = text.trim();
   return trimmed === SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY
-    || /^Paperclip exhausted the bounded successful-run handoff correction\b/i.test(trimmed);
+    || /^Myrmidon exhausted the bounded successful-run handoff correction\b/i.test(trimmed);
 }
 
 export function successfulRunHandoffActivityTone(action: string) {
