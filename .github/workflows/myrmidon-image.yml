@@ -9,7 +9,7 @@ name: Myrmidon image
 on:
   push:
     branches: [main]
-    tags: ["*-myr.*"]
+    tags: ["myr-v*"]
   workflow_dispatch:
 
 permissions: {}
@@ -41,41 +41,41 @@ jobs:
         id: version
         run: |
           set -euo pipefail
+          # myrmidon(R4): Myrmidon — свой продукт со своей версией (semver, теги myr-vX.Y.Z,
+          # решение владельца 28.09.2026). Версия Paperclip, взятого за основу, — только метка
+          # base.paperclip-version, в номер продукта не входит.
           git fetch --force --tags --quiet origin
           vendor_tag="$(git describe --tags --abbrev=0 --match 'v20*' HEAD)"
           vendor_version="${vendor_tag#v}"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             tag="${GITHUB_REF#refs/tags/}"
-            if [[ ! "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+-myr\.[0-9]+$ ]]; then
-              echo "::error::release tag must look like <vendor version>-myr.<N>, got $tag"
+            if [[ ! "$tag" =~ ^myr-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "::error::release tag must look like myr-v<major>.<minor>.<patch>, got $tag"
               exit 1
             fi
-            if [[ "${tag%-myr.*}" != "$vendor_version" ]]; then
-              echo "::error::tag $tag does not match the vendor base $vendor_version of this commit"
-              exit 1
-            fi
-            build_version="$tag"
-            expected_version="$tag"
+            expected_version="${BASH_REMATCH[1]}"
+            image_tag="$expected_version"
           else
-            # git describe output; the server turns it into <version>+<n>.git.<sha>.
-            build_version="$(git describe --tags --long --abbrev=7 --match 'v20*' HEAD)"
-            if [[ "$build_version" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-g([0-9a-f]+)$ ]]; then
+            # Between releases: <last release>+<commits>.git.<sha>; before the first release 0.0.0.
+            if describe="$(git describe --tags --long --abbrev=7 --match 'myr-v*' HEAD 2>/dev/null)" \
+              && [[ "$describe" =~ ^myr-v([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-g([0-9a-f]+)$ ]]; then
               if [[ "${BASH_REMATCH[2]}" == "0" ]]; then
                 expected_version="${BASH_REMATCH[1]}"
               else
                 expected_version="${BASH_REMATCH[1]}+${BASH_REMATCH[2]}.git.${BASH_REMATCH[3]}"
               fi
             else
-              echo "::error::unexpected git describe output: $build_version"
-              exit 1
+              expected_version="0.0.0+$(git rev-list --count HEAD).git.$(git rev-parse --short=7 HEAD)"
             fi
+            image_tag=""
           fi
           {
             echo "vendor=$vendor_version"
-            echo "build=$build_version"
+            echo "build=$expected_version"
             echo "expected=$expected_version"
+            echo "image_tag=$image_tag"
           } >> "$GITHUB_OUTPUT"
-          echo "vendor=$vendor_version build=$build_version expected=$expected_version"
+          echo "vendor=$vendor_version version=$expected_version"
 
       - name: Free runner disk
         run: |
@@ -104,7 +104,7 @@ jobs:
           tags: |
             type=sha,prefix=sha-,format=short
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ steps.version.outputs.image_tag }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
           labels: |
             org.opencontainers.image.title=Myrmidon
             org.opencontainers.image.description=Control plane for companies of AI agents, based on Paperclip

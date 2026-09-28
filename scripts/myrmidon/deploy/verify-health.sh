@@ -3,7 +3,7 @@
 # version and commit.
 #
 #   verify-health.sh --url http://127.0.0.1:3100/api/health \
-#     --expect-version 2026.916.1-myr.1 --expect-commit <40-char sha> \
+#     --expect-version 1.0.0 --expect-commit <40-char sha> \
 #     [--timeout 300] [--token-file <file>] [--interval 5]
 #
 # In `authenticated` deployments anonymous health responses carry the commit

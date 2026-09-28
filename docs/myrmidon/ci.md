@@ -225,15 +225,17 @@ Workflow [`myrmidon-image.yml`](../../.github/workflows/myrmidon-image.yml), job
 архитектур по тегам `v*` вендора, с его схемой тегов и каналами npm. Свой файл проще и не
 конфликтует при переносе.
 
-- **Когда:** `push` в `main`, git-тег вида `<версия вендора>-myr.<N>` (первый —
-  `2026.916.1-myr.1`), вручную. На `pull_request` не запускается вовсе, плюс проверка
+- **Когда:** `push` в `main`, git-тег выпуска `myr-v<major>.<minor>.<patch>` (первый —
+  `myr-v1.0.0`), вручную. На `pull_request` не запускается вовсе, плюс проверка
   `github.repository == 'itkadr-git/myrmidon'`: PR из чужих форков образ не собирают.
 - **Что:** `Dockerfile` вендора, стадия `production`, только `linux/amd64`. Кеш BuildKit — в
   реестре (`ghcr.io/itkadr-git/myrmidon:buildcache`).
 - **Версия и коммит** для `/api/health`: `PAPERCLIP_BUILD_VERSION` и
-  `PAPERCLIP_BUILD_COMMIT`. На теге выпуска версия — сам тег (сверяется с тегом вендора в
-  основе коммита). На `main` — `git describe` от тега вендора, сервер показывает его как
-  `2026.916.1+<N>.git.<sha>`.
+  `PAPERCLIP_BUILD_COMMIT`. Myrmidon — свой продукт со своей версией (semver, решение
+  владельца 28.09.2026). На теге `myr-v1.2.3` версия `1.2.3`, тег образа `1.2.3`. Между
+  выпусками — `<последний выпуск>+<N>.git.<sha>` (до первого выпуска `0.0.0+…`). Версия
+  Paperclip, взятого за основу, в номер не входит: она в метке образа
+  `io.github.itkadr-git.myrmidon.base.paperclip-version`.
 - **Порядок:** образ сначала публикуется только по digest, затем smoke: `docker run` с
   `local_trusted` (он отдаёт версию без входа), `/api/health` должен ответить `status: ok` и
   ровно ожидаемыми версией и коммитом. Только после этого digest получает теги. Упал smoke —
