@@ -22,6 +22,7 @@ import type {
   CreateChatSdkEndpointRuntimeOptions,
 } from "../services/chat-sdk-runtime.js";
 import { TELEGRAM_DM_COMMANDS } from "../myrmidon/agent-chat-bridge/commands/index.js";
+import { telegramDmConversationsEnabled } from "../myrmidon/agent-chat-bridge/settings.js";
 
 // myrmidon(X8e): the vendor registers one "no scope" Telegram command menu on
 // connect, reconnect, and remove (see "configures Telegram and preserves
@@ -325,5 +326,41 @@ describeEmbeddedPostgres("Telegram bridged DM command menu (X8e)", () => {
         body: { scope: { type: "all_private_chats" } },
       },
     ]);
+  });
+});
+
+// myrmidon(X8e): unit coverage for telegramDmConversationsEnabled's
+// comma-separated endpoint id list — the only branch the scenarios above
+// don't exercise (they only cover "*" and unset). Pure function, no
+// database needed, so it runs even where embedded Postgres is unsupported.
+describe("telegramDmConversationsEnabled (X8e)", () => {
+  const ownId = "11111111-1111-1111-1111-111111111111";
+  const otherId = "22222222-2222-2222-2222-222222222222";
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("matches the endpoint's own id in a comma-separated list", () => {
+    vi.stubEnv(
+      "MYRMIDON_TELEGRAM_DM_CONVERSATIONS",
+      `${otherId},${ownId}`,
+    );
+    expect(telegramDmConversationsEnabled(ownId)).toBe(true);
+  });
+
+  it("does not match an id absent from the list", () => {
+    vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", otherId);
+    expect(telegramDmConversationsEnabled(ownId)).toBe(false);
+  });
+
+  it("trims whitespace around listed ids and ignores empty entries", () => {
+    vi.stubEnv(
+      "MYRMIDON_TELEGRAM_DM_CONVERSATIONS",
+      ` ${otherId} , ${ownId} ,, `,
+    );
+    expect(telegramDmConversationsEnabled(ownId)).toBe(true);
+    expect(telegramDmConversationsEnabled(otherId)).toBe(true);
+    expect(telegramDmConversationsEnabled("third-id")).toBe(false);
   });
 });
