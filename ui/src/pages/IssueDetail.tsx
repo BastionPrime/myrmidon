@@ -5,6 +5,7 @@ import { agentDetailHref } from "./agent-detail-navigation";
 import { deriveInitials } from "@/components/Identity";
 import { ExecutionBlockerNotice } from "../components/ExecutionBlockerNotice";
 import { ReplayBlockedNotice } from "../components/myrmidon/ReplayBlocked"; // myrmidon(N1)
+import { isTelegramConversationIssue } from "@/lib/myrmidon/telegram-conversation"; // myrmidon(X8f)
 import type { TaskComposerPause } from "../components/task-chat/TaskChatPausedTakeover";
 import { TaskDetailTasksPanel } from "@/components/task-detail/TaskDetailTasksPanel";
 import { EmailThreadProvider } from "../components/EmailMessageCard";
@@ -7825,7 +7826,16 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                     } : undefined,
                     resumeHref: !activePauseHold.isRoot ? createIssueDetailPath(activePauseHoldRoot?.identifier ?? activePauseHold.rootIssueId) : undefined,
                   } : null}
-                  composerDisabledReason={issue.conversationAgentId && !instanceExperimentalSettings?.enableAgentChat ? "Agent Chat is disabled in Experimental settings." : treeControlStateError ? "Couldn’t check whether this task is paused. Refresh to try again." : null}
+                  composerDisabledReason={
+                    // myrmidon(X8f): the Telegram conversation is read-only on the board
+                    isTelegramConversationIssue(issue)
+                      ? "This conversation lives in Telegram. Reply to the bot there."
+                      : issue.conversationAgentId && !instanceExperimentalSettings?.enableAgentChat
+                        ? "Agent Chat is disabled in Experimental settings."
+                        : treeControlStateError
+                          ? "Couldn’t check whether this task is paused. Refresh to try again."
+                          : null
+                  }
                   composerHint={composerHint}
                   queuedCommentReason={queuedCommentReason}
                   onVote={handleCommentVote}
