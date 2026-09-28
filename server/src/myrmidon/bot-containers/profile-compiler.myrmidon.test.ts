@@ -114,6 +114,26 @@ describe("myrmidon(G2) compileHermesProfile — file modes and secrecy", () => {
     }
   });
 
+  it("marks config.yaml secret (0o600) whenever an MCP server carries headers: a header value may be an already-resolved credential, not a ${VAR} reference", () => {
+    const profile = compileHermesProfile(
+      baseInput({
+        mcpServers: [{ name: "board", url: "https://example.com/mcp/board", headers: { Authorization: "Bearer t" } }],
+      }),
+    );
+    const configYaml = fileByPath(profile.files, "hermes/config.yaml");
+    expect(configYaml.secret).toBe(true);
+    expect(configYaml.mode).toBe(0o600);
+  });
+
+  it("leaves config.yaml non-secret when MCP servers have no headers, or no MCP servers at all", () => {
+    const profile = compileHermesProfile(
+      baseInput({ mcpServers: [{ name: "board", url: "https://example.com/mcp/board" }] }),
+    );
+    const configYaml = fileByPath(profile.files, "hermes/config.yaml");
+    expect(configYaml.secret).toBe(false);
+    expect(configYaml.mode).toBe(0o644);
+  });
+
   it("never writes secret env values into config.yaml or hindsight/config.json", () => {
     const secretValue = "sk-very-secret-token-0001";
     const profile = compileHermesProfile(
@@ -369,7 +389,13 @@ describe("myrmidon(G2) compileHermesProfile — MCP servers", () => {
 });
 
 describe("myrmidon(G2) compileHermesProfile — hindsight settings", () => {
-  it("writes bank_id, mission, recall_budget and tags, sorted, no connection details", () => {
+  // Key names here must match what the vendor's hindsight plugin actually
+  // reads from hermes/hindsight/config.json — cfg.get("bank_mission") and
+  // _cfg_or_env("retain_tags", ...) in
+  // /opt/hermes-agent/src/plugins/memory/hindsight/__init__.py — not the
+  // HermesProfileHindsightSettings field names (`mission`, `tags`), which
+  // are generic on purpose.
+  it("writes bank_id, bank_mission, recall_budget and retain_tags, sorted, no connection details", () => {
     const profile = compileHermesProfile(
       baseInput({
         hindsight: { bankId: "agent-a", mission: "Keep the shop running.", recallBudget: "high", tags: [" ops ", "shop", ""] },
@@ -378,13 +404,13 @@ describe("myrmidon(G2) compileHermesProfile — hindsight settings", () => {
     const json = JSON.parse(fileByPath(profile.files, "hermes/hindsight/config.json").content);
     expect(json).toEqual({
       bank_id: "agent-a",
-      mission: "Keep the shop running.",
+      bank_mission: "Keep the shop running.",
       recall_budget: "high",
-      tags: ["ops", "shop"],
+      retain_tags: ["ops", "shop"],
     });
   });
 
-  it("omits mission, recall_budget and tags when unset", () => {
+  it("omits bank_mission, recall_budget and retain_tags when unset", () => {
     const profile = compileHermesProfile(baseInput({ hindsight: { bankId: "agent-a" } }));
     const json = JSON.parse(fileByPath(profile.files, "hermes/hindsight/config.json").content);
     expect(json).toEqual({ bank_id: "agent-a" });

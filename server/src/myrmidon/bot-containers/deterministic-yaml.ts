@@ -17,8 +17,28 @@ export type YamlMapping = { readonly [key: string]: YamlNode };
 
 const BARE_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
 
+// YAML 1.1 plain-scalar resolver keywords (case-insensitive): a bare mapping
+// key that matches one of these would be read back as a boolean or null by
+// PyYAML instead of the string it is, same hazard renderScalar's quoting
+// avoids for values. Quote these even though BARE_KEY_PATTERN accepts them.
+const YAML_11_RESERVED_KEYS = new Set([
+  "on", "off", "yes", "no", "y", "n", "true", "false", "null", "~",
+]);
+
 function isPlainObject(value: YamlNode): value is YamlMapping {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Type-guard wrapper around `Array.isArray`. `Array.isArray` is typed as
+ * `(arg: unknown) => arg is any[]` in lib.es5, which does not narrow away a
+ * `readonly YamlNode[]` member of a union in the negative (`else`) branch —
+ * a `ReadonlyArray` isn't assignable to the mutable `any[]` the built-in
+ * predicate asserts, so TS keeps it in the "not an array" branch too. This
+ * wrapper asserts the precise readonly-array type so both branches narrow.
+ */
+function isArrayNode(value: YamlNode): value is readonly YamlNode[] {
+  return Array.isArray(value);
 }
 
 function renderScalar(value: YamlScalar): string {
@@ -31,7 +51,8 @@ function renderScalar(value: YamlScalar): string {
 }
 
 function renderKey(key: string): string {
-  return BARE_KEY_PATTERN.test(key) ? key : JSON.stringify(key);
+  const bare = BARE_KEY_PATTERN.test(key) && !YAML_11_RESERVED_KEYS.has(key.toLowerCase());
+  return bare ? key : JSON.stringify(key);
 }
 
 function sortedDefinedEntries(mapping: YamlMapping): Array<[string, YamlNode]> {
@@ -51,7 +72,7 @@ function renderMapping(mapping: YamlMapping, indent: number, lines: string[]): v
       if (nested.length === 0) continue; // an empty nested group is dropped, not written as `key: {}`
       lines.push(`${pad}${renderKey(key)}:`);
       lines.push(...nested);
-    } else if (Array.isArray(value)) {
+    } else if (isArrayNode(value)) {
       if (value.length === 0) continue; // an empty list is dropped, not written as `key: []`
       lines.push(`${pad}${renderKey(key)}:`);
       renderSequence(value, indent, lines);
@@ -71,7 +92,7 @@ function renderSequence(items: readonly YamlNode[], indent: number, lines: strin
   const pad = " ".repeat(indent);
   for (const item of items) {
     if (item === undefined) continue;
-    if (Array.isArray(item)) {
+    if (isArrayNode(item)) {
       throw new Error("deterministic-yaml: nested sequences are not supported");
     }
     if (isPlainObject(item)) {

@@ -83,6 +83,19 @@ describe("myrmidon(G2) writeYamlDocument", () => {
     expect(out).toBe('"123start": "p"\n"has space": "t"\n');
   });
 
+  it("quotes a mapping key that is a YAML 1.1 boolean/null keyword, in any case", () => {
+    // Regression: an MCP server or header named "on"/"No"/"Y" is a valid bare
+    // identifier by BARE_KEY_PATTERN, but PyYAML's resolver would read the
+    // unquoted key back as a boolean or null, not the string it is.
+    const out = writeYamlDocument({ on: "1", No: "2", Y: "3", NULL: "4", "~": "5" });
+    expect(out).toBe('"NULL": "4"\n"No": "2"\n"Y": "3"\n"on": "1"\n"~": "5"\n');
+  });
+
+  it("does not quote a key that merely looks like a reserved word as a substring", () => {
+    const out = writeYamlDocument({ oncall: "1", notes: "2" });
+    expect(out).toBe('notes: "2"\noncall: "1"\n');
+  });
+
   it("is deterministic across repeated calls with the same logical input", () => {
     const build = () => ({
       c: "3",

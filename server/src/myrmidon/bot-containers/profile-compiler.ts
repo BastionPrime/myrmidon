@@ -69,14 +69,25 @@ export interface HermesProfileSkillFile {
 
 export interface HermesProfileHindsightSettings {
   bankId: string;
+  /** Default tags applied when a memory is retained (hindsight's `retain_tags`, not `recall_tags`). */
   tags?: string[];
   recallBudget?: "low" | "mid" | "high";
+  /** The memory bank's mission/purpose text (hindsight's `bank_mission`). */
   mission?: string;
 }
 
 export interface HermesProfileMcpServer {
   name: string;
   url: string;
+  /**
+   * Extra HTTP headers sent to the MCP server. Prefer `${VAR}`/`${env:VAR}`
+   * references that Hermes resolves from `hermes/.env` at load time
+   * (`_interpolate_env_vars` in the vendor's `tools/mcp_tool_config.py`)
+   * over a raw credential — a header value here lands in `hermes/config.yaml`,
+   * which this compiler writes as non-secret (0o644) unless at least one
+   * server carries headers, in which case the whole file is marked secret
+   * as a conservative default (see `hasMcpServerHeaders` below).
+   */
   headers?: Record<string, string>;
 }
 
@@ -245,6 +256,18 @@ function buildMcpServers(
   return mapping;
 }
 
+/**
+ * True when at least one MCP server carries headers. A header value may be
+ * a `${VAR}` reference (see `HermesProfileMcpServer.headers`) or, if a
+ * caller doesn't follow that convention, an already-resolved credential —
+ * this compiler has no way to tell which, so it conservatively marks
+ * `hermes/config.yaml` as secret whenever headers are present, the same
+ * way `hermes/.env` always is.
+ */
+function hasMcpServerHeaders(servers: readonly HermesProfileMcpServer[]): boolean {
+  return servers.some((server) => server.headers && Object.keys(server.headers).length > 0);
+}
+
 function buildAuxiliary(vision: string | undefined): YamlMapping | undefined {
   const model = nonEmpty(vision);
   if (!model) return undefined;
@@ -365,11 +388,17 @@ function buildHindsightConfigJson(hindsight: HermesProfileHindsightSettings, war
   const mission = nonEmpty(hindsight.mission);
 
   // Key order fixed and sorted for the same determinism reason as the YAML.
+  // Key names match what the vendor's hindsight plugin actually reads from
+  // this file (/opt/hermes-agent/src/plugins/memory/hindsight/__init__.py:
+  // cfg.get("bank_mission") and _cfg_or_env("retain_tags", ...)) — not the
+  // HermesProfileHindsightSettings field names, which are generic on
+  // purpose (see DIVERGENCE.md-style note above: this module doesn't own
+  // the hindsight connection, only the per-bot bank/mission/tags values).
   const ordered: Record<string, unknown> = {};
   ordered.bank_id = bankId;
-  if (mission) ordered.mission = mission;
+  if (mission) ordered.bank_mission = mission;
   if (recallBudget) ordered.recall_budget = recallBudget;
-  if (tags.length > 0) ordered.tags = tags;
+  if (tags.length > 0) ordered.retain_tags = tags;
   return `${JSON.stringify(ordered, null, 2)}\n`;
 }
 
@@ -431,7 +460,7 @@ export function compileHermesProfileDetailed(input: HermesProfileInput): Compile
   const hindsightConfigJson = buildHindsightConfigJson(input.hindsight, warnings);
 
   const restartFiles = [
-    file("hermes/config.yaml", configYaml, { secret: false }),
+    file("hermes/config.yaml", configYaml, { secret: hasMcpServerHeaders(input.mcpServers) }),
     file("hermes/.env", envFile, { secret: true }),
     file("hermes/hindsight/config.json", hindsightConfigJson, { secret: false }),
   ];
