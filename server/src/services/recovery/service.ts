@@ -4302,12 +4302,28 @@ export function recoveryService(
       ) {
         // getLatestIssueRun's projection omits scheduledRetryAttempt; read it
         // directly for the one run this candidate already resolved.
-        const scheduledRetryAttempt = await db
-          .select({ scheduledRetryAttempt: heartbeatRuns.scheduledRetryAttempt })
+        // scheduledRetryReason travels with it so the shared budget check
+        // (executionFailureRetryCount) sees the exact same run shape
+        // legacyExecutionNeedsReconciliation uses elsewhere -- otherwise a
+        // run left over from a workspace_busy/ai_connection_busy wait, whose
+        // raw scheduledRetryAttempt column runs ahead of the failure count
+        // preserved in contextSnapshot, would make this call site disagree
+        // with the vendor gate about whether the budget is exhausted.
+        const scheduledRetryColumns = await db
+          .select({
+            scheduledRetryAttempt: heartbeatRuns.scheduledRetryAttempt,
+            scheduledRetryReason: heartbeatRuns.scheduledRetryReason,
+          })
           .from(heartbeatRuns)
           .where(eq(heartbeatRuns.id, latestRun!.id))
-          .then((rows) => rows[0]?.scheduledRetryAttempt ?? null);
-        if (!infraInterruptRetryBudgetExhausted({ scheduledRetryAttempt })) {
+          .then((rows) => rows[0] ?? null);
+        if (
+          !infraInterruptRetryBudgetExhausted({
+            scheduledRetryAttempt: scheduledRetryColumns?.scheduledRetryAttempt ?? null,
+            scheduledRetryReason: scheduledRetryColumns?.scheduledRetryReason ?? null,
+            contextSnapshot: latestRun!.contextSnapshot,
+          })
+        ) {
           result.skipped += 1;
           continue;
         }

@@ -27,7 +27,12 @@ describeEmbeddedPostgres("reconcileStrandedAssignedIssues: infrastructure interr
     await tempDb?.cleanup();
   });
 
-  async function seedStrandedIssue(input: { errorCode: string | null; scheduledRetryAttempt?: number }) {
+  async function seedStrandedIssue(input: {
+    errorCode: string | null;
+    scheduledRetryAttempt?: number;
+    scheduledRetryReason?: string | null;
+    contextSnapshotExtra?: Record<string, unknown>;
+  }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const issueId = randomUUID();
@@ -67,9 +72,10 @@ describeEmbeddedPostgres("reconcileStrandedAssignedIssues: infrastructure interr
       companyId,
       agentId,
       status: "cancelled",
-      contextSnapshot: { issueId },
+      contextSnapshot: { issueId, ...input.contextSnapshotExtra },
       errorCode: input.errorCode,
       scheduledRetryAttempt: input.scheduledRetryAttempt ?? 0,
+      scheduledRetryReason: input.scheduledRetryReason ?? null,
       finishedAt: now,
       updatedAt: now,
     });
@@ -108,5 +114,44 @@ describeEmbeddedPostgres("reconcileStrandedAssignedIssues: infrastructure interr
     await heartbeatService(db).reconcileStrandedAssignedIssues();
 
     expect((await activeRecoveryActionsFor(issueId)).length).toBeGreaterThan(0);
+  }, 30_000);
+
+  // Regression: the raw scheduledRetryAttempt column runs ahead of the
+  // budget executionFailureRetryCount actually reports for a
+  // workspace_busy-retried run (it counts contextSnapshot's preserved
+  // failureRetriesBeforeWorkspaceWait instead, see execution-recovery-attempt.ts).
+  // The retry-budget read here must use the same full run shape or this
+  // sweep would disagree with legacyExecutionNeedsReconciliation about
+  // whether the shared budget is exhausted.
+  it("does not escalate a workspace_busy-retried run whose raw attempt column outruns its preserved failure count", async () => {
+    const { issueId } = await seedStrandedIssue({
+      errorCode: "agent_paused",
+      scheduledRetryAttempt: 5,
+      scheduledRetryReason: "workspace_busy",
+      contextSnapshotExtra: { failureRetriesBeforeWorkspaceWait: 0 },
+    });
+
+    await heartbeatService(db).reconcileStrandedAssignedIssues();
+
+    expect(await activeRecoveryActionsFor(issueId)).toHaveLength(0);
+    const [issue] = await db.select().from(issues).where(eq(issues.id, issueId));
+    expect(issue!.status).toBe("in_progress");
+  }, 30_000);
+
+  it("still escalates a workspace_busy-retried run once its preserved failure count exhausts the budget", async () => {
+    const { issueId } = await seedStrandedIssue({
+      errorCode: "agent_paused",
+      scheduledRetryAttempt: 0,
+      scheduledRetryReason: "workspace_busy",
+      contextSnapshotExtra: { failureRetriesBeforeWorkspaceWait: 2 },
+    });
+
+    await heartbeatService(db).reconcileStrandedAssignedIssues();
+
+    const actions = await activeRecoveryActionsFor(issueId);
+    expect(actions.length).toBeGreaterThan(0);
+    expect(actions[0]!.ownerType).toBe("board");
+    const [issue] = await db.select().from(issues).where(eq(issues.id, issueId));
+    expect(issue!.status).toBe("blocked");
   }, 30_000);
 });
