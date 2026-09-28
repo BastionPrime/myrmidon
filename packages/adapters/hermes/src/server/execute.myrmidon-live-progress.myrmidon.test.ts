@@ -178,6 +178,9 @@ describe("execute() — G5 live progress wiring", () => {
         "- Verified with a targeted run\n" +
         "- Updated the changelog entry",
     );
+    // Senior review round 1: a normal successful turn must never be flagged
+    // as failed just because it ran without -Q.
+    expect(result.errorMessage).toBeUndefined();
   });
 
   it("strips the 'Query:' prompt echo and reads the streaming-box answer (display.streaming: true, the default, successful-turn shape)", async () => {
@@ -213,6 +216,169 @@ describe("execute() — G5 live progress wiring", () => {
     // The echoed prompt must never leak into the persisted response.
     expect(result.resultJson!.result as string).not.toContain("Query:");
     expect(result.resultJson!.result as string).not.toContain("Paperclip-managed company");
+    expect(result.errorMessage).toBeUndefined();
+  });
+
+  it("does not leak the 'Query:' echo when a '✓ Worktree created…' status line prints before it (-w, worktreeMode), even on a successful turn", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // Senior review round 1: with worktreeMode, `_run_single_query_mode`
+    // prints this status line BEFORE the 'Query:' echo, so the echo is no
+    // longer the first non-blank line of stdout — stripQueryEcho's own
+    // boundary heuristic requires that and bails out entirely for this
+    // shape (see myrmidon-live-progress.ts's stripQueryEcho doc comment).
+    // The response must still come out clean because it is read from the
+    // answer's own frame, never from a stripQueryEcho-cleaned blob.
+    const stdout =
+      "✓ Worktree created at /tmp/hermes-worktree-abc123\n" +
+      "Query: You are \"agent-a\", an AI agent employee in a Paperclip-managed company. " +
+      "(the rest of the full prompt, Rich-wrapped across more lines with no per-line marker)\n" +
+      '[tool] terminal: git status\n' +
+      '[done] ┊ 💻 $         git status  0.1s (0.1s)\n' +
+      buildStreamBox("⚕ Hermes", ["All fixed. See the PR."]) +
+      "\n" +
+      buildExitSummary(SESSION_ID);
+
+    vi.mocked(serverUtils.runChildProcess).mockResolvedValueOnce({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout,
+      stderr: "",
+      pid: null,
+      startedAt: null,
+    });
+
+    const result = await execute(makeCtx({ worktreeMode: true }) as any);
+
+    expect(result.resultJson).toMatchObject({ result: "All fixed. See the PR.", session_id: SESSION_ID });
+    expect(result.resultJson!.result as string).not.toContain("Query:");
+    expect(result.resultJson!.result as string).not.toContain("Worktree created");
+    expect(result.resultJson!.result as string).not.toContain("Paperclip-managed company");
+    expect(result.errorMessage).toBeUndefined();
+  });
+
+  it("takes the response ONLY from the final answer frame, dropping the turn divider, an earlier streamed comment, and an inline tool diff", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // Senior review round 1: a realistic multi-tool-call turn. Every turn
+    // starts with a 40-dash divider (cli_chat_turn_mixin.py); a burst of
+    // streamed commentary before a tool call closes into its own box and a
+    // NEW box opens for whatever comes after (cli_stream_mixin.py); a
+    // completed `write_file`/`terminal` tool prints its own diff review
+    // lines at the top level, never inside a frame. None of that is the
+    // turn's real answer — only the LAST box is.
+    const stdout =
+      "─".repeat(40) + "\n" +
+      buildStreamBox("⚕ Hermes", ["Let me look at the session lookup code first."]) +
+      "\n" +
+      '[tool] terminal: write_file session.ts\n' +
+      "  ┊ ✍️ write_file session.ts\n" +
+      "  ┊ review diff\n" +
+      "  ┊ - if (session) {\n" +
+      "  ┊ + if (session && session.isValid) {\n" +
+      buildStreamBox("⚕ Hermes", [
+        "Fixed the missing null check in the session lookup.",
+        "",
+        "- Verified with a targeted run",
+        "- Updated the changelog entry",
+      ]) +
+      "\n" +
+      buildExitSummary(SESSION_ID);
+
+    vi.mocked(serverUtils.runChildProcess).mockResolvedValueOnce({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout,
+      stderr: "",
+      pid: null,
+      startedAt: null,
+    });
+
+    const result = await execute(makeCtx({}) as any);
+
+    const response = result.resultJson!.result as string;
+    expect(response).toBe(
+      "Fixed the missing null check in the session lookup.\n\n" +
+        "- Verified with a targeted run\n" +
+        "- Updated the changelog entry",
+    );
+    expect(response).not.toContain("─".repeat(40));
+    expect(response).not.toContain("Let me look at the session lookup code first.");
+    expect(response).not.toContain("review diff");
+    expect(response).not.toContain("session && session.isValid");
+    expect(result.errorMessage).toBeUndefined();
+  });
+
+  it("flags a run that exits 0 with no recognized exit summary as failed instead of silently succeeding (early exit before any turn ran)", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // Senior review round 1: missing credentials, or --resume pointed at a
+    // session that was not found or is over the history cap, all exit
+    // _run_single_query_mode before it ever reaches a turn — no Panel, no
+    // streaming box, no interactive exit summary, just exit code 0.
+    for (const stdout of ["Goodbye! ⚕\n", "Session not found.\n", ""]) {
+      vi.mocked(serverUtils.runChildProcess).mockResolvedValueOnce({
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        stdout,
+        stderr: "",
+        pid: null,
+        startedAt: null,
+      });
+
+      const result = await execute(makeCtx({}) as any);
+
+      expect(result.errorMessage).toBeTruthy();
+      expect(result.exitCode).toBe(0);
+      // Never the raw stdout mistaken for a real answer.
+      expect(result.resultJson!.result as string).not.toBe("Goodbye! ⚕");
+    }
+  });
+
+  it("does not flag a killed (timed-out) run the same way — its own timeout diagnostics own that case", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    vi.mocked(serverUtils.runChildProcess).mockResolvedValueOnce({
+      exitCode: null,
+      signal: "SIGTERM",
+      timedOut: true,
+      stdout: '[tool] terminal: curl -s "https://example.com"\nstill mid-answer, no frame ever closed',
+      stderr: "",
+      pid: null,
+      startedAt: null,
+    });
+
+    const result = await execute(makeCtx({}) as any);
+
+    expect(result.errorMessage).toBeUndefined();
+  });
+
+  it("flags a provider/billing failure mid-turn using the error Panel's own text, even though the run still exits 0 and still prints a valid exit summary", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // Senior review round 1: `_chat_print_response_panel` falls back to the
+    // box.HORIZONTALS Panel (not the streaming box) for a failed/partial
+    // turn, and chat() still completes normally afterward — only quiet
+    // mode's sys.exit(1) on result.failed would have caught this.
+    const stdout =
+      '[tool] terminal: curl -s "https://api.example.com/generate"\n' +
+      '[done] ┊ 💻 $         curl -s "https://api.example.com/generate"  1.2s (1.2s)\n' +
+      buildPanelBlock("⚕ Hermes", ["Error: the provider returned a rate-limit response (429)."]) +
+      "\n" +
+      buildExitSummary(SESSION_ID);
+
+    vi.mocked(serverUtils.runChildProcess).mockResolvedValueOnce({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout,
+      stderr: "",
+      pid: null,
+      startedAt: null,
+    });
+
+    const result = await execute(makeCtx({}) as any);
+
+    expect(result.sessionParams).toEqual({ sessionId: SESSION_ID });
+    expect(result.errorMessage).toBe("Error: the provider returned a rate-limit response (429).");
   });
 
   it("is not fooled by a 'Session:'-shaped line inside the agent's own streamed answer", async () => {

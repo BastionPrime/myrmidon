@@ -86,6 +86,77 @@ function unwrapPanelRow(line: string): string {
 }
 
 /**
+ * One recognized frame (Panel or streaming box), as found by
+ * `findRichFrames`: `bodyLines` is the frame's own content only — Panel rows
+ * already have their one-space border padding unwrapped (see
+ * `unwrapPanelRow`); streaming-box rows carry no border padding to begin
+ * with and are passed through as-is — the header/footer/title/rule lines
+ * themselves are never included.
+ */
+export interface RichFrame {
+  kind: "panel" | "stream";
+  bodyLines: string[];
+}
+
+/**
+ * myrmidon(G5): find every TERMINATED Panel or streaming-box frame in a
+ * block of Hermes stdout, in the order they appear. An unterminated frame
+ * (no matching close marker before the end of text — e.g. stdout truncated
+ * by a killed run) is not returned, same as `stripRichPanelFrames`'s "don't
+ * guess" rule.
+ *
+ * A single turn can print more than one frame before the real final answer
+ * — each burst of streamed text between tool calls reopens a new streaming
+ * box (`_on_tool_gen_start` closes the current one; new text opens another —
+ * see this module's doc comment), and a failed/partial turn's error message
+ * is a `box.HORIZONTALS` Panel that can follow an earlier, already-streamed
+ * partial-progress box in the very same run (see this file's own
+ * `myrmidon.test.ts`, "still strips a box.HORIZONTALS Panel … when both
+ * formats appear in the same run"). Callers that only want the turn's real,
+ * final answer take `frames.at(-1)` — the LAST one is always the one that
+ * matters; everything before it is superseded commentary or progress.
+ */
+export function findRichFrames(text: string): RichFrame[] {
+  const lines = text.split("\n");
+  const frames: RichFrame[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const trimmed = lines[i].trim();
+    if (isPanelTitleLine(trimmed)) {
+      let close = -1;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (isPanelRuleLine(lines[j].trim())) {
+          close = j;
+          break;
+        }
+      }
+      if (close !== -1) {
+        const bodyLines: string[] = [];
+        for (let k = i + 1; k < close; k++) bodyLines.push(unwrapPanelRow(lines[k]));
+        frames.push({ kind: "panel", bodyLines });
+        i = close + 1;
+        continue;
+      }
+    } else if (isStreamBoxHeaderLine(trimmed)) {
+      let close = -1;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (isStreamBoxFooterLine(lines[j].trim())) {
+          close = j;
+          break;
+        }
+      }
+      if (close !== -1) {
+        frames.push({ kind: "stream", bodyLines: lines.slice(i + 1, close) });
+        i = close + 1;
+        continue;
+      }
+    }
+    i++;
+  }
+  return frames;
+}
+
+/**
  * Remove every Rich Panel frame (title/top border … bottom border) or
  * streaming box (rounded-corner header … footer) from a block of Hermes
  * stdout. Panel rows get their border padding unwrapped so multi-line/

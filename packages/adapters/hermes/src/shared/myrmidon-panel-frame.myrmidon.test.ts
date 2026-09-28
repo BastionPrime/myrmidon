@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  findRichFrames,
   isPanelRuleLine,
   isPanelTitleLine,
   isStreamBoxFooterLine,
@@ -254,5 +255,37 @@ describe("stripRichPanelFrames — streaming box (display.streaming: true, the v
     expect(result).toContain("The turn failed partway through.");
     expect(result).not.toMatch(/[╭╮╰╯]/);
     expect(result).not.toMatch(/^─+$/m);
+  });
+});
+
+describe("findRichFrames", () => {
+  it("finds no frame in plain text", () => {
+    expect(findRichFrames("Just a plain multi-line answer.\n\n- with a bullet")).toEqual([]);
+  });
+
+  it("finds a single streaming-box frame with its own content, no border lines", () => {
+    const block = buildStreamBox("⚕ Hermes", ["Done."]);
+    expect(findRichFrames(block)).toEqual([{ kind: "stream", bodyLines: ["Done."] }]);
+  });
+
+  it("finds a single Panel frame with border padding already unwrapped", () => {
+    const block = buildPanelBlock("⚕ Hermes", ["Done."]);
+    expect(findRichFrames(block)).toEqual([{ kind: "panel", bodyLines: ["", "Done.", ""] }]);
+  });
+
+  it("finds both frames, in order, when a streamed box precedes a failed turn's Panel", () => {
+    const streamed = buildStreamBox("⚕ Hermes", ["Partial progress before the error."]);
+    const panelBlock = buildPanelBlock("⚕ Hermes", ["The turn failed partway through."]);
+    const frames = findRichFrames([streamed, panelBlock].join("\n"));
+    expect(frames.map((f) => f.kind)).toEqual(["stream", "panel"]);
+    expect(frames[0].bodyLines).toEqual(["Partial progress before the error."]);
+    expect(frames[1].bodyLines).toEqual(["", "The turn failed partway through.", ""]);
+  });
+
+  it("does not return an unterminated trailing frame (killed mid-answer)", () => {
+    const complete = buildStreamBox("⚕ Hermes", ["Done."]);
+    const truncated = buildStreamBox("⚕ Hermes", ["Still working"]).split("\n").slice(0, 3).join("\n");
+    const frames = findRichFrames([complete, truncated].join("\n"));
+    expect(frames).toEqual([{ kind: "stream", bodyLines: ["Done."] }]);
   });
 });

@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   createLiveLogSanitizer,
+  extractLiveAnswerFrame,
   extractLiveSessionId,
   LIVE_PROGRESS_ENV_VAR,
   LIVE_SESSION_ID_REGEX,
+  liveModeErrorFromFrame,
   QUIET_SESSION_ID_REGEX,
   resolveHermesQuietMode,
   stripExitSummary,
@@ -217,8 +219,22 @@ describe("stripQueryEcho", () => {
   });
 
   it("is a no-op when no recognized boundary follows the echo (e.g. killed before any turn output)", () => {
+    // Senior review round 1: leaving the raw echo in place here used to be
+    // the actual STORED RESPONSE for this shape too — parseHermesOutput's
+    // legacy fallback ran a blanket `cleanResponse(stdout)` over exactly
+    // this no-op output, so the whole prompt (agent instructions, wake
+    // context, task markdown) reached Paperclip as if it were the agent's
+    // answer. `stripQueryEcho` staying conservative here is still correct on
+    // its own terms — this is genuinely a case where it cannot tell where
+    // the echo ends without guessing — but the caller no longer trusts it
+    // for that: `extractLiveAnswerFrame` (see below) finds no frame in this
+    // same stdout and returns undefined, and `execute()`'s live-mode parsing
+    // takes the response ONLY from a found frame, never from this raw
+    // fallback text. See execute.myrmidon-live-progress.myrmidon.test.ts's
+    // "flags an early-exit failure … and never leaks the raw prompt echo".
     const stdout = "Query: Fix the missing null check.\nstill just wrapped prompt text, nothing else ever printed";
     expect(stripQueryEcho(stdout)).toBe(stdout);
+    expect(extractLiveAnswerFrame(stdout)).toBeUndefined();
   });
 
   it("leaves leading blank lines before the Query: line untouched", () => {
@@ -275,5 +291,101 @@ describe("createLiveLogSanitizer", () => {
     expect(sanitizer.flush()).toEqual([
       { stream: "stdout", line: "Done, verified with a targeted run." },
     ]);
+  });
+});
+
+/** See shared/myrmidon-panel-frame.ts for the verified `box.HORIZONTALS` layout. */
+function buildPanelBlock(title: string, bodyLines: string[], width = 80): string {
+  const inner = width - 2;
+  const titleSegment = `─ ${title} `;
+  const top = ` ${titleSegment}${"─".repeat(Math.max(inner - titleSegment.length, 0))} `;
+  const bottom = ` ${"─".repeat(inner)} `;
+  const blank = ` ${" ".repeat(inner)} `;
+  const row = (text: string) => ` ${text.padEnd(inner, " ")} `;
+  return [top, blank, ...bodyLines.map(row), blank, bottom].join("\r\n");
+}
+
+/** The default (`display.streaming: true`) successful-turn shape — see shared/myrmidon-panel-frame.ts. */
+function buildStreamBox(label: string, bodyLines: string[], width = 80): string {
+  const fill = width - 2 - label.length;
+  const header = `╭─${label}${"─".repeat(Math.max(fill - 1, 0))}╮`;
+  const footer = `╰${"─".repeat(width - 2)}╯`;
+  return ["", header, ...bodyLines, footer].join("\n");
+}
+
+describe("extractLiveAnswerFrame", () => {
+  it("returns undefined for stdout with no frame at all (early exit before any turn ran)", () => {
+    expect(extractLiveAnswerFrame("Goodbye! ⚕\n")).toBeUndefined();
+    expect(extractLiveAnswerFrame("Session not found.\n")).toBeUndefined();
+    expect(extractLiveAnswerFrame("")).toBeUndefined();
+  });
+
+  it("returns the single frame when there is exactly one", () => {
+    const stdout = buildStreamBox("⚕ Hermes", ["All fixed. See the PR."]);
+    const frame = extractLiveAnswerFrame(stdout);
+    expect(frame?.kind).toBe("stream");
+    expect(frame?.bodyLines).toEqual(["All fixed. See the PR."]);
+  });
+
+  it("takes the LAST frame, dropping the turn divider, earlier streamed commentary, and inline tool diffs between them", () => {
+    // A realistic multi-tool-call turn: the divider cli_chat_turn_mixin.py
+    // prints at the start of every turn, an intermediate streamed comment
+    // before a tool call, the tool's own diff output (top-level, no frame
+    // border), then the box that reopens for the real final answer.
+    const stdout = [
+      "─".repeat(40),
+      buildStreamBox("⚕ Hermes", ["Let me check the session lookup first."]),
+      '[tool] terminal: git diff',
+      "  ┊ review diff",
+      "  ┊ - if (session) {",
+      "  ┊ + if (session && session.isValid) {",
+      buildStreamBox("⚕ Hermes", ["Fixed. All tests pass."]),
+    ].join("\n");
+    const frame = extractLiveAnswerFrame(stdout);
+    expect(frame?.bodyLines).toEqual(["Fixed. All tests pass."]);
+  });
+
+  it("takes the last Panel when a failed/partial turn follows an already-streamed box (mixed shapes in one run)", () => {
+    const stdout = [
+      buildStreamBox("⚕ Hermes", ["Partial progress before the error."]),
+      buildPanelBlock("⚕ Hermes", ["Error: the provider returned a rate-limit response."]),
+    ].join("\n");
+    const frame = extractLiveAnswerFrame(stdout);
+    expect(frame?.kind).toBe("panel");
+    expect(frame?.bodyLines.join("\n")).toContain("Error: the provider returned a rate-limit response.");
+  });
+
+  it("ignores an unterminated trailing frame (killed mid-answer) the same way stripRichPanelFrames does", () => {
+    const complete = buildStreamBox("⚕ Hermes", ["Fixed the missing null check."]);
+    const truncated = buildStreamBox("⚕ Hermes", ["Still working"]).split("\n").slice(0, 3).join("\n");
+    const stdout = [complete, truncated].join("\n");
+    // The complete, earlier frame is still found — an unterminated later one
+    // just isn't counted, it doesn't hide the last COMPLETE frame silently
+    // returning the wrong (earlier) one would be worse than finding none.
+    const frame = extractLiveAnswerFrame(stdout);
+    expect(frame?.bodyLines).toEqual(["Fixed the missing null check."]);
+  });
+});
+
+describe("liveModeErrorFromFrame", () => {
+  it("is undefined for a streaming-box frame regardless of content (never the error shape)", () => {
+    const frame = extractLiveAnswerFrame(buildStreamBox("⚕ Hermes", ["Error: this is just prose in a real answer."]));
+    expect(liveModeErrorFromFrame(frame)).toBeUndefined();
+  });
+
+  it("is undefined for a Panel frame whose body does not start with 'Error:'", () => {
+    const frame = extractLiveAnswerFrame(buildPanelBlock("⚕ Hermes", ["All fixed. See the PR."]));
+    expect(liveModeErrorFromFrame(frame)).toBeUndefined();
+  });
+
+  it("returns the message for a Panel frame whose body starts with 'Error:' (provider/billing failure mid-turn)", () => {
+    const frame = extractLiveAnswerFrame(
+      buildPanelBlock("⚕ Hermes", ["Error: insufficient credits. Add credits with your provider."]),
+    );
+    expect(liveModeErrorFromFrame(frame)).toBe("Error: insufficient credits. Add credits with your provider.");
+  });
+
+  it("is undefined when there is no frame at all", () => {
+    expect(liveModeErrorFromFrame(undefined)).toBeUndefined();
   });
 });

@@ -50,7 +50,8 @@
  * CONVENTIONS.md §"утверждения отчётов — гипотезы").
  */
 
-import { stripRichPanelFrames } from "../shared/myrmidon-panel-frame.js";
+import { findRichFrames, stripRichPanelFrames } from "../shared/myrmidon-panel-frame.js";
+import type { RichFrame } from "../shared/myrmidon-panel-frame.js";
 import { redactSecretsForLog } from "../shared/myrmidon-secret-redaction.js";
 import { isTurnOutputBoundaryLine } from "../shared/myrmidon-turn-output-boundary.js";
 
@@ -227,6 +228,59 @@ export function stripQueryEcho(stdout: string): string {
   }
 
   return [...lines.slice(0, start), ...lines.slice(end)].join("\n");
+}
+
+/**
+ * The turn's real final answer, taken from a non-quiet run's stdout: the
+ * LAST Panel or streaming-box frame present, ignoring everything before it —
+ * the turn divider, earlier/superseded streamed commentary, inline tool
+ * diffs, and the vendor's whole-prompt `Query: <prompt>` echo are never
+ * themselves inside a frame's own border (see `findRichFrames`'s doc
+ * comment), so scoping to the last frame drops all of them for free.
+ *
+ * This deliberately does NOT lean on `stripQueryEcho`'s line-based "the
+ * `Query:` line must be the very first non-blank line of stdout" boundary at
+ * all: with `-w` (worktree mode), a `✓ Worktree created…` status line prints
+ * before the echo, which made that heuristic bail out entirely and leave the
+ * whole echoed prompt sitting in front of (what should have been) the
+ * answer. Scanning for the last frame instead of a leading boundary sidesteps
+ * that shape difference — and any other stray text `_run_single_query_mode`
+ * might print first — without needing to special-case it.
+ *
+ * Pass the stdout with the interactive exit summary already cut off
+ * (`stripExitSummary`) — the exit summary is plain text, not a frame, so its
+ * own `Session:`/`Duration:`/`Messages:` lines never form a frame of their
+ * own, but keeping it out is one less thing for `findRichFrames` to scan.
+ * Returns undefined when no terminated frame is found at all — e.g. an early
+ * exit before any turn ever ran (see `execute.ts`'s `parseHermesOutput`,
+ * which treats that as a failure worth an `errorMessage` rather than a quiet
+ * empty response).
+ */
+export function extractLiveAnswerFrame(stdoutBeforeExitSummary: string): RichFrame | undefined {
+  const frames = findRichFrames(stdoutBeforeExitSummary);
+  return frames.at(-1);
+}
+
+/**
+ * The vendor CLI's own "this turn failed" shape: `_chat_print_response_panel`
+ * falls back to the `box.HORIZONTALS` Panel (instead of the already-streamed
+ * box) for an error/partial turn, and prints the message body starting with
+ * `Error:` (`cli_chat_turn_mixin.py`, ~L477-479/616-632) — a provider error or
+ * rate limit, a billing/out-of-credits refusal, etc. Without `-Q`,
+ * `_run_single_query_mode` still exits 0 in this case (only quiet mode's
+ * `_run_quiet_single_query` calls `sys.exit(1)` on `result.failed`), so this
+ * is the one shape `parseHermesOutput` cannot tell apart from a genuine
+ * successful answer just by looking at the exit code — it has to look at
+ * which kind of frame the answer came from and what its own text says.
+ *
+ * A streaming-box frame is never this: `already_streamed` (and therefore the
+ * streaming box, not the Panel) is only true when the turn was NOT an
+ * error/partial one, per the same vendor source.
+ */
+export function liveModeErrorFromFrame(frame: RichFrame | undefined): string | undefined {
+  if (!frame || frame.kind !== "panel") return undefined;
+  const firstContentLine = frame.bodyLines.map((l) => l.trim()).find((l) => l.length > 0);
+  return firstContentLine && /^Error:/.test(firstContentLine) ? frame.bodyLines.join("\n").trim() : undefined;
 }
 
 // Re-exported so execute.ts's response cleaning needs a single G5 import.

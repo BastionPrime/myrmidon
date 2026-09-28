@@ -73,7 +73,9 @@ import { materializeHermesRunModels } from "./myrmidon-profile-config.js";
 // raw chunks forwarded to Paperclip's persisted run log
 import {
   createLiveLogSanitizer,
+  extractLiveAnswerFrame,
   extractLiveSessionId,
+  liveModeErrorFromFrame,
   resolveHermesQuietMode,
   stripExitSummary,
   stripQueryEcho,
@@ -298,7 +300,23 @@ function cleanResponse(raw: string): string {
 // Output parsing
 // ---------------------------------------------------------------------------
 
-function parseHermesOutput(rawStdout: string, stderr: string): ParsedOutput {
+function parseHermesOutput(
+  rawStdout: string,
+  stderr: string,
+  // myrmidon(G5): only meaningful for the live-progress (no -Q) failure
+  // detection below — quiet mode's own success/failure signal is the exit
+  // code (`_run_quiet_single_query` calls `sys.exit(1)` on `result.failed`),
+  // which execute()'s caller already turns into an errorMessage.
+  useQuiet: boolean,
+  timedOut: boolean,
+  // myrmidon(G5): the "no exit summary" failure signal below only fires for
+  // exitCode === 0 — the whole defect it exists for is that live-progress
+  // mode reports 0 where it should not; a run that already exited nonzero
+  // is already correctly diagnosed by execute()'s own
+  // `Hermes exited with code ${exitCode}` fallback (or a real stderr
+  // diagnostic), and must not be overridden by this vaguer message.
+  exitCode: number | null | undefined,
+): ParsedOutput {
   // myrmidon(G5): live progress mode (no -Q) echoes the whole prompt as a
   // "Query: <prompt>" line before any turn output (cli.py
   // _run_single_query_mode); strip it before anything else parses stdout so
@@ -323,13 +341,35 @@ function parseHermesOutput(rawStdout: string, stderr: string): ParsedOutput {
     }
   } else {
     // myrmidon(G5): live progress (no -Q) — the final answer is a Rich Panel
-    // followed by the interactive CLI's exit summary; quiet mode's stderr
-    // "session_id:" line never appears here. See myrmidon-live-progress.ts
-    // for the verified format (cli.py _print_exit_summary).
+    // or streaming box followed by the interactive CLI's exit summary;
+    // quiet mode's stderr "session_id:" line never appears here. See
+    // myrmidon-live-progress.ts for the verified format (cli.py
+    // _print_exit_summary).
     const liveSessionId = extractLiveSessionId(stdout);
     if (liveSessionId) {
       result.sessionId = liveSessionId;
-      result.response = cleanResponse(stripExitSummary(stdout));
+      // myrmidon(G5): the response is ONLY the last frame before the exit
+      // summary (the turn's real final answer), not a blanket clean of the
+      // whole pre-exit-summary stdout. Multiple frames can appear before it
+      // — each burst of streamed commentary between tool calls reopens a
+      // new streaming box, and inline tool diffs and the turn's leading
+      // '─'*40 divider (cli_chat_turn_mixin.py) sit at the top level,
+      // outside any frame — so a blanket clean previously let all of that
+      // (plus, for a killed-echo-boundary edge case, the raw 'Query:' prompt
+      // echo itself) leak into the stored response. See
+      // extractLiveAnswerFrame's doc comment.
+      const answerFrame = extractLiveAnswerFrame(stripExitSummary(stdout));
+      result.response = answerFrame ? cleanResponse(answerFrame.bodyLines.join("\n")) : undefined;
+      // myrmidon(G5): a provider/billing error or similar failure mid-turn
+      // still exits 0 without -Q and still prints a valid exit summary
+      // (chat() completes normally; only quiet mode's
+      // _run_quiet_single_query calls sys.exit on failure) — the one
+      // remaining signal is that the answer's own frame is the
+      // box.HORIZONTALS error Panel, not the normal streaming box.
+      const errorPanelText = liveModeErrorFromFrame(answerFrame);
+      if (errorPanelText) {
+        result.errorMessage = errorPanelText;
+      }
     } else {
       // Legacy/unrecognized format fallback (e.g. a killed run whose exit
       // summary never printed): best effort, as before.
@@ -337,11 +377,47 @@ function parseHermesOutput(rawStdout: string, stderr: string): ParsedOutput {
       if (legacyMatch?.[1]) {
         result.sessionId = legacyMatch?.[1] ?? null;
       }
-      // In non-quiet mode, extract clean response from stdout by
-      // filtering out tool lines, system messages, and noise
-      const cleaned = cleanResponse(stdout);
-      if (cleaned.length > 0) {
-        result.response = cleaned;
+      if (useQuiet) {
+        // Quiet mode never prints a Panel/streaming-box frame at all (Rich
+        // display is fully disabled — cli.py _configure_quiet_agent), so a
+        // blanket clean of stdout is the only extraction that ever applied
+        // here; unchanged from before G5.
+        const cleaned = cleanResponse(stdout);
+        if (cleaned.length > 0) {
+          result.response = cleaned;
+        }
+      } else {
+        // myrmidon(G5): same "only the last frame is the real answer, and
+        // no frame at all means no response" rule as the validated-exit-
+        // summary branch above, and for the same reason: a blanket clean of
+        // the whole stdout here previously let the vendor's `Query:` echo —
+        // in the one shape stripQueryEcho itself cannot safely cut, no
+        // recognized boundary ever following it (see its own doc comment)
+        // — become the stored response outright, in exactly the early-exit-
+        // before-any-turn failure case this branch exists to describe.
+        const answerFrame = extractLiveAnswerFrame(stdout);
+        if (answerFrame) {
+          result.response = cleanResponse(answerFrame.bodyLines.join("\n"));
+        }
+      }
+      // myrmidon(G5): without -Q, a run that exits 0 but never printed a
+      // validated exit summary is not a killed run's ordinary shape when it
+      // was not actually killed by our own timeout — it is
+      // _run_single_query_mode exiting before it ever reached a turn at all
+      // (no credentials configured, or --resume pointed at a session that
+      // was not found or is over the history cap — see
+      // myrmidon-live-progress.ts's module doc comment) or some other
+      // unrecognized shape. Quiet mode is the only mode where that early
+      // exit sets a non-zero exit code (_run_quiet_single_query's own
+      // sys.exit(1)); without -Q it reaches Paperclip as exitCode 0 with no
+      // errorMessage, so the run is recorded as succeeded and the failure
+      // recovery path never triggers.
+      if (!useQuiet && !timedOut && exitCode === 0) {
+        result.errorMessage =
+          "hermes chat exited 0 without a recognized exit summary in live-progress " +
+          "mode (an early exit before any turn ran — e.g. missing credentials, or " +
+          "--resume pointed at a session that was not found or is over the history " +
+          "cap — or an unrecognized output shape)";
       }
     }
   }
@@ -700,7 +776,7 @@ export async function execute(
   }
 
   // ── Parse output ───────────────────────────────────────────────────────
-  const parsed = parseHermesOutput(result.stdout || "", result.stderr || "");
+  const parsed = parseHermesOutput(result.stdout || "", result.stderr || "", useQuiet, result.timedOut, result.exitCode);
 
   await ctx.onLog(
     "stdout",
