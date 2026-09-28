@@ -1,12 +1,16 @@
-// myrmidon(X8c): OpenClaw-style commands in a bridged Telegram direct
-// message conversation: /help, /new, /model, /think, /stop, /status, plus
-// the compatibility replies /close and /task.
-//
-// The exported interface here (BridgedCommandInput, BridgedCommandResult,
-// BridgedCommandSpec, TELEGRAM_DM_COMMANDS, parseBridgedCommand,
-// runBridgedDirectMessageCommand) is the X8 contract; X8b calls it. See
-// identity.ts's header for why this PR carries its own copy of the parts of
-// the contract that X8a also owns.
+/**
+ * X8 bridged direct-message command contract (agent-chat-bridge).
+ *
+ * A bridged Telegram direct message that starts with a `/command` is
+ * intercepted before it reaches the agent, OpenClaw-style: `/help`, `/new`,
+ * `/model`, `/think`, `/stop`, `/status`, plus the compatibility replies
+ * `/close` and `/task`. X8a defined this module's shared shape
+ * (`BridgedCommandInput`, `BridgedCommandResult`, `BridgedCommandSpec`,
+ * `TELEGRAM_DM_COMMANDS`, `parseBridgedCommand`) with a minimal, only
+ * `/new`/`/reset` stand-in body for `runBridgedDirectMessageCommand`; this
+ * PR (X8c) keeps those signatures and replaces the body with the full
+ * command set. X8b calls it.
+ */
 
 import type { Db } from "@paperclipai/db";
 import { CHAT_NOT_AVAILABLE_TEXT, loadBridgedCommandContext, type BridgedCommandContext } from "./context.js";
@@ -30,11 +34,16 @@ import { stopBridgedChatRuns } from "./stop.js";
 export interface BridgedCommandInput {
   db: Db;
   companyId: string;
+  /** chat_endpoints.assigned_agent_id */
   agentId: string;
   endpointId: string;
+  /** chat_deliveries.id of this message */
   deliveryId: string;
+  /** Linked board user of the sender */
   boardUserId: string;
+  /** The Telegram conversation issue; X8b guarantees it exists */
   conversationIssueId: string;
+  /** Raw provider text */
   text: string;
   publicBaseUrl: string | null;
   cancelRun: (
@@ -55,25 +64,41 @@ export interface BridgedCommandSpec {
 }
 
 export const TELEGRAM_DM_COMMANDS: readonly BridgedCommandSpec[] = [
-  { command: "help", description: "Show this list of commands" },
-  { command: "new", description: "Start a new session, optionally with a model" },
-  { command: "model", description: "Show or change the model for this chat" },
-  { command: "think", description: "Show or change the reasoning effort for this chat" },
-  { command: "stop", description: "Stop the reply in progress" },
-  { command: "status", description: "Show chat, model and session status" },
+  { command: "help", description: "Show commands" },
+  { command: "new", description: "Start a new session (optional: /new <model>)" },
+  { command: "model", description: "Show or switch the model for this chat" },
+  { command: "think", description: "Show or set reasoning effort" },
+  { command: "stop", description: "Stop the current reply" },
+  { command: "status", description: "Show model, session and current reply" },
 ];
 
+/**
+ * myrmidon(X8c): `/start`, `/commands` and `/reset` are not part of the X8
+ * contract's `TELEGRAM_DM_COMMANDS` (X8a canon), but OpenClaw's own DM
+ * commands support them as compatibility aliases, so this bridge does too.
+ */
 const COMMAND_ALIASES: Readonly<Record<string, string>> = {
   start: "help",
   commands: "help",
   reset: "new",
 };
 
-const COMMAND_PATTERN = /^\/([a-zA-Z][a-zA-Z0-9_-]*)(?:@[a-zA-Z0-9_]+)?(?:\s+([\s\S]*))?$/;
+const BRIDGED_COMMAND_PATTERN = /^\/([a-z][\w-]*)(?:@[\w.]+)?(?:\s+([\s\S]*))?$/i;
+
+/**
+ * Parses a `/command[@bot] [args]` message. Returns null for anything that
+ * is not a command, including a slash mid-path like `/home/x` (the name
+ * must be followed by whitespace or the end of the string).
+ */
+export function parseBridgedCommand(text: string): { name: string; args: string } | null {
+  const match = BRIDGED_COMMAND_PATTERN.exec(text.trim());
+  if (!match) return null;
+  return { name: match[1].toLowerCase(), args: (match[2] ?? "").trim() };
+}
 
 /**
  * Longest command name echoed back in reply text (e.g. "Unknown command
- * /<name>."). `parsed.name` is untrusted chat input and COMMAND_PATTERN
+ * /<name>."). `parsed.name` is untrusted chat input and BRIDGED_COMMAND_PATTERN
  * does not bound its length, so it is truncated before display. This is
  * separate from the `command` result field itself, which never carries
  * unvalidated chat input at all — see the two call sites below.
@@ -82,18 +107,6 @@ const MAX_DISPLAYED_COMMAND_NAME_LENGTH = 64;
 
 function truncateForDisplay(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
-}
-
-/**
- * Parses `/name[@bot] [args]`. Case-insensitive; `/home/x` is not a command
- * (a slash must be followed by whitespace or the end of the message).
- */
-export function parseBridgedCommand(text: string): { name: string; args: string } | null {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("/")) return null;
-  const match = COMMAND_PATTERN.exec(trimmed);
-  if (!match) return null;
-  return { name: match[1]!.toLowerCase(), args: (match[2] ?? "").trim() };
 }
 
 export async function runBridgedDirectMessageCommand(
@@ -138,7 +151,7 @@ export async function runBridgedDirectMessageCommand(
       // myrmidon(X8c): same reasoning as the not-available branch above —
       // `name` is unvalidated chat input here, so `command` gets a fixed
       // literal; the original name is shown in `text` only, and truncated,
-      // since COMMAND_PATTERN does not bound its length.
+      // since BRIDGED_COMMAND_PATTERN does not bound its length.
       return {
         kind: "reply",
         command: "unknown",

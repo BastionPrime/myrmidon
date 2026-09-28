@@ -1,6 +1,7 @@
 // myrmidon(X8c): OpenClaw-style commands in a bridged Telegram direct
-// message conversation. Red on main (the module under test does not exist
-// there).
+// message conversation. Red on pre-X8c main: X8a's `runBridgedDirectMessageCommand`
+// is a `/new`/`/reset`-only stand-in, and `./context.js`, `./help.js`,
+// `./models.js`, `./overrides.js`, `./status.js`, `./stop.js` do not exist there.
 
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
