@@ -207,6 +207,12 @@ const support = await getEmbeddedPostgresTestSupport();
     expect(text).not.toMatch(/\)\s*auto\b/i);
     expect(text).toMatch(/1\)\s*model-b/);
     expect(text).toMatch(/2\)\s*model-c/);
+
+    const status = await runBridgedDirectMessageCommand(
+      baseInput({ conversationIssueId: issue.id, boardUserId, agentId: sentinelAgentId, text: "/status" }),
+    );
+    const statusText = (status as { kind: "reply"; text: string }).text;
+    expect(statusText).toContain("Model: adapter default (adapter default)");
   });
 
   it("2. /model model-b sets the override, keeps other override keys, drops the session and logs the change", async () => {
