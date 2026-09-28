@@ -187,9 +187,9 @@ describe("IssueFilesDrawer", () => {
     act(() => {
       commentLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
-    expect(document.querySelector('[data-testid="issue-files-drawer"]')?.getAttribute("data-state")).toBe(
-      "closed",
-    );
+    // No stylesheet is loaded in this test environment, so Radix's Presence
+    // sees no exit animation to wait for and unmounts the panel right away.
+    expect(document.querySelector('[data-testid="issue-files-drawer"]')).toBeNull();
   });
 
   it("leaves the desktop panel open when a comment link is clicked", () => {

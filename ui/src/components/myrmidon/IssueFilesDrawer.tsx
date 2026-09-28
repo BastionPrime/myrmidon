@@ -2,13 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IssueAttachment, IssueWorkProduct } from "@paperclipai/shared";
 import { Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { buildIssueFileEntries, IssueFilesPanel, type IssueFileEntry } from "./IssueFilesPanel";
 
@@ -90,7 +84,15 @@ export function IssueFilesDrawer({
     // Primary button only (touch/pen report button 0 or -1 for down events).
     if (event.pointerType === "mouse" && event.button !== 0) return;
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      // Keeps the drag responsive if the pointer leaves the 8px grip during a
+      // fast move. Not universally supported (and jsdom in tests has no real
+      // implementation) — the width math below still works via plain
+      // bubbling either way, so a failure here is harmless.
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Ignored — see comment above.
+    }
     dragStateRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -127,66 +129,72 @@ export function IssueFilesDrawer({
   );
 
   return (
-    <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger asChild>
-        <Button
-          variant="ghost"
-          size="xs"
-          disabled={count === 0}
-          data-testid="issue-files-drawer-trigger"
-          aria-label={`Task files (${count})`}
-          className={cn("mr-1 shrink-0 gap-1", className)}
-        >
-          <Paperclip className="h-3.5 w-3.5" />
-          Files ({count})
-        </Button>
-      </SheetTrigger>
-      <SheetContent
-        side={isMobile ? "bottom" : "right"}
-        data-testid="issue-files-drawer"
-        className={cn(
-          "gap-0 p-0",
-          isMobile
-            ? "h-(--sz-85dvh) max-h-(--sz-85dvh) w-full max-w-none pb-(--sz-safe-bottom)"
-            : "sm:max-w-none",
-        )}
-        style={isMobile ? undefined : { width, minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }}
+    <>
+      {/* A plain button, not SheetTrigger: the shared Sheet stays a pure
+      open/close primitive (Sheet/SheetContent only) so it matches every
+      other Sheet usage in this codebase (e.g. IssueDetail's mobile
+      properties drawer), including how the vendor's own IssueDetail test
+      suite mocks "@/components/ui/sheet" — that mock has no SheetTrigger. */}
+      <Button
+        variant="ghost"
+        size="xs"
+        disabled={count === 0}
+        data-testid="issue-files-drawer-trigger"
+        aria-label={`Task files (${count})`}
+        className={cn("mr-1 shrink-0 gap-1", className)}
+        onClick={() => setOpen(true)}
       >
-        {!isMobile ? (
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize files panel"
-            data-testid="issue-files-drawer-grip"
-            data-dragging={dragging ? "" : undefined}
-            className="group absolute inset-y-0 z-10 cursor-col-resize touch-none"
-            style={{ left: -4, width: 8 }}
-            onPointerDown={handleGripPointerDown}
-            onPointerMove={handleGripPointerMove}
-            onPointerUp={handleGripPointerUp}
-            onPointerCancel={handleGripPointerUp}
-            onLostPointerCapture={() => endDrag(true)}
-          >
+        <Paperclip className="h-3.5 w-3.5" />
+        Files ({count})
+      </Button>
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent
+          side={isMobile ? "bottom" : "right"}
+          data-testid="issue-files-drawer"
+          className={cn(
+            "gap-0 p-0",
+            isMobile
+              ? "h-(--sz-85dvh) max-h-(--sz-85dvh) w-full max-w-none pb-(--sz-safe-bottom)"
+              : "sm:max-w-none",
+          )}
+          style={isMobile ? undefined : { width, minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }}
+        >
+          {!isMobile ? (
             <div
-              className={cn(
-                "mx-auto h-full w-px transition-colors",
-                dragging ? "bg-ring" : "bg-transparent group-hover:bg-ring",
-              )}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize files panel"
+              data-testid="issue-files-drawer-grip"
+              data-dragging={dragging ? "" : undefined}
+              className="group absolute inset-y-0 z-10 cursor-col-resize touch-none"
+              style={{ left: -4, width: 8 }}
+              onPointerDown={handleGripPointerDown}
+              onPointerMove={handleGripPointerMove}
+              onPointerUp={handleGripPointerUp}
+              onPointerCancel={handleGripPointerUp}
+              onLostPointerCapture={() => endDrag(true)}
+            >
+              <div
+                className={cn(
+                  "mx-auto h-full w-px transition-colors",
+                  dragging ? "bg-ring" : "bg-transparent group-hover:bg-ring",
+                )}
+              />
+            </div>
+          ) : null}
+          <SheetHeader className="border-b border-border">
+            <SheetTitle>Files ({count})</SheetTitle>
+          </SheetHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            <IssueFilesPanel
+              attachments={attachments}
+              workProducts={workProducts}
+              resolveAuthor={resolveAuthor}
+              onFileCommentClick={isMobile ? () => setOpen(false) : undefined}
             />
           </div>
-        ) : null}
-        <SheetHeader className="border-b border-border">
-          <SheetTitle>Files ({count})</SheetTitle>
-        </SheetHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <IssueFilesPanel
-            attachments={attachments}
-            workProducts={workProducts}
-            resolveAuthor={resolveAuthor}
-            onFileCommentClick={isMobile ? () => setOpen(false) : undefined}
-          />
-        </div>
-      </SheetContent>
-    </Sheet>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
