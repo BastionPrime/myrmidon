@@ -201,7 +201,10 @@ describe("isStreamBoxHeaderLine / isStreamBoxFooterLine", () => {
 describe("stripRichPanelFrames — streaming box (display.streaming: true, the vendor default)", () => {
   it("removes the header/footer and passes bare content lines through unchanged", () => {
     const block = buildStreamBox("⚕ Hermes", ["Done."]);
-    expect(stripRichPanelFrames(block)).toBe("\nDone.\n");
+    // Unlike the Panel case (padding=(1,0) adds a blank row on each side),
+    // the streaming box has no blank padding row before the footer — only
+    // the leading blank from `_cprint(f"\n{_ACCENT}╭─…")`'s own leading "\n".
+    expect(stripRichPanelFrames(block)).toBe("\nDone.");
   });
 
   it("keeps multi-line content, blank paragraph separators, and markdown bullets (no border to unwrap)", () => {
@@ -212,7 +215,7 @@ describe("stripRichPanelFrames — streaming box (display.streaming: true, the v
       "- Updated the changelog entry",
     ];
     const block = buildStreamBox("⚕ Hermes", bodyLines);
-    expect(stripRichPanelFrames(block)).toBe(["", ...bodyLines, ""].join("\n"));
+    expect(stripRichPanelFrames(block)).toBe(["", ...bodyLines].join("\n"));
   });
 
   it("preserves a nested markdown list's own indentation", () => {
@@ -225,7 +228,7 @@ describe("stripRichPanelFrames — streaming box (display.streaming: true, the v
     const after = "[done] ┊ 💻 $         curl -s https://example.com  0.2s (0.2s)";
     const block = buildStreamBox("⚕ Hermes", ["Done."]);
     const text = [before, block, after].join("\n");
-    expect(stripRichPanelFrames(text)).toBe([before, "", "Done.", "", after].join("\n"));
+    expect(stripRichPanelFrames(text)).toBe([before, "", "Done.", after].join("\n"));
   });
 
   it("leaves an unterminated streaming box (killed mid-answer) alone instead of guessing", () => {
