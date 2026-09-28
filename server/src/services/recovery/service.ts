@@ -3861,9 +3861,14 @@ export function recoveryService(
         const retryIdempotencyKey = buildStrandedAutoPolicyRetryIdempotencyKey(
           { issueId: input.issue.id, sourceRunId: latestRun.id },
         );
-        let existingRetryWake: Awaited<
-          ReturnType<typeof findExistingStrandedAutoPolicyRetryWake>
-        > = null;
+        // Typed `{ id: string } | null` explicitly, not
+        // `Awaited<ReturnType<typeof findExistingStrandedAutoPolicyRetryWake>>`:
+        // that function's own `rows[0] ?? null` collapses to just
+        // `{ id: string }` under this project's TS settings (no
+        // `noUncheckedIndexedAccess`, so `rows[0]` is never statically
+        // `undefined` and the `?? null` fallback is inferred as
+        // unreachable) — which would reject the `= null` reset below.
+        let existingRetryWake: { id: string } | null = null;
         try {
           existingRetryWake = await findExistingStrandedAutoPolicyRetryWake({
             companyId: input.issue.companyId,
