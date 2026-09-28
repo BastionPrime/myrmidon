@@ -63,7 +63,9 @@ function makeCtx(adapterConfig: Record<string, unknown> = {}) {
       ...adapterConfig,
     },
     context: { issueId: "issue-1", wakeReason: "manual", paperclipWake: null },
-    onLog: vi.fn(async () => undefined),
+    // Typed params (not just `() => undefined`) so `.mock.calls` below is a
+    // real [stream, chunk][] tuple array, not an inferred `[]`.
+    onLog: vi.fn(async (_stream: "stdout" | "stderr", _chunk: string) => undefined),
     onMeta: vi.fn(async () => undefined),
     onSpawn: vi.fn(async () => undefined),
   };
@@ -234,5 +236,45 @@ describe("execute() — G5 live progress wiring", () => {
     const result = await execute(makeCtx({}) as any);
 
     expect(result.sessionParams).toEqual({ sessionId: SESSION_ID });
+  });
+
+  it("redacts secret-shaped tool-progress log chunks before forwarding them to ctx.onLog in live progress mode", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // Fake token, built from two literal halves so it never appears as one
+    // contiguous secret-shaped literal in the source (this repo's CI runs
+    // gitleaks over new commits) — see shared/myrmidon-secret-redaction.myrmidon.test.ts.
+    const fakeToken = "sk-ant-" + "abcdef0123456789";
+    vi.mocked(serverUtils.runChildProcess).mockImplementationOnce(async (_runId, _cmd, _args, opts: any) => {
+      // Simulates a `terminal` tool-progress line live progress mode prints
+      // (agent/display.py), which the vendor's own redact_tool_args_for_display
+      // does not cover — see shared/myrmidon-secret-redaction.ts.
+      await opts.onLog("stdout", `[done] ┊ 💻 $         curl -H "Authorization: Bearer ${fakeToken}"  0.1s\n`);
+      return { exitCode: 0, signal: null, timedOut: false, stdout: "Done.", stderr: "", pid: null, startedAt: null };
+    });
+
+    const ctx = makeCtx({});
+    await execute(ctx as any);
+
+    const loggedChunks = ctx.onLog.mock.calls.map((call) => call[1] as string);
+    expect(loggedChunks.some((c) => c.includes(fakeToken))).toBe(false);
+    expect(loggedChunks.some((c) => c.includes("Authorization: Bearer [REDACTED]"))).toBe(true);
+  });
+
+  it("does not redact (no-op, nothing new to redact) when quiet mode is in effect", async () => {
+    process.env[LIVE_PROGRESS_ENV_VAR] = "0";
+    const fakePassword = "hunter" + "2";
+    vi.mocked(serverUtils.runChildProcess).mockImplementationOnce(async (_runId, _cmd, _args, opts: any) => {
+      // Quiet mode never prints tool-progress lines, but the redaction gate
+      // itself (useQuiet) must still be verified directly: any stdout chunk
+      // passed through must come out byte-for-byte unchanged.
+      await opts.onLog("stdout", `password=${fakePassword}\n`);
+      return { exitCode: 0, signal: null, timedOut: false, stdout: "Done.\n\nsession_id: abc123\n", stderr: "", pid: null, startedAt: null };
+    });
+
+    const ctx = makeCtx({ quiet: true });
+    await execute(ctx as any);
+
+    const loggedChunks = ctx.onLog.mock.calls.map((call) => call[1] as string);
+    expect(loggedChunks).toContain(`password=${fakePassword}\n`);
   });
 });

@@ -76,6 +76,9 @@ import {
   stripQueryEcho,
   stripRichPanelFrames,
 } from "./myrmidon-live-progress.js";
+// myrmidon(G5): mask secret-shaped text in live-progress mode's raw
+// tool-progress lines before they reach the persisted run log
+import { redactSecretsForLog } from "../shared/myrmidon-secret-redaction.js";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -621,7 +624,16 @@ export async function execute(
   // Hermes writes non-error noise to stderr (MCP init, INFO logs, etc).
   // Paperclip renders all stderr as red/error in the UI.
   // Wrap onLog to reclassify benign stderr lines as stdout.
-  const wrappedOnLog = async (stream: "stdout" | "stderr", chunk: string) => {
+  const wrappedOnLog = async (stream: "stdout" | "stderr", rawChunk: string) => {
+    // myrmidon(G5): live progress mode's tool-progress lines carry raw,
+    // largely unredacted tool arguments (the vendor's own
+    // redact_tool_args_for_display only covers browser_type — see
+    // shared/myrmidon-secret-redaction.ts). Mask secret-shaped text before
+    // it reaches Paperclip's persisted run log / live transcript. Quiet
+    // mode (-Q) already suppresses this output entirely, so there is
+    // nothing new to redact there — skip the pass to leave its behavior
+    // unchanged.
+    const chunk = useQuiet ? rawChunk : redactSecretsForLog(rawChunk);
     if (stream === "stderr") {
       const trimmed = chunk.trimEnd();
       // Benign patterns that should NOT appear as errors:
