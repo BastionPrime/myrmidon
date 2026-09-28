@@ -172,7 +172,7 @@ describe("buildStrandedAutoPolicyRetryInstruction / buildStrandedAutoPolicyManag
       attempt: 1,
       maxAttemptsPerDay: 2,
     });
-    expect(text).toContain("attempt 1 of 2");
+    expect(text).toContain("retry 1 of 2");
     expect(text).toContain("`done`");
     expect(text).toContain("`in_review`");
     expect(text).toContain("`blocked`");
@@ -191,15 +191,23 @@ describe("buildStrandedAutoPolicyRetryInstruction / buildStrandedAutoPolicyManag
 });
 
 describe("buildStrandedAutoPolicyManagerReviewPatch", () => {
+  // The patch runs through the vendor's own execution-state schema
+  // (`issueExecutionStagePrincipalSchema`), which requires `agentId` to be a
+  // GUID — plain fixture ids like "agent-a" fail that validation silently
+  // (`parseIssueExecutionState` returns null), so this test uses UUID-shaped
+  // neutral ids instead.
+  const assigneeAgentId = "00000000-0000-4000-8000-000000000001";
+  const managerAgentId = "00000000-0000-4000-8000-000000000002";
+
   it("moves the issue to in_review with the manager as reviewer and the original assignee as the return path", () => {
     const patch = buildStrandedAutoPolicyManagerReviewPatch({
-      issue: { status: "in_progress", assigneeAgentId: "agent-a", assigneeUserId: null },
-      managerAgentId: "agent-b",
+      issue: { status: "in_progress", assigneeAgentId, assigneeUserId: null },
+      managerAgentId,
       cause: "successful_run_missing_state",
     });
 
     expect(patch.status).toBe("in_review");
-    expect(patch.assigneeAgentId).toBe("agent-b");
+    expect(patch.assigneeAgentId).toBe(managerAgentId);
     expect(patch.assigneeUserId).toBeNull();
 
     const executionState = patch.executionState as {
@@ -207,12 +215,13 @@ describe("buildStrandedAutoPolicyManagerReviewPatch", () => {
       currentParticipant: { type: string; agentId: string | null };
       returnAssignee: { type: string; agentId: string | null };
     };
+    expect(executionState).not.toBeNull();
     expect(executionState.status).toBe("pending");
-    expect(executionState.currentParticipant).toEqual({ type: "agent", agentId: "agent-b", userId: null });
-    expect(executionState.returnAssignee).toEqual({ type: "agent", agentId: "agent-a", userId: null });
+    expect(executionState.currentParticipant).toEqual({ type: "agent", agentId: managerAgentId, userId: null });
+    expect(executionState.returnAssignee).toEqual({ type: "agent", agentId: assigneeAgentId, userId: null });
 
     const executionPolicy = patch.executionPolicy as { stages: Array<{ participants: Array<{ agentId: string | null }> }> };
     expect(executionPolicy.stages).toHaveLength(1);
-    expect(executionPolicy.stages[0]?.participants[0]?.agentId).toBe("agent-b");
+    expect(executionPolicy.stages[0]?.participants[0]?.agentId).toBe(managerAgentId);
   });
 });
