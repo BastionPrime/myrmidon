@@ -172,6 +172,16 @@ describe("deploy.sh", () => {
     assert.match(out, /ALLOW_UNKNOWN_RUNS=1, not waiting/);
   });
 
+  it("--force on the same image recreates the container and keeps the real previous image", () => {
+    const sb = sandbox({ current: OLD });
+    assert.equal(run(sb, "deploy.sh", ["--digest", NEW]).code, 0);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW, "--force"]);
+    assert.equal(code, 0, out);
+    assert.match(calls(sb), /up -d --no-deps --force-recreate server/);
+    assert.equal(read(path.join(sb.dir, "state/previous-digest")).trim(), OLD);
+    assert.equal(read(path.join(sb.dir, "state/previous-image")).trim(), `ghcr.io/itkadr-git/myrmidon@${OLD}`);
+  });
+
   it("aborts when runs do not finish in time", () => {
     const sb = sandbox();
     fs.appendFileSync(sb.config, "RUNNING_RUNS_COMMAND='echo 3'\nRUNS_WAIT_TIMEOUT_SEC=0\n");
