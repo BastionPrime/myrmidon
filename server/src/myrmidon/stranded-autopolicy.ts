@@ -50,6 +50,27 @@ export function isStrandedAutoPolicyCause(cause: string | null | undefined): cau
 }
 
 export const STRANDED_AUTO_POLICY_RETRY_SOURCE = "myrmidon.stranded_autopolicy_retry";
+
+/**
+ * Ties one retry wake to one specific (issue, successful source run) pair —
+ * the exact event `escalateStrandedAssignedIssue` is resolving. The sweep,
+ * the wake-queue module and direct heartbeat.ts callers can all reach
+ * `escalateStrandedAssignedIssue` for the same stranded issue close together
+ * with an identical stale `latestRun` snapshot; a caller-side existence
+ * check against this key (see `findExistingStrandedAutoPolicyRetryWake` in
+ * `server/src/services/recovery/service.ts`) lets a racing duplicate stand
+ * down instead of queuing a second continuation wake for a disposition the
+ * agent has already been asked for once. No new unique index backs this (no
+ * migration): it mirrors the vendor's own un-indexed run-liveness-
+ * continuation idempotency check (`run-liveness-continuations.ts`), which
+ * this codebase already treats as sufficient for this class of race.
+ */
+export function buildStrandedAutoPolicyRetryIdempotencyKey(input: {
+  issueId: string;
+  sourceRunId: string;
+}): string {
+  return `${STRANDED_AUTO_POLICY_RETRY_SOURCE}:${input.issueId}:${input.sourceRunId}`;
+}
 export const STRANDED_AUTO_POLICY_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const STRANDED_AUTO_POLICY_RETRIES_PER_DAY_ENV = "MYRMIDON_STRANDED_AUTO_RETRIES_PER_DAY";
 export const STRANDED_AUTO_POLICY_DEFAULT_RETRIES_PER_DAY = 2;

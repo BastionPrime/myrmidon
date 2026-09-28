@@ -146,6 +146,7 @@ import {
   buildStrandedAutoPolicyManagerReviewComment,
   buildStrandedAutoPolicyManagerReviewPatch,
   buildStrandedAutoPolicyRetryContext,
+  buildStrandedAutoPolicyRetryIdempotencyKey,
   countStrandedAutoPolicyAttemptsInWindow,
   decideStrandedAutoPolicy,
   findActiveManagerAgentId,
@@ -936,6 +937,28 @@ export function recoveryService(
     agent: typeof agents.$inferSelect | null | undefined,
   ) {
     return (await evaluateAgentInvokabilityFromDb(db, agent)).invokable;
+  }
+
+  // myrmidon(L4): caller-side pre-check for the stranded auto-policy retry
+  // wake's idempotency key — see `buildStrandedAutoPolicyRetryIdempotencyKey`
+  // for why this exists. `skipped` wakes never ran, so they don't count as a
+  // prior attempt.
+  async function findExistingStrandedAutoPolicyRetryWake(input: {
+    companyId: string;
+    idempotencyKey: string;
+  }) {
+    return db
+      .select({ id: agentWakeupRequests.id })
+      .from(agentWakeupRequests)
+      .where(
+        and(
+          eq(agentWakeupRequests.companyId, input.companyId),
+          eq(agentWakeupRequests.idempotencyKey, input.idempotencyKey),
+          notInArray(agentWakeupRequests.status, ["skipped"]),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
   }
 
   async function getLatestIssueRun(
@@ -1888,6 +1911,11 @@ export function recoveryService(
     source: string;
     retryOfRunId?: string | null;
     extraContext?: Record<string, unknown>;
+    // myrmidon(L4): lets a caller (the stranded auto-policy retry branch) tie
+    // this wake to a stable, caller-chosen key so a racing duplicate call can
+    // be detected before it queues a second one — see
+    // `findExistingStrandedAutoPolicyRetryWake` at this function's call site.
+    idempotencyKey?: string | null;
   }) {
     if (input.retryOfRunId) {
       const [predecessor] = await db
@@ -1950,6 +1978,7 @@ export function recoveryService(
       source: "automation",
       triggerDetail: "system",
       reason: input.reason,
+      idempotencyKey: input.idempotencyKey ?? undefined,
       // The sweep can combine an old in-progress issue snapshot with a newer
       // successful run. Validate eligibility under the enqueue issue lock so
       // completion or reassignment cannot create a redundant continuation.
@@ -3792,24 +3821,59 @@ export function recoveryService(
       });
 
       if (autoPolicyDecision.kind === "retry") {
-        const queued = await enqueueStrandedIssueRecovery({
-          issueId: input.issue.id,
-          agentId: assigneeAgentId,
-          reason: "issue_continuation_needed",
-          retryReason: "issue_continuation_needed",
-          source: STRANDED_AUTO_POLICY_RETRY_SOURCE,
-          retryOfRunId: latestRun.id,
-          // myrmidon(L4): these field names (not a bare `instruction` key)
-          // are what `buildPaperclipWakePayload` reads to render the
-          // liveness-continuation section of the agent's prompt — see
-          // `buildStrandedAutoPolicyRetryContext`'s own doc comment.
-          extraContext: buildStrandedAutoPolicyRetryContext({
-            cause: recoveryCause,
-            attempt: autoPolicyDecision.attempt,
-            maxAttemptsPerDay: autoPolicyDecision.maxAttemptsPerDay,
-            sourceRunId: latestRun.id,
-          }),
-        });
+        // myrmidon(L4): `enqueueWakeup` *throws* (not a falsy return) when the
+        // assignee turns out not to be invokable or is over its invocation
+        // budget (heartbeat.ts's `conflict(...)` on both checks) — exactly
+        // the state some of `escalateStrandedAssignedIssue`'s own pre-
+        // existing callers pass in here (the "assignee not invokable" and
+        // "over budget" branches in `reconcileStrandedAssignedIssues` below,
+        // both reachable with the default `stranded_assigned_issue` cause
+        // after a *succeeded* run — e.g. the agent finished, then was paused
+        // before recording a disposition). Left unguarded that throw would
+        // escape this function, abort the whole `reconcileStrandedAssignedIssues`
+        // sweep tick (a plain loop with no catch of its own) and repeat every
+        // tick. The idempotency check below closes a separate race: the
+        // sweep, the wake-queue module and direct heartbeat.ts callers can
+        // all reach this function for the same stranded issue close together
+        // with an identical stale `latestRun` snapshot (see the comment on
+        // the reassign-to-manager branch below for the same reachability);
+        // without it, two racing callers could each queue their own
+        // continuation wake for the same successful run.
+        const retryIdempotencyKey = buildStrandedAutoPolicyRetryIdempotencyKey(
+          { issueId: input.issue.id, sourceRunId: latestRun.id },
+        );
+        let queued: Awaited<
+          ReturnType<typeof enqueueStrandedIssueRecovery>
+        > = null;
+        try {
+          const existingRetryWake = await findExistingStrandedAutoPolicyRetryWake({
+            companyId: input.issue.companyId,
+            idempotencyKey: retryIdempotencyKey,
+          });
+          if (!existingRetryWake) {
+            queued = await enqueueStrandedIssueRecovery({
+              issueId: input.issue.id,
+              agentId: assigneeAgentId,
+              reason: "issue_continuation_needed",
+              retryReason: "issue_continuation_needed",
+              source: STRANDED_AUTO_POLICY_RETRY_SOURCE,
+              retryOfRunId: latestRun.id,
+              idempotencyKey: retryIdempotencyKey,
+              // myrmidon(L4): these field names (not a bare `instruction`
+              // key) are what `buildPaperclipWakePayload` reads to render
+              // the liveness-continuation section of the agent's prompt —
+              // see `buildStrandedAutoPolicyRetryContext`'s own doc comment.
+              extraContext: buildStrandedAutoPolicyRetryContext({
+                cause: recoveryCause,
+                attempt: autoPolicyDecision.attempt,
+                maxAttemptsPerDay: autoPolicyDecision.maxAttemptsPerDay,
+                sourceRunId: latestRun.id,
+              }),
+            });
+          }
+        } catch {
+          queued = null;
+        }
         if (queued) {
           await logActivity(db, {
             companyId: input.issue.companyId,
@@ -3829,8 +3893,12 @@ export function recoveryService(
           });
           return input.issue;
         }
-        // The guarded enqueue declined (e.g. a concurrent change raced it) —
-        // fall through to the vendor's own board escalation below.
+        // The guarded enqueue declined (e.g. a concurrent change raced it),
+        // a racing caller already queued this exact retry for this exact
+        // successful run, or the assignee turned out not to be invokable or
+        // over budget (the throw case above) — fall through to the vendor's
+        // own board escalation below, same as a lost race on the reassign
+        // branch just below.
       } else if (autoPolicyDecision.kind === "reassign_to_manager") {
         // myrmidon(L4): `issuesSvc.update` *throws* (not a falsy return) when
         // the issue's assignee is locked — bound to a native conversation or
@@ -3912,29 +3980,53 @@ export function recoveryService(
           // route (`executionStageWakeup`); this direct service-layer update
           // bypasses that, so the new reviewer is woken explicitly here —
           // mirrors `enqueueInitialAssignedTodoDispatch` above.
-          await deps.enqueueWakeup(autoPolicyDecision.managerAgentId, {
-            source: "assignment",
-            triggerDetail: "system",
-            reason: "issue_assigned",
-            payload: withRecoveryContext(
+          //
+          // myrmidon(L4): by this point the issue is already durably
+          // `in_review` with the manager as reviewer and the explanatory
+          // comment already posted — that handoff must not be undone if the
+          // wake fails. `enqueueWakeup` throws (not a falsy return) when the
+          // manager itself turns non-invokable or goes over its own
+          // invocation budget in the narrow window since it was checked
+          // above; an uncaught throw here would escape this whole function
+          // and abort the `reconcileStrandedAssignedIssues` sweep tick for
+          // every other issue in it. Degrade instead: the issue stays a
+          // correctly-owned `in_review` item the manager's own normal
+          // heartbeat/board visibility will still pick up, just not
+          // proactively woken this instant.
+          try {
+            await deps.enqueueWakeup(autoPolicyDecision.managerAgentId, {
+              source: "assignment",
+              triggerDetail: "system",
+              reason: "issue_assigned",
+              payload: withRecoveryContext(
+                {
+                  issueId: input.issue.id,
+                  mutation: "myrmidon_stranded_autopolicy_manager_review",
+                },
+                "normal_model",
+              ),
+              requestedByActorType: "system",
+              requestedByActorId: null,
+              contextSnapshot: withRecoveryContext(
+                {
+                  issueId: input.issue.id,
+                  taskId: input.issue.id,
+                  wakeReason: "issue_assigned",
+                  source: "myrmidon.stranded_autopolicy_manager_review",
+                },
+                "normal_model",
+              ),
+            });
+          } catch (error) {
+            logger.warn(
               {
                 issueId: input.issue.id,
-                mutation: "myrmidon_stranded_autopolicy_manager_review",
+                managerAgentId: autoPolicyDecision.managerAgentId,
+                error: error instanceof Error ? error.message : String(error),
               },
-              "normal_model",
-            ),
-            requestedByActorType: "system",
-            requestedByActorId: null,
-            contextSnapshot: withRecoveryContext(
-              {
-                issueId: input.issue.id,
-                taskId: input.issue.id,
-                wakeReason: "issue_assigned",
-                source: "myrmidon.stranded_autopolicy_manager_review",
-              },
-              "normal_model",
-            ),
-          });
+              "myrmidon(L4): stranded auto-policy manager-review wake failed after the handoff was already committed",
+            );
+          }
           await logActivity(db, {
             companyId: input.issue.companyId,
             actorType: "system",

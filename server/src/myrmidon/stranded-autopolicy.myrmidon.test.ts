@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   STRANDED_AUTO_POLICY_DEFAULT_RETRIES_PER_DAY,
+  STRANDED_AUTO_POLICY_RETRY_SOURCE,
   buildStrandedAutoPolicyManagerReviewComment,
   buildStrandedAutoPolicyManagerReviewPatch,
   buildStrandedAutoPolicyRetryContext,
+  buildStrandedAutoPolicyRetryIdempotencyKey,
   buildStrandedAutoPolicyRetryInstruction,
   countAttemptsSince,
   decideStrandedAutoPolicy,
@@ -271,5 +273,36 @@ describe("buildStrandedAutoPolicyRetryContext", () => {
         maxAttemptsPerDay: 2,
       }),
     );
+  });
+});
+
+describe("buildStrandedAutoPolicyRetryIdempotencyKey", () => {
+  // Review finding: two racing callers (the sweep, the wake-queue module,
+  // direct heartbeat.ts callers) can reach `escalateStrandedAssignedIssue`
+  // for the same stranded issue with an identical stale `latestRun`
+  // snapshot; this key ties one retry wake to that one (issue, source run)
+  // pair so a caller-side existence check can detect the duplicate.
+  it("is stable for the same (issueId, sourceRunId) pair and namespaced under the retry source", () => {
+    const key = buildStrandedAutoPolicyRetryIdempotencyKey({
+      issueId: "issue-1",
+      sourceRunId: "run-1",
+    });
+    expect(key).toBe(`${STRANDED_AUTO_POLICY_RETRY_SOURCE}:issue-1:run-1`);
+    expect(
+      buildStrandedAutoPolicyRetryIdempotencyKey({ issueId: "issue-1", sourceRunId: "run-1" }),
+    ).toBe(key);
+  });
+
+  it("differs when the issue or the source run differs", () => {
+    const base = buildStrandedAutoPolicyRetryIdempotencyKey({ issueId: "issue-1", sourceRunId: "run-1" });
+    expect(
+      buildStrandedAutoPolicyRetryIdempotencyKey({ issueId: "issue-2", sourceRunId: "run-1" }),
+    ).not.toBe(base);
+    expect(
+      // A second successful run on the same issue (e.g. after a manager
+      // handoff and a return to the original assignee) must get its own key,
+      // not be treated as a repeat of the earlier one.
+      buildStrandedAutoPolicyRetryIdempotencyKey({ issueId: "issue-1", sourceRunId: "run-2" }),
+    ).not.toBe(base);
   });
 });
