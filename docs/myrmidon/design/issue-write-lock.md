@@ -7,7 +7,8 @@ Redaction 28.09.2026. Scope: `issue_write_assignee_run_lock` (HTTP 409) on
 
 - The lock used to fire off the issue's `status` alone: any `in_progress` issue blocked every
   other agent's write, even with no run actually going. It now only fires when the assignee's
-  checkout or execution run is itself still `running` or `queued`.
+  checkout or execution run is itself still non-terminal — `running`, `queued`, or
+  `scheduled_retry`.
 - No live run → the write proceeds (the boundary above it, `issue:mutate`, still applies) and an
   activity-log row (`issue.write_lock_bypassed_no_live_run`) records who wrote into whose issue.
 - `tasks:manage_active_checkouts` keeps bypassing the lock entirely, live run or not. This
@@ -29,9 +30,17 @@ construction.
 
 The fix (`server/src/myrmidon/issue-write-run-lock.ts`) resolves the issue's `checkoutRunId` /
 `executionRunId` against `heartbeat.getRun(...)` and only reports the lock as live when that
-run's `status` is `running` or `queued`. `queued` counts: an admission-limited run
-(`server/src/myrmidon/run-admission.ts`) waiting for a slot still owns the issue, it just has not
-started executing yet.
+run's `status` is `running`, `queued`, or `scheduled_retry`. `queued` counts: an admission-limited
+run (`server/src/myrmidon/run-admission.ts`) waiting for a slot still owns the issue, it just has
+not started executing yet. `scheduled_retry` counts too: on a transient failure the vendor
+schedules a retry on the *same* issue — it re-points `issues.executionRunId` at the newly
+inserted `scheduled_retry` run while requiring the issue to stay `in_progress`
+(`server/src/services/heartbeat.ts`, the transient-retry scheduling path) — so the assignee's run
+is about to resume on this exact issue, not gone for good. This also matches the vendor's own
+non-terminal/active-run definition used consistently elsewhere in `heartbeat.ts`:
+`EXECUTION_PATH_HEARTBEAT_RUN_STATUSES` and `CANCELLABLE_HEARTBEAT_RUN_STATUSES` are both
+`["queued", "running", "scheduled_retry"]`, and the queries that decide whether an issue already
+has an active run use that same triple.
 
 ## 2. `tasks:manage_active_checkouts` — how to grant it, config only
 

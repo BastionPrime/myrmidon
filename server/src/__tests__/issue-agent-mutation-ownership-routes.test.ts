@@ -881,6 +881,26 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockStorageService.deleteObject).not.toHaveBeenCalled();
   });
 
+  // myrmidon(L5): scheduled_retry is not terminal — the vendor re-points the
+  // issue's executionRunId at exactly this run while requiring the issue to
+  // stay in_progress (heartbeat.ts's transient-retry scheduling), so the
+  // assignee's run is about to resume here. The lock must still hold.
+  it("rejects a peer agent write while the assignee's run is scheduled to retry", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ checkoutRunId: ownerRunId, executionRunId: ownerRunId }),
+    );
+    mockHeartbeatService.getRun.mockResolvedValue({ id: ownerRunId, status: "scheduled_retry" });
+
+    const res = await request(await createApp(peerActor()))
+      .patch(`/api/issues/${issueId}`)
+      .send({ title: "Blocked while retry is scheduled" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.details.code).toBe("issue_write_assignee_run_lock");
+    expect(res.body.details.liveRunId).toBe(ownerRunId);
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
   // myrmidon(L5): an "in_progress" issue with no live run behind it is no
   // longer a lock — the write proceeds and the bypass is logged.
   it("lets a peer agent write to another agent's in_progress issue once its run is no longer live", async () => {

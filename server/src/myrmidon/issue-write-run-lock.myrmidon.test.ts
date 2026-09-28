@@ -10,6 +10,7 @@ import {
 const RUNNING_RUN_ID = "aaaaaaaa-0000-4000-8000-000000000001";
 const QUEUED_RUN_ID = "aaaaaaaa-0000-4000-8000-000000000002";
 const TERMINAL_RUN_ID = "aaaaaaaa-0000-4000-8000-000000000003";
+const RETRY_RUN_ID = "aaaaaaaa-0000-4000-8000-000000000004";
 
 function heartbeatWith(
   statuses: Record<string, string | undefined>,
@@ -92,6 +93,18 @@ describe("findLiveIssueWriteRunLock (myrmidon L5)", () => {
       executionRunId: null,
     });
     expect(result).toEqual({ live: true, liveRunId: QUEUED_RUN_ID });
+  });
+
+  it("reports live for a run scheduled to retry (vendor treats it as active, not terminal)", async () => {
+    // heartbeat.ts reuses the same issue lock for the retry: it re-points
+    // executionRunId at the scheduled_retry run while requiring the issue to
+    // stay in_progress, so the assignee's run is about to resume here.
+    const heartbeat = heartbeatWith({ [RETRY_RUN_ID]: "scheduled_retry" });
+    const result = await findLiveIssueWriteRunLock(heartbeat, {
+      checkoutRunId: null,
+      executionRunId: RETRY_RUN_ID,
+    });
+    expect(result).toEqual({ live: true, liveRunId: RETRY_RUN_ID });
   });
 
   it("falls back to the checkout run when the execution run is terminal", async () => {

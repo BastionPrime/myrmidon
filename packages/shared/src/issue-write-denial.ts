@@ -212,7 +212,8 @@ export function describeIssueWriteDenial(
     case "issue_write_assignee_run_lock": {
       // myrmidon(L5): name the live run so this claim is checkable, not just
       // asserted — the caller only reaches this code once it has confirmed
-      // that run is still running/queued (see issue-write-run-lock.ts).
+      // that run is still non-terminal (running/queued/scheduled_retry, see
+      // issue-write-run-lock.ts).
       const liveRunNote = context.liveRunId ? ` (run ${context.liveRunId})` : "";
       return {
         code,

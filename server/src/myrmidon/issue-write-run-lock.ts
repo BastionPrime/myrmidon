@@ -7,10 +7,22 @@
  * it, and the 409's "a run is live" copy was not true in that case.
  *
  * This only reports the lock as live when the assignee's checkout or
- * execution run is itself still `running` or `queued`. `queued` counts: a run
- * waiting for an admission slot (see run-admission.ts) still owns the issue,
- * it just has not started yet. A run in a terminal state, or no run at all,
- * no longer justifies the lock.
+ * execution run is itself still non-terminal: `running`, `queued`, or
+ * `scheduled_retry`. `queued` counts: a run waiting for an admission slot
+ * (see run-admission.ts) still owns the issue, it just has not started yet.
+ * `scheduled_retry` counts too: on a transient failure the vendor reuses the
+ * *same* issue lock for the retry — it re-points `issues.executionRunId` at
+ * the newly inserted `scheduled_retry` run while requiring the issue to stay
+ * `in_progress` (server/src/services/heartbeat.ts, the retry-scheduling path
+ * around the `AI_CONNECTION_BUSY_RETRY_REASON`/max-turn-continuation checks),
+ * so the assignee's run is about to resume on this exact issue. This matches
+ * the vendor's own non-terminal/active-run definition, used consistently
+ * elsewhere in heartbeat.ts: `EXECUTION_PATH_HEARTBEAT_RUN_STATUSES` and
+ * `CANCELLABLE_HEARTBEAT_RUN_STATUSES` are both
+ * `["queued", "running", "scheduled_retry"]`, and the two queries that decide
+ * whether an issue already has an active run use that same triple. A run in
+ * a genuinely terminal state, or no run at all, no longer justifies the
+ * lock.
  *
  * `tasks:manage_active_checkouts` (server/src/services/authorization.ts)
  * keeps overriding the lock entirely and is evaluated before this module is
@@ -32,7 +44,16 @@ export function isWriteLockLiveRunCheckEnabled(
   return raw !== "0" && raw !== "false";
 }
 
-const LIVE_RUN_STATUSES = new Set(["running", "queued"]);
+/**
+ * Kept in sync by hand with the vendor's own non-terminal-run triple
+ * (`EXECUTION_PATH_HEARTBEAT_RUN_STATUSES` /
+ * `CANCELLABLE_HEARTBEAT_RUN_STATUSES` in server/src/services/heartbeat.ts,
+ * both `["queued", "running", "scheduled_retry"]`) rather than importing it:
+ * that file has no export for either constant, and this is a new-file-only
+ * module (CONVENTIONS.md §4) that keeps its point of contact with vendor
+ * code to the labeled call site in routes/issues.ts.
+ */
+const LIVE_RUN_STATUSES = new Set(["running", "queued", "scheduled_retry"]);
 
 export interface IssueWriteRunLockRefs {
   checkoutRunId?: string | null;
