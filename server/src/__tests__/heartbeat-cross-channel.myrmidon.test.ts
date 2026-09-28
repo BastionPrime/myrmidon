@@ -96,6 +96,15 @@ describeEmbeddedPostgres("heartbeat run context (X8d cross-channel)", () => {
         );
         res.json({ ok: true });
       });
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Express
+      // only recognizes a 4-arg handler as error middleware. Without this,
+      // NODE_ENV=test silences finalhandler's default error log and a bug in
+      // the route above is indistinguishable from a generic 500.
+      app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+        // eslint-disable-next-line no-console
+        console.error("X8D fixture /respond threw:", err);
+        res.status(500).json({ error: err instanceof Error ? err.stack : String(err) });
+      });
       const listener = app.listen(0, "127.0.0.1");
       await new Promise<void>((resolve) => listener.once("listening", resolve));
       const { port } = listener.address() as { port: number };
@@ -236,6 +245,15 @@ describeEmbeddedPostgres("heartbeat run context (X8d cross-channel)", () => {
           { agentId, runId: run.id },
         );
         res.json({ ok: true });
+      });
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Express
+      // only recognizes a 4-arg handler as error middleware. Without this,
+      // NODE_ENV=test silences finalhandler's default error log and a bug in
+      // the route above is indistinguishable from a generic 500.
+      app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+        // eslint-disable-next-line no-console
+        console.error("X8D fixture /respond threw:", err);
+        res.status(500).json({ error: err instanceof Error ? err.stack : String(err) });
       });
       const listener = app.listen(0, "127.0.0.1");
       await new Promise<void>((resolve) => listener.once("listening", resolve));
