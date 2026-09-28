@@ -178,6 +178,36 @@ describe("IssueFilesDrawer", () => {
     expect(window.localStorage.getItem(WIDTH_STORAGE_KEY)).toBe("520");
   });
 
+  it("releases the text-selection lock if the sheet closes mid-drag (e.g. Escape)", () => {
+    render([attachment({ id: "att-escape-mid-drag" })]);
+    act(() => {
+      trigger().dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    const grip = document.querySelector<HTMLElement>('[data-testid="issue-files-drawer-grip"]');
+    expect(grip).toBeTruthy();
+
+    act(() => {
+      if (grip) firePointerEvent(grip, "pointerdown", 500);
+    });
+    // Mid-drag: the grip's pointerdown handler has locked selection for the
+    // duration of the drag.
+    expect(document.body.style.userSelect).toBe("none");
+
+    act(() => {
+      // Radix's Dialog.Content (the unmodified vendor Sheet) closes on
+      // Escape by default — this never touches the grip's own
+      // pointerup/pointercancel/lostpointercapture handlers.
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+
+    expect(document.querySelector('[data-testid="issue-files-drawer"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe("");
+    // The aborted drag's width was never confirmed by a pointerup, so it is
+    // not persisted.
+    expect(window.localStorage.getItem(WIDTH_STORAGE_KEY)).toBeNull();
+  });
+
   it("clamps a stored width to the 320-900 range on the next mount", () => {
     window.localStorage.setItem(WIDTH_STORAGE_KEY, "50000");
     render([attachment({ id: "att-clamped" })]);

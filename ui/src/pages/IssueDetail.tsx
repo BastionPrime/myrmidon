@@ -6834,11 +6834,18 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
 
   // myrmidon(U3): trigger for the on-demand task files drawer (replaces the
   // fixed IssueFilesPanel card the chat shell used to render below the
-  // thread). Rendered inline in issueHeaderBlock's action row when that
-  // block exists; the conversationAgentId branch (issueHeaderBlock is null
-  // for direct agent chats, which have no classic header row) falls back to
-  // a standalone slot in taskChatThreadHeader below so files stay reachable
-  // there too.
+  // thread). This one element is reused at up to three positions in the tree
+  // below (same pattern issueStatusControl already uses for its own
+  // mobile/desktop split) — each mount is independent, but only one is ever
+  // visible for a given viewport/branch: a desktop instance inside
+  // issueHeaderBlock's "hidden md:flex" action group, a mobile-only twin
+  // (md:hidden) next to it that is NOT gated on streamlinedTaskDetailEnabled
+  // (needed because the desktop group hides below md regardless of that
+  // flag, and the streamlined header — the default — has no other mobile
+  // action row at all), and, for the conversationAgentId branch where
+  // issueHeaderBlock itself is null (direct agent chats have no classic
+  // header row), a standalone always-visible slot in taskChatThreadHeader
+  // below.
   const filesDrawerTrigger = taskChatShellEnabled ? (
     <IssueFilesDrawer
       attachments={attachments ?? []}
@@ -7042,6 +7049,23 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
           </div>
         )}
 
+        {filesDrawerTrigger ? (
+          <div className="ml-auto flex items-center shrink-0 md:hidden">
+            {/* myrmidon(U3): mobile-only twin of the desktop trigger further
+            below (same reused `filesDrawerTrigger` element, same pattern
+            issueStatusControl already uses for its own mobile/desktop split
+            above — two independent mounts, toggled by breakpoint, not by
+            streamlinedTaskDetailEnabled). Both of the two action groups below
+            hide the desktop one on narrow viewports: the classic-only one via
+            its `!streamlinedTaskDetailEnabled` gate (skipped entirely in the
+            streamlined default), the always-present one via its own
+            "hidden md:flex" ancestor. Without this twin, phones running the
+            streamlined header (the default) have no way to reach the files
+            drawer at all. */}
+            {filesDrawerTrigger}
+          </div>
+        ) : null}
+
         {!streamlinedTaskDetailEnabled && !(isMobile && isFromInbox) && (
           <div className="ml-auto flex items-center gap-0.5 md:hidden shrink-0">
             <Button
@@ -7127,7 +7151,10 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                 "absolute right-0 top-0 flex h-7 items-center",
             )}
           >
-            {/* myrmidon(U3): files drawer trigger, next to the existing task actions */}
+            {/* myrmidon(U3): desktop instance of the files drawer trigger,
+            next to the existing task actions — the ancestor "hidden md:flex"
+            group above hides this on mobile, where the standalone twin
+            further up (md:hidden) takes over instead. */}
             {filesDrawerTrigger}
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
               <PopoverTrigger asChild>

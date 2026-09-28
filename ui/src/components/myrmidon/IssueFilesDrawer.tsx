@@ -128,6 +128,17 @@ export function IssueFilesDrawer({
     [],
   );
 
+  // myrmidon(U3): the sheet can close mid-drag by a path other than
+  // releasing the grip — Escape or an outside click both close it through
+  // Radix's own default Dialog behavior (unmodified vendor Sheet), neither of
+  // which fires the grip's pointerup/pointercancel/lostpointercapture
+  // handlers. Without this, document.body.style.userSelect stays "none"
+  // (page-wide text selection disabled) until an unrelated full drag cycle
+  // or a full component unmount happens to clear it.
+  useEffect(() => {
+    if (!open) endDrag(false);
+  }, [open, endDrag]);
+
   return (
     <>
       {/* A plain button, not SheetTrigger: the shared Sheet stays a pure

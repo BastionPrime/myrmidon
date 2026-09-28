@@ -1607,6 +1607,53 @@ describe("IssueDetail", () => {
     ).toBe(false);
   });
 
+  it("keeps the files drawer trigger reachable on mobile with the default streamlined header", async () => {
+    // Regression test for a review finding on the U1 files-drawer PR: the
+    // trigger was only ever rendered inside "hidden md:flex" (desktop-only)
+    // or a classic-header-only mobile row gated on !streamlinedTaskDetailEnabled
+    // — the default streamlined header (enableStreamlinedUi: true, set in
+    // beforeEach above) has no other mobile action row at all, so ordinary
+    // tickets had no way to open task files on a phone.
+    mockSidebarState.isMobile = true;
+    mockIssuesApi.get.mockResolvedValue(createIssue());
+    mockIssuesApi.listAttachments.mockResolvedValue([
+      createAttachment({ id: "att-mobile-reach" }),
+    ]);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitForAssertion(() => {
+      const found = Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          '[data-testid="issue-files-drawer-trigger"]',
+        ),
+      );
+      expect(found.length).toBeGreaterThan(0);
+      // Not disabled: the attachment above has loaded and counted.
+      expect(found.some((t) => t.disabled)).toBe(false);
+    });
+
+    const triggers = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="issue-files-drawer-trigger"]',
+      ),
+    );
+    // At least one mounted instance must sit in a wrapper that is visible by
+    // default and only disappears at the md breakpoint ("md:hidden", not a
+    // bare "hidden" class) — i.e. reachable at a phone-width viewport.
+    const mobileReachable = triggers.some((button) => {
+      const classes = button.parentElement?.className.split(/\s+/) ?? [];
+      return classes.includes("md:hidden") && !classes.includes("hidden");
+    });
+    expect(mobileReachable).toBe(true);
+  });
+
   it.each([false, true])(
     "preserves explicit upload receipt IDs through the page mutation (reassign=%s)",
     async (reassign) => {
