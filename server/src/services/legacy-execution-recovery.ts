@@ -9,6 +9,9 @@ import { executionFailureRetryCount } from "./execution-recovery-attempt.js";
 import { isSupersededConversationRun } from "./agent-conversations.js";
 // myrmidon(R3): runs interrupted by maintenance mode are retried, not held
 import { MAINTENANCE_INTERRUPT_ERROR_CODE } from "../myrmidon/maintenance/domain.js";
+// myrmidon(L1): infrastructure interruptions (pause, process loss, shutdown,
+// reassignment) are retried or released, not held
+import { shouldSkipReconciliationForInfraInterrupt } from "../myrmidon/infra-interrupts.js";
 
 type Run = typeof heartbeatRuns.$inferSelect;
 export const LEGACY_RECOVERY_CAUSE = "legacy_execution_requires_reconciliation";
@@ -23,6 +26,7 @@ export function legacyExecutionNeedsReconciliation(
   )
     return false;
   if (run.errorCode === MAINTENANCE_INTERRUPT_ERROR_CODE) return false; // myrmidon(R3): maintenance interruption, retried after exit
+  if (shouldSkipReconciliationForInfraInterrupt(run)) return false; // myrmidon(L1): infrastructure interruption, retried or released, not held
   // A fresh conversation turn lets the agent decide what remains. The retry
   // scheduler, not an action-outcome hold, owns the automatic attempt limit.
   if (hasConversationContinuationPolicy(run.resultJson)) return false;

@@ -3554,7 +3554,11 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     },
   );
 
-  it("terminalizes an unsupported legacy session on shutdown without speculative replay", async () => {
+  it("retries an unsupported legacy session interrupted by shutdown instead of holding it", async () => {
+    // myrmidon(L1): server_shutdown_interrupted is an infrastructure
+    // interruption, not evidence against the agent or a failed provider
+    // attempt; it gets a bounded retry (the existing enqueueProcessLossRetry
+    // -> scheduleBoundedRetryForRun path) instead of an operator hold.
     const { agentId, runId, issueId, wakeupRequestId } = await seedRunFixture({
       adapterType: "process",
       agentStatus: "running",
@@ -3564,18 +3568,30 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       new Date("2026-03-19T00:06:00.000Z"),
     );
     expect(result.interruptedRunIds).toEqual([runId]);
-    expect(result.retryRunIds).toEqual([]);
+    expect(result.retryRunIds).toHaveLength(1);
     expect(
       await db
         .select()
         .from(heartbeatRuns)
-        .where(eq(heartbeatRuns.agentId, agentId)),
+        .where(eq(heartbeatRuns.id, runId)),
     ).toEqual([
       expect.objectContaining({
         id: runId,
         status: "interrupted",
         errorCode: "server_shutdown_interrupted",
         signal: "SIGTERM",
+      }),
+    ]);
+    expect(
+      await db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, result.retryRunIds[0]!)),
+    ).toEqual([
+      expect.objectContaining({
+        agentId,
+        status: "scheduled_retry",
+        retryOfRunId: runId,
       }),
     ]);
     expect(
@@ -3598,12 +3614,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         .select()
         .from(issueRecoveryActions)
         .where(eq(issueRecoveryActions.sourceIssueId, issueId)),
-    ).toEqual([
-      expect.objectContaining({
-        cause: "legacy_execution_requires_reconciliation",
-        ownerType: "board",
-      }),
-    ]);
+    ).toHaveLength(0);
   });
 
   it("suspends native Paperclip Runner ownership on graceful restart without cancelling or creating a retry run", async () => {

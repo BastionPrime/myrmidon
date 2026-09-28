@@ -620,6 +620,10 @@ import {
   isAgentNotInvokableConflict,
   resumeAgentAfterPause as pauseResumeWakeAgent,
 } from "../myrmidon/pause-drain.js";
+// myrmidon(L1): an agent pause is infrastructure, not a provider failure;
+// retry the original executor once it is invokable again instead of an
+// immediate operator escalation
+import { shouldRetryOriginalExecutorForInfraInterrupt } from "../myrmidon/infra-interrupts.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -28676,9 +28680,17 @@ export function heartbeatService(
         run.runtimeMode !== "native"
           ? captureAdapterStopOwnership(run.id)
           : undefined;
+      // myrmidon(L1): services/recovery/service.ts retries this issue once the
+      // agent is invokable again; suppress the immediate escalation this
+      // release would otherwise fire while it is merely paused
+      const suppressImmediateRecoveryForInfraInterrupt =
+        shouldRetryOriginalExecutorForInfraInterrupt({ ...run, errorCode });
       try {
         if (stopOwnership?.control) {
-          await cancelRunInternal(run.id, reason, { errorCode });
+          await cancelRunInternal(run.id, reason, {
+            errorCode,
+            suppressImmediateRecovery: suppressImmediateRecoveryForInfraInterrupt,
+          });
           continue;
         }
         if (run.runtimeMode === "native") {
@@ -28732,7 +28744,9 @@ export function heartbeatService(
           status: "cancelled",
           failureReason: reason,
         });
-        await releaseIssueExecutionAndPromote(run);
+        await releaseIssueExecutionAndPromote(run, {
+          suppressImmediateRecovery: suppressImmediateRecoveryForInfraInterrupt,
+        });
       } finally {
         stopOwnership?.release();
       }

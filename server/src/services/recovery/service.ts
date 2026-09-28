@@ -80,6 +80,9 @@ import {
   legacyExecutionNeedsReconciliation,
   terminalizeLegacyExecution,
 } from "../legacy-execution-recovery.js";
+// myrmidon(L1): infrastructure interruptions do not create a stranded-issue
+// escalation while the original agent is only briefly non-invokable (paused)
+import { shouldSkipReconciliationForInfraInterrupt } from "../../myrmidon/infra-interrupts.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
 import { isExternalChatPresentationContext } from "../heartbeat-run-summary.js";
 import {
@@ -4279,6 +4282,20 @@ export function recoveryService(
         agent?.status === "paused" &&
         agent.companyId === issue.companyId &&
         (await hasCurrentNativePassiveWait(issue, latestRun))
+      ) {
+        result.skipped += 1;
+        continue;
+      }
+      // myrmidon(L1): the agent is non-invokable only because it is paused
+      // (infrastructure), and the terminal run itself ended on an
+      // infrastructure interrupt code within its retry budget. This is not
+      // evidence against the agent, so wait for it to resume instead of
+      // escalating to the board; the next sweep tick re-evaluates.
+      if (
+        issue.status !== "in_review" &&
+        !agentInvokable &&
+        agent?.status === "paused" &&
+        shouldSkipReconciliationForInfraInterrupt(latestRun ?? {})
       ) {
         result.skipped += 1;
         continue;

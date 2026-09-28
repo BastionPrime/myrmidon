@@ -71,6 +71,12 @@
 |---|---|---|---|---|
 | `MYRMIDON_RUN_ENV_ALLOW` | S2 | пусто | Дополнительные имена переменных окружения сервера (через запятую, без значений), которые передаются в процесс прогона сверх базового списка | Базовый список: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TERM`, `TMPDIR`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTP(S)_PROXY`, `NO_PROXY` (и строчные), Windows: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`. Несекретные указатели сервера: `PAPERCLIP_RUNTIME_API_URL`, `PAPERCLIP_LISTEN_HOST`, `PAPERCLIP_LISTEN_PORT`, `PAPERCLIP_RUNTIME_API_CANDIDATES_JSON`. Указатели каталогов CLI: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CURSOR_HOME`, `GROK_HOME`, `HERMES_HOME`, `KIMI_CODE_HOME`, `PI_CODING_AGENT_DIR`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`. Плюс учётные переменные провайдера самого адаптера (`MYRMIDON_RUN_ENV_PROVIDER_ALLOW` в `myrmidon-run-env.ts`): `claude_local` — `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`; `codex_local` — `OPENAI_API_KEY`, `OPENROUTER_API_KEY`; `cursor` — `CURSOR_API_KEY`; `gemini_local` — `GEMINI_API_KEY`, `GOOGLE_API_KEY`; `grok_local` — `XAI_API_KEY`; `kimi_local` — `KIMI_API_KEY`, `KIMI_MODEL_API_KEY`; `opencode_local` — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`; `pi_local` — `ANTHROPIC_API_KEY`, `XAI_API_KEY`; `hermes_local` — `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `KIMI_API_KEY`, `MINIMAX_API_KEY`, `ZAI_API_KEY`. Полное наследование — только флагом агента `adapterConfig.inheritProcessEnv: true` |
 
+## L1 — инфраструктурные обрывы
+
+| Переменная | Функция | По умолчанию | Что делает | Как выключить / особое |
+|---|---|---|---|---|
+| `MYRMIDON_INFRA_INTERRUPT_CODES` | L1 | `agent_paused,process_lost,server_shutdown_interrupted,issue_reassigned` | Список кодов ошибок прогона (через запятую), для которых `legacyExecutionNeedsReconciliation` не ставит замок `legacy_execution_requires_reconciliation`, пауза агента не эскалирует задачу немедленно, а периодический разбор зависших задач не эскалирует её, пока агент лишь на паузе — всё это в рамках общего бюджета повторов (2, тот же, что и у остального содержимого функции) | Пусто или `off` — поведение вендора (замок ставится всегда). Свой список заменяет умолчание целиком, не добавляет к нему |
+
 ## Настройки вендора, которые важны для Myrmidon
 
 Здесь — вендорские переключатели, которые нужно знать при развёртывании Myrmidon: например, как
