@@ -634,6 +634,16 @@ export const chatMessageLinks = pgTable(
       foreignColumns: [chatConversations.companyId, chatConversations.id],
       name: "chat_message_links_company_conversation_fk",
     }).onDelete("cascade"),
+    // myrmidon(D1): the chat run-milestone reconciliation sweep looks up an
+    // inbound link by (company, conversation, direction, comment) on every
+    // candidate run it considers; without this index that lookup fell back
+    // to a full table scan. See docs/myrmidon/DIVERGENCE.md.
+    index("chat_message_links_inbound_link_idx").on(
+      table.companyId,
+      table.conversationId,
+      table.direction,
+      table.commentId,
+    ),
   ],
 );
 
