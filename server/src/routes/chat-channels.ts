@@ -4,6 +4,8 @@ import {
   type Response as ExpressResponse,
 } from "express";
 import type { Db } from "@paperclipai/db";
+// myrmidon(B1): product name in the user-facing error text below; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 import {
   CHAT_PROVIDERS,
   configureChatEndpointSchema,
@@ -246,7 +248,7 @@ export function chatChannelRoutes(db: Db, options: ChatChannelRouteOptions) {
     async (req, res) => {
       assertBoard(req);
       const userId = actorUserId(req);
-      if (!userId) throw badRequest("A signed-in Paperclip user is required");
+      if (!userId) throw badRequest(`A signed-in ${PRODUCT_NAME} user is required`);
       res.json(await service.confirmIdentityLink(req.body.token, userId));
     },
   );

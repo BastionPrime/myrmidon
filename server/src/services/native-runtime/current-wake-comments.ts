@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 import { and, asc, eq, inArray } from "drizzle-orm";
+// myrmidon(B1): product name in the notice text below; see product.ts.
+import { productSaid } from "../../myrmidon/product.js";
 import type { Db } from "@paperclipai/db";
 import {
   assets,
@@ -223,7 +225,7 @@ function attachmentImportNotice(
   const reasons = entries
     .map(([reason, count]) => `${reason.replaceAll("_", " ")}: ${count}`)
     .join(", ");
-  return `Paperclip could not import every attachment from this exact external message: ${omitted} attachment${omitted === 1 ? " was" : "s were"} omitted (${reasons}). Treat omitted attachments as unavailable; do not infer their contents or substitute an older workspace file.`;
+  return `${productSaid(`could not import every attachment from this exact external message: ${omitted} attachment${omitted === 1 ? " was" : "s were"} omitted (${reasons}).`)} Treat omitted attachments as unavailable; do not infer their contents or substitute an older workspace file.`;
 }
 
 function bindingDigest(input: {

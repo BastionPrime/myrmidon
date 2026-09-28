@@ -1,4 +1,6 @@
 import { hasLiveLegacyController } from "../legacy-controller-lease.js";
+// myrmidon(B1): product name in the notice bodies below; see product.ts.
+import { productSaid } from "../../myrmidon/product.js";
 import { instanceSettingsService } from "../instance-settings.js";
 import { isWaitingConversation, settleConversationTurn, deliverConversationComments } from "../agent-conversations.js";
 import {
@@ -2143,7 +2145,7 @@ export function recoveryService(
         [
           "## Assigned Orphan Blocker",
           "",
-          `Paperclip found this issue is blocking ${blockingLinks} but had no assignee, so no heartbeat could pick it up.`,
+          `${productSaid(`found this issue is blocking ${blockingLinks} but had no assignee, so no heartbeat could pick it up.`)}`,
           "",
           "- Assigned it back to the agent that created the blocker.",
           "- Next action: resolve this blocker or reassign it to the right owner.",
@@ -2677,7 +2679,7 @@ export function recoveryService(
     const failureSummary = summarizeRunFailureForIssueComment(input.latestRun);
 
     return [
-      "Paperclip stopped automatic stranded-work recovery for this recovery issue.",
+      productSaid("stopped automatic stranded-work recovery for this recovery issue."),
       "",
       `- Recovery issue: ${issueUiLink({ identifier: input.issue.identifier, id: input.issue.id }, input.prefix)}`,
       `- Previous status: \`${input.previousStatus}\``,
@@ -2897,7 +2899,7 @@ export function recoveryService(
       `This task is waiting on ${waitingOn} to finish. ` +
         "It will continue automatically when that work is done — there's nothing you need to do. " +
         "(It was paused because the latest run reported it was waiting for review/approval; " +
-        "Paperclip turned that into a normal dependency wait instead of flagging it as stuck.)",
+        productSaid("turned that into a normal dependency wait instead of flagging it as stuck.)"),
       {},
       {
         authorType: "system",
@@ -3539,7 +3541,7 @@ export function recoveryService(
     await issuesSvc.addComment(
       input.issue.id,
       [
-        "Paperclip exhausted the bounded original-owner disposition repair without a durable source-state change.",
+        productSaid("exhausted the bounded original-owner disposition repair without a durable source-state change."),
         "",
         `- Attempts: ${input.attemptCount}/${DISPOSITION_REPAIR_MAX_ATTEMPTS}`,
         `- Terminal reason: \`${input.terminalReason}\``,
@@ -4302,7 +4304,7 @@ export function recoveryService(
             previousStatus: issue.status as StrandedPreviousStatus,
             latestRun,
             comment:
-              "Paperclip cannot safely continue automatic recovery because the original assignee is not invokable. " +
+              productSaid("cannot safely continue automatic recovery because the original assignee is not invokable. ") +
               "The source assignment is unchanged and the board must choose the next action.",
           });
           if (updated) {
@@ -4437,7 +4439,7 @@ export function recoveryService(
                 ? EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON
                 : undefined,
             comment:
-              "Paperclip cannot safely continue automatic recovery because the original recovery target is over budget. " +
+              productSaid("cannot safely continue automatic recovery because the original recovery target is over budget. ") +
               "The source assignment is unchanged and the board must choose the next action.",
           });
           if (updated) {
@@ -4549,7 +4551,7 @@ export function recoveryService(
             latestRun,
             recoveryCause: "configuration_incomplete",
             comment:
-              "Paperclip classified the latest adapter failure as `configuration_incomplete`. " +
+              productSaid("classified the latest adapter failure as `configuration_incomplete`. ") +
               "Moving the issue to `blocked` with the configuration fix recorded instead of creating a recovery takeover.",
           });
           if (updated) {
@@ -4664,7 +4666,7 @@ export function recoveryService(
               previousStatus: issue.status as StrandedPreviousStatus,
               latestRun: latestPostResolutionRun,
               comment:
-                `Paperclip stopped requeueing accepted interaction \`${acceptedContinuationInteraction.id}\` after ` +
+                `${productSaid(`stopped requeueing accepted interaction \`${acceptedContinuationInteraction.id}\` after`)} ` +
                 `${consecutive} consecutive continuation wakes were cancelled while waiting on review. ` +
                 "Moving the issue to `blocked` so the missing execution path is visible for intervention.",
             });
@@ -4777,7 +4779,7 @@ export function recoveryService(
             latestRun: participantLatestRun,
             recoveryCause: "configuration_incomplete",
             comment:
-              "Paperclip classified the active review participant's latest adapter failure as " +
+              productSaid("classified the active review participant's latest adapter failure as ") +
               "`configuration_incomplete`. Moving the issue to `blocked` with the configuration fix " +
               "recorded instead of repeatedly requeueing the reviewer.",
           });
@@ -4923,7 +4925,7 @@ export function recoveryService(
             latestRun,
             notice: {
               body:
-                "Paperclip automatically retried dispatch for this assigned `todo` issue after a lost wake/run, " +
+                productSaid("automatically retried dispatch for this assigned `todo` issue after a lost wake/run, ") +
                 "but it still has no live execution path. " +
                 "Moving it to `blocked` so it is visible for intervention.",
               title: "No live execution path",
@@ -5042,7 +5044,7 @@ export function recoveryService(
               previousStatus: "in_progress",
               latestRun: successfulRun,
               comment:
-                "Paperclip automatically retried continuation for this assigned `in_progress` issue and the retry " +
+                productSaid("automatically retried continuation for this assigned `in_progress` issue and the retry ") +
                 "made progress, but it still has no live execution path. Moving it to `blocked` so it is visible for intervention.",
             });
             if (updated) {
@@ -5111,7 +5113,7 @@ export function recoveryService(
             latestRun,
             notice: {
               body:
-                "Paperclip detected a non-retryable failure on this issue's continuation run " +
+                productSaid("detected a non-retryable failure on this issue's continuation run ") +
                 `(\`${classification.errorCode}\`). Skipping automatic retries and moving it to \`blocked\` ` +
                 "so it is visible for intervention.",
               title: "Continuation failed",
@@ -5144,7 +5146,7 @@ export function recoveryService(
               latestRun,
               notice: {
                 body:
-                  "Paperclip automatically retried continuation for this assigned `in_progress` issue after its live " +
+                  productSaid("automatically retried continuation for this assigned `in_progress` issue after its live ") +
                   `execution disappeared, but it still has no live execution path${attemptCopy}. ` +
                   "Moving it to `blocked` so it is visible for intervention.",
                 title: "No live execution path",

@@ -295,7 +295,7 @@ describe("Discord native question adapter-to-runtime boundary", () => {
     expect(click.deferUpdate).not.toHaveBeenCalled();
     expect(click.reply).toHaveBeenCalledWith({
       content:
-        "This action is no longer available. Open the linked Paperclip task or ask an operator to link this account.",
+        "This action is no longer available. Open the linked Myrmidon task or ask an operator to link this account.",
       flags: 64,
     });
   });
@@ -311,7 +311,7 @@ describe("Discord native question adapter-to-runtime boundary", () => {
     expect(click.deferUpdate).not.toHaveBeenCalled();
     expect(click.reply).toHaveBeenCalledWith({
       content:
-        "This action is no longer available. Open the linked Paperclip task or ask an operator to link this account.",
+        "This action is no longer available. Open the linked Myrmidon task or ask an operator to link this account.",
       flags: 64,
     });
   });

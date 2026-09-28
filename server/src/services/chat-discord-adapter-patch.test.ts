@@ -1267,7 +1267,7 @@ describe("Paperclip Discord adapter patch", () => {
     expect(interaction.deferUpdate).not.toHaveBeenCalled();
     expect(interaction.reply).toHaveBeenCalledWith({
       content:
-        "This action is no longer available. Open the linked Paperclip task or ask an operator to link this account.",
+        "This action is no longer available. Open the linked Myrmidon task or ask an operator to link this account.",
       flags: 64,
     });
     expect(logger.info).toHaveBeenCalledWith(

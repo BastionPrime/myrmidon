@@ -746,7 +746,7 @@ function fakeSlackFetch(botId = `U-BOT-${randomUUID()}`) {
           JSON.stringify({
             ok: true,
             team_id: "T-PAPERCLIP",
-            team: "Paperclip Test",
+            team: "Myrmidon Test",
             user_id: botId,
             user: `maya-${botId.slice(-8)}`,
           }),
@@ -850,7 +850,7 @@ function fakeTelegramFetch(
           result: {
             id: botId,
             username: `paperclip_${botId}_bot`,
-            first_name: "Paperclip Test",
+            first_name: "Myrmidon Test",
           },
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -1853,7 +1853,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           JSON.stringify({
             id: appRegistrationId,
             slug: `maya-${fixture.companyId.slice(0, 8)}`,
-            name: "Maya Paperclip",
+            name: "Maya Myrmidon",
             owner: { login: "paperclipai" },
             permissions: appPermissions,
             events: appEvents,
@@ -3772,7 +3772,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             JSON.stringify({
               id: appRegistrationId,
               slug: "shared-paperclip-app",
-              name: "Shared Paperclip App",
+              name: "Shared Myrmidon App",
               owner: { login: owner },
               permissions: {
                 issues: "write",
@@ -3944,7 +3944,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             JSON.stringify({
               id: appRegistrationId,
               slug: "maya-paperclip",
-              name: "Maya Paperclip",
+              name: "Maya Myrmidon",
               owner: { login: "paperclipai" },
               permissions: {
                 issues: "write",
@@ -4158,8 +4158,8 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       endpointId: endpoint.id,
       provider: "github",
       thread: makeThread({
-        channelId: "PaperclipAI/Paperclip",
-        id: "github:PaperclipAI/Paperclip:issue:17",
+        channelId: "PaperclipAI/Myrmidon",
+        id: "github:PaperclipAI/Myrmidon:issue:17",
         name: "paperclipai/paperclip",
       }).thread,
       message: makeMessage({
@@ -5821,7 +5821,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       .where(eq(chatDeliveries.endpointId, endpoint.id));
     expect(filtered).toMatchObject({
       state: "filtered",
-      redactedError: "External identity must be linked to a Paperclip account",
+      redactedError: "External identity must be linked to a Myrmidon account",
       normalizedEvent: { deduplication: { duplicateCount: 1 } },
     });
 
@@ -5904,7 +5904,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       .then((rows) => rows[0]);
     expect(suspendedDelivery).toMatchObject({
       state: "filtered",
-      redactedError: "Linked Paperclip account is not currently permitted",
+      redactedError: "Linked Myrmidon account is not currently permitted",
     });
   });
 
@@ -7594,7 +7594,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         status: "received",
         summary: "GitHub webhook received after recovery request",
         detail:
-          "Paperclip received this callback. Its normal access checks and processing still apply.",
+          "Myrmidon received this callback. Its normal access checks and processing still apply.",
         replayable: false,
         resolutionActions: [],
       });
@@ -8317,7 +8317,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       eventKind: "message",
       conversationId: null,
       principalId: null,
-      redactedError: "Destination is not enabled in Paperclip",
+      redactedError: "Destination is not enabled in Myrmidon",
       normalizedEvent: {
         kind: "message",
         filtering: {
@@ -8342,7 +8342,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         id: rows[0]!.id,
         status: "filtered",
         summary: "message ignored",
-        detail: "Destination is not enabled in Paperclip",
+        detail: "Destination is not enabled in Myrmidon",
         replayable: false,
       }),
     );
@@ -8781,9 +8781,9 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       endpointId: endpoint.id,
       provider: "github",
       thread: makeThread({
-        channelId: "PaperclipAI/Paperclip",
-        id: "github:PaperclipAI/Paperclip:issue:77",
-        name: "PaperclipAI/Paperclip",
+        channelId: "PaperclipAI/Myrmidon",
+        id: "github:PaperclipAI/Myrmidon:issue:77",
+        name: "PaperclipAI/Myrmidon",
       }).thread,
       message: makeMessage({
         id: "github-rename-root",
@@ -10163,7 +10163,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             providerThreadCreated: false,
           },
         }),
-        redactedError: "Destination is not enabled in Paperclip",
+        redactedError: "Destination is not enabled in Myrmidon",
         state: "filtered",
       },
     ]);
@@ -11176,9 +11176,9 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         commands: [
           {
             command: "task",
-            description: "Start or continue a Paperclip task",
+            description: "Start or continue a Myrmidon task",
           },
-          { command: "status", description: "Show the active Paperclip task" },
+          { command: "status", description: "Show the active Myrmidon task" },
           {
             command: "new",
             description: "Start a new task after the current one",
@@ -11262,7 +11262,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             result: {
               id: botId,
               username: "paperclip_maintenance_bot",
-              first_name: "Paperclip Maintenance",
+              first_name: "Myrmidon Maintenance",
             },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
@@ -11500,7 +11500,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             result: {
               id: botId,
               username: "paperclip_maintenance_race_bot",
-              first_name: "Paperclip Maintenance Race",
+              first_name: "Myrmidon Maintenance Race",
             },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
@@ -12099,7 +12099,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       },
       channelData: {
         tenant: { id: teamsTenantId },
-        team: { id: "team-1", name: "Paperclip" },
+        team: { id: "team-1", name: "Myrmidon" },
         channel: { id: "channel-1", name: "Engineering" },
       },
     });
@@ -15400,7 +15400,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       expect.objectContaining({ state: "active", sessionGeneration: 1 }),
     ]);
     expect(runtime.endpoints.get(endpoint.id)?.posts[0]?.text).toBe(
-      "Send your request to start a new Paperclip task.",
+      "Send your request to start a new Myrmidon task.",
     );
     // Command-only acknowledgements have no run whose final reply can retire
     // a processing reaction. The subsequent task message has its own receipt.
@@ -15583,7 +15583,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       state: "filtered",
       attempts: 0,
       principalId: null,
-      redactedError: "Destination is not enabled in Paperclip",
+      redactedError: "Destination is not enabled in Myrmidon",
       normalizedEvent: {
         filtering: { contentRetained: false },
         message: { providerMessageId: "teams-setup-group-disabled" },
@@ -15984,7 +15984,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       { allowDirectMessages: false },
       "owner-user",
     );
-    await send("teams-direct-disabled", "This must remain outside Paperclip");
+    await send("teams-direct-disabled", "This must remain outside Myrmidon");
     expect(await service.listConversations(endpoint.id)).toEqual([]);
     expect(wakeup).not.toHaveBeenCalled();
     await expect(
@@ -16000,7 +16000,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     ).resolves.toEqual([
       {
         state: "filtered",
-        redactedError: "Destination is not enabled in Paperclip",
+        redactedError: "Destination is not enabled in Myrmidon",
         normalizedEvent: expect.objectContaining({
           providerEventId: `${directThread.thread.id}:teams-direct-disabled`,
           kind: "direct_message",
@@ -16025,7 +16025,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       .where(eq(chatDeliveries.endpointId, endpoint.id))
       .then((rows) => rows[0]);
     expect(JSON.stringify(disabledDelivery)).not.toContain(
-      "This must remain outside Paperclip",
+      "This must remain outside Myrmidon",
     );
     expect(JSON.stringify(disabledDelivery)).not.toContain(
       "6c4dd0ef-f027-4b75-93d9-04d97424220e",
@@ -16437,7 +16437,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       expect(delivery).toMatchObject({
         state: "filtered",
         principalId: null,
-        redactedError: "Destination is not enabled in Paperclip",
+        redactedError: "Destination is not enabled in Myrmidon",
         normalizedEvent: {
           filtering: { contentRetained: false },
           message: { providerMessageId: rootMessageId },
@@ -16540,7 +16540,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     expect(delivery).toMatchObject({
       state: "filtered",
       principalId: null,
-      redactedError: "Destination is not enabled in Paperclip",
+      redactedError: "Destination is not enabled in Myrmidon",
       normalizedEvent: {
         filtering: { contentRetained: false },
         message: { providerMessageId: messageId },
@@ -16685,8 +16685,8 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         state: "filtered",
         redactedError:
           authorizationChange === "viewer"
-            ? "Linked Paperclip account is not currently permitted"
-            : "External identity must be linked to a Paperclip account",
+            ? "Linked Myrmidon account is not currently permitted"
+            : "External identity must be linked to a Myrmidon account",
         normalizedEvent: {
           filtering: { contentRetained: false },
           message: { providerMessageId: messageId },
@@ -16866,7 +16866,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     expect(delivery).toMatchObject({
       state: "filtered",
       principalId: null,
-      redactedError: "Destination is not enabled in Paperclip",
+      redactedError: "Destination is not enabled in Myrmidon",
       normalizedEvent: {
         filtering: { contentRetained: false },
         message: { providerMessageId: messageId },
@@ -17479,7 +17479,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     const posts = runtime.endpoints.get(endpoint.id)?.posts ?? [];
     const channelAttachmentPost = posts.find((post) =>
       post.text.includes(
-        "File saved on the Paperclip task: channel-report.txt.",
+        "File saved on the Myrmidon task: channel-report.txt.",
       ),
     );
     expect(channelAttachmentPost?.text).toContain(
@@ -17491,7 +17491,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     expect(channelAttachmentPost?.files).toBeUndefined();
     const personalAttachmentPost = posts.find((post) =>
       post.text.includes(
-        "File saved on the Paperclip task: personal-report.txt.",
+        "File saved on the Myrmidon task: personal-report.txt.",
       ),
     );
     expect(personalAttachmentPost?.text).toContain(
@@ -20869,7 +20869,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     expect(deliveries[2]).toMatchObject({
       eventKind: "action",
       state: "filtered",
-      redactedError: "External chat modal submission denied by Paperclip",
+      redactedError: "External chat modal submission denied by Myrmidon",
       processedAt: expect.any(Date),
     });
     expect(JSON.stringify(await service.get(endpoint.id))).not.toContain(
@@ -23038,7 +23038,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     ).resolves.toEqual([{ state: "filtered" }]);
   });
 
-  it("keeps one Paperclip account mapping for the same provider principal across endpoints", async () => {
+  it("keeps one Myrmidon account mapping for the same provider principal across endpoints", async () => {
     const fixture = await seedCompany();
     const firstContext = createService(
       new FakeChatSdkRuntime(),
@@ -23112,7 +23112,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await db.insert(authUsers).values([
       {
         id: "paperclip-user-a",
-        name: "Paperclip User A",
+        name: "Myrmidon User A",
         email: `identity-a-${fixture.companyId}@example.com`,
         emailVerified: true,
         createdAt: now,
@@ -23120,7 +23120,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       },
       {
         id: "paperclip-user-b",
-        name: "Paperclip User B",
+        name: "Myrmidon User B",
         email: `identity-b-${fixture.companyId}@example.com`,
         emailVerified: true,
         createdAt: now,
@@ -24460,7 +24460,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             method: "sendMessage",
             body: {
               chat_id: "-100123",
-              text: "This Paperclip action is no longer available. Open the linked task or ask an operator to link this account.",
+              text: "This Myrmidon action is no longer available. Open the linked task or ask an operator to link this account.",
               ephemeral_message_parameters: {
                 receiver_user_id: 456,
                 callback_query_id: "native-private-callback-1",
@@ -24675,7 +24675,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             method: "sendMessage",
             body: {
               chat_id: "456",
-              text: "This Paperclip action is no longer available. Open the linked task or ask an operator to link this account.",
+              text: "This Myrmidon action is no longer available. Open the linked task or ask an operator to link this account.",
             },
           },
         ]);
@@ -25048,7 +25048,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       runtime.endpoints.get(endpoint.id)?.posts.map((post) => post.text),
     ).toEqual([
       "old-generation-final",
-      "Send your request to start a new Paperclip task.",
+      "Send your request to start a new Myrmidon task.",
     ]);
     await expect(service.listConversations(endpoint.id)).resolves.toEqual([
       expect.objectContaining({ id: oldConversation.id, state: "completed" }),
@@ -25114,7 +25114,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       runtime.endpoints.get(endpoint.id)?.posts.map((post) => post.text),
     ).toEqual([
       "old-generation-final",
-      "Send your request to start a new Paperclip task.",
+      "Send your request to start a new Myrmidon task.",
       "new-generation-final",
     ]);
     expect(
@@ -27569,7 +27569,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     ).toMatchObject({
       progressState: "failed",
       text: expect.stringContaining(
-        "Ask a Paperclip admin to create a private identity link for this account or enable isolated guest execution, then start a new task.",
+        "Ask a Myrmidon admin to create a private identity link for this account or enable isolated guest execution, then start a new task.",
       ),
     });
   });
@@ -28814,7 +28814,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             result: {
               id: 884422,
               username: "paperclip_lease_reclaim_bot",
-              first_name: "Paperclip Lease Reclaim",
+              first_name: "Myrmidon Lease Reclaim",
             },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
@@ -28978,7 +28978,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             result: {
               id: 884423,
               username: "paperclip_removal_reclaim_bot",
-              first_name: "Paperclip Removal Reclaim",
+              first_name: "Myrmidon Removal Reclaim",
             },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
@@ -30645,7 +30645,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         expect.objectContaining({
           state: "filtered",
           attempts: 1,
-          redactedError: "External action denied by Paperclip authorization",
+          redactedError: "External action denied by Myrmidon authorization",
           normalizedEvent: {
             providerEventId: expect.stringMatching(
               /^action-denied:[a-f0-9]{64}$/,
@@ -30673,7 +30673,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       });
       expect(gatewayInteraction.reply).toHaveBeenLastCalledWith({
         content:
-          "This action is no longer available. Open the linked Paperclip task or ask an operator to link this account.",
+          "This action is no longer available. Open the linked Myrmidon task or ask an operator to link this account.",
         flags: 64,
       });
     } finally {
@@ -31846,7 +31846,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           expect(callback.reply.mock.calls[0]![0].content).toBe(
             submittedText === winnerText
               ? "Your response was received."
-              : "This response was not accepted. Open the linked Paperclip task or reopen the question to try again.",
+              : "This response was not accepted. Open the linked Myrmidon task or reopen the question to try again.",
           );
         }
         expect(answered).toMatchObject({
@@ -32501,7 +32501,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     expect(providerRuntime.posts).toHaveLength(1);
     const delivered = providerRuntime.posts[0]!;
     expect(delivered.text).toBe(
-      "Paperclip attached the complete response because it exceeds Discord’s message limit.",
+      "Myrmidon attached the complete response because it exceeds Discord’s message limit.",
     );
     expect(delivered.text).not.toContain("...");
     expect(delivered.files).toHaveLength(1);
@@ -32655,7 +32655,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       );
     expect(definiteFailureNotices).toHaveLength(1);
     const rejectedAttachmentNotice =
-      "Paperclip could not send the response attachment. The complete response remains on its Paperclip task for an operator to retry." +
+      "Myrmidon could not send the response attachment. The complete response remains on its Myrmidon task for an operator to retry." +
       ` Open task: https://paperclip.example/issues/${conversation.issueId}`;
     expect(definiteFailureNotices[0]).toMatchObject({
       commentId: null,
@@ -33243,7 +33243,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     expect(completed).toMatchObject({ state: "published", attempts: 2 });
     expect(providerRuntime.posts).toHaveLength(1);
     expect(providerRuntime.posts[0]?.text).toBe(
-      "Paperclip attached the complete response to preserve its Markdown formatting.",
+      "Myrmidon attached the complete response to preserve its Markdown formatting.",
     );
     const attachment = providerRuntime.posts[0]?.attachments?.[0] as {
       data: Buffer;
@@ -34163,7 +34163,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     );
     expect(channel.postEphemeral).toHaveBeenCalledWith(
       unlinkedAction.event.user.userId,
-      "This action is no longer available. Open the linked Paperclip task or ask an operator to link this account.",
+      "This action is no longer available. Open the linked Myrmidon task or ask an operator to link this account.",
       { fallbackToDM: false },
     );
     const deniedSlackActions = await db
@@ -34181,7 +34181,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         principalId: expect.any(String),
         state: "filtered",
         attempts: 1,
-        redactedError: "External action denied by Paperclip authorization",
+        redactedError: "External action denied by Myrmidon authorization",
         normalizedEvent: {
           providerEventId: expect.stringMatching(
             /^action-denied:[a-f0-9]{64}$/,
@@ -34202,7 +34202,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           kind: "delivery",
           status: "filtered",
           summary: "action ignored",
-          detail: "External action denied by Paperclip authorization",
+          detail: "External action denied by Myrmidon authorization",
           replayable: false,
         }),
       ]),
@@ -34217,7 +34217,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     );
     await vi.waitFor(() =>
       expect(channel.post).toHaveBeenCalledWith(
-        "This Paperclip action is no longer available.",
+        "This Myrmidon action is no longer available.",
       ),
     );
     expect(channel.postEphemeral).toHaveBeenCalledTimes(2);
@@ -34706,7 +34706,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       ([userId, text]) =>
         userId === externalUserId &&
         text ===
-          "This action is no longer available. Open the linked Paperclip task or ask an operator to link this account.",
+          "This action is no longer available. Open the linked Myrmidon task or ask an operator to link this account.",
     ).length;
     await callbacks.onAction(actionEvent());
     expect(
@@ -34714,7 +34714,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         ([userId, text]) =>
           userId === externalUserId &&
           text ===
-            "This action is no longer available. Open the linked Paperclip task or ask an operator to link this account.",
+            "This action is no longer available. Open the linked Myrmidon task or ask an operator to link this account.",
       ),
     ).toHaveLength(staleNoticeCount);
     expect(
@@ -35150,7 +35150,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         response_action: "errors",
         errors: {
           [select.block_id]:
-            "This form is no longer authorized. Close it and open the linked Paperclip task.",
+            "This form is no longer authorized. Close it and open the linked Myrmidon task.",
         },
       });
       expect(await submissionState()).toEqual(before);
@@ -35554,7 +35554,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       await vi.waitFor(() =>
         expect(channel.postEphemeral).toHaveBeenCalledWith(
           modalUser.userId,
-          "This action is no longer available. Open the linked Paperclip task or ask an operator to link this account.",
+          "This action is no longer available. Open the linked Myrmidon task or ask an operator to link this account.",
           { fallbackToDM: false },
         ),
       );
@@ -35664,7 +35664,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         await vi.waitFor(() =>
           expect(channel.postEphemeral).toHaveBeenCalledWith(
             modalUser.userId,
-            "Paperclip could not open this form. Try the action again or open the linked Paperclip task.",
+            "Myrmidon could not open this form. Try the action again or open the linked Myrmidon task.",
             { fallbackToDM: false },
           ),
         );
@@ -35875,7 +35875,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         action: "errors",
         errors: {
           [selectField.id]:
-            "This form is no longer authorized. Close it and open the linked Paperclip task.",
+            "This form is no longer authorized. Close it and open the linked Myrmidon task.",
         },
       };
       await expect(
@@ -36178,7 +36178,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           expect.objectContaining({
             kind: "delivery",
             status: "filtered",
-            detail: "External chat modal submission denied by Paperclip",
+            detail: "External chat modal submission denied by Myrmidon",
             replayable: false,
           }),
         ]),
@@ -36791,7 +36791,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
               result: {
                 id: botId,
                 username: "paperclip_denial_test_bot",
-                first_name: "Paperclip Denial Test",
+                first_name: "Myrmidon Denial Test",
               },
             }),
             { status: 200, headers: { "content-type": "application/json" } },
@@ -36840,7 +36840,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
                   type: "private",
                   first_name: "Telegram User",
                 },
-                text: "This Paperclip action is no longer available.",
+                text: "This Myrmidon action is no longer available.",
               },
             }),
             { status: 200, headers: { "content-type": "application/json" } },
@@ -36979,7 +36979,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       expect(notices).toHaveLength(1);
       expect(JSON.parse(notices[0]!.body)).toMatchObject({
         chat_id: "417200359",
-        text: "This Paperclip action is no longer available. Open the linked task or ask an operator to link this account.",
+        text: "This Myrmidon action is no longer available. Open the linked task or ask an operator to link this account.",
       });
       expect(notices[0]!.body).not.toContain(actionId);
       expect(notices[0]!.body).not.toContain(callbackData);
@@ -37000,7 +37000,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       expect(denials[0]).toMatchObject({
         state: "filtered",
         attempts: 1,
-        redactedError: "External action denied by Paperclip authorization",
+        redactedError: "External action denied by Myrmidon authorization",
         normalizedEvent: {
           providerEventId: expect.stringMatching(
             /^action-denied:[a-f0-9]{64}$/,
@@ -37265,7 +37265,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         principalId: principal.id,
         state: "filtered",
         attempts: 1,
-        redactedError: "External action denied by Paperclip authorization",
+        redactedError: "External action denied by Myrmidon authorization",
         normalizedEvent: {
           providerEventId: expect.stringMatching(
             /^action-denied:[a-f0-9]{64}$/,
@@ -37288,7 +37288,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           kind: "delivery",
           status: "filtered",
           summary: "action ignored",
-          detail: "External action denied by Paperclip authorization",
+          detail: "External action denied by Myrmidon authorization",
           replayable: false,
         }),
       ]),
@@ -38334,7 +38334,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     ).toHaveLength(0);
   });
 
-  it("publishes complex question sets as non-executable Paperclip fallbacks", async () => {
+  it("publishes complex question sets as non-executable Myrmidon fallbacks", async () => {
     const fixture = await seedCompany();
     const { callbacks, endpoint, service } =
       await configuredSlackEndpoint(fixture);
@@ -38416,7 +38416,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       ) ?? [],
     ).toEqual([]);
     expect(publication.payload.text).toContain(
-      "Open the task in Paperclip to respond",
+      "Open the task in Myrmidon to respond",
     );
     expect(callbacks.onModalSubmit).toBeTypeOf("function");
     expect(callbacks.onModalClose).toBeUndefined();
@@ -38496,7 +38496,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             actions: [
               {
                 type: "link",
-                label: "Open in Paperclip",
+                label: "Open in Myrmidon",
                 url: `https://paperclip.example/issues/${conversation!.issueId}`,
               },
             ],
@@ -38637,7 +38637,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           card: {
             actions: [
               expect.objectContaining({
-                label: "Open in Paperclip",
+                label: "Open in Myrmidon",
                 type: "link",
               }),
             ],
@@ -38901,12 +38901,12 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       {
         publicBaseUrl: "https://board.paperclip.example",
         expectedFallback: (issueId: string) =>
-          `File saved on the Paperclip task: report.txt. This GitHub App connection cannot upload file bytes into comments. Download it: https://board.paperclip.example/issues/${issueId}`,
+          `File saved on the Myrmidon task: report.txt. This GitHub App connection cannot upload file bytes into comments. Download it: https://board.paperclip.example/issues/${issueId}`,
       },
       {
         publicBaseUrl: "http://127.0.0.1:3103",
         expectedFallback: () =>
-          "File saved on the private Paperclip task: report.txt. This GitHub App connection cannot upload file bytes into comments.",
+          "File saved on the private Myrmidon task: report.txt. This GitHub App connection cannot upload file bytes into comments.",
       },
     ]) {
       const fixture = await seedCompany();
@@ -39069,7 +39069,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
 
     expect(failed).toMatchObject({ state: "failed" });
     const selectedAttachmentNotice =
-      "Paperclip could not send an attachment. The file remains on its Paperclip task for an operator to retry." +
+      "Myrmidon could not send an attachment. The file remains on its Myrmidon task for an operator to retry." +
       ` Open task: https://paperclip.example/issues/${conversation.issueId}`;
     const publications = await db
       .select()
@@ -44539,7 +44539,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           if (legacyCopy) {
             const prior = structuredClone(remoteCommands[0]!);
             (prior.options as Array<{ description: string }>)[2]!.description =
-              "Close the current Paperclip task";
+              "Close the current Myrmidon task";
             remoteCommands[0] = prior;
             const {
               id: _id,
@@ -46230,7 +46230,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     });
   });
 
-  it("turns a Slack slash command into a new native thread and one Paperclip task", async () => {
+  it("turns a Slack slash command into a new native thread and one Myrmidon task", async () => {
     const fixture = await seedCompany();
     const { callbacks, endpoint, runtime, service } =
       await configuredSlackEndpoint(fixture);
@@ -46617,7 +46617,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           }),
         }),
         principalId: null,
-        redactedError: "Destination is not enabled in Paperclip",
+        redactedError: "Destination is not enabled in Myrmidon",
       },
     ]);
     await expect(
@@ -47197,10 +47197,10 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         principalId: null,
         redactedError:
           authorizationChange === "resource_disabled"
-            ? "Destination is not enabled in Paperclip"
+            ? "Destination is not enabled in Myrmidon"
             : authorizationChange === "viewer"
-              ? "Linked Paperclip account is not currently permitted"
-              : "External identity must be linked to a Paperclip account",
+              ? "Linked Myrmidon account is not currently permitted"
+              : "External identity must be linked to a Myrmidon account",
         state: "filtered",
       });
       expect(JSON.stringify(delivery?.normalizedEvent)).not.toContain(
@@ -47409,7 +47409,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           filtering: { contentRetained: false },
         }),
         principalId: null,
-        redactedError: "Destination is not enabled in Paperclip",
+        redactedError: "Destination is not enabled in Myrmidon",
         state: "filtered",
       }),
     ]);
@@ -48138,7 +48138,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       expect.objectContaining({
         state: "filtered",
         principalId: null,
-        redactedError: "Destination is not enabled in Paperclip",
+        redactedError: "Destination is not enabled in Myrmidon",
         normalizedEvent: expect.objectContaining({
           filtering: { contentRetained: false },
         }),
@@ -48374,7 +48374,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       },
       {
         threadId: dm.thread.id,
-        text: "Send your request to start a new Paperclip task.",
+        text: "Send your request to start a new Myrmidon task.",
       },
       {
         threadId: dm.thread.id,
@@ -48487,7 +48487,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await vi.waitFor(() => expect(postEphemeral).toHaveBeenCalledTimes(3));
     for (const call of postEphemeral.mock.calls) {
       expect(call[1]).toBe(
-        "Use status, new, and close in a direct message with this agent. In a channel, open the Paperclip task from its Slack thread.",
+        "Use status, new, and close in a direct message with this agent. In a channel, open the Myrmidon task from its Slack thread.",
       );
       expect(call[2]).toEqual({ fallbackToDM: false });
     }
@@ -49444,7 +49444,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
               result: {
                 id: botId,
                 username: "paperclip_guidance_test_bot",
-                first_name: "Paperclip Guidance Test",
+                first_name: "Myrmidon Guidance Test",
               },
             }),
             { status: 200, headers: { "content-type": "application/json" } },
@@ -49637,7 +49637,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           state: "filtered",
           attempts: 0,
           conversationId: null,
-          redactedError: "Destination is not enabled in Paperclip",
+          redactedError: "Destination is not enabled in Myrmidon",
           normalizedEvent: expect.objectContaining({
             deduplication: expect.objectContaining({ duplicateCount: 1 }),
           }),
@@ -49783,13 +49783,13 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     ).toEqual([
       expect.stringMatching(/— todo$/),
       expect.stringContaining(
-        "Open a new Telegram forum topic to start a new Paperclip task.",
+        "Open a new Telegram forum topic to start a new Myrmidon task.",
       ),
-      "This chat conversation is closed. A later message here will continue the same Paperclip task.",
+      "This chat conversation is closed. A later message here will continue the same Myrmidon task.",
     ]);
   });
 
-  it("keeps successive Telegram DM messages on one active Paperclip task", async () => {
+  it("keeps successive Telegram DM messages on one active Myrmidon task", async () => {
     const fixture = await seedCompany();
     const { callbacks, endpoint, service, wakeup } =
       await configuredTelegramEndpoint(fixture);
@@ -49977,7 +49977,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await vi.waitFor(() =>
       expect(postEphemeral).toHaveBeenCalledWith(
         "U-COMMANDER",
-        "This channel or account is not allowed to start Paperclip work.",
+        "This channel or account is not allowed to start Myrmidon work.",
         { fallbackToDM: false },
       ),
     );
@@ -52210,7 +52210,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
               edit_date: 1_788_620_390,
               chat: { id: Number(chatId), type: "private" },
               from: { id: Number(chatId), first_name: "Telegram User" },
-              text: "Edit whose original never reached Paperclip",
+              text: "Edit whose original never reached Myrmidon",
             },
           }),
         }),
@@ -52974,7 +52974,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       .from(issueComments)
       .where(eq(issueComments.issueId, conversation.issueId))
       .then((rows) => rows.length);
-    const secretEdit = "Revoked Telegram edit must not enter Paperclip";
+    const secretEdit = "Revoked Telegram edit must not enter Myrmidon";
     await expect(
       service.handleWebhook(
         endpoint.publicId,
@@ -53089,7 +53089,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       {
         threadId: dm.thread.id,
         messageId: "outbound-2",
-        text: "Maya needs a Paperclip admin to safely recover this turn before more work can start. Open the task in Paperclip for details.",
+        text: "Maya needs a Myrmidon admin to safely recover this turn before more work can start. Open the task in Myrmidon for details.",
       },
     ]);
     expect(JSON.stringify(providerRuntime?.edits)).not.toContain(
@@ -53157,7 +53157,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           errorCode: terminal
             ? "adapter_failed"
             : "native_execution_ownership_unverified",
-          error: "Private diagnostic must not leave Paperclip",
+          error: "Private diagnostic must not leave Myrmidon",
           updatedAt: new Date(),
         })
         .where(eq(heartbeatRuns.id, runId));
@@ -56059,7 +56059,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         agentId: fixture.assignedAgentId,
         seq,
         eventType,
-        message: "PRIVATE native event prose must stay in Paperclip",
+        message: "PRIVATE native event prose must stay in Myrmidon",
         payload: {
           toolName: "secret_internal_tool",
           arguments: { token: "PRIVATE-NATIVE-TOKEN" },
@@ -56408,7 +56408,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         {
           threadId: context.thread.thread.id,
           messageId: originalWorking!.providerMessageId,
-          text: "Maya stopped before completing this turn. Open the task in Paperclip for details.",
+          text: "Maya stopped before completing this turn. Open the task in Myrmidon for details.",
         },
       ]);
 
@@ -56464,7 +56464,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           providerMessageId: originalWorking!.providerMessageId,
           payload: {
             progressState: "failed",
-            text: "Maya stopped before completing this turn. Open the task in Paperclip for details.",
+            text: "Maya stopped before completing this turn. Open the task in Myrmidon for details.",
           },
         }),
       ]);
@@ -59642,7 +59642,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           JSON.stringify({
             id: 790,
             slug: "maya-paperclip-lifecycle",
-            name: "Maya Paperclip",
+            name: "Maya Myrmidon",
             owner: { login: "paperclipai" },
             permissions: {
               issues: "write",
@@ -60354,7 +60354,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       state: "filtered",
       attempts: 0,
       principalId: null,
-      redactedError: "Destination is not enabled in Paperclip",
+      redactedError: "Destination is not enabled in Myrmidon",
       normalizedEvent: {
         filtering: { contentRetained: false },
         message: { providerMessageId: `${chatId}:10` },
@@ -61074,7 +61074,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       const [conversation] = await service.listConversations(endpoint.id);
       if (!conversation)
         throw new Error("Expected Telegram attachment failure conversation");
-      const visibleFailure = `Paperclip could not safely import the attached Telegram file. Please resend it as a supported file under ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)} or include text describing the request.`;
+      const visibleFailure = `Myrmidon could not safely import the attached Telegram file. Please resend it as a supported file under ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)} or include text describing the request.`;
       await expect(
         db
           .select({ body: issueComments.body })
@@ -62506,7 +62506,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       await expect(context.repair()).resolves.toBe(true);
       await context.service.processPendingPublications(100);
       const taskUrl = `https://paperclip.example/issues/${context.issue.id}`;
-      const expected = `${context.result.summary}\n\n[Open this Paperclip task](${taskUrl})`;
+      const expected = `${context.result.summary}\n\n[Open this Myrmidon task](${taskUrl})`;
       expect(context.providerRuntime.posts.map((post) => post.text)).toEqual([
         expected,
       ]);
@@ -62567,7 +62567,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           .posts[0]!.text;
         expect(text).toBe(
           expected
-            ? `${context.result.summary}\n\n[Open this Paperclip task](${expected}/issues/${context.issue.id})`
+            ? `${context.result.summary}\n\n[Open this Myrmidon task](${expected}/issues/${context.issue.id})`
             : context.result.summary,
         );
         for (const secret of [
@@ -62594,7 +62594,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         undefined,
         mode === "existing_link"
           ? (issueId) =>
-              `Attach directly: [Open this Paperclip task](https://paperclip.example/issues/${issueId})`
+              `Attach directly: [Open this Myrmidon task](https://paperclip.example/issues/${issueId})`
           : undefined,
       );
       let restarted: ReturnType<typeof createService> | undefined;
@@ -62616,7 +62616,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           );
         expect(before).toMatchObject({ state: "retry", attempts: 1 });
         expect(
-          before.payload.text.match(/Open this Paperclip task/g),
+          before.payload.text.match(/Open this Myrmidon task/g),
         ).toHaveLength(1);
         const [preparation] = await db
           .select()
@@ -62892,7 +62892,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             ? []
             : [
                 mode === "complete_batch"
-                  ? `${context.result.summary}\n\n[Open this Paperclip task](https://paperclip.example/issues/${context.issue.id})`
+                  ? `${context.result.summary}\n\n[Open this Myrmidon task](https://paperclip.example/issues/${context.issue.id})`
                   : context.result.summary,
               ],
         );
@@ -62942,7 +62942,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
             ),
           );
         expect(publication).toMatchObject({ state: "retry", attempts: 1 });
-        expect(publication.payload.text).toContain("Open this Paperclip task");
+        expect(publication.payload.text).toContain("Open this Myrmidon task");
         const payload = { ...publication.payload };
         if (mode === "text") payload.text += "\nChanged after preparation";
         if (mode === "progress") payload.progressState = "completed";
@@ -64590,7 +64590,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           issueId: context.conversation.issueId,
           idempotencyKey: `run:${runId}:failed:${context.endpoint.id}`,
           payload: {
-            text: "Maya stopped before completing this turn. Open the task in Paperclip for details.",
+            text: "Maya stopped before completing this turn. Open the task in Myrmidon for details.",
             progressState: "failed",
           },
         });
@@ -64604,7 +64604,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           {
             threadId: context.thread.thread.id,
             messageId: queued.providerMessageId,
-            text: "Maya stopped before completing this turn. Open the task in Paperclip for details.",
+            text: "Maya stopped before completing this turn. Open the task in Myrmidon for details.",
           },
         ]);
         expect(JSON.stringify(runtime.edits)).not.toContain("was not started");
@@ -64706,7 +64706,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         {
           threadId: context.thread.thread.id,
           messageId: queued.providerMessageId,
-          text: "This follow-up was not started. Open the task in Paperclip for details.",
+          text: "This follow-up was not started. Open the task in Myrmidon for details.",
         },
       ]);
       expect(JSON.stringify(runtime.edits)).not.toMatch(

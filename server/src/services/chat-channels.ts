@@ -1,4 +1,6 @@
 import { takePhotonCompanion } from "./photon/attachments.js";
+// myrmidon(B1): product name in the user-facing chat/webhook text below; see product.ts.
+import { PRODUCT_NAME, productSaid } from "../myrmidon/product.js";
 import { writePhotonCheckpoint } from "./photon/receiver.js";
 import { PhotonState } from "./photon/state.js";
 import { nativeSha256 } from "./native-runtime/canonical.js";
@@ -729,8 +731,8 @@ const REQUIRED_GITHUB_PERMISSIONS = {
 } as const;
 
 const TELEGRAM_COMMANDS = [
-  { command: "task", description: "Start or continue a Paperclip task" },
-  { command: "status", description: "Show the active Paperclip task" },
+  { command: "task", description: "Start or continue a Myrmidon task" },
+  { command: "status", description: "Show the active Myrmidon task" },
   { command: "new", description: "Start a new task after the current one" },
   { command: "close", description: "Close the active chat conversation" },
 ] as const;
@@ -2983,7 +2985,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
 
   function discordGatewayNotOwnedError() {
     return conflict(
-      "Another Paperclip server owns this Discord Gateway connection; retry shortly",
+      "Another Myrmidon server owns this Discord Gateway connection; retry shortly",
       { code: "chat_discord_gateway_not_owned" },
     );
   }
@@ -3382,7 +3384,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
 
   function retryableGitHubWebhookResponse(): Response {
     return new Response(
-      "Paperclip could not durably accept the event in time",
+      productSaid("could not durably accept the event in time"),
       {
         status: 503,
         headers: {
@@ -4624,7 +4626,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     return {
       kind: "delivery_unknown" as const,
       reason:
-        "Provider effect completed, but Paperclip could not confirm its durable result",
+        "Provider effect completed, but Myrmidon could not confirm its durable result",
     };
   }
 
@@ -6240,13 +6242,13 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               ? `GitHub App needs the documented minimum access for: ${missingPermissions.join(", ")}`
               : null,
             excessivePermissions.length > 0
-              ? `GitHub App has broader permissions than Paperclip needs: ${excessivePermissions.join(", ")}`
+              ? `GitHub App has broader permissions than Myrmidon needs: ${excessivePermissions.join(", ")}`
               : null,
             missingEvents.length > 0
               ? `GitHub App must subscribe to: ${missingEvents.join(", ")}`
               : null,
             excessiveEvents.length > 0
-              ? `GitHub App subscribes to broader events than Paperclip needs: ${excessiveEvents.join(", ")}`
+              ? `GitHub App subscribes to broader events than Myrmidon needs: ${excessiveEvents.join(", ")}`
               : null,
           ]
             .filter(Boolean)
@@ -6407,7 +6409,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     });
     if (conflictEndpoint) {
       throw conflict(
-        `This ${PROVIDER_LABELS[endpoint.provider]} bot already represents another Paperclip agent connection`,
+        `This ${PROVIDER_LABELS[endpoint.provider]} bot already represents another Myrmidon agent connection`,
         conflictEndpoint.companyId === endpoint.companyId
           ? {
               code: "chat_bot_identity_in_use",
@@ -6434,7 +6436,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
 
   function nativeBotIdentityConflict(provider: ChatProvider) {
     return conflict(
-      `This ${PROVIDER_LABELS[provider]} bot already represents another Paperclip agent connection`,
+      `This ${PROVIDER_LABELS[provider]} bot already represents another Myrmidon agent connection`,
       { code: "chat_bot_identity_in_use" },
     );
   }
@@ -9433,7 +9435,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     }
     if (!webhookPublicBaseUrl && endpoint.provider !== "discord" && endpoint.provider !== "imessage-photon") {
       throw unprocessable(
-        `A public HTTPS Paperclip URL is required before connecting ${PROVIDER_LABELS[endpoint.provider]}`,
+        `A public HTTPS Myrmidon URL is required before connecting ${PROVIDER_LABELS[endpoint.provider]}`,
       );
     }
     if (
@@ -9464,7 +9466,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         );
       }
       if (!endpoint.setup.webhookVerifiedAt) {
-        throw conflict("Slack has not verified the Paperclip Request URL yet", {
+        throw conflict("Slack has not verified the Myrmidon Request URL yet", {
           code: "chat_webhook_not_verified",
         });
       }
@@ -10024,7 +10026,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           );
         if (!finalPublication) {
           throw conflict(
-            "Wait for the Paperclip agent to reply to the setup turn before completing setup",
+            "Wait for the Myrmidon agent to reply to the setup turn before completing setup",
             {
               code: "chat_test_round_trip_incomplete",
             },
@@ -11041,7 +11043,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     const diagnostic =
       attachmentOmissionDetail(input.attachmentResult) ??
       "The Telegram attachment could not be imported";
-    const visibleFailure = `Paperclip could not safely import the attached Telegram file. Please resend it as a supported file under ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)} or include text describing the request.`;
+    const visibleFailure = `${productSaid("could not safely import the attached Telegram file.")} Please resend it as a supported file under ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)} or include text describing the request.`;
     const effectContext =
       input.runtimeContext ??
       runtimeContextForRecord(
@@ -11271,7 +11273,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               (resource.enabled || setupDestination)
             )
           ) {
-            reason = "Destination is not enabled in Paperclip";
+            reason = "Destination is not enabled in Myrmidon";
           }
 
           if (!reason && endpoint) {
@@ -11323,10 +11325,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             }
             if (!allowed) {
               reason = linkedDenied
-                ? "Linked Paperclip account is not currently permitted"
+                ? "Linked Myrmidon account is not currently permitted"
                 : endpoint.allowUnlinkedPeople
                   ? "Endpoint sponsor can no longer authorize external guests"
-                  : "External identity must be linked to a Paperclip account";
+                  : "External identity must be linked to a Myrmidon account";
             }
           }
           if (!reason) {
@@ -13483,7 +13485,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                   text:
                     state === "queued"
                       ? "Your retry is queued."
-                      : "This retry was not started. Open the task in Paperclip for details.",
+                      : "This retry was not started. Open the task in Myrmidon for details.",
                   progressState: state === "queued" ? "queued" : "failed",
                 }),
                 state: "pending",
@@ -14827,7 +14829,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           : "Connection is not active"
         : endpoint.provider === "telegram" && !thread.isDM && !addressed
           ? "Message did not address the agent"
-          : "Destination is not enabled in Paperclip";
+          : "Destination is not enabled in Myrmidon";
       let candidate = admittedDeliveryId
         ? await tx
             .select()
@@ -15169,7 +15171,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                   principalId: null,
                   nextAttemptAt: null,
                   processedAt: resolutionAt,
-                  redactedError: "Destination is not enabled in Paperclip",
+                  redactedError: "Destination is not enabled in Myrmidon",
                   updatedAt: resolutionAt,
                 },
           )
@@ -15547,13 +15549,13 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         const filteredReason = !endpointAllowed
           ? "Connection is not active"
           : !destinationAllowed
-            ? "Destination is not enabled in Paperclip"
+            ? "Destination is not enabled in Myrmidon"
             : principalResolution.linkedDenied
-              ? "Linked Paperclip account is not currently permitted"
+              ? "Linked Myrmidon account is not currently permitted"
               : !principalAllowed
                 ? endpoint.allowUnlinkedPeople
                   ? "Endpoint sponsor can no longer authorize external guests"
-                  : "External identity must be linked to a Paperclip account"
+                  : "External identity must be linked to a Myrmidon account"
                 : "Message did not address the agent or an active task thread";
         await db
           .update(chatDeliveries)
@@ -15801,12 +15803,12 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             : controlCommand === "new"
               ? isTelegramForumTopic
                 ? existingIssue
-                  ? `${taskLabel} stays bound to this forum topic. Open a new Telegram forum topic to start a new Paperclip task.`
-                  : "Open a new Telegram forum topic to start a new Paperclip task."
-                : "Send your request to start a new Paperclip task."
+                  ? `${taskLabel} stays bound to this forum topic. Open a new Telegram forum topic to start a new Myrmidon task.`
+                  : "Open a new Telegram forum topic to start a new Myrmidon task."
+                : "Send your request to start a new Myrmidon task."
               : existingConversation
                 ? isTelegramForumTopic
-                  ? "This chat conversation is closed. A later message here will continue the same Paperclip task."
+                  ? "This chat conversation is closed. A later message here will continue the same Myrmidon task."
                   : "This chat conversation is closed. Send another message to start a new task."
                 : "No task is active. Send a message to start one.";
         const publicationBinding =
@@ -16002,7 +16004,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         }
         if (!conversation)
           throw conflict(
-            "Could not bind external conversation to a Paperclip task",
+            "Could not bind external conversation to a Myrmidon task",
           );
 
         const issue =
@@ -16104,7 +16106,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                       type: "key_value",
                       label: "Authority",
                       value: taskUserId
-                        ? "Linked Paperclip user"
+                        ? "Linked Myrmidon user"
                         : "Sponsored external guest (restricted)",
                     },
                   ],
@@ -16247,11 +16249,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               redactedError: endpointStillAllowed
                 ? destinationStillAllowed
                   ? currentPrincipalAuthorization.linkedDenied
-                    ? "Linked Paperclip account is not currently permitted"
+                    ? "Linked Myrmidon account is not currently permitted"
                     : currentEndpoint.allowUnlinkedPeople
                       ? "Endpoint sponsor can no longer authorize external guests"
-                      : "External identity must be linked to a Paperclip account"
-                  : "Destination is not enabled in Paperclip"
+                      : "External identity must be linked to a Myrmidon account"
+                  : "Destination is not enabled in Myrmidon"
                 : "Connection is not active",
               updatedAt: filteredAt,
             })
@@ -16539,7 +16541,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             content:
               typeof normalized.message?.text === "string"
                 ? normalized.message.text
-                : "Paperclip task",
+                : `${PRODUCT_NAME} task`,
           });
           return await db.transaction(async (tx) => {
             await credentialLease.assertOwned(tx);
@@ -18932,8 +18934,8 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             authorizationMode: "safe_notice",
             threadId: event.event.threadId,
             userId: event.event.user.userId,
-            text: "This action is no longer available. Open the linked Paperclip task or ask an operator to link this account.",
-            fallbackText: "This Paperclip action is no longer available.",
+            text: "This action is no longer available. Open the linked Myrmidon task or ask an operator to link this account.",
+            fallbackText: "This Myrmidon action is no longer available.",
             settleDelivery: false,
           } as const)
         : null;
@@ -18974,7 +18976,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             },
             state: "filtered",
             attempts: 1,
-            redactedError: "External action denied by Paperclip authorization",
+            redactedError: "External action denied by Myrmidon authorization",
             processedAt,
             updatedAt: processedAt,
           })
@@ -19072,8 +19074,8 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             authorizationMode: "safe_notice",
             threadId: event.event.threadId,
             userId: event.event.user.userId,
-            text: "Paperclip could not open this form. Try the action again or open the linked Paperclip task.",
-            fallbackText: "Paperclip could not open this form.",
+            text: `${productSaid("could not open this form.")} Try the action again or open the linked ${PRODUCT_NAME} task.`,
+            fallbackText: productSaid("could not open this form."),
             settleDelivery: false,
           } as const)
         : null;
@@ -19259,7 +19261,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           },
           state: "filtered",
           attempts: 1,
-          redactedError: "External chat modal submission denied by Paperclip",
+          redactedError: "External chat modal submission denied by Myrmidon",
           processedAt,
           updatedAt: processedAt,
         })
@@ -20049,7 +20051,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       ["active"],
     );
     if (!record) {
-      throw forbidden("This chat action is not a current Paperclip question");
+      throw forbidden("This chat action is not a current Myrmidon question");
     }
     const deny = async (safelyKnown?: {
       conversationId?: string | null;
@@ -20070,7 +20072,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         // adapter can withhold that misleading acknowledgement. The runtime,
         // not raw JSON or discord.js methods, supplies the ingress context.
         throw Object.assign(
-          new Error("Discord Gateway action was not admitted by Paperclip"),
+          new Error("Discord Gateway action was not admitted by Myrmidon"),
           { code: "chat_discord_gateway_action_rejected" },
         );
       }
@@ -21117,7 +21119,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     runtimeContext: RuntimeContext,
   ): Promise<ModalResponse> {
     const denialError = () =>
-      forbidden("This chat form is not a current Paperclip question");
+      forbidden("This chat form is not a current Myrmidon question");
     const record = await runtimeCallbackRecord(
       event.endpointId,
       runtimeContext,
@@ -23021,18 +23023,18 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                     2000,
                   )
                 : invocation.sourceKind === "guild_channel"
-                  ? "Open the Discord task thread to view its Paperclip status."
+                  ? "Open the Discord task thread to view its Myrmidon status."
                   : "No task is active in this conversation.";
           } else if (
             invocation.command === "new" &&
             invocation.sourceKind !== "direct_message"
           ) {
             content =
-              "Open a new Discord thread by mentioning this agent in a new channel message. This thread stays bound to its current Paperclip task.";
+              "Open a new Discord thread by mentioning this agent in a new channel message. This thread stays bound to its current Myrmidon task.";
           } else if (!active || !conversation || !issue) {
             content =
               invocation.sourceKind === "direct_message"
-                ? "No task is active. Send a message to start a new Paperclip task."
+                ? "No task is active. Send a message to start a new Myrmidon task."
                 : "No active task is bound here. Open its Discord thread to manage it.";
           } else if (
             (await readChatControlChronology(
@@ -23055,10 +23057,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           } else {
             const publicText =
               invocation.command === "new"
-                ? "Send your request to start a new Paperclip task."
+                ? "Send your request to start a new Myrmidon task."
                 : invocation.sourceKind === "direct_message"
                   ? "This chat conversation is closed. Send another message to start a new task."
-                  : "This chat conversation is closed. A later message here will continue the same Paperclip task.";
+                  : "This chat conversation is closed. A later message here will continue the same Myrmidon task.";
             const publication = await stageAuthorizedTaskControlPublication(
               tx,
               {
@@ -23252,7 +23254,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       scheduleProviderEffect(effect.id, event.event.channel);
     };
     if (!["verifying", "active"].includes(record.endpoint.status)) {
-      await queueSlackNotice("This Paperclip connection is not active.");
+      await queueSlackNotice("This Myrmidon connection is not active.");
       return;
     }
     const expectedCommand =
@@ -23307,7 +23309,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           (await sponsorAllowsGuest(record.endpoint))));
     if (!authorized) {
       await queueSlackNotice(
-        "This channel or account is not allowed to start Paperclip work.",
+        "This channel or account is not allowed to start Myrmidon work.",
         principal.principal.id,
       );
       return;
@@ -23323,7 +23325,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         // task-management surface there; the control vocabulary is exact only
         // in a DM, whose provider channel identity is stable.
         await queueSlackNotice(
-          "Use status, new, and close in a direct message with this agent. In a channel, open the Paperclip task from its Slack thread.",
+          "Use status, new, and close in a direct message with this agent. In a channel, open the Myrmidon task from its Slack thread.",
           principal.principal.id,
         );
         return;
@@ -24800,7 +24802,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                   eventKind,
                   state: "filtered",
                   processedAt: new Date(),
-                  redactedError: "Destination is not enabled in Paperclip",
+                  redactedError: "Destination is not enabled in Myrmidon",
                   normalizedEvent: {
                     providerEventId,
                     kind: eventKind,
@@ -26338,7 +26340,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                 eq(agents.id, payload.assignedAgentId),
               ),
             )
-            .then((rows) => rows[0]?.name ?? "Paperclip agent");
+            .then((rows) => rows[0]?.name ?? `${PRODUCT_NAME} agent`);
           await stageAuthorizedTaskControlPublication(tx, {
             companyId: current.companyId,
             conversationId: conversation.id,
@@ -28016,7 +28018,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         .then((rows) => rows[0] ?? null);
       if (membership?.status !== "active") {
         throw forbidden(
-          "The signed-in Paperclip account is not a member of this company",
+          "The signed-in Myrmidon account is not a member of this company",
         );
       }
       const conflictingLink = await tx
@@ -28037,7 +28039,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         .then((rows) => rows[0] ?? null);
       if (conflictingLink) {
         throw conflict(
-          "This provider identity is linked to a different Paperclip account",
+          "This provider identity is linked to a different Myrmidon account",
           {
             code: "chat_identity_link_conflict",
           },
@@ -28455,12 +28457,12 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           detail:
             status === "delivery_unknown"
               ? recovery
-                ? "Slack may have accepted the task-start message, so Paperclip will not replay it automatically. Check Slack first; an explicit retry can create a duplicate starter message and task."
+                ? "Slack may have accepted the task-start message, so Myrmidon will not replay it automatically. Check Slack first; an explicit retry can create a duplicate starter message and task."
                 : "Slack may have accepted the task-start message. This older action lacks the context required for a safe explicit retry, so check Slack and cancel it here before submitting a new command."
               : status === "provider_confirmed"
-                ? "Slack accepted the task-start message. Paperclip is completing durable task admission without sending another Slack message."
+                ? "Slack accepted the task-start message. Myrmidon is completing durable task admission without sending another Slack message."
                 : status === "admitting"
-                  ? "Slack accepted the task-start message. A Paperclip worker is admitting the task without replaying the Slack send."
+                  ? "Slack accepted the task-start message. A Myrmidon worker is admitting the task without replaying the Slack send."
                   : status === "failed"
                     ? "Slack rejected the task-start message. Submit the command again to retry."
                     : status === "cancelled"
@@ -28485,8 +28487,8 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           status: row.status,
           summary: "Provider reply delivery unknown",
           detail: payload?.completeConversationId
-            ? "The provider may have accepted this reply, but Paperclip could not confirm it or close the task conversation. Check the provider first. Marking it delivered closes the conversation; retrying can create a duplicate message."
-            : "The provider may have accepted this reply, but Paperclip could not confirm it. Check the provider first. Retrying can create a duplicate message.",
+            ? "The provider may have accepted this reply, but Myrmidon could not confirm it or close the task conversation. Check the provider first. Marking it delivered closes the conversation; retrying can create a duplicate message."
+            : "The provider may have accepted this reply, but Myrmidon could not confirm it. Check the provider first. Retrying can create a duplicate message.",
           createdAt: row.createdAt.toISOString(),
           replayable: false,
           resolutionActions: [
@@ -28515,19 +28517,19 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               : row.result?.code === "slack_session_sync_rejected"
                 ? "Slack rejected the session indicator update. Check app permissions and channel access; message delivery is tracked separately."
                 : retrying
-                  ? "The Slack session indicator is waiting to sync. Paperclip will not resend the response."
+                  ? "The Slack session indicator is waiting to sync. Myrmidon will not resend the response."
                   : row.result?.sessionStatus === "processing"
                     ? "Working status is refreshed automatically while the run remains active."
                     : null
             : row.status === "processed"
-              ? "Paperclip stopped the work authorized by this request."
+              ? productSaid("stopped the work authorized by this request.")
               : row.status === "cancelled"
                 ? "No work was stopped: this request was no longer authorized or its target was no longer current."
                 : row.status === "failed"
                   ? row.result?.retryable === true
-                    ? "The Stop request could not finish yet. Paperclip will retry against the original work only."
+                    ? `The Stop request could not finish yet. ${PRODUCT_NAME} will retry against the original work only.`
                     : "The Stop request could not be completed. Check the task's current run before trying again."
-                  : "Paperclip is processing this Stop request against its original task and run.",
+                  : productSaid("is processing this Stop request against its original task and run."),
           createdAt: row.updatedAt.toISOString(),
           replayable: false,
           resolutionActions: [],
@@ -28545,7 +28547,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           status: row.status,
           summary: "GitHub webhook could not be processed",
           detail: deliveryId
-            ? `GitHub delivery ${deliveryId} was authenticated, but Paperclip could not finish processing it. Fix the connection or destination, then redeliver this delivery from the GitHub App's Recent Deliveries page.`
+            ? `GitHub delivery ${deliveryId} was authenticated, but Myrmidon could not finish processing it. Fix the connection or destination, then redeliver this delivery from the GitHub App's Recent Deliveries page.`
             : "An authenticated GitHub webhook could not be processed. Fix the connection or destination, then redeliver it from the GitHub App's Recent Deliveries page.",
           createdAt: row.createdAt.toISOString(),
           replayable: false,
@@ -28570,11 +28572,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         detail:
           row.status === "cancelled"
             ? row.result?.code === "source_changed_or_unavailable"
-              ? "The original comment changed or is no longer available. Paperclip did not replay its old contents."
-              : "This callback was not an eligible current user comment. Paperclip did not replay it."
+              ? `The original comment changed or is no longer available. ${PRODUCT_NAME} did not replay its old contents.`
+              : `This callback was not an eligible current user comment. ${PRODUCT_NAME} did not replay it.`
             : ingressStatus
-              ? "Paperclip received this callback. Its normal access checks and processing still apply."
-              : "Paperclip asked GitHub to resend a recent missed message. This does not yet confirm receipt or a reply. Automatic requests are limited; if it remains unanswered, check the App's Recent Deliveries and send your request again in the current conversation.",
+              ? productSaid("received this callback. Its normal access checks and processing still apply.")
+              : productSaid("asked GitHub to resend a recent missed message. This does not yet confirm receipt or a reply. Automatic requests are limited; if it remains unanswered, check the App's Recent Deliveries and send your request again in the current conversation."),
         createdAt: row.updatedAt.toISOString(),
         replayable: false,
         resolutionActions: [],
@@ -28587,7 +28589,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             : value?.outcome === "callback_mismatch"
               ? "The GitHub App's callback no longer matches this connection. Reconnect the App to repair it; repository access will not change."
               : value?.outcome === "scan_failed"
-                ? "Paperclip could not check GitHub's failed deliveries. The check will retry with backoff; normal callbacks are still processed."
+                ? productSaid("could not check GitHub's failed deliveries. The check will retry with backoff; normal callbacks are still processed.")
                 : null;
         return detail
           ? [
@@ -32807,21 +32809,21 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               : "Direct file delivery isn't available for this Teams conversation.";
           if (generatedFileLabel) {
             const saved = taskUrl
-              ? `File saved on the Paperclip task: ${generatedFileLabel}.`
-              : `File saved on the private Paperclip task: ${generatedFileLabel}.`;
+              ? `File saved on the Myrmidon task: ${generatedFileLabel}.`
+              : `File saved on the private Myrmidon task: ${generatedFileLabel}.`;
             text = taskUrl
               ? `${saved} ${limitation} Download it: ${taskUrl}`
               : `${saved} ${limitation}`;
           } else {
             const handoff = taskUrl
-              ? `Open the file on its Paperclip task: ${taskUrl}`
-              : "The file remains available only on the private Paperclip task.";
+              ? `Open the file on its Myrmidon task: ${taskUrl}`
+              : "The file remains available only on the private Myrmidon task.";
             text = `${text}\n\n${limitation} ${handoff}`;
           }
         } else {
           const attachmentFallback = taskUrl
-            ? `Open the task in Paperclip: ${taskUrl}`
-            : "Open the task in Paperclip to download the attachment.";
+            ? `Open the task in Myrmidon: ${taskUrl}`
+            : "Open the task in Myrmidon to download the attachment.";
           text = `${text}\n\n${attachmentFallback}`;
         }
       }
@@ -33061,7 +33063,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       text =
         input.payload.transportPart.count > 1
           ? "Complete response attached."
-          : "Paperclip attached the complete response because it exceeds Discord’s message limit.";
+          : `${PRODUCT_NAME} attached the complete response because it exceeds Discord’s message limit.`;
     }
     if (
       input.endpoint.provider === "telegram" &&
@@ -33071,7 +33073,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       text =
         input.payload.transportPart.count > 1
           ? "Complete response attached."
-          : "Paperclip attached the complete response to preserve its Markdown formatting.";
+          : `${PRODUCT_NAME} attached the complete response to preserve its Markdown formatting.`;
     }
     if (card && CAPABILITIES[input.endpoint.provider].cards) {
       return await attemptProviderPublication(async () =>
@@ -33322,7 +33324,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       if (prepared) return publication.payload.text;
       const text = publication.payload.text.includes(taskUrl)
         ? publication.payload.text
-        : `${publication.payload.text}\n\n[Open this Paperclip task](${taskUrl})`;
+        : `${publication.payload.text}\n\n[Open this Myrmidon task](${taskUrl})`;
       await tx.insert(chatActions).values({
         companyId: publication.companyId,
         endpointId: publication.endpointId,
@@ -34877,7 +34879,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       ? {
           kind: "delivery_unknown" as const,
           reason:
-            "Provider accepted the publication, but Paperclip could not confirm its durable result",
+            "Provider accepted the publication, but Myrmidon could not confirm its durable result",
         }
       : error instanceof NativeChatReviewPresentationContentionError
         ? { kind: "retry" as const, retryAfterMs: 250, reason: error.message }
@@ -35093,8 +35095,8 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           );
           const noticeText =
             attachmentFailure.kind === "generated_response"
-              ? "Paperclip could not send the response attachment. The complete response remains on its Paperclip task for an operator to retry."
-              : "Paperclip could not send an attachment. The file remains on its Paperclip task for an operator to retry.";
+              ? `${productSaid("could not send the response attachment.")} The complete response remains on its ${PRODUCT_NAME} task for an operator to retry.`
+              : `${productSaid("could not send an attachment.")} The file remains on its ${PRODUCT_NAME} task for an operator to retry.`;
           const idempotencyKey = `${ATTACHMENT_FAILURE_NOTICE_PREFIX}${publication.id}:${attachmentFailureRuntimeContext.generation}:${attachmentFailureRuntimeContext.credentialFingerprint}`;
           await tx
             .insert(chatPublications)
@@ -36863,7 +36865,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               .update(chatPublications)
               .set({
                 state: "cancelled",
-                redactedError: "Direct messages are disabled in Paperclip",
+                redactedError: "Direct messages are disabled in Myrmidon",
                 updatedAt: new Date(),
               })
               .where(
@@ -36895,7 +36897,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               .update(chatPublications)
               .set({
                 state: "cancelled",
-                redactedError: "Destination is disabled in Paperclip",
+                redactedError: "Destination is disabled in Myrmidon",
                 updatedAt: new Date(),
               })
               .where(

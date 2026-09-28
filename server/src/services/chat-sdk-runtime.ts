@@ -1,4 +1,6 @@
 import { PhotonChatAdapter, parsePhotonThreadId } from "./photon/adapter.js";
+// myrmidon(B1): product name in the user-facing chat/webhook text below; see product.ts.
+import { PRODUCT_NAME, productSaid } from "../myrmidon/product.js";
 import { PhotonLineAuthentication } from "./photon/cloud.js";
 import { PhotonState } from "./photon/state.js";
 import { PhotonReceiver } from "./photon/receiver.js";
@@ -735,9 +737,9 @@ function installDiscordNativeCommands(
   const snowflake = (value: unknown): value is string =>
     typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value);
   const denied =
-    "This command is not available here. Open the Paperclip task or ask an operator to check your chat access.";
+    `This command is not available here. Open the ${PRODUCT_NAME} task or ask an operator to check your chat access.`;
   const unconfirmed =
-    "This command could not be confirmed. Check the Paperclip task before trying again.";
+    `This command could not be confirmed. Check the ${PRODUCT_NAME} task before trying again.`;
   discord.handleGatewayInteraction = async (interaction) => {
     if (!interaction.isChatInputCommand()) return await original(interaction);
     const startedAt = Date.now();
@@ -2406,7 +2408,7 @@ export class ChatSdkEndpointRuntime {
       responseDeadlineAt ?? Number.POSITIVE_INFINITY,
     );
     const retryableTimeout = () =>
-      new Response("Paperclip could not durably accept the event in time", {
+      new Response(productSaid("could not durably accept the event in time"), {
         status: 503,
         headers: {
           "content-type": "text/plain; charset=utf-8",
@@ -2467,7 +2469,7 @@ export class ChatSdkEndpointRuntime {
           return retryableTimeout();
       }
       if (response.ok && attempt.callbackError !== undefined) {
-        return new Response("Paperclip could not durably accept the event", {
+        return new Response(productSaid("could not durably accept the event"), {
           status: 503,
           headers: {
             "content-type": "text/plain; charset=utf-8",

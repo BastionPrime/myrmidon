@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FINISH_SUCCESSFUL_RUN_HANDOFF_REASON,
+  LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_BODY_PAPERCLIP,
   SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY,
   SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY,
   SUCCESSFUL_RUN_MISSING_STATE_REASON,
@@ -609,5 +610,18 @@ describe("successful run handoff decision", () => {
     expect(isSuccessfulRunHandoffRequiredNoticeBody("## Successful run missing issue disposition\n\nold body")).toBe(true);
     expect(isSuccessfulRunHandoffRequiredNoticeBody("## This issue still needs a next step\n\nold body")).toBe(true);
     expect(isSuccessfulRunHandoffRequiredNoticeBody("Unrelated comment")).toBe(false);
+  });
+
+  // myrmidon(B1): the notice body now names the product ("Myrmidon needs a
+  // disposition..."); issues that already carry the pre-rename body ("Paperclip
+  // needs a disposition...") must still be recognized so recovery does not
+  // re-post the notice under the new name.
+  it("recognizes the pre-rename notice body for fallback deduplication", () => {
+    expect(SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY).not.toBe(
+      LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_BODY_PAPERCLIP,
+    );
+    expect(
+      isSuccessfulRunHandoffRequiredNoticeBody(LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_BODY_PAPERCLIP),
+    ).toBe(true);
   });
 });
