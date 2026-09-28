@@ -21,11 +21,26 @@
 //     the provider segment of the key. Without a provider this compiler
 //     cannot place the model name anywhere; it warns and drops it, exactly
 //     like M1 does when the profile it edits has no provider set either.
-//   - hindsight connection (mode/api_url/api_key): out of scope for this
-//     input — HermesProfileInput only carries the per-bot settings
-//     (bankId/tags/recallBudget/mission). Connection details are instance-
-//     wide, not per-card, and are expected to be merged in by the caller
-//     that builds HermesProfileInput (G3), not by this function.
+//   - hindsight api_key: out of scope for this input, same as the LLM
+//     gateway's api key below — it goes into hermes/.env under
+//     HINDSIGHT_API_KEY (input.env, handled by buildEnvFile), never into
+//     hermes/hindsight/config.json. The vendor plugin still reads it from
+//     there via get_secret("HINDSIGHT_API_KEY") even once config.json
+//     exists and is otherwise authoritative, because it only ever reads
+//     config.json's own "api_key"/"apiKey" keys, which this compiler never
+//     writes (plugins/memory/hindsight/__init__.py `_cloud_api_key`).
+//     mode/apiUrl/memoryMode/autoRetain, by contrast, ARE this function's
+//     job (HermesProfileHindsightSettings) — the previous version of this
+//     comment deferred them to the caller (G3), which cannot do it: G3
+//     has no such fields to merge in, and hermes/hindsight/config.json is
+//     this module's own restart-class output.
+//   - LLM gateway endpoint (model.base_url / model.api_key): instance-wide,
+//     not per-card — HermesProfileInput.llm (HermesProfileLlmSettings)
+//     carries it once per instance, same shape as the hindsight connection
+//     details above. The api key itself is never written as a value, only
+//     as a "${VAR}" reference Hermes expands from hermes/.env at load
+//     (hermes_cli/config.py `_expand_env_vars`); the actual value belongs
+//     in input.env under that name.
 import { createHash } from "node:crypto";
 
 import type { CompiledProfile, CompiledProfileFile } from "./types.js";
@@ -67,6 +82,14 @@ export interface HermesProfileSkillFile {
   content: string;
 }
 
+/**
+ * hindsight's `mode` (plugins/memory/hindsight/settings.py choices). The
+ * fleet only ever runs `local_external` (a shared hindsight service inside
+ * the network); `cloud` and `local_embedded` exist here only so a caller can
+ * opt into them explicitly — see {@link HermesProfileHindsightSettings.mode}.
+ */
+export type HermesProfileHindsightMode = "local_external" | "cloud" | "local_embedded";
+
 export interface HermesProfileHindsightSettings {
   bankId: string;
   /** Default tags applied when a memory is retained (hindsight's `retain_tags`, not `recall_tags`). */
@@ -74,6 +97,68 @@ export interface HermesProfileHindsightSettings {
   recallBudget?: "low" | "mid" | "high";
   /** The memory bank's mission/purpose text (hindsight's `bank_mission`). */
   mission?: string;
+  /**
+   * hindsight's `mode`. Defaults to `"local_external"` when unset — this
+   * compiler always writes an explicit `mode`, never leaves it out, because
+   * once `hermes/hindsight/config.json` exists on disk the vendor plugin
+   * stops consulting `HINDSIGHT_MODE`/env entirely and falls back to its own
+   * default of `"cloud"` with a public vectorize.io endpoint
+   * (`_load_config`/`is_available`/`initialize`: `cfg.get("mode", "cloud")`
+   * in plugins/memory/hindsight/__init__.py) — an *implicit* cloud default
+   * for a fleet bot is exactly the failure mode this field closes off. Set
+   * it to `"cloud"` explicitly if a bot genuinely needs that.
+   */
+  mode?: HermesProfileHindsightMode;
+  /**
+   * hindsight's `api_url`. Required (this function throws otherwise) when
+   * `mode` is, or defaults to, `"local_external"`: that mode's own runtime
+   * fallback is `http://localhost:8888` (settings.py `_DEFAULT_LOCAL_URL`),
+   * which is never the fleet's shared hindsight service, so this compiler
+   * refuses to emit a `local_external` profile that would silently fall
+   * back to it.
+   */
+  apiUrl?: string;
+  /** hindsight's `memory_mode` (`"hybrid" | "context" | "tools"`). Defaults to `"tools"` here — the fleet's own convention — not the vendor's own default of `"hybrid"`. */
+  memoryMode?: "hybrid" | "context" | "tools";
+  /** hindsight's `auto_retain`. Defaults to `false` here — the fleet's own convention — not the vendor's own default of `true`. */
+  autoRetain?: boolean;
+}
+
+/**
+ * Instance-wide LLM gateway settings (e.g. an internal OpenAI-compatible
+ * gateway endpoint) — not carried by the agent card, merged in once per
+ * instance by the caller (G3), the same way
+ * {@link HermesProfileHindsightSettings.apiUrl} is.
+ * Applied to `model.base_url`/`model.api_key` and to every `fallback_model`
+ * entry's `base_url`/`key_env`: Hermes resolves each of those independently
+ * (`hermes_cli/runtime_provider_backends.py` for `model`,
+ * `hermes_cli/fallback_config.py` for `fallback_model` entries — neither
+ * inherits `base_url`/the key from the other). Auxiliary models (vision,
+ * compression) are not configured with their own endpoint at all and simply
+ * reuse whatever `model.base_url`/`model.api_key` resolve to, so fixing
+ * `model` covers them too.
+ */
+export interface HermesProfileLlmSettings {
+  /**
+   * OpenAI-compatible base URL for a "custom"-family provider (or any
+   * provider that needs an explicit endpoint instead of its built-in
+   * default), e.g. `https://example.com/llm/v1`. Written unconditionally
+   * whenever set, regardless of `adapterConfig.provider`'s value.
+   */
+  baseUrl?: string;
+  /**
+   * Name of the `hermes/.env` variable holding the API key Hermes should
+   * send — never the key's value itself. `model.api_key` gets the literal
+   * string `"${<apiKeyEnv>}"`, which Hermes expands from `hermes/.env` at
+   * config load (`hermes_cli/config.py` `_expand_env_vars`); each
+   * `fallback_model` entry gets a plain `key_env: "<apiKeyEnv>"` field
+   * instead (`hermes_cli/fallback_config.py` `resolve_entry_api_key` reads
+   * `key_env` as a bare name and resolves it itself — it does not go
+   * through `_expand_env_vars`, so it must not be `${...}`-wrapped). The
+   * caller (G3) must ensure `input.env` actually carries this name; this
+   * compiler only ever emits the reference.
+   */
+  apiKeyEnv?: string;
 }
 
 export interface HermesProfileMcpServer {
@@ -115,6 +200,8 @@ export interface HermesProfileInput {
   /** The AGENTS.md instruction bundle text, already assembled by the caller. */
   instructions: string;
   hindsight: HermesProfileHindsightSettings;
+  /** Instance-wide LLM gateway settings — see {@link HermesProfileLlmSettings}. */
+  llm: HermesProfileLlmSettings;
   mcpServers: readonly HermesProfileMcpServer[];
   /** gateway.api_server.max_concurrent_runs — must be a positive integer. */
   maxConcurrentRuns: number;
@@ -143,6 +230,9 @@ export interface CompileHermesProfileResult {
 
 const HERMES_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 const HINDSIGHT_RECALL_BUDGETS = ["low", "mid", "high"];
+const HINDSIGHT_MODES: readonly HermesProfileHindsightMode[] = ["local_external", "cloud", "local_embedded"];
+/** The fleet's only supported mode — see {@link HermesProfileHindsightSettings.mode}. */
+const HINDSIGHT_DEFAULT_MODE: HermesProfileHindsightMode = "local_external";
 
 /**
  * Hermes's CONTEXT_FILE_MAX_CHARS floor (agent/prompt_builder.py), used as a
@@ -199,6 +289,13 @@ function file(path: string, content: string, opts: { secret: boolean }): Compile
 function buildFallbackModelSequence(
   fallbacks: readonly string[] | undefined,
   provider: string | undefined,
+  // Each fallback_model entry resolves its own base_url/key independently of
+  // `model` (hermes_cli/fallback_config.py) — it does not inherit either,
+  // so the caller's already-resolved instance-level LLM gateway settings
+  // are repeated onto every entry (resolved once by the caller so a bad
+  // llm.apiKeyEnv only ever warns a single time per compile).
+  llmBaseUrl: string | undefined,
+  llmApiKeyEnv: string | undefined,
   warnings: string[],
 ): YamlMapping[] | undefined {
   if (!fallbacks || fallbacks.length === 0) return undefined;
@@ -209,7 +306,25 @@ function buildFallbackModelSequence(
     return undefined;
   }
   const resolvedProvider = provider;
-  return fallbacks.map((model): YamlMapping => ({ provider: resolvedProvider, model }));
+  return fallbacks.map((model): YamlMapping => ({
+    provider: resolvedProvider,
+    model,
+    base_url: llmBaseUrl,
+    key_env: llmApiKeyEnv,
+  }));
+}
+
+/** `input.llm.apiKeyEnv`, validated as an env-var name, or undefined (with a warning) if it isn't one. */
+function resolveLlmApiKeyEnv(llm: HermesProfileLlmSettings, warnings: string[]): string | undefined {
+  const apiKeyEnv = nonEmpty(llm.apiKeyEnv);
+  if (!apiKeyEnv) return undefined;
+  if (!ENV_NAME_PATTERN.test(apiKeyEnv)) {
+    warnings.push(
+      `llm.apiKeyEnv: "${apiKeyEnv}" is not a valid environment variable name; the LLM gateway api key was dropped`,
+    );
+    return undefined;
+  }
+  return apiKeyEnv;
 }
 
 function buildReasoningEffort(effort: string | undefined, warnings: string[]): string | undefined {
@@ -319,18 +434,34 @@ function buildConfigYaml(input: HermesProfileInput, warnings: string[]): string 
   const { adapterConfig } = input;
   warnUnplacedVoiceModels(adapterConfig.models, warnings);
 
+  // Resolved once (not inline below, and not re-resolved inside
+  // buildFallbackModelSequence) so the "not a valid env var name" warning is
+  // only ever pushed a single time per compile.
+  const llmBaseUrl = nonEmpty(input.llm.baseUrl);
+  const llmApiKeyEnv = resolveLlmApiKeyEnv(input.llm, warnings);
+
   const root: YamlMapping = {
     approvals: { mode: "off" },
     agent: { reasoning_effort: buildReasoningEffort(adapterConfig.effort, warnings) },
     auxiliary: buildAuxiliary(adapterConfig.models?.vision),
     compression: buildCompression(input.instanceDefaults.compression),
-    fallback_model: buildFallbackModelSequence(adapterConfig.models?.fallbacks, adapterConfig.provider, warnings),
+    fallback_model: buildFallbackModelSequence(
+      adapterConfig.models?.fallbacks,
+      adapterConfig.provider,
+      llmBaseUrl,
+      llmApiKeyEnv,
+      warnings,
+    ),
     gateway: { api_server: { max_concurrent_runs: input.maxConcurrentRuns } },
     mcp_servers: buildMcpServers(input.mcpServers, warnings),
     memory: { provider: "hindsight" },
     model: {
       default: nonEmpty(adapterConfig.model),
       provider: nonEmpty(adapterConfig.provider),
+      // Instance-level LLM gateway settings — see HermesProfileLlmSettings.
+      // api_key is a "${VAR}" reference, never the key's value.
+      base_url: llmBaseUrl,
+      api_key: llmApiKeyEnv ? `\${${llmApiKeyEnv}}` : undefined,
     },
     platform_toolsets: { api_server: buildToolsets(adapterConfig.toolsets) },
     platforms: { api_server: { enabled: true } },
@@ -429,16 +560,49 @@ function buildHindsightConfigJson(hindsight: HermesProfileHindsightSettings, war
   const tags = (hindsight.tags ?? []).map((tag) => tag.trim()).filter((tag) => tag.length > 0);
   const mission = nonEmpty(hindsight.mission);
 
+  // mode: always written, defaulting to the fleet's only supported mode —
+  // see HermesProfileHindsightSettings.mode for why an implicit default is
+  // not an option here the way it is for recallBudget/tags/mission above.
+  let mode = nonEmpty(hindsight.mode) as HermesProfileHindsightMode | undefined;
+  if (mode && !HINDSIGHT_MODES.includes(mode)) {
+    warnings.push(
+      `hindsight.mode: "${mode}" is not one of ${HINDSIGHT_MODES.join("/")}; using the default "${HINDSIGHT_DEFAULT_MODE}"`,
+    );
+    mode = undefined;
+  }
+  mode ??= HINDSIGHT_DEFAULT_MODE;
+
+  // api_url: required once mode resolves to "local_external" — that mode's
+  // own runtime fallback is a localhost address, never the fleet's shared
+  // service (see HermesProfileHindsightSettings.apiUrl). Thrown, not
+  // warned, the same severity as an empty bankId/mcp url elsewhere in this
+  // module: a local_external profile with no api_url is not a degraded-but-
+  // usable profile, it is a wrong one.
+  const apiUrl = nonEmpty(hindsight.apiUrl);
+  if (mode === "local_external" && !apiUrl) {
+    throw new Error(
+      'compileHermesProfile: hindsight.apiUrl must not be empty when hindsight.mode is "local_external" (the default)',
+    );
+  }
+
+  const memoryMode = hindsight.memoryMode ?? "tools";
+  const autoRetain = hindsight.autoRetain ?? false;
+
   // Key order fixed and sorted for the same determinism reason as the YAML.
   // Key names match what the vendor's hindsight plugin actually reads from
   // this file (/opt/hermes-agent/src/plugins/memory/hindsight/__init__.py:
-  // cfg.get("bank_mission") and _cfg_or_env("retain_tags", ...)) — not the
-  // HermesProfileHindsightSettings field names, which are generic on
-  // purpose (see DIVERGENCE.md-style note above: this module doesn't own
-  // the hindsight connection, only the per-bot bank/mission/tags values).
+  // cfg.get("bank_mission"), cfg.get("mode", "cloud"), cfg.get("api_url"),
+  // cfg.get("memory_mode", "hybrid"), cfg.get("auto_retain", True) and
+  // _cfg_or_env("retain_tags", ...)) — not the HermesProfileHindsightSettings
+  // field names, which are generic on purpose. api_key is deliberately never
+  // written here — see the module docstring's "hindsight api_key" note.
   const ordered: Record<string, unknown> = {};
+  if (apiUrl) ordered.api_url = apiUrl;
+  ordered.auto_retain = autoRetain;
   ordered.bank_id = bankId;
   if (mission) ordered.bank_mission = mission;
+  ordered.memory_mode = memoryMode;
+  ordered.mode = mode;
   if (recallBudget) ordered.recall_budget = recallBudget;
   if (tags.length > 0) ordered.retain_tags = tags;
   return `${JSON.stringify(ordered, null, 2)}\n`;
@@ -500,21 +664,36 @@ export function compileHermesProfileDetailed(input: HermesProfileInput): Compile
   const configYaml = buildConfigYaml(input, warnings);
   const envFile = buildEnvFile(input, warnings);
   const hindsightConfigJson = buildHindsightConfigJson(input.hindsight, warnings);
+  // Restart-class, same as config.yaml/.env/hindsight config above: the
+  // vendor gateway's skills index is built once and cached in-process (LRU +
+  // disk snapshot) and does not watch the skills directory for changes —
+  // adding, removing or editing a skill's files never takes effect for a
+  // running gateway without a restart (agent/prompt_builder.py skills-index
+  // cache; agent/conversation_loop.py: "The skills index cache ... does not
+  // watch the skills dir"; the vendor's own `/reload-skills` command exists
+  // precisely to force this by hand otherwise). All of a skill's files go
+  // in, not just SKILL.md: its frontmatter alone drives the index entry, but
+  // a skill's other files (scripts, references) are also only ever (re)read
+  // through that same cached external_dirs listing.
+  const skillFiles = buildSkillFiles(input.skills, warnings);
 
   const restartFiles = [
     file("hermes/config.yaml", configYaml, { secret: hasMcpServerHeaders(input.mcpServers) }),
     file("hermes/.env", envFile, { secret: true }),
     file("hermes/hindsight/config.json", hindsightConfigJson, { secret: false }),
+    ...skillFiles,
   ];
 
-  const skillFiles = buildSkillFiles(input.skills, warnings);
   if (input.instructions.length > AGENTS_MD_WARN_CHARS) {
     warnings.push(
       `workspace/AGENTS.md: ${input.instructions.length} characters, over Hermes's ${AGENTS_MD_WARN_CHARS}-character context-file floor; Hermes may truncate it at runtime, depending on the bot's model context window (the floor, not necessarily the effective limit for this bot)`,
     );
   }
+  // Files-class: AGENTS.md is re-read by the gateway on each run (it isn't
+  // cached the way the skills index is), so a running gateway picks up an
+  // edit without a restart.
   const agentsMdFile = file("workspace/AGENTS.md", input.instructions, { secret: false });
-  const filesTrackedFiles = [...skillFiles, agentsMdFile];
+  const filesTrackedFiles = [agentsMdFile];
 
   const restartHash = hashEntries(restartFiles);
   const filesHash = hashEntries(filesTrackedFiles);

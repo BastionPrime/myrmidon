@@ -17,7 +17,8 @@ function baseInput(overrides: Partial<HermesProfileInput> = {}): HermesProfileIn
     env: {},
     skills: {},
     instructions: "# Role\n\nYou are agent-a.\n",
-    hindsight: { bankId: "agent-a" },
+    hindsight: { bankId: "agent-a", apiUrl: "https://example.com/hindsight" },
+    llm: {},
     mcpServers: [],
     maxConcurrentRuns: 2,
     instanceDefaults: {},
@@ -359,6 +360,92 @@ describe("myrmidon(G2) compileHermesProfile — model mapping (repeats the M1 ma
   });
 });
 
+// Regression coverage for the bug this closes: config.yaml used to write
+// only model.default/model.provider, never an endpoint. Every live fleet
+// profile runs provider=custom against an internal OpenAI-compatible LLM
+// gateway, so without model.base_url Hermes either 401s against it (with a
+// same-origin API key it isn't meant for) or silently routes to
+// OpenRouter's default endpoint instead — see HermesProfileLlmSettings.
+describe("myrmidon(G2) compileHermesProfile — LLM gateway (instance-level base_url/api_key)", () => {
+  it("provider custom + baseUrl: config.yaml gets model.base_url, and never the key's actual value", () => {
+    const profile = compileHermesProfile(
+      baseInput({
+        adapterConfig: { model: "custom-provider/some-model", provider: "custom" },
+        llm: { baseUrl: "https://example.com/llm/v1", apiKeyEnv: "LLM_GATEWAY_API_KEY" },
+      }),
+    );
+    const yaml = fileByPath(profile.files, "hermes/config.yaml").content;
+    expect(yaml).toContain('base_url: "https://example.com/llm/v1"');
+    // api_key is a "${VAR}" reference, never a resolved value: this
+    // compiler never has the actual secret in hand for config.yaml, and
+    // must never write one even if it did.
+    expect(yaml).toContain('api_key: "${LLM_GATEWAY_API_KEY}"');
+    expect(yaml).not.toMatch(/api_key:\s*"(?!\$\{)/);
+  });
+
+  it("writes base_url alone, with api_key left out, when apiKeyEnv is not set", () => {
+    const profile = compileHermesProfile(
+      baseInput({ adapterConfig: { provider: "custom" }, llm: { baseUrl: "https://example.com/llm/v1" } }),
+    );
+    const yaml = fileByPath(profile.files, "hermes/config.yaml").content;
+    expect(yaml).toContain('base_url: "https://example.com/llm/v1"');
+    expect(yaml).not.toContain("api_key");
+  });
+
+  it("leaves model.base_url/api_key, and the model: key entirely, out of the document when llm is unset", () => {
+    const profile = compileHermesProfile(baseInput({ adapterConfig: {} }));
+    const yaml = fileByPath(profile.files, "hermes/config.yaml").content;
+    expect(yaml).not.toContain("model:");
+    expect(yaml).not.toContain("base_url");
+    expect(yaml).not.toContain("api_key");
+  });
+
+  it("drops an apiKeyEnv that is not a valid environment variable name, with a warning", () => {
+    const { profile, warnings } = compileHermesProfileDetailed(
+      baseInput({
+        adapterConfig: { provider: "custom" },
+        llm: { baseUrl: "https://example.com/llm/v1", apiKeyEnv: "not a name" },
+      }),
+    );
+    const yaml = fileByPath(profile.files, "hermes/config.yaml").content;
+    expect(yaml).not.toContain("api_key");
+    expect(yaml).toContain('base_url: "https://example.com/llm/v1"');
+    expect(warnings.some((w) => w.includes("llm.apiKeyEnv") && w.includes("not a name"))).toBe(true);
+  });
+
+  // fallback_model entries resolve base_url/key independently of `model`
+  // (hermes_cli/fallback_config.py resolve_entry_api_key /
+  // _iter_fallback_entries — neither is inherited), so the same instance
+  // settings must be repeated onto every entry, not just the main model.
+  it("propagates base_url and key_env (never api_key/a resolved value) to every fallback_model entry", () => {
+    const profile = compileHermesProfile(
+      baseInput({
+        adapterConfig: { provider: "custom", models: { fallbacks: ["model-b", "model-c"] } },
+        llm: { baseUrl: "https://example.com/llm/v1", apiKeyEnv: "LLM_GATEWAY_API_KEY" },
+      }),
+    );
+    const yaml = fileByPath(profile.files, "hermes/config.yaml").content;
+    // The exact-substring match below already proves each entry has only
+    // these four keys (base_url, key_env, model, provider) — in particular
+    // no "api_key" key, which model.api_key uses instead (asserted above).
+    expect(yaml).toContain(
+      'fallback_model:\n- base_url: "https://example.com/llm/v1"\n  key_env: "LLM_GATEWAY_API_KEY"\n  model: "model-b"\n  provider: "custom"\n- base_url: "https://example.com/llm/v1"\n  key_env: "LLM_GATEWAY_API_KEY"\n  model: "model-c"\n  provider: "custom"',
+    );
+  });
+
+  it("still drops the fallback chain (base_url/key_env included) when the provider is auto, same as before", () => {
+    const { profile, warnings } = compileHermesProfileDetailed(
+      baseInput({
+        adapterConfig: { provider: "auto", models: { fallbacks: ["model-b"] } },
+        llm: { baseUrl: "https://example.com/llm/v1", apiKeyEnv: "LLM_GATEWAY_API_KEY" },
+      }),
+    );
+    const yaml = fileByPath(profile.files, "hermes/config.yaml").content;
+    expect(yaml).not.toContain("fallback_model");
+    expect(warnings.some((w) => w.startsWith("fallback_model:"))).toBe(true);
+  });
+});
+
 describe("myrmidon(G2) compileHermesProfile — toolsets", () => {
   it("splits, trims and de-duplicates the comma-separated toolsets field", () => {
     const profile = compileHermesProfile(
@@ -451,30 +538,46 @@ describe("myrmidon(G2) compileHermesProfile — hindsight settings", () => {
   // /opt/hermes-agent/src/plugins/memory/hindsight/__init__.py — not the
   // HermesProfileHindsightSettings field names (`mission`, `tags`), which
   // are generic on purpose.
-  it("writes bank_id, bank_mission, recall_budget and retain_tags, sorted, no connection details", () => {
+  it("writes bank_id, bank_mission, recall_budget, retain_tags plus the always-on mode/api_url/memory_mode/auto_retain, sorted", () => {
     const profile = compileHermesProfile(
       baseInput({
-        hindsight: { bankId: "agent-a", mission: "Keep the shop running.", recallBudget: "high", tags: [" ops ", "shop", ""] },
+        hindsight: {
+          bankId: "agent-a",
+          apiUrl: "https://example.com/hindsight",
+          mission: "Keep the shop running.",
+          recallBudget: "high",
+          tags: [" ops ", "shop", ""],
+        },
       }),
     );
     const json = JSON.parse(fileByPath(profile.files, "hermes/hindsight/config.json").content);
     expect(json).toEqual({
+      api_url: "https://example.com/hindsight",
+      auto_retain: false,
       bank_id: "agent-a",
       bank_mission: "Keep the shop running.",
+      memory_mode: "tools",
+      mode: "local_external",
       recall_budget: "high",
       retain_tags: ["ops", "shop"],
     });
   });
 
-  it("omits bank_mission, recall_budget and retain_tags when unset", () => {
-    const profile = compileHermesProfile(baseInput({ hindsight: { bankId: "agent-a" } }));
+  it("still omits bank_mission, recall_budget and retain_tags when unset, but never mode/api_url/memory_mode/auto_retain", () => {
+    const profile = compileHermesProfile(baseInput({ hindsight: { bankId: "agent-a", apiUrl: "https://example.com/hindsight" } }));
     const json = JSON.parse(fileByPath(profile.files, "hermes/hindsight/config.json").content);
-    expect(json).toEqual({ bank_id: "agent-a" });
+    expect(json).toEqual({
+      api_url: "https://example.com/hindsight",
+      auto_retain: false,
+      bank_id: "agent-a",
+      memory_mode: "tools",
+      mode: "local_external",
+    });
   });
 
   it("drops an unrecognized recall budget with a warning", () => {
     const { profile, warnings } = compileHermesProfileDetailed(
-      baseInput({ hindsight: { bankId: "agent-a", recallBudget: "extreme" as never } }),
+      baseInput({ hindsight: { bankId: "agent-a", apiUrl: "https://example.com/hindsight", recallBudget: "extreme" as never } }),
     );
     const json = JSON.parse(fileByPath(profile.files, "hermes/hindsight/config.json").content);
     expect(json.recall_budget).toBeUndefined();
@@ -482,15 +585,107 @@ describe("myrmidon(G2) compileHermesProfile — hindsight settings", () => {
   });
 
   it("rejects an empty bank id", () => {
-    expect(() => compileHermesProfile(baseInput({ hindsight: { bankId: "  " } }))).toThrow();
+    expect(() => compileHermesProfile(baseInput({ hindsight: { bankId: "  ", apiUrl: "https://example.com/hindsight" } }))).toThrow();
   });
 
   it("always sets memory.provider to hindsight in config.yaml, regardless of the hindsight settings given", () => {
     const yaml = fileByPath(
-      compileHermesProfile(baseInput({ hindsight: { bankId: "agent-a" } })).files,
+      compileHermesProfile(baseInput({ hindsight: { bankId: "agent-a", apiUrl: "https://example.com/hindsight" } })).files,
       "hermes/config.yaml",
     ).content;
     expect(yaml).toContain('memory:\n  provider: "hindsight"');
+  });
+
+  // Regression guard for the bug this closes: hermes/hindsight/config.json
+  // used to carry only bank_id/bank_mission/recall_budget/retain_tags. Once
+  // that file exists on disk the vendor plugin stops consulting
+  // HINDSIGHT_MODE (or any other env var) at all and falls back to its own
+  // default of mode="cloud" with a public vectorize.io endpoint — so a
+  // fleet bot must never be able to end up with an implicit "cloud". This
+  // compiler now always writes an explicit mode, defaulting to
+  // "local_external" (the fleet's only supported mode), so cloud only ever
+  // happens when a caller opts in by name.
+  it("defaults mode to local_external without being told to, never cloud", () => {
+    const json = JSON.parse(
+      fileByPath(
+        compileHermesProfile(baseInput({ hindsight: { bankId: "agent-a", apiUrl: "https://example.com/hindsight" } })).files,
+        "hermes/hindsight/config.json",
+      ).content,
+    );
+    expect(json.mode).toBe("local_external");
+  });
+
+  it("rejects a local_external hindsight profile with no apiUrl (mode's default), rather than silently falling back to Hermes's own localhost default", () => {
+    expect(() => compileHermesProfile(baseInput({ hindsight: { bankId: "agent-a" } }))).toThrow(
+      /apiUrl.*must not be empty.*local_external/,
+    );
+  });
+
+  it("also rejects an explicit mode: \"local_external\" with no apiUrl", () => {
+    expect(() =>
+      compileHermesProfile(baseInput({ hindsight: { bankId: "agent-a", mode: "local_external" } })),
+    ).toThrow(/apiUrl/);
+  });
+
+  it("allows an explicit mode: \"cloud\" with no apiUrl — cloud has its own vendor default endpoint", () => {
+    const json = JSON.parse(
+      fileByPath(
+        compileHermesProfile(baseInput({ hindsight: { bankId: "agent-a", mode: "cloud" } })).files,
+        "hermes/hindsight/config.json",
+      ).content,
+    );
+    expect(json.mode).toBe("cloud");
+    expect(json.api_url).toBeUndefined();
+  });
+
+  it("falls back to local_external with a warning on an unrecognized mode", () => {
+    const { profile, warnings } = compileHermesProfileDetailed(
+      baseInput({ hindsight: { bankId: "agent-a", apiUrl: "https://example.com/hindsight", mode: "sky" as never } }),
+    );
+    const json = JSON.parse(fileByPath(profile.files, "hermes/hindsight/config.json").content);
+    expect(json.mode).toBe("local_external");
+    expect(warnings.some((w) => w.includes("hindsight.mode") && w.includes("sky"))).toBe(true);
+  });
+
+  it("writes memory_mode and auto_retain from the card when given, overriding this compiler's own tools/false defaults", () => {
+    const json = JSON.parse(
+      fileByPath(
+        compileHermesProfile(
+          baseInput({
+            hindsight: {
+              bankId: "agent-a",
+              apiUrl: "https://example.com/hindsight",
+              memoryMode: "hybrid",
+              autoRetain: true,
+            },
+          }),
+        ).files,
+        "hermes/hindsight/config.json",
+      ).content,
+    );
+    expect(json.memory_mode).toBe("hybrid");
+    expect(json.auto_retain).toBe(true);
+  });
+
+  // Never writes hindsight's own api_key/apiKey into config.json — the key
+  // goes through hermes/.env (HINDSIGHT_API_KEY) instead, same as every
+  // other secret this compiler handles. Once config.json exists, the vendor
+  // plugin's _cloud_api_key() still falls back to get_secret("HINDSIGHT_API_KEY")
+  // as long as config.json has no "api_key"/"apiKey" key of its own.
+  it("never writes an api_key/apiKey field into hindsight/config.json", () => {
+    const json = JSON.parse(
+      fileByPath(
+        compileHermesProfile(
+          baseInput({
+            hindsight: { bankId: "agent-a", apiUrl: "https://example.com/hindsight" },
+            env: { HINDSIGHT_API_KEY: { value: "sk-hindsight-secret-0001", secret: true } },
+          }),
+        ).files,
+        "hermes/hindsight/config.json",
+      ).content,
+    );
+    expect(json.api_key).toBeUndefined();
+    expect(json.apiKey).toBeUndefined();
   });
 });
 
@@ -613,13 +808,51 @@ describe("myrmidon(G2) classifyProfileChange integration", () => {
     ).toBe("restart");
   });
 
-  it("reports \"files\" when only a files-class field changes (a skill's content)", () => {
+  // Skills are restart-class, not files-class: the vendor gateway's skills
+  // index is cached in-process (LRU + disk snapshot) and does not watch the
+  // skills directory, so a running gateway never picks up an added,
+  // removed or edited skill on its own — see the compiler's comment at the
+  // skillFiles call site. A files-class classification here (the old
+  // behavior) meant the reconciler would write the new files and then never
+  // restart the gateway to pick them up.
+  it("reports \"restart\" when an existing skill's content changes (skills are restart-class)", () => {
     const before = compileHermesProfile(
       baseInput({ skills: { "code-review": [{ path: "SKILL.md", content: "v1" }] } }),
     );
     const after = compileHermesProfile(
       baseInput({ skills: { "code-review": [{ path: "SKILL.md", content: "v2" }] } }),
     );
+    expect(before.restartHash).not.toBe(after.restartHash);
+    expect(classifyProfileChange({ restartHash: before.restartHash, filesHash: before.filesHash }, after)).toBe(
+      "restart",
+    );
+  });
+
+  it("reports \"restart\" when a skill is added", () => {
+    const before = compileHermesProfile(baseInput({ skills: {} }));
+    const after = compileHermesProfile(
+      baseInput({ skills: { "new-skill": [{ path: "SKILL.md", content: "# New\n" }] } }),
+    );
+    expect(before.restartHash).not.toBe(after.restartHash);
+    expect(classifyProfileChange({ restartHash: before.restartHash, filesHash: before.filesHash }, after)).toBe(
+      "restart",
+    );
+  });
+
+  it("reports \"restart\" when a skill is removed", () => {
+    const before = compileHermesProfile(
+      baseInput({ skills: { "old-skill": [{ path: "SKILL.md", content: "# Old\n" }] } }),
+    );
+    const after = compileHermesProfile(baseInput({ skills: {} }));
+    expect(before.restartHash).not.toBe(after.restartHash);
+    expect(classifyProfileChange({ restartHash: before.restartHash, filesHash: before.filesHash }, after)).toBe(
+      "restart",
+    );
+  });
+
+  it("reports \"files\" when only AGENTS.md changes (still the one files-class field)", () => {
+    const before = compileHermesProfile(baseInput({ instructions: "v1" }));
+    const after = compileHermesProfile(baseInput({ instructions: "v2" }));
     expect(before.restartHash).toBe(after.restartHash);
     expect(before.filesHash).not.toBe(after.filesHash);
     expect(classifyProfileChange({ restartHash: before.restartHash, filesHash: before.filesHash }, after)).toBe(
