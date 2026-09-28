@@ -10,6 +10,8 @@ import {
   countAttemptsSince,
   decideStrandedAutoPolicy,
   isStrandedAutoPolicyCause,
+  isStrandedAutoPolicyManagerHandoffAlreadyApplied,
+  issueExecutionPolicyHasManagerReviewStage,
   readStrandedAutoPolicyEnabled,
   readStrandedAutoRetriesPerDay,
   resolveActiveManagerAgentId,
@@ -227,6 +229,91 @@ describe("buildStrandedAutoPolicyManagerReviewPatch", () => {
     const executionPolicy = patch.executionPolicy as { stages: Array<{ participants: Array<{ agentId: string | null }> }> };
     expect(executionPolicy.stages).toHaveLength(1);
     expect(executionPolicy.stages[0]?.participants[0]?.agentId).toBe(managerAgentId);
+  });
+});
+
+describe("issueExecutionPolicyHasManagerReviewStage / isStrandedAutoPolicyManagerHandoffAlreadyApplied", () => {
+  // Third-round review finding: the reassign-to-manager transaction's
+  // optimistic guard used to `return null` (fall through to the vendor's
+  // own board escalation) whenever the re-read row differed from the
+  // caller's stale snapshot in *any* way — including the one case where
+  // that difference is a racing caller having already committed this exact
+  // handoff moments earlier. These two functions distinguish that specific,
+  // already-safe case from a genuine conflict.
+  const assigneeAgentId = "00000000-0000-4000-8000-000000000001";
+  const managerAgentId = "00000000-0000-4000-8000-000000000002";
+  const otherAgentId = "00000000-0000-4000-8000-000000000003";
+
+  it("issueExecutionPolicyHasManagerReviewStage matches the exact patch shape buildStrandedAutoPolicyManagerReviewPatch produces", () => {
+    const patch = buildStrandedAutoPolicyManagerReviewPatch({
+      issue: { status: "in_progress", assigneeAgentId, assigneeUserId: null },
+      managerAgentId,
+      cause: "stranded_assigned_issue",
+    });
+    expect(issueExecutionPolicyHasManagerReviewStage(patch.executionPolicy, managerAgentId)).toBe(true);
+    expect(issueExecutionPolicyHasManagerReviewStage(patch.executionPolicy, otherAgentId)).toBe(false);
+  });
+
+  it("issueExecutionPolicyHasManagerReviewStage tolerates a missing, null or malformed policy", () => {
+    expect(issueExecutionPolicyHasManagerReviewStage(null, managerAgentId)).toBe(false);
+    expect(issueExecutionPolicyHasManagerReviewStage(undefined, managerAgentId)).toBe(false);
+    expect(issueExecutionPolicyHasManagerReviewStage({}, managerAgentId)).toBe(false);
+    expect(issueExecutionPolicyHasManagerReviewStage({ stages: "not-an-array" }, managerAgentId)).toBe(false);
+    expect(
+      issueExecutionPolicyHasManagerReviewStage(
+        { stages: [{ type: "review", participants: "not-an-array" }] },
+        managerAgentId,
+      ),
+    ).toBe(false);
+  });
+
+  it("recognizes a racing caller's already-committed handoff: in_review, manager as assignee, manager as review participant", () => {
+    const patch = buildStrandedAutoPolicyManagerReviewPatch({
+      issue: { status: "in_progress", assigneeAgentId, assigneeUserId: null },
+      managerAgentId,
+      cause: "stranded_assigned_issue",
+    });
+    expect(
+      isStrandedAutoPolicyManagerHandoffAlreadyApplied({
+        current: { status: "in_review", assigneeAgentId: managerAgentId, executionPolicy: patch.executionPolicy },
+        managerAgentId,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat an unrelated in_review state (different reviewer, or assignee never moved to the manager) as already applied", () => {
+    const patch = buildStrandedAutoPolicyManagerReviewPatch({
+      issue: { status: "in_progress", assigneeAgentId, assigneeUserId: null },
+      managerAgentId: otherAgentId,
+      cause: "stranded_assigned_issue",
+    });
+    // in_review, but for a different reviewer entirely.
+    expect(
+      isStrandedAutoPolicyManagerHandoffAlreadyApplied({
+        current: { status: "in_review", assigneeAgentId: otherAgentId, executionPolicy: patch.executionPolicy },
+        managerAgentId,
+      }),
+    ).toBe(false);
+    // in_review with the manager's id as assignee, but no matching review
+    // stage (e.g. some unrelated policy shape) — not our handoff.
+    expect(
+      isStrandedAutoPolicyManagerHandoffAlreadyApplied({
+        current: { status: "in_review", assigneeAgentId: managerAgentId, executionPolicy: null },
+        managerAgentId,
+      }),
+    ).toBe(false);
+    // Still in_progress — no handoff has happened at all yet.
+    const inProgressPatch = buildStrandedAutoPolicyManagerReviewPatch({
+      issue: { status: "in_progress", assigneeAgentId, assigneeUserId: null },
+      managerAgentId,
+      cause: "stranded_assigned_issue",
+    });
+    expect(
+      isStrandedAutoPolicyManagerHandoffAlreadyApplied({
+        current: { status: "in_progress", assigneeAgentId, executionPolicy: inProgressPatch.executionPolicy },
+        managerAgentId,
+      }),
+    ).toBe(false);
   });
 });
 

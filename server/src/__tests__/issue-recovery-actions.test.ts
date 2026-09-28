@@ -909,6 +909,49 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       });
     });
 
+    it("does not apply the L4 auto-policy to a todo-status escalation with a succeeded last run", async () => {
+      // Third-round review finding: `stranded_assigned_issue` is the generic
+      // catch-all `resolveStrandedRecoveryCause` returns for ANY call here
+      // that passes no explicit cause, including pre-existing, unrelated
+      // escalation reasons for a `todo` issue — the re-dispatch-failure path
+      // (`wasTodoHandedBackDuringOrAfterLatestRun` + `didAutomaticRecoveryFail`)
+      // and the "assignee not invokable"/"over budget" catch-all just above
+      // it in `reconcileStrandedAssignedIssues` — both reachable with a
+      // succeeded latest run. Without a scope check on
+      // `previousStatus`/`issue.status`, those dispatch failures would
+      // wrongly get an agent retry-wake or a manager `in_review` handoff
+      // instead of the vendor's own `blocked` board escalation the "no live
+      // execution path" notice describes. The assignee here is invokable
+      // and has an active manager with retries available, so if the scope
+      // check were missing, L4 would engage (retry) instead of escalating.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      await db.update(issues).set({ status: "todo" }).where(eq(issues.id, sourceIssue.id));
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const updated = await recovery.escalateStrandedAssignedIssue({
+        issue: { ...sourceIssue, status: "todo" },
+        previousStatus: "todo",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        notice: {
+          body:
+            "Paperclip automatically retried dispatch for this assigned `todo` issue after a lost wake/run, " +
+            "but it still has no live execution path. " +
+            "Moving it to `blocked` so it is visible for intervention.",
+          title: "No live execution path",
+          tone: "danger",
+        },
+      });
+
+      expect(enqueueWakeup).not.toHaveBeenCalled();
+      expect(updated?.status).toBe("blocked");
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id));
+      expect(action?.ownerType).toBe("board");
+    });
+
     it("does not crash the caller when the guarded wake throws for a non-invokable or over-budget assignee, and falls back to the vendor's own board escalation", async () => {
       // Review finding: heartbeat.ts's real `enqueueWakeup` *throws* (not a
       // falsy return) when the target agent turns out not to be invokable or
@@ -964,7 +1007,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       // queued continuation run has itself started — it must stand down
       // instead of queuing a second continuation wake for the exact same
       // successful run.
-      await recovery.escalateStrandedAssignedIssue({
+      const second = await recovery.escalateStrandedAssignedIssue({
         issue: sourceIssue,
         previousStatus: "in_progress",
         latestRun,
@@ -977,6 +1020,18 @@ describeEmbeddedPostgres("issue recovery actions", () => {
         .from(agentWakeupRequests)
         .where(eq(agentWakeupRequests.companyId, companyId));
       expect(wakes).toHaveLength(1);
+
+      // Third-round review finding: the duplicate-detected call used to fall
+      // through into the vendor's own board escalation below (setting the
+      // issue `blocked` and posting a board-escalation comment) instead of
+      // standing down as a true no-op — re-triggering the very owner-card
+      // escalation this policy exists to eliminate on every redundant sweep
+      // tick. It must leave the issue exactly as the first call did.
+      expect(second?.status).toBe("in_progress");
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("in_progress");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id))).toHaveLength(0);
     });
 
     it("keeps the manager handoff committed even when the reviewer wake itself throws", async () => {
@@ -1064,6 +1119,17 @@ describeEmbeddedPostgres("issue recovery actions", () => {
           ),
         );
       expect(activity).toHaveLength(1);
+
+      // Third-round review finding: the losing call used to fall through
+      // into the vendor's own board-escalation `blocked` update after the
+      // winning call had already committed `in_review` — silently reverting
+      // a handoff that had already succeeded. No board-escalation action
+      // should exist, and the issue must stay exactly where the winner left
+      // it.
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("in_review");
+      expect(persisted?.assigneeAgentId).toBe(managerId);
+      expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id))).toHaveLength(0);
     });
   });
 

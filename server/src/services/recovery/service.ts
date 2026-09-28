@@ -151,6 +151,7 @@ import {
   decideStrandedAutoPolicy,
   findActiveManagerAgentId,
   isStrandedAutoPolicyCause,
+  isStrandedAutoPolicyManagerHandoffAlreadyApplied,
   readStrandedAutoPolicyEnabled,
   readStrandedAutoRetriesPerDay,
   STRANDED_AUTO_POLICY_RETRY_SOURCE,
@@ -3795,11 +3796,26 @@ export function recoveryService(
     // instead of escalating straight to an owner card. Only the last-run-
     // succeeded causes are in scope; a failed run stays on the vendor path
     // below (L1's concern). See ../../myrmidon/stranded-autopolicy.ts.
+    //
+    // The `previousStatus`/`issue.status === "in_progress"` check narrows
+    // this to the actual "in progress, no disposition" case the spec
+    // describes. Without it, `stranded_assigned_issue` is too generic a
+    // match on its own: `resolveStrandedRecoveryCause` returns it as the
+    // catch-all default for *any* call here that passes no explicit
+    // `recoveryCause`, and several unrelated pre-existing call sites do
+    // that with a `todo` issue and a succeeded latest run — e.g. the `todo`
+    // re-dispatch-failure path below (`wasTodoHandedBackDuringOrAfterLatestRun`
+    // + `didAutomaticRecoveryFail`) and the "assignee not invokable" /
+    // "over budget" catch-all just below for a `todo` issue. Those are
+    // dispatch failures, not a missing disposition, and must keep going to
+    // the vendor's own `blocked` escalation, not into an agent retry-wake
+    // or a manager `in_review` handoff.
     const strandedAutoPolicyLatestRun = input.latestRun;
     if (
       readStrandedAutoPolicyEnabled() &&
       strandedAutoPolicyLatestRun?.status === "succeeded" &&
       isStrandedAutoPolicyCause(recoveryCause) &&
+      (input.previousStatus === "in_progress" || input.issue.status === "in_progress") &&
       input.issue.assigneeAgentId &&
       !isPluginManagedIssueLifecycle(input.issue)
     ) {
@@ -3836,41 +3852,54 @@ export function recoveryService(
         // sweep, the wake-queue module and direct heartbeat.ts callers can
         // all reach this function for the same stranded issue close together
         // with an identical stale `latestRun` snapshot (see the comment on
-        // the reassign-to-manager branch below for the same reachability);
-        // without it, two racing callers could each queue their own
-        // continuation wake for the same successful run.
+        // the reassign-to-manager branch below for the same reachability).
+        // A found duplicate is a genuine no-op — it must return here, not
+        // fall through to the vendor's own board escalation below: falling
+        // through would re-trigger the owner-card escalation this policy
+        // exists to eliminate every time a racing caller (correctly)
+        // detects that another caller already queued this exact retry.
         const retryIdempotencyKey = buildStrandedAutoPolicyRetryIdempotencyKey(
           { issueId: input.issue.id, sourceRunId: latestRun.id },
         );
+        let existingRetryWake: Awaited<
+          ReturnType<typeof findExistingStrandedAutoPolicyRetryWake>
+        > = null;
+        try {
+          existingRetryWake = await findExistingStrandedAutoPolicyRetryWake({
+            companyId: input.issue.companyId,
+            idempotencyKey: retryIdempotencyKey,
+          });
+        } catch {
+          existingRetryWake = null;
+        }
+        if (existingRetryWake) {
+          // A racing caller already queued this exact continuation wake for
+          // this exact successful run — stand down as a genuine no-op.
+          return input.issue;
+        }
         let queued: Awaited<
           ReturnType<typeof enqueueStrandedIssueRecovery>
         > = null;
         try {
-          const existingRetryWake = await findExistingStrandedAutoPolicyRetryWake({
-            companyId: input.issue.companyId,
+          queued = await enqueueStrandedIssueRecovery({
+            issueId: input.issue.id,
+            agentId: assigneeAgentId,
+            reason: "issue_continuation_needed",
+            retryReason: "issue_continuation_needed",
+            source: STRANDED_AUTO_POLICY_RETRY_SOURCE,
+            retryOfRunId: latestRun.id,
             idempotencyKey: retryIdempotencyKey,
+            // myrmidon(L4): these field names (not a bare `instruction`
+            // key) are what `buildPaperclipWakePayload` reads to render
+            // the liveness-continuation section of the agent's prompt —
+            // see `buildStrandedAutoPolicyRetryContext`'s own doc comment.
+            extraContext: buildStrandedAutoPolicyRetryContext({
+              cause: recoveryCause,
+              attempt: autoPolicyDecision.attempt,
+              maxAttemptsPerDay: autoPolicyDecision.maxAttemptsPerDay,
+              sourceRunId: latestRun.id,
+            }),
           });
-          if (!existingRetryWake) {
-            queued = await enqueueStrandedIssueRecovery({
-              issueId: input.issue.id,
-              agentId: assigneeAgentId,
-              reason: "issue_continuation_needed",
-              retryReason: "issue_continuation_needed",
-              source: STRANDED_AUTO_POLICY_RETRY_SOURCE,
-              retryOfRunId: latestRun.id,
-              idempotencyKey: retryIdempotencyKey,
-              // myrmidon(L4): these field names (not a bare `instruction`
-              // key) are what `buildPaperclipWakePayload` reads to render
-              // the liveness-continuation section of the agent's prompt —
-              // see `buildStrandedAutoPolicyRetryContext`'s own doc comment.
-              extraContext: buildStrandedAutoPolicyRetryContext({
-                cause: recoveryCause,
-                attempt: autoPolicyDecision.attempt,
-                maxAttemptsPerDay: autoPolicyDecision.maxAttemptsPerDay,
-                sourceRunId: latestRun.id,
-              }),
-            });
-          }
         } catch {
           queued = null;
         }
@@ -3893,12 +3922,12 @@ export function recoveryService(
           });
           return input.issue;
         }
-        // The guarded enqueue declined (e.g. a concurrent change raced it),
-        // a racing caller already queued this exact retry for this exact
-        // successful run, or the assignee turned out not to be invokable or
-        // over budget (the throw case above) — fall through to the vendor's
-        // own board escalation below, same as a lost race on the reassign
-        // branch just below.
+        // The guarded enqueue genuinely declined (e.g. the assignee turned
+        // out not to be invokable or is over its invocation budget, the
+        // throw case above) — fall through to the vendor's own board
+        // escalation below, same as a lost race on the reassign branch just
+        // below. A duplicate-in-flight-retry no-op was already returned
+        // above and never reaches here.
       } else if (autoPolicyDecision.kind === "reassign_to_manager") {
         // myrmidon(L4): `issuesSvc.update` *throws* (not a falsy return) when
         // the issue's assignee is locked — bound to a native conversation or
@@ -3908,15 +3937,26 @@ export function recoveryService(
         // abort the whole sweep tick, and the very next tick would reach the
         // same poisoned issue and die again. A conversation-bound issue is
         // skipped up front (its identity is fixed, not just contested); any
-        // other lock (e.g. an external chat binding) is caught. Either way
+        // other lock (e.g. an external chat binding) is caught — either way
         // this falls through to the vendor's own board escalation below,
-        // same as a raced update. The lock also serializes concurrent
-        // handoffs for this issue — the sweep, the wake-queue module and
-        // direct heartbeat.ts callers can all reach it close together — by
-        // re-reading the row under a row lock and standing down if another
-        // caller already moved it, so two racing callers cannot both post a
-        // manager-review comment and wake for the same exhaustion event.
+        // same as a genuinely-blocked raced update. The lock also serializes
+        // concurrent handoffs for this issue — the sweep, the wake-queue
+        // module and direct heartbeat.ts callers can all reach it close
+        // together — by re-reading the row under a row lock; a caller that
+        // loses the race because another caller already committed *this
+        // exact* handoff (`isStrandedAutoPolicyManagerHandoffAlreadyApplied`)
+        // stands down as a true no-op instead, so it neither repeats the
+        // manager-review comment/wake/activity log nor overwrites the
+        // winner's already-committed `in_review` state with a board
+        // escalation.
         let updated: Awaited<ReturnType<typeof issuesSvc.update>> = null;
+        // Deliberately `typeof issues.$inferSelect`, not the richer
+        // `Awaited<ReturnType<typeof issuesSvc.update>>` `updated` uses below
+        // — this is the bare row read back under the lock, returned as-is
+        // when a racing caller already committed the handoff, never passed
+        // through `issuesSvc.update` itself.
+        let alreadyHandedOffByRacingCaller: typeof issues.$inferSelect | null =
+          null;
         if (!input.issue.conversationAgentId) {
           const patch = buildStrandedAutoPolicyManagerReviewPatch({
             issue: input.issue,
@@ -3924,7 +3964,13 @@ export function recoveryService(
             cause: recoveryCause,
           });
           try {
-            updated = await db.transaction(async (tx) => {
+            const result = await db.transaction(async (
+              tx,
+            ): Promise<
+              | { outcome: "blocked" }
+              | { outcome: "applied"; issue: Awaited<ReturnType<typeof issuesSvc.update>> }
+              | { outcome: "already_applied"; issue: typeof issues.$inferSelect }
+            > => {
               const [current] = await tx
                 .select()
                 .from(issues)
@@ -3936,22 +3982,47 @@ export function recoveryService(
                 )
                 .for("update")
                 .limit(1);
-              if (
-                !current ||
-                current.status !== input.issue.status ||
-                current.assigneeAgentId !== input.issue.assigneeAgentId
-              ) {
-                return null;
+              if (!current) {
+                return { outcome: "blocked" as const };
               }
-              return issuesSvc.update(
-                input.issue.id,
-                patch as Partial<typeof issues.$inferInsert>,
-                tx,
-              );
+              if (
+                current.status === input.issue.status &&
+                current.assigneeAgentId === input.issue.assigneeAgentId
+              ) {
+                const applied = await issuesSvc.update(
+                  input.issue.id,
+                  patch as Partial<typeof issues.$inferInsert>,
+                  tx,
+                );
+                return applied
+                  ? { outcome: "applied" as const, issue: applied }
+                  : { outcome: "blocked" as const };
+              }
+              if (
+                isStrandedAutoPolicyManagerHandoffAlreadyApplied({
+                  current: {
+                    status: current.status,
+                    assigneeAgentId: current.assigneeAgentId,
+                    executionPolicy: current.executionPolicy,
+                  },
+                  managerAgentId: autoPolicyDecision.managerAgentId,
+                })
+              ) {
+                return { outcome: "already_applied" as const, issue: current };
+              }
+              return { outcome: "blocked" as const };
             });
+            if (result.outcome === "applied") {
+              updated = result.issue;
+            } else if (result.outcome === "already_applied") {
+              alreadyHandedOffByRacingCaller = result.issue;
+            }
           } catch {
             updated = null;
           }
+        }
+        if (alreadyHandedOffByRacingCaller) {
+          return alreadyHandedOffByRacingCaller;
         }
         if (updated) {
           const managerAgent = await getAgent(autoPolicyDecision.managerAgentId);
@@ -4046,9 +4117,11 @@ export function recoveryService(
           });
           return updated;
         }
-        // The update raced a concurrent change, lost the row lock to another
-        // caller, threw (assignee locked), or was skipped up front
-        // (conversation-bound) — fall through below.
+        // The update genuinely could not apply — the row changed underneath
+        // it in some other way, it threw (assignee locked), or it was
+        // skipped up front (conversation-bound) — fall through below. A
+        // racing caller that found the *same* handoff already committed was
+        // already returned above and never reaches here.
       }
       // autoPolicyDecision.kind === "vendor_default" falls through as-is.
     }

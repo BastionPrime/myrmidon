@@ -271,6 +271,60 @@ export function buildStrandedAutoPolicyManagerReviewComment(input: {
 }
 
 /**
+ * True when `executionPolicy` already carries a review stage with
+ * `managerAgentId` as an agent participant — the shape
+ * `buildStrandedAutoPolicyManagerReviewPatch` below produces. Pure structural
+ * check, deliberately tolerant of an unrelated or malformed
+ * `Record<string, unknown>` (the DB column's declared type): anything that
+ * doesn't look like our own review-stage shape is "no".
+ */
+export function issueExecutionPolicyHasManagerReviewStage(
+  executionPolicy: unknown,
+  managerAgentId: string,
+): boolean {
+  const rawStages =
+    executionPolicy && typeof executionPolicy === "object"
+      ? (executionPolicy as { stages?: unknown }).stages
+      : undefined;
+  const stages = Array.isArray(rawStages) ? rawStages : [];
+  return stages.some((stage: unknown) => {
+    if (!stage || typeof stage !== "object") return false;
+    const typedStage = stage as { type?: unknown; participants?: unknown };
+    if (typedStage.type !== "review") return false;
+    const participants = Array.isArray(typedStage.participants) ? typedStage.participants : [];
+    return participants.some((participant: unknown) => {
+      if (!participant || typeof participant !== "object") return false;
+      const typedParticipant = participant as { type?: unknown; agentId?: unknown };
+      return typedParticipant.type === "agent" && typedParticipant.agentId === managerAgentId;
+    });
+  });
+}
+
+/**
+ * Detects the one specific case where the reassign-to-manager transaction's
+ * row-locked optimistic guard trips not because the handoff is unsafe, but
+ * because a *racing caller already committed this exact handoff first*: the
+ * row is `in_review`, the manager (not the original assignee) now owns it as
+ * `assigneeAgentId` (see `applyIssueExecutionPolicyTransition`'s own review-
+ * stage reassignment, which `buildStrandedAutoPolicyManagerReviewPatch`
+ * relies on), and the manager is the review-stage participant. That caller
+ * must stand down as a genuine no-op — return the winner's already-committed
+ * row without repeating its side effects (comment/wake/activity log) — not
+ * fall through to the vendor's board-escalation path, which would overwrite
+ * a handoff that had already succeeded moments earlier.
+ */
+export function isStrandedAutoPolicyManagerHandoffAlreadyApplied(input: {
+  current: { status: string; assigneeAgentId: string | null; executionPolicy: unknown };
+  managerAgentId: string;
+}): boolean {
+  return (
+    input.current.status === "in_review" &&
+    input.current.assigneeAgentId === input.managerAgentId &&
+    issueExecutionPolicyHasManagerReviewStage(input.current.executionPolicy, input.managerAgentId)
+  );
+}
+
+/**
  * Builds the `in_review` patch that hands the issue to `managerAgentId` as a
  * single-stage reviewer, using the vendor's own execution-policy transition
  * (`applyIssueExecutionPolicyTransition`) so the result is a normal review
