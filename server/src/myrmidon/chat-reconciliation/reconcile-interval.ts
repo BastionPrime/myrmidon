@@ -18,7 +18,7 @@
  * chats are idle — a deployment-specific value, not a new default cadence.
  */
 export function chatReconcileMinimumSpacingMs(
-  env: Pick<NodeJS.ProcessEnv, "MYRMIDON_CHAT_RECONCILE_INTERVAL_MS"> = process.env,
+  env: { MYRMIDON_CHAT_RECONCILE_INTERVAL_MS?: string } = process.env,
 ): number | undefined {
   const raw = env.MYRMIDON_CHAT_RECONCILE_INTERVAL_MS;
   if (!raw) return undefined;
