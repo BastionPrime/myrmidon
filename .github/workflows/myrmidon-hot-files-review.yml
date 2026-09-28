@@ -1,0 +1,49 @@
+name: Myrmidon hot files review
+
+# myrmidon(R1): решение владельца 28.09.2026 — PR, которые трогают ключевые файлы ядра, сливаются
+# только после ревью. Все действия в репозитории идут от одной учётки, поэтому одобрение GitHub
+# здесь не работает; вместо него — метка `review-approved`, которую ставит роль ревьюера
+# (adm-dev-review) или сопровождающий после ревью. Проверка обязательная (ruleset).
+# Новый push снимает метку: ревью относится к конкретному коду.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  hot-files-review:
+    name: hot files review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check hot files and review label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+          files="$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')"
+          hot='^(server/src/services/heartbeat\.ts|server/src/services/execution-continuation\.ts|server/src/services/legacy-execution-recovery\.ts|server/src/services/tool-gateway\.ts|server/src/routes/tool-gateway\.ts|server/src/services/redaction\.ts|server/src/services/native-runtime/runtime-context\.ts|server/src/services/issues\.ts|server/src/routes/issues\.ts|server/src/services/chat-channels\.ts|packages/adapters/hermes/.*|packages/db/.*|scripts/myrmidon/deploy/.*|Dockerfile|\.github/workflows/.*)$'
+          touched="$(grep -E "$hot" <<<"$files" || true)"
+          if [[ -z "$touched" ]]; then
+            echo "Ключевые файлы не затронуты — ревью не обязательно."
+            exit 0
+          fi
+          echo "Затронуты ключевые файлы:"; echo "$touched"
+          if [[ "$ACTION" == "synchronize" ]]; then
+            gh api -X DELETE "repos/$REPO/issues/$PR/labels/review-approved" >/dev/null 2>&1 || true
+            echo "::error::Новый push после ревью — метка review-approved снята, нужно повторное ревью."
+            exit 1
+          fi
+          labels="$(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name')"
+          if grep -qx 'review-approved' <<<"$labels"; then
+            echo "Метка review-approved есть — ревью пройдено."
+            exit 0
+          fi
+          echo "::error::PR трогает ключевые файлы ядра: нужна метка review-approved после ревью (adm-dev-review или сопровождающий)."
+          exit 1
