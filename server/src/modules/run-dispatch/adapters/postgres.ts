@@ -1,5 +1,8 @@
 import { hasConversationContinuationPolicy } from "../../../services/conversation-continuation.js";
 import { getExecutionBlocker } from "../../../services/execution-blocker.js";
+// myrmidon(L2): a queued run created by an explicitly authorized wake
+// ignores a settled "do not replay" hold; see docs/myrmidon/DIVERGENCE.md "L2".
+import { bypassesSettledHold } from "../../../myrmidon/settled-holds/explicit-wake-gate.js";
 import { and, asc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -920,7 +923,15 @@ export function createPostgresRunDispatchAdapter(
     const contextSnapshot = parseObject(run.contextSnapshot);
     const issueId = readNonEmptyString(contextSnapshot.issueId);
     if (!issueId) return { issueId: null, facts: null, decision: { stale: false as const } };
-    const recovery = await getExecutionBlocker(tx, run.companyId, issueId, { conversationResetCommentId: deriveCommentId(contextSnapshot) });
+    const recovery = await getExecutionBlocker(tx, run.companyId, issueId, {
+      conversationResetCommentId: deriveCommentId(contextSnapshot),
+      // myrmidon(L2): an explicitly authorized wake ignores a settled "do
+      // not replay" hold.
+      explicitWake: bypassesSettledHold({
+        source: run.invocationSource, triggerDetail: run.triggerDetail,
+        reason: readNonEmptyString(contextSnapshot.wakeReason),
+      }),
+    });
     if (recovery) return { issueId, facts: null, decision: { stale: true as const,
       errorCode: "execution_reconciliation_required" as const, reason: recovery.nextAction,
       details: { issueId, recoveryActionId: recovery.recoveryActionId },

@@ -3,6 +3,9 @@ import { conversationRecoveryActionPredicate, getConversationOwnershipBlocker } 
 import { z } from "zod";
 import { heartbeatRuns, issueComments, issues, issueRecoveryActions, type Db } from "@paperclipai/db";
 import { EXECUTION_RECONCILIATION_CAUSES, type ExecutionBlocker } from "@paperclipai/shared";
+// myrmidon(L2): an explicitly authorized wake ignores a settled "do not
+// replay" hold; see settled-holds/predicate.ts and docs/myrmidon/DIVERGENCE.md "L2".
+import { explicitWakeExecutionBlockerPredicate } from "../myrmidon/settled-holds/predicate.js";
 
 /** Resolved recovery bookkeeping can still carry an effective no-replay hold. */
 export function executionBlockerPredicate() {
@@ -14,7 +17,11 @@ export function executionBlockerPredicate() {
   );
 }
 
-export async function getExecutionBlocker(db: Db, companyId: string, issueId: string, options?: { conversationResetCommentId?: string | null }): Promise<ExecutionBlocker | null> {
+export async function getExecutionBlocker(db: Db, companyId: string, issueId: string, options?: {
+  conversationResetCommentId?: string | null;
+  /** myrmidon(L2): true when the caller is checking an explicitly authorized wake. */
+  explicitWake?: boolean;
+}): Promise<ExecutionBlocker | null> {
   const [conversation] = await db.select({ agentId: issues.conversationAgentId,
     boundaryId: issues.conversationBoundaryCommentId }).from(issues).where(and(
     eq(issues.companyId, companyId), eq(issues.id, issueId),
@@ -39,7 +46,13 @@ export async function getExecutionBlocker(db: Db, companyId: string, issueId: st
   const [action] = await db.select().from(issueRecoveryActions).where(and(
     eq(issueRecoveryActions.companyId, companyId),
     eq(issueRecoveryActions.sourceIssueId, issueId),
-    executionBlockerPredicate(),
+    // myrmidon(L2): an explicitly authorized wake ignores a settled "do not
+    // replay" hold. The caller decides `explicitWake` (settled-holds/
+    // explicit-wake-gate.ts), which already applies
+    // MYRMIDON_SETTLED_HOLDS_BLOCK_EXPLICIT_WAKES.
+    options?.explicitWake
+      ? explicitWakeExecutionBlockerPredicate()
+      : executionBlockerPredicate(),
     boundary ? gt(issueRecoveryActions.createdAt, boundary.createdAt) : undefined,
   )).orderBy(desc(issueRecoveryActions.updatedAt), desc(issueRecoveryActions.id)).limit(1);
   if (!action) return null;

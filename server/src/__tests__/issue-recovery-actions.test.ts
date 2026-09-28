@@ -1648,9 +1648,11 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     const body = { actionId: action!.id, outcome: "restored", sourceIssueStatus: "todo",
       executionReconciliation: { runId, providerStopped: true, actionOutcome: "not_performed",
         outcomeEvidence: "Provider receipts confirm the action was never submitted; the stopped process has no remaining effects." } };
-    // A retry without new evidence cannot clear the hold or reopen the task.
-    await request(app).post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`).send({ ...body, executionReconciliation: undefined }).expect(200);
-    expect((await db.select().from(issues).where(eq(issues.id, sourceIssueId)))[0]!.status).toBe("blocked");
+    // myrmidon(L2): a retry without new evidence does not reopen the task —
+    // but from a board actor it does clear the no-replay disposition itself,
+    // so this scenario now needs its own action (see the L2 tests below);
+    // this one continues to exercise the reopen-with-verified-evidence path
+    // on an action whose disposition was never cleared.
     const resolved = await request(app).post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`).send(body).expect(200);
     expect(resolved.body.issue.status).toBe("todo");
     const [recorded] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, action!.id));
@@ -1658,6 +1660,64 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     expect(recorded!.evidence).toMatchObject({ executionReconciliation: { runId }, continuationDelivery: "pending" });
     await request(app).post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`).send(body).expect(200);
     expect((await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, action!.id)))[0]).toEqual(recorded);
+  });
+
+  // myrmidon(L2): a board operator can clear a settled "do not replay"
+  // disposition with a plain resolve call, instead of a raw evidence SQL
+  // edit. See server/src/myrmidon/settled-holds/clear.ts.
+  it("clears a settled no-replay disposition on a plain resolve from a board operator, idempotently, without reopening the task", async () => {
+    const { companyId, coderId, sourceIssueId } = await seedCompany();
+    const runId = randomUUID();
+    await seedHeartbeatRun({ companyId, agentId: coderId, runId, issueId: sourceIssueId, status: "failed" });
+    await db.update(issues).set({ status: "blocked" }).where(eq(issues.id, sourceIssueId));
+    const [action] = await db.insert(issueRecoveryActions).values({
+      companyId, sourceIssueId, kind: "active_run_watchdog", status: "resolved", outcome: "blocked",
+      ownerType: "board", returnOwnerAgentId: coderId, cause: "uncertain_external_action", fingerprint: runId,
+      nextAction: "Preserve recorded work without replay.",
+      evidence: { runId, automaticRecovery: { replay: "blocked", actionOutcome: "unknown" } },
+    }).returning();
+    const app = createApp();
+    // No executionReconciliation: a plain resolve, the shape a board operator
+    // sends to just lift the hold without asserting a verified outcome.
+    const body = { actionId: action!.id, outcome: "restored", sourceIssueStatus: "todo" };
+    await request(app).post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`).send(body).expect(200);
+    expect((await db.select().from(issues).where(eq(issues.id, sourceIssueId)))[0]!.status).toBe("blocked");
+    const [cleared] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, action!.id));
+    expect(cleared!.status).toBe("resolved");
+    expect(cleared!.evidence.automaticRecovery).toMatchObject({
+      replay: "cleared", actionOutcome: "unknown", replayClearedByType: "user", replayClearedBy: "board",
+    });
+    expect(typeof (cleared!.evidence.automaticRecovery as Record<string, unknown>).replayClearedAt).toBe("string");
+    const [activity] = await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, companyId), eq(activityLog.entityId, sourceIssueId),
+      eq(activityLog.action, "issue.execution_recovery_replay_cleared"),
+    ));
+    expect(activity).toBeTruthy();
+
+    // A repeat plain resolve is a no-op: the disposition already reads
+    // "cleared", so the vendor's own settled-action branch takes over.
+    await request(app).post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`).send(body).expect(200);
+    expect((await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, action!.id)))[0]).toEqual(cleared);
+  });
+
+  // myrmidon(L2): only a board actor can clear the disposition this way; an
+  // agent hitting the same endpoint keeps the vendor's plain no-op.
+  it("does not clear a settled no-replay disposition on a plain resolve from an agent", async () => {
+    const { companyId, coderId, sourceIssueId } = await seedCompany();
+    const runId = randomUUID();
+    await seedHeartbeatRun({ companyId, agentId: coderId, runId, issueId: sourceIssueId, status: "failed" });
+    await db.update(issues).set({ status: "blocked", assigneeAgentId: coderId }).where(eq(issues.id, sourceIssueId));
+    const [action] = await db.insert(issueRecoveryActions).values({
+      companyId, sourceIssueId, kind: "active_run_watchdog", status: "resolved", outcome: "blocked",
+      ownerType: "board", returnOwnerAgentId: coderId, cause: "uncertain_external_action", fingerprint: runId,
+      nextAction: "Preserve recorded work without replay.",
+      evidence: { runId, automaticRecovery: { replay: "blocked", actionOutcome: "unknown" } },
+    }).returning();
+    const app = createApp({ type: "agent", agentId: coderId, companyId, runId: randomUUID(), source: "agent_jwt" });
+    const body = { actionId: action!.id, outcome: "restored", sourceIssueStatus: "todo" };
+    await request(app).post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`).send(body).expect(200);
+    const [unchanged] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, action!.id));
+    expect(unchanged!.evidence.automaticRecovery).toMatchObject({ replay: "blocked" });
   });
 
   async function seedReconciledDelivery() {

@@ -1,6 +1,10 @@
 // N1: tasks held by an automatic "do not replay" recovery disposition.
-// Read-only list for the board UI; resolving uses the vendor
-// POST /issues/:id/recovery-actions/resolve unchanged.
+// Read-only list for the board UI. Resolving uses the vendor
+// POST /issues/:id/recovery-actions/resolve; a board operator can also just
+// clear the hold there (L2, settled-holds/clear.ts) instead of restoring a
+// verified outcome. Either way, a row drops out of this list once
+// evidence.automaticRecovery.replay no longer reads "blocked" — the query
+// below checks that directly, so clearing the hold needs no change here.
 
 import { Router } from "express";
 import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";

@@ -1,6 +1,9 @@
 import { deliverConversationComments, isConversation } from "../services/agent-conversations.js";
 import { issueRecoveryActionReadModel } from "../services/issue-recovery-actions.js";
 import { getExecutionBlocker } from "../services/execution-blocker.js";
+// myrmidon(L2): clears a closed "do not replay" hold on plain resolve;
+// see docs/myrmidon/DIVERGENCE.md "L2".
+import { clearSettledReplayBlock } from "../myrmidon/settled-holds/clear.js";
 import { extractIssueReferenceIdentifiers, requiresExecutionReconciliation } from "@paperclipai/shared";
 import {
   validateExecutionReconciliation,
@@ -9209,9 +9212,23 @@ export function issueRoutes(
                 .returning();
               activeRecoveryAction = issueRecoveryActionReadModel(reopened!);
             } else {
+              // myrmidon(L2): a board operator can clear a closed "do not
+              // replay" hold without also asserting a verified execution
+              // outcome (the branch above); see settled-holds/clear.ts and
+              // docs/myrmidon/DIVERGENCE.md "L2".
+              const clearedRecoveryAction =
+                req.actor.type === "board" && automatic?.replay === "blocked"
+                  ? await clearSettledReplayBlock({
+                      db: tx as unknown as Db,
+                      companyId: lockedIssue.companyId,
+                      action: settled,
+                      actor: { actorType: actor.actorType, actorId: actor.actorId },
+                      note: resolutionNote ?? null,
+                    })
+                  : settled;
               return {
                 issue: lockedIssue,
-                recoveryAction: settled,
+                recoveryAction: clearedRecoveryAction,
                 replayed: true,
               };
             }

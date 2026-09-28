@@ -6,6 +6,9 @@ import { completeTerminatedRemoteNativeSessionCleanup } from "../vendor/papercli
 import { hasRemoteTerminationReceipt, remoteExecutionHasStopped, remoteTerminationReceipt, stoppedRemoteCleanupScopes } from "./remote-execution-termination.js";
 import { applyConnectorSkills, prepareConnectorSkillDelivery, resolveConnectorAssignments } from "./connector-runtime.js";
 import { admitExplicitNativeContinuation, undeliveredLegacyUserCommentIds } from "./explicit-native-continuation.js";
+// myrmidon(L2): an explicitly authorized wake ignores a settled "do not
+// replay" hold; see docs/myrmidon/DIVERGENCE.md "L2".
+import { bypassesSettledHold } from "../myrmidon/settled-holds/explicit-wake-gate.js";
 import { connectionIntentService } from "./connection-intents.js";
 import { prepareManagedAiRuntime, assertManagedAiProjectAuth, stripAiAuthBindings, isAiConnectionBusy, AI_AUTH_ENV_KEYS } from "./ai-connection-runtime.js";
 import { aiConnectionBindingSchema } from "@paperclipai/shared";
@@ -26701,7 +26704,10 @@ export function heartbeatService(
           const explicitContinuationRunId = randomUUID();
           const executionBlocker = await getExecutionBlocker(
             tx as unknown as Db, issue.companyId, issue.id,
-            { conversationResetCommentId: opts.requestedByActorType === "user" ? wakeCommentId : null },
+            { conversationResetCommentId: opts.requestedByActorType === "user" ? wakeCommentId : null,
+              // myrmidon(L2): an explicitly authorized wake ignores a settled
+              // "do not replay" hold.
+              explicitWake: bypassesSettledHold({ source, triggerDetail, reason }) },
           );
           // Prove eligibility without retiring the hold. Later gates can still
           // decline this wake; hold retirement and successor creation stay atomic.
@@ -27517,7 +27523,9 @@ export function heartbeatService(
               : null;
           const pendingComments =
             !isConversation(issue) && opts.allowRunCoalescing !== false &&
-            !(await getExecutionBlocker(tx as unknown as Db, issue.companyId, issue.id))
+            // myrmidon(L2): keep this consistent with the admission check above.
+            !(await getExecutionBlocker(tx as unknown as Db, issue.companyId, issue.id,
+              { explicitWake: bypassesSettledHold({ source, triggerDetail, reason }) }))
               ? await tx
                   .select()
                   .from(agentWakeupRequests)
