@@ -16,9 +16,13 @@ Docker socket, no host mounts, and no media tools.
 
 - Base: `python:3.13-slim`.
 - `hermes-agent`, pinned to a git tag (`HERMES_VERSION`/`HERMES_GIT_REF`
-  build args, default `0.21.2` / `v0.21.2`), installed **editable** from a
-  clean clone of `https://github.com/NousResearch/hermes-agent` — see
-  "Why editable, not pip install" below.
+  build args, default `0.21.2` / `v2026.9.11`), installed **editable** from
+  a clean clone of `https://github.com/NousResearch/hermes-agent` — see
+  "Why editable, not pip install" below. hermes tags releases by date
+  (`vYYYY.M.D`); `v2026.9.11` is the tag we confirmed (via the GitHub API,
+  checking `pyproject.toml` on every recent release tag) actually carries
+  `version = "0.21.2"` — the two numbers do not share a scheme, so a future
+  version bump needs the same lookup, not an assumed `v<version>`.
 - `aiohttp`, pinned to the exact version hermes' own `messaging`/`slack`
   extras use at this release (`HERMES_AIOHTTP_VERSION`, default `3.14.3`).
   `gateway/platforms/api_server.py` is built on `aiohttp.web`, but aiohttp
@@ -29,7 +33,7 @@ Docker socket, no host mounts, and no media tools.
   keeps the image to what an API-server-only bot actually uses, without
   guessing a version upstream hasn't tested.
 - Bundled skills (`skills/` in the hermes source tree — 14 categories at
-  `v0.21.2`), read-only. They are **not** shipped via PyPI package-data
+  `0.21.2`/`v2026.9.11`), read-only. They are **not** shipped via PyPI package-data
   (hermes' `pyproject.toml` package-data list does not include `skills/**`
   at all — see "Why editable, not pip install"); the editable install
   keeps the full source tree in the image, which is what

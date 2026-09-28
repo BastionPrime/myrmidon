@@ -17,8 +17,16 @@
 # hermes relative to the installed module's __file__, not from wheel
 # package-data.
 
+# HERMES_VERSION is the `version =` field in hermes' pyproject.toml (the
+# number it reports itself); HERMES_GIT_REF is the git tag that ships that
+# version. The two do NOT share a numbering scheme: hermes-agent tags
+# releases by date (vYYYY.M.D) while pyproject.toml's version field is a
+# separate, independently-bumped 0.x.y counter. v2026.9.11 is the tag we
+# confirmed (via the GitHub API, against every recent release tag) carries
+# `version = "0.21.2"` — do not assume a future HERMES_VERSION bump maps to
+# `v<that number>`; look the date tag up the same way and update both.
 ARG HERMES_VERSION=0.21.2
-ARG HERMES_GIT_REF=v0.21.2
+ARG HERMES_GIT_REF=v2026.9.11
 ARG HERMES_REPO=https://github.com/NousResearch/hermes-agent.git
 # gateway/platforms/api_server.py uses aiohttp.web, but aiohttp is not a core
 # dependency of hermes-agent — it only ships inside the messaging/slack/matrix

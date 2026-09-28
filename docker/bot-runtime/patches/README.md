@@ -3,7 +3,7 @@
 Empty at Myrmidon 1.1.0 (G1, 2026-09-28). This is where our patches to the
 `hermes-agent` client land once we need one, applied at image build time
 against the pinned upstream tag (`HERMES_GIT_REF` in
-`docker/bot-runtime/Dockerfile`, currently `v0.21.2`).
+`docker/bot-runtime/Dockerfile`, currently `v2026.9.11`, the tag that ships hermes's pyproject.toml version 0.21.2).
 
 We could not tell from `/opt/hermes-agent/src` on the host whether the
 installed checkout already carries local modifications relative to that tag:
@@ -12,13 +12,13 @@ readable by the session that wrote this Dockerfile, so `git log` / `git
 diff` against the tag could not be run. If that checkout does carry
 undocumented local changes, they are **not** captured here — do not assume
 this directory is a complete patch set without checking `git log
-v0.21.2..HEAD` on that checkout (or its origin, if it has one) directly.
+v2026.9.11..HEAD` on that checkout (or its origin, if it has one) directly.
 
 ## How a patch is added
 
 1. Write the change against a fresh clone of the pinned tag:
    ```sh
-   git clone --branch v0.21.2 https://github.com/NousResearch/hermes-agent.git /tmp/hermes-check
+   git clone --branch v2026.9.11 https://github.com/NousResearch/hermes-agent.git /tmp/hermes-check
    cd /tmp/hermes-check
    # edit, test against a real gateway run locally
    git diff > my-change.patch

@@ -22,13 +22,13 @@ const dockerfileInstructions = dockerfile
   .join("\n");
 
 describe("docker/bot-runtime/Dockerfile", () => {
-  it("pins the hermes version through a build arg with an exact default", () => {
+  it("pins the hermes version and a matching git tag through build args with exact defaults", () => {
+    // hermes-agent's git tags (vYYYY.M.D, calendar-based) and its
+    // pyproject.toml `version` field (0.x.y, bumped independently) do not
+    // share a numbering scheme — see the ARG block's comment. Only check
+    // that both are pinned to something exact, not that they look alike.
     assert.match(dockerfile, /^ARG HERMES_VERSION=\d+\.\d+\.\d+$/m);
-    assert.match(dockerfile, /^ARG HERMES_GIT_REF=v\d+\.\d+\.\d+$/m);
-    // The tag and the version must actually be the same release.
-    const version = dockerfile.match(/^ARG HERMES_VERSION=(\d+\.\d+\.\d+)$/m)[1];
-    const ref = dockerfile.match(/^ARG HERMES_GIT_REF=v(\d+\.\d+\.\d+)$/m)[1];
-    assert.equal(ref, version, "HERMES_GIT_REF must point at the HERMES_VERSION release");
+    assert.match(dockerfile, /^ARG HERMES_GIT_REF=v\d+\.\d+(\.\d+)?$/m);
   });
 
   it("runs as a non-root, fixed uid", () => {
