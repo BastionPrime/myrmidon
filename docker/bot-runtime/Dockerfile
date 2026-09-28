@@ -29,12 +29,14 @@ ARG HERMES_VERSION=0.21.2
 ARG HERMES_GIT_REF=v2026.9.11
 ARG HERMES_REPO=https://github.com/NousResearch/hermes-agent.git
 # gateway/platforms/api_server.py uses aiohttp.web, but aiohttp is not a core
-# dependency of hermes-agent — it only ships inside the messaging/slack/matrix
-# extras, all of which pull in Telegram/Discord/Slack client libraries we do
-# not need for an API-server-only bot. Installing aiohttp alone, pinned to
-# the exact version pyproject.toml uses for those extras at this hermes
-# release, keeps the image lean without diverging from what upstream tests
-# against. See docker/bot-runtime/README.md.
+# dependency of hermes-agent — it only ships inside optional extras, most of
+# which also pull in Telegram/Discord/Slack client libraries we do not need
+# for an API-server-only bot. "sms" is the smallest extra that resolves to
+# exactly aiohttp + its own transitive deps and nothing else, so installing
+# through it (`uv sync --frozen --extra sms`, see the builder stage below)
+# gets aiohttp through the same hash-verified lockfile path as every other
+# dependency in this image, instead of a separate unlocked `uv pip install`.
+# See docker/bot-runtime/README.md.
 ARG HERMES_AIOHTTP_VERSION=3.14.3
 
 # Same uv build + digest hermes-agent's own upstream Dockerfile pins
@@ -90,9 +92,19 @@ RUN set -eu; \
       git apply --whitespace=fix "$p"; \
     done
 
-RUN uv sync --frozen \
-  && uv pip install --python /opt/hermes-src/.venv/bin/python \
-    "aiohttp==${HERMES_AIOHTTP_VERSION}" \
+# Fail loudly if pyproject.toml's "sms" extra ever stops being exactly
+# aiohttp pinned at HERMES_AIOHTTP_VERSION (a future hermes release could
+# add a dependency to it, or repin aiohttp to a different version than the
+# rest of the messaging extras) instead of silently installing whatever it
+# resolves to.
+RUN set -eu; \
+    pinned_aiohttp="$(sed -n 's/^sms = \["aiohttp==\(.*\)"\]$/\1/p' pyproject.toml)"; \
+    if [ "$pinned_aiohttp" != "${HERMES_AIOHTTP_VERSION}" ]; then \
+      echo "pyproject.toml 'sms' extra pins aiohttp==$pinned_aiohttp, HERMES_AIOHTTP_VERSION=${HERMES_AIOHTTP_VERSION} disagrees" >&2; \
+      exit 1; \
+    fi
+
+RUN uv sync --frozen --extra sms \
   && find /opt/hermes-src/.venv -name '__pycache__' -type d -prune -exec rm -rf {} +
 
 FROM python:3.13-slim AS runtime
@@ -125,7 +137,20 @@ COPY --chmod=0755 entrypoint.sh /usr/local/bin/bot-runtime-entrypoint
 
 # /opt/hermes-src is root-owned and not writable by `bot` — the venv, the
 # hermes source and the bundled skills under it are effectively read-only
-# for the runtime user without a separate read-only bind mount.
+# for the runtime user without a separate read-only bind mount. Sealing it
+# this way also seals hermes' own lazy-install mechanism
+# (tools/lazy_deps.py — installs an opt-in backend's SDK, e.g. the native
+# `anthropic` provider, `bedrock`, a web-search backend, on first use): with
+# neither HERMES_LAZY_INSTALL_TARGET nor HERMES_DISABLE_LAZY_INSTALLS set,
+# it defaults to installing straight into this read-only venv, which would
+# fail with a raw `uv pip install` permission error the first time any bot
+# profile picks such a feature, instead of hermes' own clean "no writable
+# target configured" message. HERMES_WRITE_SAFE_ROOT scopes hermes' own
+# write/patch tools (agent/file_safety.py) to the durable volume for the
+# same "sealed, unattended container" reason. All three ENV vars below
+# mirror hermes' own upstream Dockerfile, which seals its image the same
+# way and redirects lazy installs and safe writes to its data volume for
+# the identical reason.
 RUN mkdir -p /data /workspace \
   && chown bot:bot /data /workspace
 
@@ -135,6 +160,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/home/bot \
     HERMES_HOME=/data/hermes \
     HERMES_BUNDLED_SKILLS=/opt/hermes-src/skills \
+    HERMES_WRITE_SAFE_ROOT=/data:/workspace \
+    HERMES_DISABLE_LAZY_INSTALLS=1 \
+    HERMES_LAZY_INSTALL_TARGET=/data/hermes/lazy-packages \
     NO_COLOR=1 \
     API_SERVER_ENABLED=true \
     API_SERVER_HOST=0.0.0.0 \

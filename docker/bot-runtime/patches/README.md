@@ -5,14 +5,29 @@ Empty at Myrmidon 1.1.0 (G1, 2026-09-28). This is where our patches to the
 against the pinned upstream tag (`HERMES_GIT_REF` in
 `docker/bot-runtime/Dockerfile`, currently `v2026.9.11`, the tag that ships hermes's pyproject.toml version 0.21.2).
 
-We could not tell from `/opt/hermes-agent/src` on the host whether the
-installed checkout already carries local modifications relative to that tag:
-its `.git/HEAD` and `.git/COMMIT_EDITMSG` are owned by `root` (`0600`), not
-readable by the session that wrote this Dockerfile, so `git log` / `git
-diff` against the tag could not be run. If that checkout does carry
-undocumented local changes, they are **not** captured here — do not assume
-this directory is a complete patch set without checking `git log
-v2026.9.11..HEAD` on that checkout (or its origin, if it has one) directly.
+`/opt/hermes-agent/src` on the host does carry at least one local
+modification relative to the pinned tag, **not** captured here. `.git/HEAD`
+and `.git/COMMIT_EDITMSG` on that checkout are root-owned (`0600`), so
+`git log`/`git diff` against the tag cannot be run directly — but
+`.git/refs/heads/` is world-readable and lists a local branch (not the
+pinned tag, not any upstream ref) whose tip commit is a real, non-trivial
+change to `tools/environments/base.py` and
+`tools/environments/base_session_env.py`, hardening what a session's
+terminal-snapshot mechanism writes to disk so it stops including
+credential-shaped environment variables (names matching patterns like
+`*_SECRET`, `*_TOKEN`, `*_KEY`, `*_PASSWORD`, `*_URL`) in cleartext.
+
+That commit's message and top-level tree are readable the same
+world-readable way (no root needed); a full diff is not: its parent
+commit's tree object is one of the majority of this repository's git
+objects that *is* root-locked, so `git diff <parent>..<tip>` fails with a
+permission error rather than producing output. Rewriting this into a clean
+`*.patch` here would mean guessing at a security-relevant diff we cannot
+actually read in full — worse than not having it. **This is a known gap**,
+left for a maintainer or a later Этап with read access to the full local
+history to port properly (as a reviewed, tested patch, not a guess): do not
+assume `patches/` is a complete patch set without checking that checkout's
+local branches directly.
 
 ## How a patch is added
 

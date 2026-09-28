@@ -66,6 +66,26 @@ describe("docker/bot-runtime/Dockerfile", () => {
   it("does not install hermes-agent from PyPI (unsupported at this release)", () => {
     assert.doesNotMatch(dockerfileInstructions, /pip install[^\n]*hermes-agent/);
   });
+
+  it("installs aiohttp through the locked lockfile path, not an unlocked pip install", () => {
+    // tools/lazy_deps.py's own hash-pinned allowlist is the bar every
+    // dependency in this image should clear; a bare `uv pip install
+    // aiohttp==...` bypasses uv.lock's hash verification even though the
+    // exact same pin already exists there.
+    assert.doesNotMatch(dockerfileInstructions, /uv pip install[^\n]*aiohttp/);
+    assert.match(dockerfile, /uv sync --frozen --extra sms/);
+  });
+
+  it("redirects hermes' lazy installs and write tools off the sealed, read-only venv", () => {
+    // Sealing /opt/hermes-src read-only (below) otherwise leaves
+    // tools/lazy_deps.py trying to install into it and
+    // agent/file_safety.py's write guard inert — see the comment above the
+    // ENV block and README.md "Sealed image: lazy installs and the
+    // write-safe root".
+    assert.match(dockerfile, /HERMES_DISABLE_LAZY_INSTALLS=1/);
+    assert.match(dockerfile, /HERMES_LAZY_INSTALL_TARGET=\/data\//);
+    assert.match(dockerfile, /HERMES_WRITE_SAFE_ROOT=\/data/);
+  });
 });
 
 describe("docker/bot-runtime/patches/", () => {

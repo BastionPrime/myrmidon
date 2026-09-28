@@ -76,6 +76,13 @@ fi
 log "HERMES_HOME=${HERMES_HOME}"
 log "workspace=$(pwd)"
 log "API_SERVER_HOST=${API_SERVER_HOST} API_SERVER_PORT=${API_SERVER_PORT}"
+# Set by the image (see the Dockerfile's runtime ENV block) so a lazy
+# install (tools/lazy_deps.py) and hermes' own write guard
+# (agent/file_safety.py) target the durable volume instead of the sealed,
+# read-only /opt/hermes-src venv. Logged, not enforced here — an operator
+# who overrides them away sees why in this line, not a silent behavior
+# change.
+log "HERMES_LAZY_INSTALL_TARGET=${HERMES_LAZY_INSTALL_TARGET:-<unset>} HERMES_WRITE_SAFE_ROOT=${HERMES_WRITE_SAFE_ROOT:-<unset>}"
 
 # --replace: a previous instance's lock (from a hard container restart) does
 # not block this one — the fleet manager, not hermes, decides whether two

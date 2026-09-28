@@ -23,15 +23,18 @@ Docker socket, no host mounts, and no media tools.
   checking `pyproject.toml` on every recent release tag) actually carries
   `version = "0.21.2"` — the two numbers do not share a scheme, so a future
   version bump needs the same lookup, not an assumed `v<version>`.
-- `aiohttp`, pinned to the exact version hermes' own `messaging`/`slack`
-  extras use at this release (`HERMES_AIOHTTP_VERSION`, default `3.14.3`).
+- `aiohttp`, pinned to the exact version hermes' own optional extras use at
+  this release (`HERMES_AIOHTTP_VERSION`, default `3.14.3`).
   `gateway/platforms/api_server.py` is built on `aiohttp.web`, but aiohttp
-  is not one of hermes' core dependencies — only its messaging-platform
-  extras pull it in, and those extras also pull in
-  `python-telegram-bot`/`discord.py`/`slack-bolt`, which this image does
-  not need. Installing just `aiohttp` at the version those extras pin
-  keeps the image to what an API-server-only bot actually uses, without
-  guessing a version upstream hasn't tested.
+  is not one of hermes' core dependencies — most of the extras that pull it
+  in also pull in `python-telegram-bot`/`discord.py`/`slack-bolt`, which
+  this image does not need. `pyproject.toml`'s `sms` extra resolves to
+  exactly `aiohttp==3.14.3` and nothing else, so the build installs through
+  `uv sync --frozen --extra sms` — the same hash-verified `uv.lock` path
+  every other dependency in this image goes through, rather than a
+  separate unlocked `uv pip install aiohttp==...` that could pull an
+  untampered-looking but unverified wheel. A build-time check fails loudly
+  if that extra ever stops being exactly `aiohttp==${HERMES_AIOHTTP_VERSION}`.
 - Bundled skills (`skills/` in the hermes source tree — 14 categories at
   `0.21.2`/`v2026.9.11`), read-only. They are **not** shipped via PyPI package-data
   (hermes' `pyproject.toml` package-data list does not include `skills/**`
@@ -47,6 +50,37 @@ Docker socket, no host mounts, and no media tools.
   `docs/myrmidon/CONVENTIONS.md` §8; media handling is a separate service
   outside this fork.
 - Non-root user, uid/gid `10001`.
+
+## Sealed image: lazy installs and the write-safe root
+
+`/opt/hermes-src` (the venv, the hermes source tree and the bundled skills
+under it) is root-owned and read-only for the `bot` user — not a pure
+security win on its own, since hermes has its own runtime mechanisms that
+assume a writable install by default:
+
+- `tools/lazy_deps.py` installs an opt-in backend's SDK (the native
+  `anthropic` provider, `bedrock`, `vertex`, `azure_identity`, the
+  `exa`/`firecrawl`/`parallel` web-search backends, TTS/STT, OTLP export,
+  …) the first time a bot profile actually uses it. Left unconfigured, it
+  installs straight into the (read-only) venv and fails with a raw `uv pip
+  install` permission error at that moment, instead of hermes' own clean
+  "no writable install target configured" message.
+- `agent/file_safety.py`'s write/patch guard (`HERMES_WRITE_SAFE_ROOT`) is
+  inert when unset — hermes' built-in file-write tools would then have no
+  application-level path scoping beyond raw container filesystem
+  permissions (the separate `~/.ssh`/credential-file denylist in the same
+  module stays active regardless).
+
+hermes' own upstream `Dockerfile` seals its image the identical way and
+sets three `ENV` vars for exactly these two reasons; this image sets the
+same three, pointed at the durable `/data` volume instead of upstream's
+`/opt/data`:
+
+| Variable | Value | What |
+|---|---|---|
+| `HERMES_DISABLE_LAZY_INSTALLS` | `1` | Blocks a lazy install into the sealed venv; still allowed when a durable target is configured (below) — see `tools/lazy_deps.py::_allow_lazy_installs()`. |
+| `HERMES_LAZY_INSTALL_TARGET` | `/data/hermes/lazy-packages` | Redirects a lazy install to this directory instead (created on first use, under the already-writable `HERMES_HOME`) and appends it to `sys.path` — appended, not prepended, so a lazy package can only add modules, never shadow or downgrade a core one. |
+| `HERMES_WRITE_SAFE_ROOT` | `/data:/workspace` | Scopes hermes' own write/patch tools to the durable volume and the workspace, matching upstream's equivalent setting for the same sealed-image posture. |
 
 ## Why editable, not `pip install hermes-agent`
 
@@ -80,8 +114,9 @@ vetted against this exact hermes release, not one guessed independently.
 
 `patches/*.patch` are applied (`git apply`) against the cloned tag before
 `uv sync`. Empty at 1.1.0 — see `patches/README.md` for the mechanism and
-an honest note on what we could and could not verify about local
-modifications on the reference host.
+an honest note on a local modification found on the reference host that is
+**not** captured here yet (known gap, flagged for a maintainer/later
+Этап, not silently dropped).
 
 ## Required environment
 
@@ -90,10 +125,12 @@ modifications on the reference host.
 | `API_SERVER_KEY` | yes | Bearer token for the gateway's API server. hermes itself refuses to start the API server without one at least 16 chars and not a known placeholder (`gateway/platforms/api_server.py: _api_key_passes_startup_guard`); the entrypoint checks length up front so a misconfigured container fails in one line. Generate with `openssl rand -hex 32`. |
 | `MYRMIDON_BOT_YOLO` | no (default `1`) | `1`: sets `HERMES_YOLO_MODE=1` before exec — dangerous-command approvals bypassed, because this gateway has no attended operator to answer a prompt. `0`: leaves approvals to the profile's `config.yaml` (`approvals.mode`, default `smart`); on `api_server` (an "unattended platform" in hermes' own terms) an unanswered approval defaults to `deny`, not to a hang. See `docs/myrmidon/SETTINGS.md`. |
 
-`API_SERVER_ENABLED`, `API_SERVER_HOST`, `API_SERVER_PORT`, `HERMES_HOME`
-already have working defaults baked into the image (`true`, `0.0.0.0`,
-`8642`, `/data/hermes`) — override only if the container topology needs
-something else.
+`API_SERVER_ENABLED`, `API_SERVER_HOST`, `API_SERVER_PORT`, `HERMES_HOME`,
+`HERMES_DISABLE_LAZY_INSTALLS`, `HERMES_LAZY_INSTALL_TARGET`,
+`HERMES_WRITE_SAFE_ROOT` already have working defaults baked into the
+image (`true`, `0.0.0.0`, `8642`, `/data/hermes`, `1`,
+`/data/hermes/lazy-packages`, `/data:/workspace`) — override only if the
+container topology needs something else.
 
 ## Volumes
 
