@@ -64,11 +64,12 @@ docker pull --quiet "$ref" >/dev/null || die "cannot pull $ref"
 
 log "2/8 previous image: ${previous_image:-<none>}"
 mkdir -p "$STATE_DIR"
-if [[ -n "$previous" ]]; then
+# myrmidon(R4): a forced redeploy of the same image must not overwrite the real previous one.
+if [[ -n "$previous" && "$previous" != "$digest" ]]; then
   printf '%s\n' "$previous" >"$PREVIOUS_FILE"
 fi
 # myrmidon(R4): the full reference, so rollback also works from a vendor image.
-if [[ -n "$previous_image" ]]; then
+if [[ -n "$previous_image" && "$previous_image" != "$ref" ]]; then
   printf '%s\n' "$previous_image" >"$PREVIOUS_IMAGE_FILE"
 fi
 
@@ -84,7 +85,11 @@ wait_for_idle_runs
 
 log "6/8 switch image and recreate $COMPOSE_SERVICE"
 write_override "$digest"
-compose up -d --no-deps "$COMPOSE_SERVICE"
+if [[ "$force" == "1" ]]; then
+  compose up -d --no-deps --force-recreate "$COMPOSE_SERVICE"
+else
+  compose up -d --no-deps "$COMPOSE_SERVICE"
+fi
 record_history deploy "$digest"
 
 log "7/8 verify health"
