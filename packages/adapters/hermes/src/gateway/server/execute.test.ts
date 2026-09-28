@@ -1,7 +1,12 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it, vi, afterEach } from "vitest";
 import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
 import { execute, mapFinalResultForTest, parseSseFramesForTest, resolveSessionKey } from "./execute.js";
 import { testEnvironment } from "./test.js";
+import { DEFAULT_TIMEOUT_SEC } from "../shared/constants.js";
 
 function makeCtx(config: Record<string, unknown>): AdapterExecutionContext {
   return {
@@ -763,5 +768,417 @@ describe("mapFinalResultForTest", () => {
     expect(result.exitCode).toBe(1);
     expect(result.errorCode).toBe("hermes_gateway_run_failed");
     expect(result.errorMessage).toBe("boom");
+  });
+});
+
+// myrmidon(G4): defaults, cancellation, approvals, per-run model, instructions
+// bundle, compact progress logging, and idempotent retry attach.
+
+describe("gateway defaults (G4)", () => {
+  it("defaults timeoutSec to 1800, matching hermes_local", () => {
+    expect(DEFAULT_TIMEOUT_SEC).toBe(1800);
+  });
+});
+
+describe("execute — operator cancellation (G4)", () => {
+  it("registers onCancellationReady only after the run exists, then stops and reports cancellation on operator abort", async () => {
+    const controller = new AbortController();
+    const callOrder: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        callOrder.push("create");
+        return new Response(JSON.stringify({ run_id: "run-cancel-1", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) return new Promise<Response>(() => {}); // never resolves
+      if (url.endsWith("/stop")) {
+        callOrder.push("stop");
+        return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      }
+      if (init?.method === "GET") {
+        return new Response(JSON.stringify({ status: "cancelled", last_event: "run.cancelled" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+    ctx.signal = controller.signal;
+    ctx.onCancellationReady = vi.fn(async () => {
+      // The run must already exist (the create call already fired) before the
+      // adapter opts into signal-based cancellation.
+      expect(callOrder).toEqual(["create"]);
+      callOrder.push("ready");
+      controller.abort();
+    });
+
+    const result = await execute(ctx);
+
+    expect(callOrder).toEqual(["create", "ready", "stop"]);
+    expect(ctx.onCancellationReady).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(1);
+    expect(result.timedOut).toBe(false);
+    expect(result.errorCode).toBe("hermes_gateway_cancelled");
+  });
+
+  it("still honors an already-aborted ctx.signal when the caller supplies no onCancellationReady", async () => {
+    // ctx.signal is the actual cancellation mechanism; onCancellationReady is
+    // only the readiness handshake back to the platform. A caller that sets
+    // ctx.signal without also providing onCancellationReady (unusual, but the
+    // field is optional) still gets a clean cancellation, not a hang or crash.
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-x", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) return new Promise<Response>(() => {});
+      if (url.endsWith("/stop")) return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      if (init?.method === "GET") return new Response(JSON.stringify({ status: "cancelled" }), { status: 200 });
+      return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    ctx.signal = controller.signal;
+    // onCancellationReady intentionally left undefined.
+
+    const result = await execute(ctx);
+    expect(result.errorCode).toBe("hermes_gateway_cancelled");
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/stop"))).toBe(true);
+  });
+});
+
+describe("execute — approval auto-deny (G4)", () => {
+  it("denies an approval.request instead of waiting for a human, and keeps the run going", async () => {
+    const approvalBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-approval-1", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/approval")) {
+        approvalBodies.push(JSON.parse(String(init?.body)));
+        return new Response(
+          JSON.stringify({ object: "hermes.run.approval_response", choice: "deny", resolved: 1 }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith("/events")) {
+        return new Response(
+          sseStream(
+            [
+              "event: approval.request",
+              "data: {\"request_id\":\"req-1\",\"command\":\"rm -rf /\"}",
+              "",
+              "event: run.completed",
+              "data: {\"status\":\"completed\",\"output\":\"done\"}",
+              "",
+            ].join("\n"),
+          ),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    const result = await execute(ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBe(false);
+    expect(approvalBodies).toEqual([{ choice: "deny", request_id: "req-1" }]);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/run-approval-1/approval"))).toBe(true);
+
+    const logText = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line)).join("\n");
+    expect(logText).toContain("approval auto-denied (request_id=req-1)");
+  });
+
+  it("logs the failure and still lets the run continue when the deny request itself fails", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-approval-2", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/approval")) {
+        return new Response(JSON.stringify({ error: "gone" }), { status: 409 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(
+          sseStream(
+            [
+              "event: approval.request",
+              "data: {}",
+              "",
+              "event: run.completed",
+              "data: {\"status\":\"completed\",\"output\":\"done\"}",
+              "",
+            ].join("\n"),
+          ),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    const result = await execute(ctx);
+
+    expect(result.exitCode).toBe(0);
+    const logText = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line)).join("\n");
+    expect(logText).toContain("approval auto-deny request failed");
+  });
+});
+
+describe("execute — per-run model/provider/effort (G4)", () => {
+  it("sends model, provider, and model_options.reasoning.effort from adapterConfig", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/v1/runs") ? { run_id: "run-model-1", status: "started" } : { status: "completed", output: "done" },
+    ), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      timeoutSec: 5,
+      model: "provider-a/model-a",
+      provider: "provider-a",
+      effort: "high",
+    });
+    await execute(ctx);
+
+    const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const body = JSON.parse(String(calls.find(([input]) => String(input).endsWith("/v1/runs"))?.[1]?.body));
+    expect(body.model).toBe("provider-a/model-a");
+    expect(body.provider).toBe("provider-a");
+    expect(body.model_options).toEqual({ reasoning: { effort: "high" } });
+  });
+
+  it("omits model/provider/model_options when the card sets none of them", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/v1/runs") ? { run_id: "run-model-2", status: "started" } : { status: "completed", output: "done" },
+    ), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    await execute(ctx);
+
+    const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const body = JSON.parse(String(calls.find(([input]) => String(input).endsWith("/v1/runs"))?.[1]?.body));
+    expect(body.model).toBeUndefined();
+    expect(body.provider).toBeUndefined();
+    expect(body.model_options).toBeUndefined();
+  });
+});
+
+describe("execute — managed instructions bundle (G4)", () => {
+  it("prepends the instructions bundle ahead of the card's instructions string", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "myrmidon-hermes-gateway-"));
+    try {
+      const instructionsPath = path.join(root, "AGENTS.md");
+      await fs.writeFile(instructionsPath, "You are agent-a. Be terse.\n", "utf8");
+
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+        String(input).endsWith("/v1/runs") ? { run_id: "run-instr-1", status: "started" } : { status: "completed", output: "done" },
+      ), { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const ctx = makeCtx({
+        apiBaseUrl: "http://127.0.0.1:8642",
+        apiKey: "secret-key",
+        timeoutSec: 5,
+        instructionsFilePath: instructionsPath,
+        instructions: "Card instructions string.",
+      });
+      await execute(ctx);
+
+      const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+      const body = JSON.parse(String(calls.find(([input]) => String(input).endsWith("/v1/runs"))?.[1]?.body));
+      expect(body.instructions).toBe("You are agent-a. Be terse.\n\n---\n\nCard instructions string.");
+
+      const logText = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line)).join("\n");
+      expect(logText).toContain(`Loaded agent instructions from ${instructionsPath}`);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the card's instructions string alone when the bundle file is missing", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/v1/runs") ? { run_id: "run-instr-2", status: "started" } : { status: "completed", output: "done" },
+    ), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      timeoutSec: 5,
+      instructionsFilePath: "/nonexistent/AGENTS.md",
+      instructions: "Card instructions string.",
+    });
+    await execute(ctx);
+
+    const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const body = JSON.parse(String(calls.find(([input]) => String(input).endsWith("/v1/runs"))?.[1]?.body));
+    expect(body.instructions).toBe("Card instructions string.");
+
+    const logText = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line)).join("\n");
+    expect(logText).toContain("Warning: could not read agent instructions file");
+  });
+});
+
+describe("execute — compact progress logging (G4)", () => {
+  function toolEventsSse(): string {
+    return [
+      "event: tool.started",
+      "data: {\"tool\":\"terminal\",\"preview\":\"curl example.com\"}",
+      "",
+      "event: tool.completed",
+      "data: {\"tool\":\"terminal\",\"preview\":\"curl example.com\",\"duration\":1.2}",
+      "",
+      "event: message.delta",
+      "data: {\"delta\":\"Hello\\n\"}",
+      "",
+      "event: reasoning.available",
+      "data: {\"text\":\"Weighing two options.\"}",
+      "",
+      "event: run.completed",
+      "data: {\"status\":\"completed\",\"output\":\"done\"}",
+      "",
+    ].join("\n");
+  }
+
+  it("writes hermes-chat-shaped compact lines and drives onRuntimeProgress by default", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-compact-1", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(sseStream(toolEventsSse()), { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    const onRuntimeProgress = vi.fn();
+    ctx.onRuntimeProgress = onRuntimeProgress;
+
+    await execute(ctx);
+
+    const logLines = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line));
+    expect(logLines.some((line) => line.includes("[tool] terminal curl example.com"))).toBe(true);
+    expect(logLines.some((line) =>
+      line.includes("[done]") && line.includes("terminal") && line.includes("curl example.com") && line.includes("1.2s"),
+    )).toBe(true);
+    expect(logLines.some((line) => line.includes("┊ 💬 Hello"))).toBe(true);
+    expect(logLines.some((line) => line.includes("💭") && line.includes("Weighing two options."))).toBe(true);
+    expect(logLines.every((line) => !line.includes("[hermes-gateway:event]"))).toBe(true);
+
+    expect(onRuntimeProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "adapter_startup", currentToolName: "terminal", message: "Using terminal" }),
+    );
+    expect(onRuntimeProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "adapter_startup", currentToolName: "terminal", message: "Used terminal" }),
+    );
+    expect(onRuntimeProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "adapter_startup", lastAssistantSnippet: "Hello\n" }),
+    );
+  });
+
+  it("logs raw redacted event JSON instead when adapterConfig.debugEvents is true", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-compact-2", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(sseStream(toolEventsSse()), { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5, debugEvents: true });
+    await execute(ctx);
+
+    const logLines = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line));
+    expect(logLines.some((line) => line.startsWith("[hermes-gateway:event] run=run-compact-2 event=tool.started"))).toBe(true);
+    expect(logLines.some((line) => line.startsWith("  [tool]"))).toBe(false);
+    expect(logLines.some((line) => line.startsWith("  [done]"))).toBe(false);
+  });
+});
+
+describe("execute — idempotent retry attach (G4)", () => {
+  it("uses retryOfRunId as the Idempotency-Key so Hermes can dedupe the retry", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/v1/runs") ? { run_id: "run-hermes-1", status: "started" } : { status: "completed", output: "done" },
+    ), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    ctx.context = { ...ctx.context, retryOfRunId: "pc-run-original" };
+    await execute(ctx);
+
+    const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const init = calls.find(([input]) => String(input).endsWith("/v1/runs"))?.[1] as RequestInit;
+    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe("pc-run-original");
+  });
+
+  it("falls back to the Paperclip run id when this run is not a retry", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/v1/runs") ? { run_id: "run-hermes-2", status: "started" } : { status: "completed", output: "done" },
+    ), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    await execute(ctx);
+
+    const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const init = calls.find(([input]) => String(input).endsWith("/v1/runs"))?.[1] as RequestInit;
+    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe("pc-run-1");
+  });
+
+  it("attaches to the existing run and logs the replay when Hermes reports replayed:true", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-original-1", status: "running", replayed: true }), { status: 202 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(
+          sseStream(["event: run.completed", "data: {\"status\":\"completed\",\"output\":\"done\"}", ""].join("\n")),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    ctx.context = { ...ctx.context, retryOfRunId: "pc-run-original" };
+    const result = await execute(ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/run-original-1/events"))).toBe(true);
+    const logText = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line)).join("\n");
+    expect(logText).toContain("idempotent replay: attaching to existing run run-original-1 instead of starting a new one");
+  });
+
+  it("classifies a 409 idempotency-key conflict distinctly from a generic protocol error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(
+        JSON.stringify({ error: "Idempotency-Key was already used with a different request payload" }),
+        { status: 409 },
+      )),
+    );
+    const result = await execute(makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key" }));
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("hermes_gateway_idempotency_conflict");
   });
 });
