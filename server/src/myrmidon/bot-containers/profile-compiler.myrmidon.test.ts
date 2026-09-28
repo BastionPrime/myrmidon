@@ -210,6 +210,46 @@ describe("myrmidon(G2) compileHermesProfile — file modes and secrecy", () => {
     expect(env).not.toContain("not a name");
     expect(warnings.some((w) => w.includes("not a name") && w.includes("not a valid"))).toBe(true);
   });
+
+  // Hermes loads hermes/.env with python-dotenv's default `interpolate=True`
+  // (hermes_cli/env_loader.py never passes `interpolate=`), which resolves a
+  // literal "${NAME}"/"${NAME:-default}" substring against the process
+  // environment regardless of quoting, and this dotenv version has no escape
+  // for a literal "$" in a double-quoted value (its escape set is
+  // \\['"abfnrtv], no "$"). The compiler can't prevent this in the .env text
+  // format, so it warns instead of failing silently.
+  it("warns when a card env value contains a literal ${...} sequence dotenv would interpolate", () => {
+    const { profile, warnings } = compileHermesProfileDetailed(
+      baseInput({ env: { WEBHOOK_SECRET: { value: "prefix-${SOME_VAR}-suffix", secret: true } } }),
+    );
+    const env = fileByPath(profile.files, "hermes/.env").content;
+    // The value is still written verbatim (this PR doesn't corrupt it) — the
+    // corruption happens later, when Hermes' dotenv loader reads the file.
+    expect(env).toContain('WEBHOOK_SECRET="prefix-${SOME_VAR}-suffix"');
+    expect(
+      warnings.some(
+        (w) => w.includes("WEBHOOK_SECRET") && w.includes("${") && w.includes("interpolate"),
+      ),
+    ).toBe(true);
+  });
+
+  it("also warns for the ${NAME:-default} form, and for the compiler's own reserved values", () => {
+    const { warnings } = compileHermesProfileDetailed(
+      baseInput({
+        env: { TOKEN: { value: "x${FOO:-bar}y", secret: true } },
+        apiServerKey: "value-with-${LITERAL}-in-it",
+      }),
+    );
+    expect(warnings.some((w) => w.includes("TOKEN") && w.includes("interpolate"))).toBe(true);
+    expect(warnings.some((w) => w.includes("API_SERVER_KEY") && w.includes("interpolate"))).toBe(true);
+  });
+
+  it("does not warn for a plain \"$\" or an unclosed \"${\" with no matching brace", () => {
+    const { warnings } = compileHermesProfileDetailed(
+      baseInput({ env: { PRICE: { value: "costs $5, formula ${unclosed", secret: false } } }),
+    );
+    expect(warnings.some((w) => w.includes("interpolate"))).toBe(false);
+  });
 });
 
 describe("myrmidon(G2) compileHermesProfile — always-set config.yaml fields", () => {
@@ -386,6 +426,22 @@ describe("myrmidon(G2) compileHermesProfile — MCP servers", () => {
     expect(fileByPath(profile.files, "hermes/config.yaml").content).not.toContain("mcp_servers");
     expect(warnings.some((w) => w.includes("empty name"))).toBe(true);
   });
+
+  // buildMcpServers used to build the mapping via `{}` + `mapping[name] = ...`
+  // bracket assignment: `{}["__proto__"] = x` sets the object's prototype
+  // instead of an own property, so Object.keys (what the YAML writer walks)
+  // never saw it and the entry silently vanished. Guards against a
+  // regression back to that pattern.
+  it("does not lose a server literally named \"__proto__\" (prototype-pollution footgun in the name -> object map)", () => {
+    const profile = compileHermesProfile(
+      baseInput({ mcpServers: [{ name: "__proto__", url: "https://example.com/mcp/proto" }] }),
+    );
+    const yaml = fileByPath(profile.files, "hermes/config.yaml").content;
+    expect(yaml).toContain('__proto__:\n    url: "https://example.com/mcp/proto"');
+    // And it must not have leaked onto Object.prototype for any other plain
+    // object built in the same compile.
+    expect(({} as Record<string, unknown>).url).toBeUndefined();
+  });
 });
 
 describe("myrmidon(G2) compileHermesProfile — hindsight settings", () => {
@@ -491,6 +547,22 @@ describe("myrmidon(G2) compileHermesProfile — instructions / AGENTS.md", () =>
     const { profile, warnings } = compileHermesProfileDetailed(baseInput({ instructions }));
     expect(fileByPath(profile.files, "workspace/AGENTS.md").content).toBe(instructions);
     expect(warnings.some((w) => w.includes("AGENTS.md") && w.includes("20001"))).toBe(true);
+  });
+
+  // 20,000 is only Hermes's CONTEXT_FILE_MAX_CHARS *floor*
+  // (agent/prompt_builder.py); the effective runtime limit is
+  // max(floor, min(model_context_length * 4 * 0.06, 500_000)), which for a
+  // large-context model is far above 20,000. HermesProfileInput carries no
+  // model context length, so the warning must not claim 20,000 is the actual
+  // cutoff for this bot.
+  it("phrases the AGENTS.md warning as a floor, not the bot's actual runtime cutoff", () => {
+    const instructions = "x".repeat(20_001);
+    const { warnings } = compileHermesProfileDetailed(baseInput({ instructions }));
+    const warning = warnings.find((w) => w.includes("AGENTS.md"));
+    expect(warning).toBeDefined();
+    expect(warning).toContain("floor");
+    expect(warning).toContain("may truncate");
+    expect(warning).not.toContain("Hermes truncates it at runtime");
   });
 });
 

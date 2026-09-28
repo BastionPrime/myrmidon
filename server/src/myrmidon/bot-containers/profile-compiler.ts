@@ -144,7 +144,16 @@ export interface CompileHermesProfileResult {
 const HERMES_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 const HINDSIGHT_RECALL_BUDGETS = ["low", "mid", "high"];
 
-/** Where the compiled AGENTS.md is truncated by Hermes itself at runtime (agent/prompt_builder.py CONTEXT_FILE_MAX_CHARS). */
+/**
+ * Hermes's CONTEXT_FILE_MAX_CHARS floor (agent/prompt_builder.py), used as a
+ * heads-up threshold here, not the effective truncation limit: at runtime
+ * Hermes picks `max(CONTEXT_FILE_MAX_CHARS, min(context_length * 4 * 0.06,
+ * 500_000))` off the bot's configured model context window (unless
+ * config.yaml sets an explicit `context_file_max_chars`), so a large-context
+ * model's real cutoff can be far above this number. HermesProfileInput
+ * carries no model context length to compute that dynamic value, so this
+ * compiler can only warn against the floor — see the warning text below.
+ */
 const AGENTS_MD_WARN_CHARS = 20_000;
 
 /** In-container mount point of the skills-board volume subtree (containers-plan-senior §2.1). */
@@ -246,7 +255,11 @@ function buildMcpServers(
     byName.set(name, server);
   }
   if (byName.size === 0) return undefined;
-  const mapping: Record<string, YamlMapping> = {};
+  // Object.create(null), not `{}` + bracket assignment: a server literally
+  // named "__proto__" would otherwise set the object's prototype instead of
+  // an own property (`{}["__proto__"] = x` never adds a key `Object.keys`
+  // can see), silently vanishing from the compiled config with no warning.
+  const mapping: Record<string, YamlMapping> = Object.create(null);
   for (const [name, server] of byName) {
     mapping[name] = {
       url: requireNonEmpty(server.url, `mcp_servers.${name}.url`),
@@ -334,7 +347,26 @@ function buildConfigYaml(input: HermesProfileInput, warnings: string[]): string 
 
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Always double-quoted: simpler than a "safe enough to leave bare" heuristic, and it sidesteps whatever a given .env parser does with a bare leading `#` or trailing whitespace. */
+/**
+ * Matches python-dotenv's `${NAME}` / `${NAME:-default}` interpolation
+ * syntax (dotenv/variables.py `_posix_variable`). The vendor gateway loads
+ * `hermes/.env` with `load_dotenv(...)`, whose `interpolate` parameter
+ * defaults to `True` and is never overridden by
+ * `hermes_cli/env_loader.py::_load_dotenv_with_fallback` — so this runs
+ * regardless of whether the value was double-quoted, and there is no escape
+ * for a literal `$` in this dotenv version (see `renderEnvValue` below).
+ */
+const DOTENV_INTERPOLATION_PATTERN = /\$\{[^}\r\n]*\}/;
+
+/**
+ * Always double-quoted: simpler than a "safe enough to leave bare"
+ * heuristic, and it sidesteps whatever a given .env parser does with a bare
+ * leading `#` or trailing whitespace. Note this only escapes backslash,
+ * quote and newline/CR — python-dotenv's double-quote escape set
+ * (`\\[\\'"abfnrtv]`) has no entry for `$`, so a literal `${...}` substring
+ * survives unescaped and is interpolated on load; see
+ * `DOTENV_INTERPOLATION_PATTERN` and its call site in `buildEnvFile`.
+ */
 function renderEnvValue(value: string): string {
   const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r");
   return `"${escaped}"`;
@@ -367,6 +399,16 @@ function buildEnvFile(input: HermesProfileInput, warnings: string[]): string {
       warnings.push(`.env: "${name}" is reserved for the compiler's own value; the card's value was dropped`);
     }
     entries.set(name, value);
+  }
+
+  // No quoting style escapes this: warn rather than fail silently, the same
+  // way RESERVED_ENV_NAMES / ENV_NAME_PATTERN violations are surfaced above.
+  for (const [name, value] of entries) {
+    if (DOTENV_INTERPOLATION_PATTERN.test(value)) {
+      warnings.push(
+        `.env: "${name}" contains a literal \${...} sequence; Hermes' dotenv loader will interpolate it as a variable reference and silently corrupt the value`,
+      );
+    }
   }
 
   const lines = [...entries.keys()].sort().map((name) => `${name}=${renderEnvValue(entries.get(name)!)}`);
@@ -468,7 +510,7 @@ export function compileHermesProfileDetailed(input: HermesProfileInput): Compile
   const skillFiles = buildSkillFiles(input.skills, warnings);
   if (input.instructions.length > AGENTS_MD_WARN_CHARS) {
     warnings.push(
-      `workspace/AGENTS.md: ${input.instructions.length} characters, over the Hermes ${AGENTS_MD_WARN_CHARS}-character context file limit; Hermes truncates it at runtime`,
+      `workspace/AGENTS.md: ${input.instructions.length} characters, over Hermes's ${AGENTS_MD_WARN_CHARS}-character context-file floor; Hermes may truncate it at runtime, depending on the bot's model context window (the floor, not necessarily the effective limit for this bot)`,
     );
   }
   const agentsMdFile = file("workspace/AGENTS.md", input.instructions, { secret: false });
