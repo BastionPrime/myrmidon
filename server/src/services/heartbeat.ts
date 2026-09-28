@@ -614,7 +614,7 @@ import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/main
 import { createStaleActiveLeaseSweep } from "../myrmidon/leases-stale-sweep.js";
 // myrmidon(M3): skip idle timer heartbeats
 import { hasOtherActionableWork, skipIdleHeartbeatsEnabled } from "../myrmidon/heartbeat-idle-skip.js";
-import { sharedRunAdmission } from "../myrmidon/run-admission.js";
+import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -19137,10 +19137,33 @@ export function heartbeatService(
       // myrmidon: oldest waiting run first, so capped admission stays fair
       .orderBy(asc(heartbeatRuns.createdAt));
 
+    // myrmidon: keep the admission count honest against the database
+    const [{ running }] = await db
+      .select({ running: sql<number>`count(*)` })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.status, "running"));
+    sharedRunAdmission().syncRunning(Number(running ?? 0));
+
     const agentIds = [...new Set(queuedRuns.map((r) => r.agentId))];
     for (const agentId of agentIds) {
-      await startNextQueuedRunForAgent(agentId);
+      // myrmidon: one agent's failure (e.g. a duplicate routine issue on claim)
+      // must not stop the sweep for every agent queued after it
+      try {
+        await startNextQueuedRunForAgent(agentId);
+      } catch (err) {
+        logger.error({ err, agentId }, "queued run sweep: start failed for agent");
+      }
     }
+  }
+
+  // myrmidon: when admission held runs back, sweep again once the start window
+  // moves instead of waiting for the next scheduler tick (5 min on vm-core)
+  function scheduleAdmissionResweep() {
+    scheduleQueuedResweep(() =>
+      resumeQueuedRuns().catch((err) =>
+        logger.error({ err }, "queued run resweep after admission limit failed"),
+      ),
+    );
   }
 
   async function recoverActiveSessionGoals() {
@@ -19573,6 +19596,9 @@ export function heartbeatService(
         }
       } finally {
         admission.release(admitted - claimedRuns.length);
+      }
+      if (admitted < availableSlots && admitted < prioritizedRuns.length) {
+        scheduleAdmissionResweep();
       }
       if (claimedRuns.length === 0) return [];
 

@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { createRunAdmission, readCgroupFreeMemoryBytes, readRunAdmissionLimits } from "./run-admission.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createRunAdmission,
+  readCgroupFreeMemoryBytes,
+  readRunAdmissionLimits,
+  scheduleQueuedResweep,
+} from "./run-admission.js";
 
 const NO_MEMORY = { minFreeMemoryMb: null, runMemoryEstimateMb: 300 };
 const MB = 1024 * 1024;
@@ -104,5 +109,42 @@ describe("memory headroom", () => {
         throw new Error("ENOENT");
       }),
     ).toBeNull();
+  });
+});
+
+describe("drift and resweep", () => {
+  it("raises the count to the database but never lowers it", () => {
+    const admission = createRunAdmission({ limits: { maxConcurrentRuns: 12, maxStartsPerMinute: null, ...NO_MEMORY } });
+    expect(admission.reserve(2)).toBe(2);
+    // An execution settled while its row still runs: the database says 12.
+    admission.finish();
+    admission.syncRunning(12);
+    expect(admission.reserve(1)).toBe(0);
+    admission.syncRunning(3);
+    expect(admission.reserve(1)).toBe(0);
+  });
+
+  it("reports when a limit held runs back", () => {
+    const admission = createRunAdmission({ limits: { maxConcurrentRuns: 1, maxStartsPerMinute: null, ...NO_MEMORY } });
+    expect(admission.reserve(1)).toBe(1);
+    expect(admission.limited()).toBe(false);
+    expect(admission.reserve(2)).toBe(0);
+    expect(admission.limited()).toBe(true);
+  });
+
+  it("schedules one resweep for many calls", () => {
+    vi.useFakeTimers();
+    try {
+      const sweep = vi.fn();
+      scheduleQueuedResweep(sweep, 1000);
+      scheduleQueuedResweep(sweep, 1000);
+      vi.advanceTimersByTime(1000);
+      expect(sweep).toHaveBeenCalledTimes(1);
+      scheduleQueuedResweep(sweep, 1000);
+      vi.advanceTimersByTime(1000);
+      expect(sweep).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
