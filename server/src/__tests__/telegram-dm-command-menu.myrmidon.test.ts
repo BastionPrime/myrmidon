@@ -363,4 +363,14 @@ describe("telegramDmConversationsEnabled (X8e)", () => {
     expect(telegramDmConversationsEnabled(otherId)).toBe(true);
     expect(telegramDmConversationsEnabled("third-id")).toBe(false);
   });
+
+  // myrmidon(X8e): "*" must work as one entry of a mixed list, not only as
+  // the entire raw value — this is the branch that diverged from X8a's copy
+  // of this function until it was aligned (review fix).
+  it("matches every endpoint when '*' is one entry among others", () => {
+    vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", `${otherId},*`);
+    expect(telegramDmConversationsEnabled(ownId)).toBe(true);
+    expect(telegramDmConversationsEnabled(otherId)).toBe(true);
+    expect(telegramDmConversationsEnabled("any-other-id")).toBe(true);
+  });
 });
