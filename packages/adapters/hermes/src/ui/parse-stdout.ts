@@ -24,6 +24,8 @@ function stripAnsi(text: string): string {
 import type { TranscriptEntry } from "@paperclipai/adapter-utils";
 
 import { TOOL_OUTPUT_PREFIX } from "../shared/constants.js";
+// myrmidon(G5): drop the Rich Panel frame around the non-quiet final answer
+import { isPanelRuleLine, isPanelTitleLine } from "../shared/myrmidon-panel-frame.js";
 
 // ── Kaomoji / noise stripping ──────────────────────────────────────────────
 
@@ -266,6 +268,16 @@ export function parseHermesStdoutLine(
       .replace(new RegExp(`^${TOOL_OUTPUT_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`), "")
       .trim();
     return [{ kind: "stdout", ts, text: stripped }];
+  }
+
+  // ── Rich Panel frame around the non-quiet final answer ─────────────────
+  // myrmidon(G5): the border rule and title line of the Panel that wraps the
+  // final response when hermes runs without -Q are chrome, not transcript
+  // content — drop them instead of emitting them as garbage "assistant"
+  // lines. The panel's inner text lines fall through to the plain-text
+  // branch below unchanged (already-trimmed border padding included).
+  if (isPanelTitleLine(trimmed) || isPanelRuleLine(trimmed)) {
+    return [];
   }
 
   // ── Thinking blocks ────────────────────────────────────────────────────

@@ -1,8 +1,9 @@
 /**
  * Server-side execution logic for the Hermes Agent adapter.
  *
- * Spawns `hermes chat -q "..." -Q` as a child process, streams output,
- * and returns structured results to Paperclip.
+ * Spawns `hermes chat --query-file -` as a child process, streams output,
+ * and returns structured results to Paperclip. myrmidon(G5): `-Q` (quiet) is
+ * no longer the effective default — see myrmidon-live-progress.ts.
  *
  * Verified CLI flags (hermes chat):
  *   -q/--query         single query (non-interactive)
@@ -66,6 +67,14 @@ import {
 } from "./myrmidon-runtime-mcp.js";
 // myrmidon(M1): card models in the run-scoped config.yaml
 import { materializeHermesRunModels } from "./myrmidon-profile-config.js";
+// myrmidon(G5): live progress by default (ignore adapterConfig.quiet=true),
+// session id in both -Q and non-Q output, Rich Panel frame stripping
+import {
+  extractLiveSessionId,
+  resolveHermesQuietMode,
+  stripExitSummary,
+  stripRichPanelFrames,
+} from "./myrmidon-live-progress.js";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -256,7 +265,9 @@ interface ParsedOutput {
 
 /** Strip noise lines from a Hermes response (tool output, system messages, etc.) */
 function cleanResponse(raw: string): string {
-  return raw
+  // myrmidon(G5): drop the Rich Panel border/title that live progress mode
+  // (no -Q) wraps the final answer in; see myrmidon-live-progress.ts.
+  return stripRichPanelFrames(raw)
     .split("\n")
     .filter((line) => {
       const t = line.trim();
@@ -300,16 +311,27 @@ function parseHermesOutput(stdout: string, stderr: string): ParsedOutput {
       result.response = cleanResponse(stdout.slice(0, sessionLineIdx));
     }
   } else {
-    // Legacy format (non-quiet mode)
-    const legacyMatch = combined.match(SESSION_ID_REGEX_LEGACY);
-    if (legacyMatch?.[1]) {
-      result.sessionId = legacyMatch?.[1] ?? null;
-    }
-    // In non-quiet mode, extract clean response from stdout by
-    // filtering out tool lines, system messages, and noise
-    const cleaned = cleanResponse(stdout);
-    if (cleaned.length > 0) {
-      result.response = cleaned;
+    // myrmidon(G5): live progress (no -Q) — the final answer is a Rich Panel
+    // followed by the interactive CLI's exit summary; quiet mode's stderr
+    // "session_id:" line never appears here. See myrmidon-live-progress.ts
+    // for the verified format (cli.py _print_exit_summary).
+    const liveSessionId = extractLiveSessionId(stdout);
+    if (liveSessionId) {
+      result.sessionId = liveSessionId;
+      result.response = cleanResponse(stripExitSummary(stdout));
+    } else {
+      // Legacy/unrecognized format fallback (e.g. a killed run whose exit
+      // summary never printed): best effort, as before.
+      const legacyMatch = combined.match(SESSION_ID_REGEX_LEGACY);
+      if (legacyMatch?.[1]) {
+        result.sessionId = legacyMatch?.[1] ?? null;
+      }
+      // In non-quiet mode, extract clean response from stdout by
+      // filtering out tool lines, system messages, and noise
+      const cleaned = cleanResponse(stdout);
+      if (cleaned.length > 0) {
+        result.response = cleaned;
+      }
     }
   }
 
@@ -453,8 +475,11 @@ export async function execute(
   }
 
   // ── Build command args ─────────────────────────────────────────────────
-  // Use -Q (quiet) to get clean output: just response + session_id line
-  const useQuiet = cfgBoolean(config.quiet) === true; // default false
+  // Use -Q (quiet) to get clean output: just response + session_id line.
+  // myrmidon(G5): MYRMIDON_HERMES_LIVE_PROGRESS (default on) ignores a card's
+  // adapterConfig.quiet=true so hermes_local shows tool-by-tool progress
+  // without editing every existing agent card; see myrmidon-live-progress.ts.
+  const useQuiet = resolveHermesQuietMode(cfgBoolean(config.quiet) === true);
   // myrmidon(P4): the prompt goes to stdin (`--query-file -`), not argv, so a long
   // task history cannot hit the kernel per-argument limit (E2BIG).
   const args: string[] = ["chat", "--query-file", "-"];
