@@ -215,13 +215,14 @@ describe("assertBotRuntimeContract", () => {
     ).not.toThrow();
   });
 
-  it.each([
+  const refused: Array<{ label: string; labels: Record<string, string> | null | undefined }> = [
     { label: "no labels (Docker's null)", labels: null },
     { label: "no labels (absent)", labels: undefined },
     { label: "other labels only", labels: { "org.opencontainers.image.title": "myrmidon-hermes" } },
     { label: "an empty contract", labels: { [BOT_RUNTIME_CONTRACT_LABEL]: "" } },
     { label: "an unknown contract", labels: { [BOT_RUNTIME_CONTRACT_LABEL]: "2" } },
-  ])("refuses an image with $label", ({ labels }) => {
+  ];
+  it.each(refused)("refuses an image with $label", ({ labels }) => {
     expect(() => assertBotRuntimeContract("myrmidon-hermes:1.0.0", labels)).toThrow(BotContainerTemplateError);
   });
 });
