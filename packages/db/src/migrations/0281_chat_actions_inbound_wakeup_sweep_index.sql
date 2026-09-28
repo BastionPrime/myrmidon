@@ -1,10 +1,11 @@
 -- myrmidon(D1): chat_actions had no index covering (kind, status,
 -- created_at, id). The inbound-wakeup notice sweep
 -- (enqueueInboundWakeupPublications) filters on kind/status and
--- keyset-scans in (created_at, id) order, including a periodic full rescan
--- to recover rows whose eligibility resolves later than a sibling row's
--- (see sweep-cursor.ts); without this index every such scan fell back to a
--- sequential scan of the whole table.
+-- keyset-scans in (created_at, id) order, resetting to a start-of-table
+-- scan whenever a page doesn't fill the requested limit (needed because a
+-- row's eligibility can resolve later than a sibling row created after it —
+-- see enqueueInboundWakeupPublications's cursor comment); without this
+-- index every such scan fell back to a sequential scan of the whole table.
 --
 -- myrmidon(D1): this is NOT CREATE INDEX CONCURRENTLY (migrations run inside
 -- a transaction, so it cannot be), and check-migration-safety.ts's

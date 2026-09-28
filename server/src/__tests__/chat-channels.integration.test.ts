@@ -64415,6 +64415,208 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     }
   });
 
+  it("finds a straggler row on the next ordinary sweep, not lost to a lapped cursor (review PR #98, senior round 1)", async () => {
+    // Two independent deferred-notice conversations on ONE service (so the
+    // sweep's in-memory cursor is actually shared across the two calls
+    // below, the way it is in production): row A created before row B. A's
+    // owner is put back into an active run before the first sweep (so A is
+    // not yet eligible), while B's owner is left deferred (eligible). This
+    // is the out-of-order-eligibility case a purely forward-advancing
+    // keyset cursor gets wrong: if the cursor advanced past B's created_at
+    // and never reset, it would exclude A from every later call once A's
+    // owner also goes deferred — even though A's chat_actions row was
+    // created first. See enqueueInboundWakeupPublications's cursor comment.
+    const fixture = await seedCompany();
+    const owners = new Map<string, string>();
+    const configured = await configuredSlackEndpoint(fixture, {
+      wakeup: async (agentId, opts) => {
+        const conversationKey = String(
+          opts.contextSnapshot?.issueId ?? opts.payload?.issueId ?? "",
+        );
+        const request = opts.durableChatRequest!;
+        await db.transaction(async (tx) => {
+          await request.authorize(
+            tx as unknown as Parameters<typeof request.authorize>[0],
+          );
+          const existingOwnerId = owners.get(conversationKey) ?? null;
+          const [owner] = existingOwnerId
+            ? await tx
+                .select()
+                .from(agentWakeupRequests)
+                .where(eq(agentWakeupRequests.id, existingOwnerId))
+            : [];
+          const existingContext = owner?.payload?._paperclipWakeContext as
+            Record<string, unknown> | undefined;
+          const commentIds = [
+            ...(Array.isArray(existingContext?.wakeCommentIds)
+              ? existingContext.wakeCommentIds
+              : []),
+            request.commentId,
+          ];
+          const payload = {
+            ...opts.payload,
+            _paperclipWakeContext: {
+              ...opts.contextSnapshot,
+              wakeCommentIds: commentIds,
+            },
+          };
+          if (owner)
+            await tx
+              .update(agentWakeupRequests)
+              .set({ payload, coalescedCount: owner.coalescedCount + 1 })
+              .where(eq(agentWakeupRequests.id, owner.id));
+          await tx.insert(agentWakeupRequests).values({
+            id: request.id,
+            companyId: fixture.companyId,
+            agentId,
+            source: "assignment",
+            reason: "issue_execution_deferred",
+            status: owner ? "coalesced" : "deferred_issue_execution",
+            payload: owner
+              ? { ...opts.payload, coalescedIntoWakeupRequestId: owner.id }
+              : payload,
+            requestedByActorType: request.requestedByActorType,
+            requestedByActorId: request.requestedByActorId,
+            requestedAt: request.requestedAt,
+            idempotencyKey: request.idempotencyKey,
+          });
+          if (!owners.has(conversationKey))
+            owners.set(conversationKey, request.id);
+        });
+        return { accepted: true };
+      },
+    });
+    const threadA = makeThread({
+      channelId: "C-STRAGGLER-A",
+      id: "slack:C-STRAGGLER-A:2000000.1",
+    });
+    const threadB = makeThread({
+      channelId: "C-STRAGGLER-B",
+      id: "slack:C-STRAGGLER-B:2000001.1",
+    });
+    await deliverMessage({
+      callbacks: configured.callbacks,
+      endpointId: configured.endpoint.id,
+      thread: threadA.thread,
+      message: makeMessage({
+        id: "2000000.1",
+        text: "@maya straggler row A queued request",
+        mentioned: true,
+      }),
+      trigger: "mention",
+    });
+    await deliverMessage({
+      callbacks: configured.callbacks,
+      endpointId: configured.endpoint.id,
+      thread: threadB.thread,
+      message: makeMessage({
+        id: "2000001.1",
+        text: "@maya straggler row B queued request",
+        mentioned: true,
+      }),
+      trigger: "mention",
+    });
+    const [conversationA, conversationB] = await db
+      .select()
+      .from(chatConversations)
+      .where(eq(chatConversations.endpointId, configured.endpoint.id))
+      .orderBy(asc(chatConversations.createdAt));
+    const [actionA] = await db
+      .select()
+      .from(chatActions)
+      .where(
+        and(
+          eq(chatActions.conversationId, conversationA.id),
+          eq(chatActions.kind, "inbound_wakeup"),
+        ),
+      );
+    // A's owner id is the chat_actions row's own id here (first message on
+    // each conversation, so it is never coalesced into another owner).
+    const runIdA = randomUUID();
+    await db.transaction(async (tx) => {
+      const [ownerA] = await tx
+        .select()
+        .from(agentWakeupRequests)
+        .where(eq(agentWakeupRequests.id, actionA.id));
+      await tx.insert(heartbeatRuns).values({
+        id: runIdA,
+        companyId: fixture.companyId,
+        agentId: fixture.assignedAgentId,
+        status: "running",
+        runtimeMode: "native",
+        wakeupRequestId: ownerA.id,
+        contextSnapshot: ownerA.payload!._paperclipWakeContext as Record<
+          string,
+          unknown
+        >,
+      });
+      await tx
+        .update(agentWakeupRequests)
+        .set({ runId: runIdA, status: "claimed" })
+        .where(eq(agentWakeupRequests.id, ownerA.id));
+    });
+    try {
+      // Call 1: only B is eligible (A's owner is "claimed" — an active
+      // run). A full backlog would keep the cursor advanced past B, but
+      // this page (one match) doesn't fill the requested limit, so the
+      // sweep resets its cursor to a start-of-table scan for the next
+      // call instead of remembering it stopped at B.
+      await expect(
+        configured.service.enqueueInboundWakeupPublications(),
+      ).resolves.toBe(1);
+      await configured.service.processPendingPublications();
+      const [queuedB] = await db
+        .select()
+        .from(chatPublications)
+        .where(eq(chatPublications.conversationId, conversationB.id));
+      expect(queuedB).toMatchObject({
+        state: "published",
+        payload: { text: "Your follow-up is queued.", progressState: "queued" },
+      });
+      await expect(
+        db
+          .select()
+          .from(chatPublications)
+          .where(eq(chatPublications.conversationId, conversationA.id)),
+      ).resolves.toEqual([]);
+
+      // A's run finishes and its wakeup is deferred — eligible now, after
+      // B already got its notice. This is the out-of-order resolution.
+      await db
+        .update(agentWakeupRequests)
+        .set({ runId: null, status: "deferred_issue_execution" })
+        .where(eq(agentWakeupRequests.id, actionA.id));
+
+      // Call 2, same service, an ordinary sweep (no forced rescan
+      // involved): A is still found, because call 1 reset the cursor
+      // instead of lapping past A's earlier created_at.
+      await expect(
+        configured.service.enqueueInboundWakeupPublications(),
+      ).resolves.toBe(1);
+      await configured.service.processPendingPublications();
+      const [queuedA] = await db
+        .select()
+        .from(chatPublications)
+        .where(eq(chatPublications.conversationId, conversationA.id));
+      expect(queuedA).toMatchObject({
+        state: "published",
+        payload: { text: "Your follow-up is queued.", progressState: "queued" },
+      });
+
+      // The notice reached chat_publications while A's owner was still
+      // "deferred" — before it is promoted to a new run — so the notice is
+      // not stale by the time it is superseded.
+      await expect(
+        db
+          .select({ status: agentWakeupRequests.status })
+          .from(agentWakeupRequests)
+          .where(eq(agentWakeupRequests.id, actionA.id)),
+      ).resolves.toEqual([{ status: "deferred_issue_execution" }]);
+    } finally {
+      await configured.service.shutdown();
+    }
+  });
+
   it.each(["answer_first", "failure_first"] as const)(
     "preserves selected answer and failure lanes after deferred admission (%s)",
     async (order) => {

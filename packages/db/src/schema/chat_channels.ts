@@ -682,10 +682,11 @@ export const chatActions = pgTable(
     ),
     // myrmidon(D1): the inbound-wakeup notice sweep
     // (enqueueInboundWakeupPublications) filters chat_actions by
-    // (kind, status) and orders/keyset-scans by (created_at, id); without
-    // this index that was a sequential scan of the whole table on every
-    // call, including the periodic full rescan the sweep does to recover
-    // rows whose eligibility resolves out of created_at order. See
+    // (kind, status) and orders/keyset-scans by (created_at, id), resetting
+    // to a start-of-table scan whenever a page doesn't fill the requested
+    // limit (rows can resolve eligible out of created_at order); without
+    // this index both the keyset page and the start-of-table scan fell
+    // back to a sequential scan of the whole table. See
     // docs/myrmidon/DIVERGENCE.md.
     index("chat_actions_inbound_wakeup_sweep_idx").on(
       table.kind,

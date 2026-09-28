@@ -126,10 +126,6 @@ import {
 import { isUniqueViolation } from "../db-errors.js";
 import { coalescedOwnerId } from "../myrmidon/chat-reconciliation/owner-join.js";
 import {
-  nextSweepCursor,
-  shouldForceFullSweep,
-} from "../myrmidon/chat-reconciliation/sweep-cursor.js";
-import {
   bindTeamsPersonalRecipient,
   deriveTeamsPersonalRecipient,
   parseTeamsPersonalRecipient,
@@ -765,13 +761,6 @@ const SUPPLIED_CREDENTIAL_KEYS: Record<ChatProvider, readonly string[]> = {
 const MAX_INBOUND_TEXT = 100_000;
 const MAX_ERROR_TEXT = 2_000;
 const DELIVERY_PROCESSING_STALE_MS = 60_000;
-// myrmidon(D1): how often enqueueInboundWakeupPublications ignores its
-// keyset cursor and rescans chat_actions from the start, to recover a row
-// whose owner went terminal after a later-created sibling's owner already
-// did (see sweep-cursor.ts's doc comments). Bounds staleness instead of
-// eliminating it: worst case, a straggler notice is delayed by up to this
-// long, not lost.
-const INBOUND_WAKE_SWEEP_FULL_RESCAN_MS = 5 * 60_000;
 // Reactions can beat the transaction that persists a just-sent provider
 // message link. Keep that narrow gap durable, but never retain an unbound
 // reaction indefinitely or let it enter the ordinary inbound-message FIFO.
@@ -13759,11 +13748,6 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   }
 
   let inboundWakeNoticeCursor: { createdAt: Date; id: string } | null = null;
-  // myrmidon(D1): last time enqueueInboundWakeupPublications used a null
-  // (start-of-table) cursor, forced or otherwise. Drives
-  // shouldForceFullSweep. See INBOUND_WAKE_SWEEP_FULL_RESCAN_MS and
-  // sweep-cursor.ts.
-  let inboundWakeLastFullSweepAt: number | null = null;
 
   async function inboundQueueNoticeStillVisible(
     tx: DbOrTransaction,
@@ -13801,17 +13785,23 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     const removedComment = alias(issueComments, "removed_comment");
     const sourceRemoved = isNotNull(removedComment.id);
     // myrmidon(D1): eligibility here depends on the owner's status, which
-    // can go terminal well after chat_actions.created_at, so the keyset
-    // cursor below can lap a still-pending row. Periodically force a
-    // start-of-table scan to recover it. See sweep-cursor.ts and
-    // INBOUND_WAKE_SWEEP_FULL_RESCAN_MS.
-    const sweepStartedAt = Date.now();
-    const forceFullSweep = shouldForceFullSweep(
-      inboundWakeLastFullSweepAt,
-      sweepStartedAt,
-      INBOUND_WAKE_SWEEP_FULL_RESCAN_MS,
-    );
-    const cursor = forceFullSweep ? null : inboundWakeNoticeCursor;
+    // can go terminal well after chat_actions.created_at, and not in
+    // created_at order between rows (12 concurrent run lanes can resolve a
+    // later-created row's owner before an earlier one's). A keyset cursor
+    // that only ever advances forward, and never resets, would then
+    // permanently skip the earlier row once a later one has pushed the
+    // cursor past it (review PR #98, senior round 1). So this cursor is
+    // reset to a start-of-table scan below on every call whose page does
+    // not fill the requested limit — the same rule the vendor's original
+    // (pre-D1) version of this sweep used — not just periodically: a
+    // straggler row is retried on the very next call, not left for up to
+    // several minutes. A full page only advances the cursor because that
+    // case means a real backlog, and rescanning it from the start on every
+    // call would defeat the point of the keyset scan; this matches vendor
+    // behavior and carries the same (pre-existing, not introduced by D1)
+    // out-of-order risk on a full page, which we do not attempt to close
+    // here.
+    const cursor = inboundWakeNoticeCursor;
     const hasVisibleQueue = sql`exists (select 1 from chat_publications queued_notice
       join chat_message_links visible_queue on visible_queue.publication_id = queued_notice.id
         and visible_queue.company_id = queued_notice.company_id
@@ -13826,6 +13816,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           ${chatActions.endpointId}::text || ':' || ${chatActions.conversationId}::text)`;
     // A bounded keyset sweep, not an in-memory work queue. Advancing even past
     // revoked candidates prevents an inaccessible old message starving others.
+    const pageLimit = Math.max(1, Math.min(limit, 200));
     const candidates = await db
       .select({ action: chatActions })
       .from(chatActions)
@@ -13885,19 +13876,18 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         ),
       )
       .orderBy(asc(chatActions.createdAt), asc(chatActions.id))
-      .limit(Math.max(1, Math.min(limit, 200)));
-    // myrmidon(D1): advance to the last row a non-empty page returned
-    // (whether or not the page was full), and otherwise keep the previous
-    // cursor instead of resetting to the very start of chat_actions on every
-    // call. shouldForceFullSweep above still does that reset periodically,
-    // to catch a row whose eligibility resolves after the cursor has passed
-    // it. See nextSweepCursor's and shouldForceFullSweep's doc comments and
-    // docs/myrmidon/DIVERGENCE.md.
-    if (forceFullSweep) inboundWakeLastFullSweepAt = sweepStartedAt;
-    inboundWakeNoticeCursor = nextSweepCursor(
-      cursor,
-      candidates.map(({ action }) => ({ createdAt: action.createdAt, id: action.id })),
-    );
+      .limit(pageLimit);
+    // myrmidon(D1): only advance the cursor on a full page (a real backlog);
+    // otherwise reset to a start-of-table scan, matching the vendor's
+    // original (pre-D1) rule. See the comment above `cursor` for why this
+    // reset can't be periodic-only: eligibility isn't in created_at order,
+    // so leaving the cursor advanced past a still-pending row would exclude
+    // that row from every future call.
+    const last = candidates.at(-1)?.action;
+    inboundWakeNoticeCursor =
+      candidates.length >= pageLimit && last
+        ? { createdAt: last.createdAt, id: last.id }
+        : null;
     let inserted = retryInserted;
     for (const { action } of candidates) {
       try {

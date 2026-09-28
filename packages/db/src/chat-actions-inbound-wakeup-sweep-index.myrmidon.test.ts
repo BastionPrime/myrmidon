@@ -1,6 +1,7 @@
-// myrmidon(D1): companion index for the inbound-wakeup notice sweep's
-// periodic full rescan (server/src/services/chat-channels.ts,
-// enqueueInboundWakeupPublications) and its sweep-cursor keyset scan. See
+// myrmidon(D1): companion index for the inbound-wakeup notice sweep
+// (server/src/services/chat-channels.ts, enqueueInboundWakeupPublications):
+// used both by its keyset-cursor page and by the start-of-table rescan it
+// falls back to whenever a page doesn't fill the requested limit. See
 // docs/myrmidon/DIVERGENCE.md.
 import { describe, expect, it, afterEach } from "vitest";
 import postgres from "postgres";
