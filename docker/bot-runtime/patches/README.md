@@ -1,27 +1,25 @@
 # Patches applied to the hermes client at build time
 
-Empty at Myrmidon 1.1.0 (G1, 2026-09-28). This is where our patches to the
-`hermes-agent` client land once we need one, applied at image build time
-against the pinned upstream tag (`HERMES_GIT_REF` in
+This is where our patches to the `hermes-agent` client land, applied at
+image build time against the pinned upstream tag (`HERMES_GIT_REF` in
 `docker/bot-runtime/Dockerfile`, currently `v2026.9.11`, the tag that ships hermes's pyproject.toml version 0.21.2).
 
 A reference `hermes-agent` checkout used while preparing this image carries
-**multiple** local modifications on top of the pinned tag that are **not**
-captured as `*.patch` files here. They span more than the one area a first
-pass might notice — environment/session handling, some tool behavior, and
-CLI/agent-loop helper code are all touched — so this is wider than a
-single change. Full access to that checkout's history was not available
-while preparing this image (only a partial, read-only view), so turning
-these into clean, reviewed patches needs someone with full access to that
-history, not a guess from a partial read.
+local modifications on top of the pinned tag. The two below — the
+hindsight reflect timeout/retry behavior and the session-snapshot secret
+redaction — are ported here as reviewed patches, rewritten clean against
+this tag (English comments, no internal identifiers, per
+`docs/myrmidon/CONVENTIONS.md` §10). Full access to that checkout's history
+was not available while preparing this image (only a partial, read-only
+view), so these two were confirmed by diffing the checkout directly against
+a fresh clone of the pinned tag, not by reading history.
 
-At least one of the unported changes is security-relevant (it hardens what
-gets written to disk as part of a session's state) and should not wait for
-a full survey of the rest before being prioritized. **This is a known gap,
-wider than a single change**, left for a maintainer or a later Этап with
+The rest of that checkout's local modifications — some tool behavior (e.g.
+the browser tool) and CLI/agent-loop helper code — are **not yet** ported
+here. **This is a known gap**, left for a maintainer or a later phase with
 full access to port properly (as reviewed, tested patches, not guesses):
 do not assume `patches/` is a complete patch set, and do not stop after the
-first modification found — check that checkout's full local history
+two modifications below — check that checkout's full local history
 directly before treating this list as closed.
 
 ## How a patch is added
@@ -52,8 +50,9 @@ directly before treating this list as closed.
    (`uv sync`), the supported path this image uses. See the Dockerfile's
    header comment.
 
-## Patches (none yet)
+## Patches
 
 | File | What it changes | Why | Drop when |
 |---|---|---|---|
-| — | — | — | — |
+| `01-hindsight-reflect-timeout-and-retry.patch` | `plugins/memory/hindsight/settings.py` and `__init__.py`: a `reflect`-specific client timeout (`reflect_timeout` / `HINDSIGHT_REFLECT_TIMEOUT`, default 360s, separate from the shared `timeout`), a `reflect_fact_types` filter that skips the expensive consolidated-observations layer by default, and a bounded retry on the bank's `503` admission refusal (busy reflect lane), honoring `Retry-After`. | The shared client timeout is sized for recall/retain; a `reflect` call synthesizes an LLM answer over the whole bank and routinely runs well past it, so every `reflect` was silently killed client-side while the bank was still working. A `503` admission refusal is transient by contract; without a retry, that turn's memory call was lost outright instead of completing on the next available slot. | Upstream ships its own per-operation timeout and/or 503 retry for the hindsight client (check `plugins/memory/hindsight/` in a newer tag). |
+| `02-session-snapshot-secret-redaction.patch` | `tools/environments/base.py` and `base_session_env.py`: excludes credential-shaped env var **names** (`*_SECRET`, `*_TOKEN`, `*_API_KEY`, `*_KEY`, `*_URL`, `*_DSN`, …) from the bash session-snapshot dump, in addition to the existing per-session passthrough exclusions. | The snapshot file lives in a shared temp dir; every profile in the container runs as one uid, so file permissions alone do not separate co-tenant agents. Dumping a run secret's value into that file made it readable by any neighbouring profile. The value stays available to every command via the inherited process env regardless, so excluding it from the snapshot costs nothing functionally. | Upstream adds an equivalent snapshot exclusion for credential-shaped env names (check `tools/environments/base_session_env.py` in a newer tag). |

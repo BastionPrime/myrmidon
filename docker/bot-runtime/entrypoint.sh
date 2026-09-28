@@ -21,15 +21,42 @@ fail() {
 
 # --- required environment ---------------------------------------------
 
+: "${HERMES_HOME:?HERMES_HOME is required (set by the image; do not unset it — it must point at the /data volume)}"
+
+# myrmidon(G1): API_SERVER_KEY is read from ${HERMES_HOME}/.env when the container's
+# own environment does not already have it — never required in the container's Env.
+# Bot-runtime contract "1" (server/src/myrmidon/bot-containers/template.ts,
+# BOT_RUNTIME_CONTRACT_LABEL): the G3 driver's create body never sets Env (anything
+# there is visible via `docker inspect`), so every secret the gateway needs travels
+# only in the profile's ${HERMES_HOME}/.env. hermes itself loads that same file with
+# override=True before reading API_SERVER_KEY (gateway/run.py, env_loader.py), so
+# this is only a fast first gate — the file is parsed here as data (grep/sed), never
+# sourced, since it is not a trusted script. A key already in the process
+# environment (e.g. `docker run -e API_SERVER_KEY=...` for local/manual testing,
+# outside the fleet driver) is honored as-is and the file is not touched.
+if [ -z "${API_SERVER_KEY:-}" ]; then
+  env_file="${HERMES_HOME}/.env"
+  if [ -r "${env_file}" ]; then
+    line="$(grep -m1 -E '^API_SERVER_KEY=' "${env_file}" || true)"
+    if [ -n "${line}" ]; then
+      value="${line#API_SERVER_KEY=}"
+      # Strip one layer of matching quotes (dotenv KEY="value" / KEY='value').
+      case "${value}" in
+        \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        \'*\') value="${value#\'}"; value="${value%\'}" ;;
+      esac
+      API_SERVER_KEY="${value}"
+    fi
+  fi
+fi
 # gateway/platforms/api_server.py refuses to start the API server without a
 # key at least 16 chars and not a known placeholder value. We only check
 # length here; hermes itself checks the placeholder list.
-: "${API_SERVER_KEY:?API_SERVER_KEY is required (the hermes API server refuses to start without it) — generate one with: openssl rand -hex 32}"
+: "${API_SERVER_KEY:?API_SERVER_KEY is required — set it in \${HERMES_HOME}/.env as API_SERVER_KEY=\"...\" (bot-runtime contract: never in the container's own environment) — generate one with: openssl rand -hex 32}"
 if [ "${#API_SERVER_KEY}" -lt 16 ]; then
   fail "API_SERVER_KEY is ${#API_SERVER_KEY} chars, hermes requires at least 16 (openssl rand -hex 32 gives 64)"
 fi
-
-: "${HERMES_HOME:?HERMES_HOME is required (set by the image; do not unset it — it must point at the /data volume)}"
+export API_SERVER_KEY
 
 # --- defaults (only fill in what the image's own ENV did not already) --
 

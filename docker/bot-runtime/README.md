@@ -32,11 +32,24 @@ Docker socket, no host mounts, and no media tools.
   in also pull in `python-telegram-bot`/`discord.py`/`slack-bolt`, which
   this image does not need. `pyproject.toml`'s `sms` extra resolves to
   exactly `aiohttp==3.14.3` and nothing else, so the build installs through
-  `uv sync --frozen --extra sms` — the same hash-verified `uv.lock` path
-  every other dependency in this image goes through, rather than a
-  separate unlocked `uv pip install aiohttp==...` that could pull an
-  untampered-looking but unverified wheel. A build-time check fails loudly
-  if that extra ever stops being exactly `aiohttp==${HERMES_AIOHTTP_VERSION}`.
+  `uv sync --frozen --extra sms --extra mcp --extra hindsight` — the same
+  hash-verified `uv.lock` path every other dependency in this image goes
+  through, rather than a separate unlocked `uv pip install aiohttp==...`
+  that could pull an untampered-looking but unverified wheel. A build-time
+  check fails loudly if that extra ever stops being exactly
+  `aiohttp==${HERMES_AIOHTTP_VERSION}`.
+- `mcp` and `hindsight-client` (the `mcp` and `hindsight` extras), baked in
+  rather than left to hermes' own lazy install
+  (`tools/lazy_deps.py`/`HERMES_LAZY_INSTALL_TARGET`, below): every
+  G2-compiled bot profile writes both an `mcp_servers` block and a
+  `memory.provider=hindsight` config, and this image's sealed venv cannot
+  reliably lazy-install into itself at runtime (see "Sealed image" below).
+  Without these two extras hermes does not error — it silently disables
+  MCP tools (`tools/mcp_tool.py`, gated on `importlib.util.find_spec('mcp')`)
+  and hindsight memory (`plugins/memory/hindsight/__init__.py`,
+  `is_available()`) — so the builder also runs
+  `python -c 'import aiohttp, mcp, hindsight_client'` against the synced
+  venv, to fail the build instead of shipping that silent regression.
 - Bundled skills (`skills/` in the hermes source tree — 14 categories at
   `0.21.2`/`v2026.9.11`), read-only. They are **not** shipped via PyPI package-data
   (hermes' `pyproject.toml` package-data list does not include `skills/**`
@@ -110,6 +123,14 @@ skills through `__file__`, not PyPI package-data.
 digest hermes' own upstream `Dockerfile` uses for the same
 `pyproject.toml`/`uv.lock` pair — reusing a version we found already
 vetted against this exact hermes release, not one guessed independently.
+It is copied into both the builder stage and the final runtime image: at
+runtime, hermes' own lazy-install mechanism (`tools/lazy_deps.py`, see
+"Sealed image" below) tries `uv pip install --target <dir>` before falling
+back to `pip`/`ensurepip` — a fallback that would try (and fail) to write
+into the sealed, read-only `/opt/hermes-src/.venv` in this image. Without
+`uv` on `PATH`, every lazy-installable opt-in backend (a model provider not
+already baked in, a web-search backend, TTS/STT, OTLP export, ...) would
+silently break in this image the first time a bot profile picked one.
 
 The builder stage clones the tag into `/opt/hermes-src`, but the runtime
 image does not ship that clone unmodified: after `uv sync`, the Dockerfile
@@ -125,26 +146,45 @@ runtime by `hermes_cli/plugin_catalog.py`.
 ## Patches
 
 `patches/*.patch` are applied (`git apply`) against the cloned tag before
-`uv sync`. Empty at 1.1.0 — see `patches/README.md` for the mechanism and
-an honest note that a reference checkout carries **multiple** local
-modifications, spanning more than one area, not captured here yet (a
-known gap wider than a single change, flagged for a maintainer/later
-Этап, not silently dropped — at least one of them is security-relevant
-and should not wait for a full survey to be ported).
+`uv sync`. Two are ported at 1.1.0 — a hindsight `reflect` timeout/retry
+fix and a session-snapshot secret redaction — see `patches/README.md` for
+what each does and why. A reference checkout carries further local
+modifications beyond these two (CLI/agent-loop helper code, some tool
+behavior) that are **not yet** ported; `patches/README.md` flags this as a
+known gap for a maintainer/later phase, not silently dropped.
 
 ## Required environment
 
 | Variable | Required | What |
 |---|---|---|
-| `API_SERVER_KEY` | yes | Bearer token for the gateway's API server. hermes itself refuses to start the API server without one at least 16 chars and not a known placeholder (`gateway/platforms/api_server.py: _api_key_passes_startup_guard`); the entrypoint checks length up front so a misconfigured container fails in one line. Generate with `openssl rand -hex 32`. |
+| `API_SERVER_KEY` | yes, but never as container `Env` | Bearer token for the gateway's API server. hermes itself refuses to start the API server without one at least 16 chars and not a known placeholder (`gateway/platforms/api_server.py: _api_key_passes_startup_guard`); the entrypoint checks length up front so a misconfigured container fails in one line. Per the bot-runtime contract (below), the G3 driver never sets container `Env` — the entrypoint reads it from `${HERMES_HOME}/.env` (`API_SERVER_KEY="..."`, parsed as data, never sourced) when it is not already in the process environment. Generate with `openssl rand -hex 32`. |
 | `MYRMIDON_BOT_YOLO` | no (default `1`) | `1`: sets `HERMES_YOLO_MODE=1` before exec — dangerous-command approvals bypassed, because this gateway has no attended operator to answer a prompt. `0`: leaves approvals to the profile's `config.yaml` (`approvals.mode`, default `smart`); on `api_server` (an "unattended platform" in hermes' own terms) an unanswered approval defaults to `deny`, not to a hang. See `docs/myrmidon/SETTINGS.md`. |
 
 `API_SERVER_ENABLED`, `API_SERVER_HOST`, `API_SERVER_PORT`, `HERMES_HOME`,
 `HERMES_DISABLE_LAZY_INSTALLS`, `HERMES_LAZY_INSTALL_TARGET`,
 `HERMES_WRITE_SAFE_ROOT` already have working defaults baked into the
 image (`true`, `0.0.0.0`, `8642`, `/data/hermes`, `1`,
-`/data/hermes/lazy-packages`, `/data:/workspace`) — override only if the
-container topology needs something else.
+`/data/hermes/lazy-packages`, `/data:/workspace:/scratch`) — override only
+if the container topology needs something else.
+
+## Bot-runtime contract
+
+The image declares `myrmidon.bot-runtime.contract="1"` (an OCI label,
+`docker/bot-runtime/Dockerfile`'s runtime-stage `LABEL`). The G3 container
+driver (`server/src/myrmidon/bot-containers/template.ts`,
+`assertBotRuntimeContract`) refuses to create a bot container from an image
+that does not declare a value it supports, before anything is created — an
+image that exists but was built for a different contract would otherwise
+only fail after the container starts, then crash-loop under its restart
+policy. Contract "1" (see that file's docstring on
+`BOT_RUNTIME_CONTRACT_LABEL` for the authoritative text) commits this image
+to: uid:gid `10001:10001`, `HERMES_HOME=/data/hermes` and `/workspace` as
+the working directory; every secret read from `${HERMES_HOME}/.env`, never
+from the container's own environment; nothing written outside `/data/hermes`,
+`/workspace`, `/scratch`, `/tmp` and any volume the image declares itself
+(the driver runs the container with a read-only root filesystem); and a
+POSIX shell with `find`, `mv -T`, `mkdir -p`, `rm`, `chmod`, `chown`,
+`dirname`.
 
 ## Volumes
 
@@ -154,9 +194,17 @@ container topology needs something else.
   it is the one process with the privilege to do it; see item C1 in
   `docs/myrmidon/ROADMAP.md` on why `docker.sock` and that privilege live
   there and not here — the fuller rationale is maintainer-side material,
-  not part of this repository).
+  not part of this repository). `HOME` is also set to `/data/hermes`
+  (not the default `/home/bot`): the driver runs this image with a
+  read-only root filesystem, so anything a library would write under
+  `$HOME` on first use needs to land on a mounted, writable path instead —
+  mirrors hermes' own upstream Dockerfile, which points its user's home at
+  its data volume for the identical reason.
 - `/workspace` — the bot/project's working directory (`terminal.cwd`).
   Same ownership requirement.
+- `/scratch` — scratch space for the coding-agent tools' own temp files,
+  outside `/workspace` and `/data/hermes`. Same ownership requirement; part
+  of `HERMES_WRITE_SAFE_ROOT` alongside the other two.
 
 ## Health check
 

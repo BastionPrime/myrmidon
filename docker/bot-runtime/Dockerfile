@@ -29,16 +29,24 @@
 # `v<that number>`; look the date tag up the same way and update both.
 ARG HERMES_VERSION=0.21.2
 ARG HERMES_GIT_REF=v2026.9.11
+# The exact commit `HERMES_GIT_REF` must resolve to (confirmed via the GitHub API:
+# `GET /repos/NousResearch/hermes-agent/commits/v2026.9.11`). A git tag is a mutable
+# ref — upstream (or an MITM on the clone) moving it would otherwise silently ship a
+# different tree under the same version/label check below. The builder stage fails
+# loudly on a mismatch, before the shallow clone's `.git` is ever removed, so this
+# check is only meaningful pinned here, not as a comment. Update both together when
+# HERMES_GIT_REF moves to a new tag.
+ARG HERMES_GIT_SHA=939e45c91d751fadd94dcd1b873ac3cb44846213
 ARG HERMES_REPO=https://github.com/NousResearch/hermes-agent.git
 # gateway/platforms/api_server.py uses aiohttp.web, but aiohttp is not a core
 # dependency of hermes-agent — it only ships inside optional extras, most of
 # which also pull in Telegram/Discord/Slack client libraries we do not need
 # for an API-server-only bot. "sms" is the smallest extra that resolves to
 # exactly aiohttp + its own transitive deps and nothing else, so installing
-# through it (`uv sync --frozen --extra sms`, see the builder stage below)
-# gets aiohttp through the same hash-verified lockfile path as every other
-# dependency in this image, instead of a separate unlocked `uv pip install`.
-# See docker/bot-runtime/README.md.
+# through it (`uv sync --frozen --extra sms --extra mcp --extra hindsight`, see the
+# builder stage below) gets aiohttp through the same hash-verified lockfile path as
+# every other dependency in this image, instead of a separate unlocked `uv pip
+# install`. See docker/bot-runtime/README.md.
 ARG HERMES_AIOHTTP_VERSION=3.14.3
 
 # Same uv build + digest hermes-agent's own upstream Dockerfile pins (its
@@ -49,6 +57,7 @@ FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df228
 FROM python:3.13-slim AS builder
 ARG HERMES_VERSION
 ARG HERMES_GIT_REF
+ARG HERMES_GIT_SHA
 ARG HERMES_REPO
 ARG HERMES_AIOHTTP_VERSION
 
@@ -71,6 +80,17 @@ RUN apt-get update \
 RUN git clone --depth 1 --branch "${HERMES_GIT_REF}" "${HERMES_REPO}" /opt/hermes-src
 WORKDIR /opt/hermes-src
 
+# Fail the build loudly if the cloned tag does not resolve to the pinned commit
+# (moved tag, upstream force-push, MITM on the clone) instead of silently building
+# a different tree than the one HERMES_GIT_SHA records as reviewed. Must run before
+# .git is removed below — it is the only place this ref's identity can be checked.
+RUN set -eu; \
+    actual="$(git rev-parse HEAD)"; \
+    if [ "$actual" != "${HERMES_GIT_SHA}" ]; then \
+      echo "HERMES_GIT_REF=${HERMES_GIT_REF} resolved to commit $actual, HERMES_GIT_SHA=${HERMES_GIT_SHA} disagrees" >&2; \
+      exit 1; \
+    fi
+
 # Fail the build loudly if the pinned tag and the pinned version disagree
 # (wrong build-arg, moved tag, upstream renumbering) instead of silently
 # shipping a different hermes than the labels claim.
@@ -81,10 +101,10 @@ RUN set -eu; \
       exit 1; \
     fi
 
-# myrmidon(G1): apply our hermes client patches, if any (docker/bot-runtime/patches/*.patch).
-# The directory is empty at 1.1.0 — see docker/bot-runtime/patches/README.md for how a patch
-# is added and reviewed. This loop is scaffolding for when the first one lands. Copying the
-# whole directory (not a *.patch glob) so the build does not fail when it holds only the README.
+# myrmidon(G1): apply our hermes client patches (docker/bot-runtime/patches/*.patch) —
+# see docker/bot-runtime/patches/README.md for what each one does and how a new one is
+# added and reviewed. Copying the whole directory (not a *.patch glob) so the build
+# does not fail if it ever holds only the README again.
 COPY patches/ /tmp/patches/
 RUN set -eu; \
     for p in /tmp/patches/*.patch; do \
@@ -105,8 +125,22 @@ RUN set -eu; \
       exit 1; \
     fi
 
-RUN uv sync --frozen --extra sms \
+# myrmidon(G1): "mcp" and "hindsight" are baked in (not left to hermes' own lazy
+# install) because a G2-compiled bot profile always writes mcp_servers and a
+# memory.provider=hindsight config — without these two extras, hermes silently
+# starts with both features disabled (tools/mcp_tool.py checks importlib.util.
+# find_spec('mcp') and logs at debug on failure; plugins/memory/hindsight/__init__.py
+# similarly no-ops) instead of a build- or start-time error. See README.md
+# "Sealed image: lazy installs and the write-safe root" for why lazy-installing them
+# at runtime instead is not a reliable fallback in this image.
+RUN uv sync --frozen --extra sms --extra mcp --extra hindsight \
   && find /opt/hermes-src/.venv -name '__pycache__' -type d -prune -exec rm -rf {} +
+
+# Fail the build loudly if any of the three packages this image relies on being
+# preinstalled (never lazily) fails to import from the synced venv, instead of only
+# discovering it the first time a bot profile tries to use MCP tools or hindsight
+# memory at runtime.
+RUN /opt/hermes-src/.venv/bin/python -c 'import aiohttp, mcp, hindsight_client'
 
 # myrmidon(G1): the runtime image only needs the installed package plus
 # bundled skills (tools/skills_sync.py resolves skills/ relative to its own
@@ -133,11 +167,18 @@ RUN rm -rf /opt/hermes-src/.git \
 FROM python:3.13-slim AS runtime
 ARG HERMES_VERSION
 
+# myrmidon.bot-runtime.contract: the G3 container driver
+# (server/src/myrmidon/bot-containers/template.ts, BOT_RUNTIME_CONTRACT_LABEL)
+# refuses to create a container from an image that does not declare a supported
+# value here — see that file's docstring on BOT_RUNTIME_CONTRACT_LABEL for the
+# full contract this image commits to (uid:gid, mounts, secrets via
+# $HERMES_HOME/.env, read-only root, shell requirements).
 LABEL org.opencontainers.image.title="myrmidon-hermes" \
       org.opencontainers.image.description="Bot runtime image: hermes gateway (API server) for a Myrmidon bot or project container" \
       org.opencontainers.image.source="https://github.com/itkadr-git/myrmidon" \
       org.opencontainers.image.licenses="MIT" \
-      io.github.itkadr-git.myrmidon.base.hermes-version="${HERMES_VERSION}"
+      io.github.itkadr-git.myrmidon.base.hermes-version="${HERMES_VERSION}" \
+      myrmidon.bot-runtime.contract="1"
 
 # ripgrep: hermes' file-search tool shells out to `rg`. git: workspace tools
 # (status/diff/commit) for coding-agent bots. curl: HEALTHCHECK only.
@@ -152,10 +193,25 @@ RUN apt-get update \
     tini \
   && rm -rf /var/lib/apt/lists/*
 
+# myrmidon(G1): --home-dir /data/hermes (not /home/bot) — the G3 driver runs this
+# image with ReadonlyRootfs: true (docker-driver.ts buildCreateContainerRequestBody),
+# so anything under $HOME on the image's own filesystem (dotfiles a library writes on
+# first use — pip/uv cache dirs, .gitconfig, …) would fail to write instead of no-op.
+# /data/hermes is the one mount that is both writable and always present (it is
+# HERMES_HOME); mirrors hermes' own upstream Dockerfile, which points its `hermes`
+# user's home at its data volume for the identical reason (`useradd -m -d /opt/data`).
 RUN groupadd --gid 10001 bot \
-  && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/bot --shell /usr/sbin/nologin bot
+  && useradd --uid 10001 --gid 10001 --create-home --home-dir /data/hermes --shell /usr/sbin/nologin bot
 
 COPY --from=builder --chown=root:root /opt/hermes-src /opt/hermes-src
+# myrmidon(G1): uv is also needed at runtime, not just to build the image — hermes'
+# own lazy-install mechanism (tools/lazy_deps.py, see the ENV block below) shells out
+# to `uv pip install --target <dir>` first and only falls back to `pip`/`ensurepip`
+# (which would try to write into the sealed, read-only /opt/hermes-src/.venv and
+# fail) when uv is not on PATH. Without this, every lazy-installable opt-in backend
+# (a non-baked-in model provider, a web-search backend, TTS/STT, OTLP export, ...)
+# would be silently broken in this image the first time a bot profile picked one.
+COPY --chmod=0755 --from=uv_bin /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/bot-runtime-entrypoint
 
 # /opt/hermes-src is root-owned and not writable by `bot` — the venv, the
@@ -174,16 +230,21 @@ COPY --chmod=0755 entrypoint.sh /usr/local/bin/bot-runtime-entrypoint
 # mirror hermes' own upstream Dockerfile, which seals its image the same
 # way and redirects lazy installs and safe writes to its data volume for
 # the identical reason.
-RUN mkdir -p /data /workspace \
-  && chown bot:bot /data /workspace
+#
+# myrmidon(G1): /scratch is the third of the three mounts the bot-runtime contract
+# fixes (template.ts BOT_VOLUME_MOUNTS: hermes -> /data/hermes, workspace ->
+# /workspace, scratch -> /scratch) — created and chowned here so a manual `docker
+# run` (no fleet driver) still gets a writable /scratch; the G3 driver's own
+# prepare-volumes helper re-chowns all three from the host side regardless.
+RUN mkdir -p /data /workspace /scratch \
+  && chown bot:bot /data /workspace /scratch
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/opt/hermes-src/.venv/bin:$PATH \
-    HOME=/home/bot \
     HERMES_HOME=/data/hermes \
     HERMES_BUNDLED_SKILLS=/opt/hermes-src/skills \
-    HERMES_WRITE_SAFE_ROOT=/data:/workspace \
+    HERMES_WRITE_SAFE_ROOT=/data:/workspace:/scratch \
     HERMES_DISABLE_LAZY_INSTALLS=1 \
     HERMES_LAZY_INSTALL_TARGET=/data/hermes/lazy-packages \
     NO_COLOR=1 \
@@ -191,10 +252,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     API_SERVER_HOST=0.0.0.0 \
     API_SERVER_PORT=8642 \
     MYRMIDON_BOT_YOLO=1
+# myrmidon(G1): HOME=$HERMES_HOME (/data/hermes), not /home/bot — see the useradd
+# comment above; ENV cannot reference another ENV set earlier in the same
+# instruction reliably across BuildKit versions, so the literal is repeated here.
+ENV HOME=/data/hermes
 
 USER 10001:10001
 WORKDIR /workspace
-VOLUME ["/data", "/workspace"]
+VOLUME ["/data", "/workspace", "/scratch"]
 EXPOSE 8642
 
 # /health needs no auth (unlike /v1/capabilities, which is Bearer-gated) —
