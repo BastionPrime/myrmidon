@@ -31,33 +31,20 @@ if (!globalThis.ResizeObserver) {
   };
 }
 
-// jsdom's own PointerEvent constructor (when a given jsdom version ships
-// one) is not a reliable superset of MouseEventInit: some releases accept a
-// PointerEventInit dictionary but silently drop MouseEvent-inherited fields
-// such as clientX instead of throwing, which zeroes out drag math without
-// any error. Building the event on the long-stable MouseEvent constructor
-// and stamping the pointer-specific fields on as own properties afterwards
-// keeps the coordinates this test asserts on correct no matter which jsdom
-// CI happens to run, instead of depending on PointerEvent's own (version
-// -dependent) dictionary handling. React reads native event properties by
-// name regardless of the constructor used, so this still drives the
-// component's onPointerDown/onPointerMove/onPointerUp handlers faithfully.
-interface FiredPointerEventInit {
-  pointerId: number;
-  clientX: number;
-  button?: number;
-}
-
-function firePointerEvent(target: EventTarget, type: string, init: FiredPointerEventInit): void {
-  const event = new MouseEvent(type, {
-    bubbles: true,
-    cancelable: true,
-    clientX: init.clientX,
-    button: init.button ?? 0,
-  });
-  Object.defineProperty(event, "pointerId", { value: init.pointerId, configurable: true });
-  Object.defineProperty(event, "pointerType", { value: "mouse", configurable: true });
+// Same technique as the sibling resizable panel's test
+// (SidebarShell.test.tsx's `pointerEvent` helper): MouseEvent's clientX is
+// long-stable in jsdom, while PointerEvent support varies enough by jsdom
+// version that relying on its own init-dictionary handling is not safe —
+// build on MouseEvent and stamp pointerId on afterwards, since MouseEventInit
+// has no such field for the constructor to apply. React reads native event
+// properties by name regardless of the constructor used, so this still
+// drives the component's onPointerDown/onPointerMove/onPointerUp handlers
+// faithfully without depending on PointerEvent's own dictionary handling.
+function firePointerEvent(target: EventTarget, type: string, clientX: number): Event {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX });
+  Object.defineProperty(event, "pointerId", { value: 1, configurable: true });
   target.dispatchEvent(event);
+  return event;
 }
 
 function act(callback: () => void | Promise<void>) {
@@ -172,19 +159,39 @@ describe("IssueFilesDrawer", () => {
     expect(grip).toBeTruthy();
     expect(drawer?.style.width).toBe("420px");
 
+    // Raw-event diagnostic: if the width assertion below ever fails again,
+    // this prints what the grip's own listener actually received (bypassing
+    // React entirely), instead of leaving the next round to guess blind.
+    const seen: string[] = [];
+    grip?.addEventListener("pointerdown", (e) =>
+      seen.push(`down clientX=${(e as MouseEvent).clientX} pointerId=${(e as PointerEvent).pointerId}`),
+    );
+    grip?.addEventListener("pointermove", (e) => seen.push(`move clientX=${(e as MouseEvent).clientX}`));
+
     // The grip sits on the panel's left border: dragging left widens it.
+    // Both events land in the same act(), matching SidebarShell.test.tsx's
+    // proven-working drag helper (separate act()s per event is untested
+    // there and not worth risking here).
     act(() => {
-      if (grip) firePointerEvent(grip, "pointerdown", { pointerId: 1, clientX: 500, button: 0 });
+      if (grip) {
+        firePointerEvent(grip, "pointerdown", 500);
+        firePointerEvent(grip, "pointermove", 400);
+      }
     });
-    act(() => {
-      if (grip) firePointerEvent(grip, "pointermove", { pointerId: 1, clientX: 400 });
-    });
+    if (drawer?.style.width !== "520px") {
+      // eslint-disable-next-line no-console
+      console.log("issue-files-drawer resize diagnostic:", {
+        seen,
+        width: drawer?.style.width,
+        gripAttached: grip ? document.body.contains(grip) : null,
+      });
+    }
     expect(drawer?.style.width).toBe("520px");
     // Not persisted until the drag ends.
     expect(window.localStorage.getItem(WIDTH_STORAGE_KEY)).toBeNull();
 
     act(() => {
-      if (grip) firePointerEvent(grip, "pointerup", { pointerId: 1, clientX: 400 });
+      if (grip) firePointerEvent(grip, "pointerup", 400);
     });
     expect(window.localStorage.getItem(WIDTH_STORAGE_KEY)).toBe("520");
   });
