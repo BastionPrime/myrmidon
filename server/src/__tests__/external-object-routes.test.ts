@@ -297,8 +297,11 @@ describe("external object routes", () => {
     expect(mockExternalObjectsService.refreshIssueObjects).not.toHaveBeenCalled();
   });
 
-  // myrmidon(L5): once the checkout's run is no longer live, the lock lifts.
-  it("allows a peer agent's manual refresh once the checkout run is no longer live", async () => {
+  // myrmidon(L5): once the checkout's run is no longer live, the run lock
+  // itself lifts, but this route never opted into allowVisibleIssueWrite —
+  // it still denies another agent's in_progress issue exactly like it would
+  // an idle one.
+  it("still denies a peer agent's manual refresh once the checkout run is no longer live", async () => {
     mockIssueService.getById.mockResolvedValue(
       makeIssue({ status: "in_progress", checkoutRunId: null, executionRunId: null }),
     );
@@ -308,8 +311,9 @@ describe("external object routes", () => {
       .post(`/api/issues/${issueId}/external-objects/refresh`)
       .send({});
 
-    expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(mockExternalObjectsService.refreshIssueObjects).toHaveBeenCalled();
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toBe("Agent cannot mutate another agent's issue");
+    expect(mockExternalObjectsService.refreshIssueObjects).not.toHaveBeenCalled();
   });
 
   it("allows the checked-out agent to request manual refresh", async () => {

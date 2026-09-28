@@ -1044,6 +1044,26 @@ describeEmbeddedPostgres(
         "issue_write_assignee_run_lock",
       );
 
+      // myrmidon(L5): once that run is no longer live, the run lock itself
+      // lifts — but the document route never opted into
+      // allowVisibleIssueWrite, so it must still deny the write exactly like
+      // it would for an idle reviewRoot, not fall open just because the
+      // status is still "in_progress".
+      await db
+        .update(heartbeatRuns)
+        .set({ status: "succeeded" })
+        .where(eq(heartbeatRuns.id, ctoReviewRun!.id));
+
+      const documentWriteNoLiveRun = await request(standardApp)
+        .put(
+          `/api/issues/${fixture.issues.reviewRoot.id}/documents/upward-write`,
+        )
+        .send({ format: "markdown", body: "No upward document write either" });
+      expect(
+        documentWriteNoLiveRun.status,
+        JSON.stringify(documentWriteNoLiveRun.body),
+      ).toBe(403);
+
       for (const closedParent of [
         { assigneeAgentId: null, intent: { reopen: true } },
         {

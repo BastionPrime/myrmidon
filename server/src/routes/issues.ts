@@ -5339,6 +5339,11 @@ export function issueRoutes(
       ) {
         return true;
       }
+      // myrmidon(L5): tracks only whether we fell through the "in_progress
+      // but no live run behind it" branch below, so the bypass activity log
+      // can fire once — after the allowVisibleIssueWrite gate has actually
+      // let the write through, not before it.
+      let bypassedNoLiveRun = false;
       if (issue.status === "in_progress") {
         // Run/checkout ownership stays assignee-scoped even though writes are
         // open, so this lock clears on its own — the copy routes to comments.
@@ -5361,26 +5366,15 @@ export function issueRoutes(
             { liveRunId: runLock.liveRunId },
           );
         }
-        const bypassActor = getActorInfo(req);
-        await logActivity(db, {
-          companyId: issue.companyId,
-          actorType: bypassActor.actorType,
-          actorId: bypassActor.actorId,
-          agentId: bypassActor.agentId,
-          runId: bypassActor.runId,
-          agentApiKeyId: bypassActor.agentApiKeyId,
-          action: "issue.write_lock_bypassed_no_live_run",
-          entityType: "issue",
-          entityId: issue.id,
-          details: {
-            assigneeAgentId: issue.assigneeAgentId,
-            actorAgentId,
-          },
-        });
-        return true;
+        // myrmidon(L5): no live run behind the "in_progress" status — this
+        // issue is no longer distinguishable from an idle one, so it falls
+        // through to exactly the same allowVisibleIssueWrite gate below
+        // instead of being treated as open on every channel.
+        bypassedNoLiveRun = true;
       }
-      // Past the run lock the issue is idle, so only channels that have not
-      // adopted the default-open rule still refuse another agent's issue.
+      // Past the run lock the issue is idle (or in_progress with no live run
+      // behind it), so only channels that have not adopted the default-open
+      // rule still refuse another agent's issue.
       if (!options.allowVisibleIssueWrite) {
         res.status(403).json({
           error: "Agent cannot mutate another agent's issue",
@@ -5397,6 +5391,24 @@ export function issueRoutes(
           },
         });
         return false;
+      }
+      if (bypassedNoLiveRun) {
+        const bypassActor = getActorInfo(req);
+        await logActivity(db, {
+          companyId: issue.companyId,
+          actorType: bypassActor.actorType,
+          actorId: bypassActor.actorId,
+          agentId: bypassActor.agentId,
+          runId: bypassActor.runId,
+          agentApiKeyId: bypassActor.agentApiKeyId,
+          action: "issue.write_lock_bypassed_no_live_run",
+          entityType: "issue",
+          entityId: issue.id,
+          details: {
+            assigneeAgentId: issue.assigneeAgentId,
+            actorAgentId,
+          },
+        });
       }
       return true;
     }

@@ -929,6 +929,27 @@ describe("agent issue mutation checkout ownership", () => {
     );
   });
 
+  // myrmidon(L5): the no-live-run "in_progress" case must fall through to
+  // exactly the same allowVisibleIssueWrite gate the idle-issue path uses —
+  // routes that never opted into that gate (DELETE /issues/:id among them)
+  // still deny a peer agent, run or no run.
+  it("still rejects a peer agent's delete of another agent's in_progress issue once its run is no longer live", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ checkoutRunId: ownerRunId, executionRunId: ownerRunId }),
+    );
+    mockHeartbeatService.getRun.mockResolvedValue({ id: ownerRunId, status: "succeeded" });
+
+    const res = await request(await createApp(peerActor())).delete(`/api/issues/${issueId}`);
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toBe("Agent cannot mutate another agent's issue");
+    expect(mockIssueService.remove).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "issue.write_lock_bypassed_no_live_run" }),
+    );
+  });
+
   it("keeps the write locked when MYRMIDON_WRITE_LOCK_REQUIRES_LIVE_RUN=0 reverts to the status-only lock", async () => {
     const previous = process.env.MYRMIDON_WRITE_LOCK_REQUIRES_LIVE_RUN;
     process.env.MYRMIDON_WRITE_LOCK_REQUIRES_LIVE_RUN = "0";

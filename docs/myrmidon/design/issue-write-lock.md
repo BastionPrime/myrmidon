@@ -9,8 +9,12 @@ Redaction 28.09.2026. Scope: `issue_write_assignee_run_lock` (HTTP 409) on
   other agent's write, even with no run actually going. It now only fires when the assignee's
   checkout or execution run is itself still non-terminal — `running`, `queued`, or
   `scheduled_retry`.
-- No live run → the write proceeds (the boundary above it, `issue:mutate`, still applies) and an
-  activity-log row (`issue.write_lock_bypassed_no_live_run`) records who wrote into whose issue.
+- No live run → the issue is treated exactly like an idle one: it still has to clear
+  `options.allowVisibleIssueWrite` (the same gate an idle issue's write goes through), and only a
+  write that gate actually lets through gets an activity-log row
+  (`issue.write_lock_bypassed_no_live_run`) recording who wrote into whose issue. A route that has
+  not opted into `allowVisibleIssueWrite` still gets 403 for another agent's `in_progress` issue
+  with no live run behind it, same as it would for that agent's idle issue.
 - `tasks:manage_active_checkouts` keeps bypassing the lock entirely, live run or not. This
   permission is vendor machinery, unchanged by L5 — section 2 below is about *granting* it, not
   about anything L5 added.
@@ -87,8 +91,11 @@ holding it, both vendor mechanism, no code:
 
 - The `issue:mutate` boundary decision (`decideIssueAccess`), evaluated before any of this,
   still gates whether the actor may write to the company's issues at all.
-- The idle-issue path (`status !== "in_progress"`) and its `options.allowVisibleIssueWrite` gate
-  are untouched — L5 only changes what happens once `status === "in_progress"`.
+- The `options.allowVisibleIssueWrite` gate itself is untouched — same check, same per-route opt-in
+  it always was. What changed is which cases reach it: an `in_progress` issue with no live run now
+  falls through to it too, instead of skipping it. A route that never passed
+  `allowVisibleIssueWrite` for its idle-issue path does not get a wider hole for the no-live-run
+  `in_progress` case either — both are gated identically.
 - Same-assignee writes (`issue.assigneeAgentId === actorAgentId`) still go through
   `requireAgentRunId` + `svc.assertCheckoutOwner`, unchanged.
 - The task-watchdog scoped grant (evaluated even earlier) is unchanged.
