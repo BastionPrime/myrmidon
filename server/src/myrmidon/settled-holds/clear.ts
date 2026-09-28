@@ -6,6 +6,7 @@
 // docs/myrmidon/DIVERGENCE.md "L2".
 import { eq } from "drizzle-orm";
 import { issueRecoveryActions, type Db } from "@paperclipai/db";
+import { notFound } from "../../errors.js";
 import { logActivity, type ActivityPublication } from "../../services/activity-log.js";
 
 type IssueRecoveryAction = typeof issueRecoveryActions.$inferSelect;
@@ -59,12 +60,14 @@ export async function clearSettledReplayBlock(input: {
     .where(eq(issueRecoveryActions.id, action.id))
     .returning();
   // myrmidon(L2): a 0-row update means `action.id` no longer matches a row
-  // (deleted, or its evidence/status changed since the caller read it) —
-  // never synthesize a cleared record for a write that did not happen.
+  // (deleted since the caller read it) — never synthesize a cleared record
+  // for a write that did not happen. A typed HttpError, not a plain Error,
+  // so this rare race surfaces as the route's usual 404 instead of an
+  // opaque 500 through error-handler.ts's crash-reporting fallback.
   if (!updated) {
-    throw new Error(
-      `clearSettledReplayBlock: recovery action ${action.id} was not found for update`,
-    );
+    throw notFound(`Recovery action ${action.id} was not found for update`, {
+      recoveryActionId: action.id,
+    });
   }
   await logActivity(db, {
     companyId,

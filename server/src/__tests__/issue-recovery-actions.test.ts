@@ -1700,12 +1700,31 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     expect((await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, action!.id)))[0]).toEqual(cleared);
   });
 
-  // myrmidon(L2): only a board actor can clear the disposition this way
-  // (routes/issues.ts checks `req.actor.type === "board"` before calling
-  // settled-holds/clear.ts); an agent keeps the vendor's plain no-op. Not
-  // covered by an HTTP-level test here — this endpoint's agent-authorization
-  // prerequisites (run/cross-issue-influence context) are its own vendor
-  // surface, orthogonal to this gate.
+  // myrmidon(L2): only a board actor can clear the disposition this way; an
+  // agent hitting the same endpoint keeps the vendor's plain no-op. The
+  // request's run must be the same one seeded below (its context snapshot
+  // points at `sourceIssueId`) so the vendor's cross-issue-influence gate
+  // (assertCrossIssueInfluenceWithinRunCap, unrelated to this L2 gate) reads
+  // the request as the agent acting on its own run's source issue and lets
+  // it through — an unseeded or mismatched run id 403s there before this
+  // gate is ever reached.
+  it("does not clear a settled no-replay disposition on a plain resolve from an agent", async () => {
+    const { companyId, coderId, sourceIssueId } = await seedCompany();
+    const runId = randomUUID();
+    await seedHeartbeatRun({ companyId, agentId: coderId, runId, issueId: sourceIssueId, status: "failed" });
+    await db.update(issues).set({ status: "blocked", assigneeAgentId: coderId }).where(eq(issues.id, sourceIssueId));
+    const [action] = await db.insert(issueRecoveryActions).values({
+      companyId, sourceIssueId, kind: "active_run_watchdog", status: "resolved", outcome: "blocked",
+      ownerType: "board", returnOwnerAgentId: coderId, cause: "uncertain_external_action", fingerprint: runId,
+      nextAction: "Preserve recorded work without replay.",
+      evidence: { runId, automaticRecovery: { replay: "blocked", actionOutcome: "unknown" } },
+    }).returning();
+    const app = createApp({ type: "agent", agentId: coderId, companyId, runId, source: "agent_jwt" });
+    const body = { actionId: action!.id, outcome: "restored", sourceIssueStatus: "todo" };
+    await request(app).post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`).send(body).expect(200);
+    const [unchanged] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, action!.id));
+    expect(unchanged!.evidence.automaticRecovery).toMatchObject({ replay: "blocked" });
+  });
 
   async function seedReconciledDelivery() {
     const fixture = await seedCompany();
