@@ -3,10 +3,12 @@
 A container image that runs one long-lived `hermes gateway run` process,
 serving its OpenAI-compatible API server (`platforms.api_server`) on
 `:8642` for the board's `hermes_gateway` adapter to talk to. This is the
-per-bot / per-project process described as "variant B" in
-`containers-plan-senior-2026-09-28.md` §1.1 — the board itself no longer
-spawns or owns hermes processes; it reconciles a desired profile into this
-container's volumes and talks to the running gateway over HTTP.
+per-bot / per-project process described as "variant B" under item C1/H3 in
+`docs/myrmidon/ROADMAP.md` — the board itself no longer spawns or owns
+hermes processes; it reconciles a desired profile into this container's
+volumes and talks to the running gateway over HTTP. The fuller design
+write-up behind that decision is maintainer-side material and not part of
+this repository (`ROADMAP.md` says the same under C1).
 
 This image does **one** job: run the gateway. It does not run cron, a
 dashboard, or any messaging platform other than `api_server`. It has no
@@ -109,6 +111,17 @@ digest hermes' own upstream `Dockerfile` uses for the same
 `pyproject.toml`/`uv.lock` pair — reusing a version we found already
 vetted against this exact hermes release, not one guessed independently.
 
+The builder stage clones the tag into `/opt/hermes-src`, but the runtime
+image does not ship that clone unmodified: after `uv sync`, the Dockerfile
+removes `.git` (the shallow clone's history — never needed once `git
+apply`/`uv sync` above are done, since hermes-agent's version is a static
+`pyproject.toml` string, not derived from git at build time) and the
+top-level dev/build-only directories and lockfiles that nothing in the
+installed package imports at runtime (`tests/`, `tests-js/`, `evals/`,
+`docs/`, `contributors/`, `nix/`, `mcp-research-data/`, `package-lock.json`,
+`flake.lock`, `flake.nix`). `plugin-catalog/` is kept — it is read at
+runtime by `hermes_cli/plugin_catalog.py`.
+
 ## Patches
 
 `patches/*.patch` are applied (`git apply`) against the cloned tag before
@@ -138,9 +151,10 @@ container topology needs something else.
 - `/data` — `HERMES_HOME=/data/hermes`: config, `.env`, `sessions/`,
   `state.db`. Must be owned by uid `10001` before the container starts
   (this image does not chown it — that is the fleet manager's job, since
-  it is the one process with the privilege to do it; see
-  containers-plan-senior §1.4 on why the socket and that privilege live
-  there and not here).
+  it is the one process with the privilege to do it; see item C1 in
+  `docs/myrmidon/ROADMAP.md` on why `docker.sock` and that privilege live
+  there and not here — the fuller rationale is maintainer-side material,
+  not part of this repository).
 - `/workspace` — the bot/project's working directory (`terminal.cwd`).
   Same ownership requirement.
 

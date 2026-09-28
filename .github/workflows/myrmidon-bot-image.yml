@@ -1,12 +1,12 @@
 name: Myrmidon bot image
 
 # G1: builds docker/bot-runtime (a hermes gateway process for a bot/project
-# container — containers-plan-senior-2026-09-28.md §1.1) and publishes it to
-# ghcr.io/itkadr-git/myrmidon-hermes. On a pull request this only checks that
-# the image builds (no registry credentials involved, so this is safe to run
-# for any PR against this repository, fork or not); push/push-by-digest only
-# happens on push to main or a myr-v* release tag, by the pattern in
-# myrmidon-image.yml.
+# container — item C1/H3 in docs/myrmidon/ROADMAP.md, "variant B") and
+# publishes it to ghcr.io/itkadr-git/myrmidon-hermes. On a pull request this
+# only checks that the image builds (no registry credentials involved, so
+# this is safe to run for any PR against this repository, fork or not);
+# push/push-by-digest only happens on push to main or a myr-v* release tag,
+# by the pattern in myrmidon-image.yml.
 
 on:
   push:

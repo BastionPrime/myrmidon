@@ -3,9 +3,11 @@
 # G1: bot runtime image — a long-running hermes gateway (`hermes gateway run`,
 # OpenAI-compatible API server on :8642) that the board talks to through the
 # hermes_gateway adapter. See docs/myrmidon/CONVENTIONS.md and
-# containers-plan-senior (design decision "variant B", 2026-09-28) for the
-# surrounding architecture: this image is the long-lived per-bot/per-project
-# process; the board and a separate fleet manager own its lifecycle.
+# docs/myrmidon/ROADMAP.md (items C1/H3, owner decision 2026-09-28, "variant
+# B") for the surrounding architecture: this image is the long-lived
+# per-bot/per-project process; the board and a separate fleet manager own
+# its lifecycle. The fuller design write-up behind C1/H3 is maintainer-side
+# material, not part of this repository (ROADMAP.md says the same under C1).
 #
 # hermes-agent is NOT published as an installable PyPI wheel from this
 # version on (its own setup.py refuses `bdist_wheel`/`sdist` outside a Nix
@@ -105,6 +107,28 @@ RUN set -eu; \
 
 RUN uv sync --frozen --extra sms \
   && find /opt/hermes-src/.venv -name '__pycache__' -type d -prune -exec rm -rf {} +
+
+# myrmidon(G1): the runtime image only needs the installed package plus
+# bundled skills (tools/skills_sync.py resolves skills/ relative to its own
+# __file__, so that lookup is unaffected by anything removed below). Drop
+# the shallow clone's git history (never needed after `git apply`/`uv sync`
+# above — hermes-agent's version is a static pyproject.toml string, not
+# derived from git at build time) and the top-level dev/build-only
+# directories and lockfiles that are never imported at runtime, so the
+# image does not ship the whole upstream checkout. `plugin-catalog/` is
+# kept: hermes_cli/plugin_catalog.py reads it at runtime
+# (get_bundled_catalog_dir()).
+RUN rm -rf /opt/hermes-src/.git \
+    /opt/hermes-src/tests \
+    /opt/hermes-src/tests-js \
+    /opt/hermes-src/evals \
+    /opt/hermes-src/docs \
+    /opt/hermes-src/contributors \
+    /opt/hermes-src/nix \
+    /opt/hermes-src/mcp-research-data \
+    /opt/hermes-src/package-lock.json \
+    /opt/hermes-src/flake.lock \
+    /opt/hermes-src/flake.nix
 
 FROM python:3.13-slim AS runtime
 ARG HERMES_VERSION

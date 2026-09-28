@@ -86,6 +86,18 @@ describe("docker/bot-runtime/Dockerfile", () => {
     assert.match(dockerfile, /HERMES_LAZY_INSTALL_TARGET=\/data\//);
     assert.match(dockerfile, /HERMES_WRITE_SAFE_ROOT=\/data/);
   });
+
+  it("strips the clone's .git history before the runtime stage copies /opt/hermes-src", () => {
+    const builderStageEnd = dockerfile.indexOf("FROM python:3.13-slim AS runtime");
+    assert.ok(builderStageEnd > 0, "expected a runtime stage after the builder stage");
+    // The removal must happen in the builder stage (i.e. before this index),
+    // strictly before the runtime stage's COPY --from=builder picks the
+    // directory up — otherwise .git ships in the final image.
+    const builderStage = dockerfile.slice(0, builderStageEnd);
+    assert.match(builderStage, /rm -rf[^\n]*\/opt\/hermes-src\/\.git\b/);
+    const runtimeStage = dockerfile.slice(builderStageEnd);
+    assert.match(runtimeStage, /^COPY --from=builder[^\n]*\/opt\/hermes-src[^\n]*$/m);
+  });
 });
 
 describe("docker/bot-runtime/patches/", () => {
