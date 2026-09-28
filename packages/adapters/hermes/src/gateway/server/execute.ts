@@ -1366,6 +1366,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const outcome = await Promise.race([state.terminalPromise, timeoutPromise, cancelPromise]);
   if (timeoutTimer) clearTimeout(timeoutTimer);
   controller.abort();
+  // myrmidon(G4): handleEvent's SSE terminal branch already flushes the
+  // trailing partial delta line, but pollStatus's terminal branch (the
+  // documented fallback while SSE is reconnecting) calls markTerminal()
+  // directly and never does. Flush here too so a run whose terminal status
+  // is first observed through polling doesn't silently drop the last,
+  // not-yet-newline-terminated line of the compact progress transcript.
+  // flushCompactDeltaLines() is a no-op once nothing is buffered (already
+  // flushed via SSE, or debugEvents never buffers at all), so this is safe
+  // to call unconditionally on every outcome.
+  await flushCompactDeltaLines(ctx, state, { final: true });
 
   if (outcome === "cancelled") {
     await stopRun({ ctx, baseUrl, headers: eventHeaders, runId, redactText });

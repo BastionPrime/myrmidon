@@ -1219,6 +1219,51 @@ describe("execute — compact progress logging (G4)", () => {
     expect(logLines.some((line) => line.startsWith("  [tool]"))).toBe(false);
     expect(logLines.some((line) => line.startsWith("  [done]"))).toBe(false);
   });
+
+  it("flushes a trailing partial compact-progress line when polling (not SSE) observes the terminal status", async () => {
+    // myrmidon(G4): flushCompactDeltaLines(..., {final:true}) previously only
+    // ran inside handleEvent's SSE terminal branch. If the SSE stream never
+    // delivers a run.* terminal event — here it delivers one message.delta
+    // with no trailing newline and then just ends, as it would while
+    // reconnecting — and pollStatus's periodic GET is what first observes
+    // "completed", markTerminal() was reached without ever flushing the
+    // buffered line, silently dropping it from the transcript.
+    let eventsCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-poll-flush", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        eventsCalls += 1;
+        // Only the first connection carries the partial delta; every
+        // reconnect after that gets an empty stream, so state.terminal is
+        // never set from this path and pollStatus must be the one to do it.
+        const sse = eventsCalls === 1
+          ? ["event: message.delta", "data: {\"delta\":\"trailing partial line\"}", ""].join("\n")
+          : "";
+        return new Response(sseStream(sse), { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      timeoutSec: 5,
+      // Poll fast, reconnect slow, so the GET /v1/runs status — not another
+      // SSE connection — is what first observes the terminal status.
+      pollIntervalMs: 250,
+      eventReconnectMs: 30_000,
+    });
+
+    const result = await execute(ctx);
+
+    expect(result.exitCode).toBe(0);
+    const logLines = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line));
+    expect(logLines.some((line) => line.includes("┊ 💬 trailing partial line"))).toBe(true);
+  });
 });
 
 describe("execute — idempotent retry attach (G4)", () => {
