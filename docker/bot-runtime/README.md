@@ -84,9 +84,8 @@ same three, pointed at the durable `/data` volume instead of upstream's
 
 ## Why editable, not `pip install hermes-agent`
 
-`hermes-agent`'s own `setup.py` (at `/opt/hermes-agent/src/setup.py` on the
-host this image was designed against) explicitly refuses to build a wheel
-or sdist outside a Nix build:
+`hermes-agent`'s own `setup.py` explicitly refuses to build a wheel or
+sdist outside a Nix build:
 
 > pip/PyPI and Homebrew are no longer supported distribution methods for
 > Hermes Agent [...] Hermes is distributed via the shell installer, Docker
@@ -114,9 +113,11 @@ vetted against this exact hermes release, not one guessed independently.
 
 `patches/*.patch` are applied (`git apply`) against the cloned tag before
 `uv sync`. Empty at 1.1.0 — see `patches/README.md` for the mechanism and
-an honest note on a local modification found on the reference host that is
-**not** captured here yet (known gap, flagged for a maintainer/later
-Этап, not silently dropped).
+an honest note that a reference checkout carries **multiple** local
+modifications, spanning more than one area, not captured here yet (a
+known gap wider than a single change, flagged for a maintainer/later
+Этап, not silently dropped — at least one of them is security-relevant
+and should not wait for a full survey to be ported).
 
 ## Required environment
 
@@ -155,8 +156,8 @@ container health check.
 
 ## What's not verified yet
 
-This Dockerfile and entrypoint were written by reading
-`/opt/hermes-agent/src` and hermes' own upstream `Dockerfile`/tests, not
+This Dockerfile and entrypoint were written by reading a reference
+`hermes-agent` checkout and hermes' own upstream `Dockerfile`/tests, not
 by running a build — this session's host forbids installing dependencies
 or running Docker builds locally (CONVENTIONS.md, "Сборка и тесты"). CI
 builds and, on `main`/tags, should also be given a live boot check before

@@ -39,10 +39,9 @@ ARG HERMES_REPO=https://github.com/NousResearch/hermes-agent.git
 # See docker/bot-runtime/README.md.
 ARG HERMES_AIOHTTP_VERSION=3.14.3
 
-# Same uv build + digest hermes-agent's own upstream Dockerfile pins
-# (/opt/hermes-agent/src/Dockerfile, stage `uv_source`) — reusing a version
-# we found already vetted against this exact pyproject.toml/uv.lock pair,
-# rather than picking one blind.
+# Same uv build + digest hermes-agent's own upstream Dockerfile pins (its
+# `uv_source` stage) — reusing a version we found already vetted against
+# this exact pyproject.toml/uv.lock pair, rather than picking one blind.
 FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df22866bd7857e5d304b67a564f4feab6ac22044dde719b AS uv_bin
 
 FROM python:3.13-slim AS builder

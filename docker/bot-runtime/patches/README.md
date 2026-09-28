@@ -5,29 +5,24 @@ Empty at Myrmidon 1.1.0 (G1, 2026-09-28). This is where our patches to the
 against the pinned upstream tag (`HERMES_GIT_REF` in
 `docker/bot-runtime/Dockerfile`, currently `v2026.9.11`, the tag that ships hermes's pyproject.toml version 0.21.2).
 
-`/opt/hermes-agent/src` on the host does carry at least one local
-modification relative to the pinned tag, **not** captured here. `.git/HEAD`
-and `.git/COMMIT_EDITMSG` on that checkout are root-owned (`0600`), so
-`git log`/`git diff` against the tag cannot be run directly — but
-`.git/refs/heads/` is world-readable and lists a local branch (not the
-pinned tag, not any upstream ref) whose tip commit is a real, non-trivial
-change to `tools/environments/base.py` and
-`tools/environments/base_session_env.py`, hardening what a session's
-terminal-snapshot mechanism writes to disk so it stops including
-credential-shaped environment variables (names matching patterns like
-`*_SECRET`, `*_TOKEN`, `*_KEY`, `*_PASSWORD`, `*_URL`) in cleartext.
+A reference `hermes-agent` checkout used while preparing this image carries
+**multiple** local modifications on top of the pinned tag that are **not**
+captured as `*.patch` files here. They span more than the one area a first
+pass might notice — environment/session handling, some tool behavior, and
+CLI/agent-loop helper code are all touched — so this is wider than a
+single change. Full access to that checkout's history was not available
+while preparing this image (only a partial, read-only view), so turning
+these into clean, reviewed patches needs someone with full access to that
+history, not a guess from a partial read.
 
-That commit's message and top-level tree are readable the same
-world-readable way (no root needed); a full diff is not: its parent
-commit's tree object is one of the majority of this repository's git
-objects that *is* root-locked, so `git diff <parent>..<tip>` fails with a
-permission error rather than producing output. Rewriting this into a clean
-`*.patch` here would mean guessing at a security-relevant diff we cannot
-actually read in full — worse than not having it. **This is a known gap**,
-left for a maintainer or a later Этап with read access to the full local
-history to port properly (as a reviewed, tested patch, not a guess): do not
-assume `patches/` is a complete patch set without checking that checkout's
-local branches directly.
+At least one of the unported changes is security-relevant (it hardens what
+gets written to disk as part of a session's state) and should not wait for
+a full survey of the rest before being prioritized. **This is a known gap,
+wider than a single change**, left for a maintainer or a later Этап with
+full access to port properly (as reviewed, tested patches, not guesses):
+do not assume `patches/` is a complete patch set, and do not stop after the
+first modification found — check that checkout's full local history
+directly before treating this list as closed.
 
 ## How a patch is added
 
