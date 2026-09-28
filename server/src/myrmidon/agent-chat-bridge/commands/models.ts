@@ -228,6 +228,14 @@ export async function checkChooserAvailability(
   return { available: candidates.length > 0, candidates };
 }
 
+/**
+ * Shared with the caller's post-resolution re-check in overrides.ts
+ * (applyChatAdapterOverride's `refuseIfTurnInProgress`), so both the early
+ * read here and the later, authoritative check right before the write
+ * report the same refusal in the same words.
+ */
+export const TURN_IN_PROGRESS_TEXT = "A reply is in progress. Try again after it or send /stop.";
+
 export type ChooserSelectionResult =
   | { kind: "set"; candidate: ChatModelCandidate }
   | { kind: "default" }
@@ -250,7 +258,7 @@ export async function resolveChooserSelection(input: {
     return { kind: "error", text: `Switching the ${input.chooser.noun} is not available for this agent.` };
   }
   if (input.checkTurnInProgress && input.turnInProgress) {
-    return { kind: "error", text: "A reply is in progress. Try again after it or send /stop." };
+    return { kind: "error", text: TURN_IN_PROGRESS_TEXT };
   }
   const trimmed = input.arg.trim();
   if (trimmed.toLowerCase() === "default") {

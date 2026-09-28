@@ -115,7 +115,14 @@ export async function loadBridgedCommandContext(
   };
 }
 
-async function isBridgedCommandTurnInProgress(
+/**
+ * Exported so `applyChatAdapterOverride` (overrides.ts) can re-run this same
+ * check inside its own transaction, against a freshly read `executionRunId`,
+ * right before it writes a `/model` or `/think` override — closing the race
+ * between this function's own read (here, before the command's argument is
+ * even resolved) and that later write.
+ */
+export async function isBridgedCommandTurnInProgress(
   db: Db,
   input: {
     companyId: string;

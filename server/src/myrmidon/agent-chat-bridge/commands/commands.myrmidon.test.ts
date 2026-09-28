@@ -26,6 +26,7 @@ import {
   runBridgedDirectMessageCommand,
   type BridgedCommandInput,
 } from "./index.js";
+import { applyChatAdapterOverride } from "./overrides.js";
 
 const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
@@ -296,6 +297,56 @@ const support = await getEmbeddedPostgresTestSupport();
       text: "A reply is in progress. Try again after it or send /stop.",
     });
     expect(await readOverrides(issue.id)).toBeNull();
+  });
+
+  it("5b. applyChatAdapterOverride re-checks turnInProgress at write time (review round 2, minor)", async () => {
+    // Reproduces the narrow window between a command handler's earlier
+    // turnInProgress read (loadBridgedCommandContext, before argument
+    // resolution) and applyChatAdapterOverride's own write: a run that starts
+    // in between must still block a /model or /think write, so the check is
+    // repeated here, inside the row lock, against a freshly read
+    // executionRunId/heartbeat_runs state — not just trusted from earlier.
+    const { issue, boardUserId } = await createTelegramConversation();
+    await db.insert(agentTaskSessions).values({ companyId, agentId, adapterType: "hermes_local", taskKey: issue.id });
+    await db.insert(heartbeatRuns).values({
+      companyId,
+      agentId,
+      status: "running",
+      contextSnapshot: { issueId: issue.id },
+    });
+
+    const refused = await applyChatAdapterOverride({
+      db,
+      companyId,
+      conversationAgentId: agentId,
+      issueId: issue.id,
+      boardUserId,
+      key: "model",
+      value: "model-b",
+      refuseIfTurnInProgress: true,
+    });
+    expect(refused).toEqual({ applied: false });
+    expect(await readOverrides(issue.id)).toBeNull();
+    // The refusal must not touch the session either — only a successful
+    // apply resets it.
+    expect(await hasSessionRow(issue.id)).toBe(true);
+
+    // /new's own call passes refuseIfTurnInProgress: false and must still
+    // apply — it targets the fresh session it is about to start, not
+    // whatever is currently running (index.ts's handleNewCommand).
+    const applied = await applyChatAdapterOverride({
+      db,
+      companyId,
+      conversationAgentId: agentId,
+      issueId: issue.id,
+      boardUserId,
+      key: "model",
+      value: "model-b",
+      refuseIfTurnInProgress: false,
+    });
+    expect(applied).toEqual({ applied: true });
+    expect(await readOverrides(issue.id)).toEqual({ adapterConfig: { model: "model-b" } });
+    expect(await hasSessionRow(issue.id)).toBe(false);
   });
 
   it("6. /model default clears the override, dropping an empty adapterConfig entirely", async () => {

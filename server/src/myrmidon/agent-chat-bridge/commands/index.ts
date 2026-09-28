@@ -14,6 +14,7 @@ import { buildHelpText } from "./help.js";
 import {
   MODEL_CHOOSER,
   THINK_CHOOSER,
+  TURN_IN_PROGRESS_TEXT,
   checkChooserAvailability,
   describeCardValue,
   describeEffectiveChatValue,
@@ -178,6 +179,10 @@ async function handleNewCommand(
     boardUserId: input.boardUserId,
     key: MODEL_CHOOSER.adapterConfigKey,
     value,
+    // A model chosen with /new applies to the fresh session it is about to
+    // start regardless of what is currently running — same reasoning as
+    // `checkTurnInProgress: false` above.
+    refuseIfTurnInProgress: false,
   });
   const modelLabel =
     resolution.kind === "default"
@@ -235,7 +240,7 @@ async function handleChooserCommand(
   }
 
   if (resolution.kind === "default") {
-    await applyChatAdapterOverride({
+    const overrideResult = await applyChatAdapterOverride({
       db: input.db,
       companyId: input.companyId,
       conversationAgentId: input.agentId,
@@ -243,7 +248,14 @@ async function handleChooserCommand(
       boardUserId: input.boardUserId,
       key: chooser.adapterConfigKey,
       value: null,
+      // myrmidon(X8c): re-checked at write time (see overrides.ts) — a reply
+      // can start in the gap between resolveChooserSelection's read above and
+      // this write.
+      refuseIfTurnInProgress: true,
     });
+    if (!overrideResult.applied) {
+      return { kind: "reply", command: chooser.commandName, text: TURN_IN_PROGRESS_TEXT };
+    }
     return {
       kind: "reply",
       command: chooser.commandName,
@@ -251,7 +263,7 @@ async function handleChooserCommand(
     };
   }
 
-  await applyChatAdapterOverride({
+  const overrideResult = await applyChatAdapterOverride({
     db: input.db,
     companyId: input.companyId,
     conversationAgentId: input.agentId,
@@ -259,7 +271,11 @@ async function handleChooserCommand(
     boardUserId: input.boardUserId,
     key: chooser.adapterConfigKey,
     value: resolution.candidate.id,
+    refuseIfTurnInProgress: true,
   });
+  if (!overrideResult.applied) {
+    return { kind: "reply", command: chooser.commandName, text: TURN_IN_PROGRESS_TEXT };
+  }
   return {
     kind: "reply",
     command: chooser.commandName,
