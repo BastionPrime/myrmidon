@@ -271,6 +271,34 @@ describeEmbeddedPostgres("cross-channel context (X8d)", () => {
     expect(context!.full).not.toContain("reset marker");
   });
 
+  it("degrades to no boundary filter (not to an empty quote) when the sibling's /new boundary comment was hard-deleted", async () => {
+    // Regression: `(created_at, id) > (select ... where id = <stale uuid>)`
+    // evaluates to SQL NULL when the boundary row is gone, and WHERE treats
+    // NULL as false for every candidate row — that would silently empty the
+    // whole quote instead of just dropping the (now meaningless) boundary,
+    // the same way conversationReplay degrades when its own boundary lookup
+    // comes back empty (agent-conversations.ts).
+    const { companyId, agentId, web, tg, webUserId } = await seedPair(db);
+    await userMsg(db, web.id, webUserId, "before reset", at(0));
+    const boundary = await agentMsg(db, web.id, agentId, "reset marker", at(1));
+    await db
+      .update(issues)
+      .set({ conversationBoundaryCommentId: boundary.id })
+      .where(eq(issues.id, web.id));
+    await userMsg(db, web.id, webUserId, "after reset", at(2));
+    await issueService(db).removeComment(boundary.id);
+
+    const context = await buildCrossChannelContext(db, {
+      companyId,
+      issueId: tg.id,
+      wakeCommentId: null,
+    });
+
+    expect(context).not.toBeNull();
+    expect(context!.full).toContain("after reset");
+    expect(context!.full).toContain("before reset");
+  });
+
   it("drops sibling messages older than the lookback window", async () => {
     const { companyId, web, tg, webUserId } = await seedPair(db);
     await userMsg(db, web.id, webUserId, "too old", at(-180));
@@ -428,6 +456,39 @@ describeEmbeddedPostgres("cross-channel context (X8d)", () => {
     expect(context!.delta).toContain("web new 2");
     expect(context!.delta).not.toContain("earlier messages not shown");
     void tgFirst;
+  });
+
+  it("ignores a wakeCommentId that does not belong to this conversation", async () => {
+    // Regression: the delta cursor's upper bound must be scoped to THIS
+    // issue, like conversationReplay's `wake` lookup (agent-conversations.ts)
+    // — otherwise any comment id, from any issue, could be passed in and its
+    // created_at would silently gate the cursor by an unrelated timestamp.
+    const { companyId, tg, web, webUserId, tgUserId } = await seedPair(db);
+    const tgFirst = await userMsg(db, tg.id, tgUserId, "telegram turn 1", at(0));
+    const tgSecond = await userMsg(db, tg.id, tgUserId, "telegram turn 2", at(20));
+    await userMsg(db, web.id, webUserId, "web before", at(-5));
+    await userMsg(db, web.id, webUserId, "web mid", at(10));
+    await userMsg(db, web.id, webUserId, "web late", at(25));
+    // A real comment id, but it belongs to the web conversation, not tg.
+    const foreignComment = await userMsg(db, web.id, webUserId, "foreign wake candidate", at(15));
+
+    const context = await buildCrossChannelContext(db, {
+      companyId,
+      issueId: tg.id,
+      wakeCommentId: foreignComment.id,
+    });
+
+    expect(context).not.toBeNull();
+    // The foreign id must be treated as if no wakeCommentId were given at
+    // all: the cursor falls back to this conversation's own latest user
+    // message (telegram turn 2, at(20)), not to a bound derived from the
+    // foreign comment's own at(15) timestamp (which would wrongly let "web
+    // mid" through as if it were still unseen).
+    expect(context!.delta).toContain("web late");
+    expect(context!.delta).not.toContain("web mid");
+    expect(context!.delta).not.toContain("web before");
+    void tgFirst;
+    void tgSecond;
   });
 
   it("returns null when this conversation is low-trust quarantined", async () => {

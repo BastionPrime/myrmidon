@@ -77,10 +77,46 @@ async function fetchSiblingConversationRow(
 
 type ConversationRow = NonNullable<Awaited<ReturnType<typeof fetchConversationRow>>>;
 
-/** Eligible sibling comments: not deleted, from the person or from this same agent, after the sibling's own /new boundary, within the lookback window. */
+/**
+ * Verifies a comment id actually resolves to a row before it is trusted as a
+ * boundary/cursor marker, matching conversationReplay's `boundary`/`wake`
+ * lookups (agent-conversations.ts). A stale FK (the row was hard-deleted,
+ * e.g. via issueService(db).removeComment) must degrade to "no boundary",
+ * not to a tuple comparison against a subquery with zero rows: `(a, b) >
+ * (select ... where false)` evaluates to SQL NULL, which WHERE treats as
+ * false for every row and would silently empty the whole quote/delta.
+ */
+async function fetchCommentIfExists(
+  db: Db,
+  commentId: string | null,
+): Promise<{ id: string } | null> {
+  if (!commentId) return null;
+  const [row] = await db
+    .select({ id: issueComments.id })
+    .from(issueComments)
+    .where(eq(issueComments.id, commentId));
+  return row ?? null;
+}
+
+/** Same as `fetchCommentIfExists`, additionally scoped to belong to `issueId` (mirrors conversationReplay's `wake` lookup: a comment id from another issue must never gate this one's cursor). */
+async function fetchOwnedCommentIfExists(
+  db: Db,
+  issueId: string,
+  commentId: string | null,
+): Promise<{ id: string } | null> {
+  if (!commentId) return null;
+  const [row] = await db
+    .select({ id: issueComments.id })
+    .from(issueComments)
+    .where(and(eq(issueComments.id, commentId), eq(issueComments.issueId, issueId)));
+  return row ?? null;
+}
+
+/** Eligible sibling comments: not deleted, from the person or from this same agent, after the sibling's own /new boundary (when it still exists), within the lookback window. */
 function neighborRowsCondition(input: {
   companyId: string;
   neighbor: ConversationRow;
+  neighborBoundaryId: string | null;
   lookbackSince: Date;
 }) {
   return and(
@@ -91,8 +127,8 @@ function neighborRowsCondition(input: {
       isNotNull(issueComments.authorUserId),
       eq(issueComments.authorAgentId, input.neighbor.conversationAgentId as string),
     ),
-    input.neighbor.conversationBoundaryCommentId
-      ? sql`(${issueComments.createdAt}, ${issueComments.id}) > (select cursor.created_at, cursor.id from issue_comments cursor where cursor.id = ${input.neighbor.conversationBoundaryCommentId}::uuid)`
+    input.neighborBoundaryId
+      ? sql`(${issueComments.createdAt}, ${issueComments.id}) > (select cursor.created_at, cursor.id from issue_comments cursor where cursor.id = ${input.neighborBoundaryId}::uuid)`
       : undefined,
     gte(issueComments.createdAt, input.lookbackSince),
   );
@@ -100,7 +136,13 @@ function neighborRowsCondition(input: {
 
 async function fetchNeighborRows(
   db: Db,
-  input: { companyId: string; neighbor: ConversationRow; lookbackSince: Date; limit: number },
+  input: {
+    companyId: string;
+    neighbor: ConversationRow;
+    neighborBoundaryId: string | null;
+    lookbackSince: Date;
+    limit: number;
+  },
 ) {
   return db
     .select({
@@ -123,7 +165,12 @@ type NeighborRow = Awaited<ReturnType<typeof fetchNeighborRows>>[number];
 
 async function countNeighborRows(
   db: Db,
-  input: { companyId: string; neighbor: ConversationRow; lookbackSince: Date },
+  input: {
+    companyId: string;
+    neighbor: ConversationRow;
+    neighborBoundaryId: string | null;
+    lookbackSince: Date;
+  },
 ): Promise<number> {
   const [row] = await db
     .select({ count: sql<number>`count(*)::int` })
@@ -142,7 +189,13 @@ async function countNeighborRows(
  */
 async function countNeighborRowsAfter(
   db: Db,
-  input: { companyId: string; neighbor: ConversationRow; lookbackSince: Date; after: Date },
+  input: {
+    companyId: string;
+    neighbor: ConversationRow;
+    neighborBoundaryId: string | null;
+    lookbackSince: Date;
+    after: Date;
+  },
 ): Promise<number> {
   const [row] = await db
     .select({ count: sql<number>`count(*)::int` })
@@ -151,10 +204,21 @@ async function countNeighborRowsAfter(
   return row?.count ?? 0;
 }
 
-/** The created_at of the last user message in `issue` before `wakeCommentId`, after `issue`'s own /new boundary — null on the first message of a session. */
+/**
+ * The created_at of the last user message in `issue` before `wakeCommentId`,
+ * after `issue`'s own /new boundary — null on the first message of a
+ * session. `issueBoundaryId` and `wakeId` must already be verified to exist
+ * (and, for `wakeId`, to belong to `issue`) by the caller — see
+ * `fetchCommentIfExists` / `fetchOwnedCommentIfExists`.
+ */
 async function findDeltaCursor(
   db: Db,
-  input: { companyId: string; issue: ConversationRow; wakeCommentId: string | null },
+  input: {
+    companyId: string;
+    issue: ConversationRow;
+    issueBoundaryId: string | null;
+    wakeId: string | null;
+  },
 ) {
   const [row] = await db
     .select({ createdAt: issueComments.createdAt })
@@ -165,11 +229,11 @@ async function findDeltaCursor(
         eq(issueComments.issueId, input.issue.id),
         isNotNull(issueComments.authorUserId),
         isNull(issueComments.deletedAt),
-        input.issue.conversationBoundaryCommentId
-          ? sql`(${issueComments.createdAt}, ${issueComments.id}) > (select cursor.created_at, cursor.id from issue_comments cursor where cursor.id = ${input.issue.conversationBoundaryCommentId}::uuid)`
+        input.issueBoundaryId
+          ? sql`(${issueComments.createdAt}, ${issueComments.id}) > (select cursor.created_at, cursor.id from issue_comments cursor where cursor.id = ${input.issueBoundaryId}::uuid)`
           : undefined,
-        input.wakeCommentId
-          ? sql`(${issueComments.createdAt}, ${issueComments.id}) < (select cursor.created_at, cursor.id from issue_comments cursor where cursor.id = ${input.wakeCommentId}::uuid)`
+        input.wakeId
+          ? sql`(${issueComments.createdAt}, ${issueComments.id}) < (select cursor.created_at, cursor.id from issue_comments cursor where cursor.id = ${input.wakeId}::uuid)`
           : undefined,
       ),
     )
@@ -266,12 +330,20 @@ async function buildCrossChannelContextUnsafe(
   if (isLowTrustQuarantined(issue!.sourceTrust) || isLowTrustQuarantined(neighbor.sourceTrust))
     return null;
 
+  // Verify the boundary/wake comment ids actually resolve before trusting
+  // them to gate the SQL below (see fetchCommentIfExists/fetchOwnedCommentIfExists).
+  const neighborBoundary = await fetchCommentIfExists(db, neighbor.conversationBoundaryCommentId);
+  const issueBoundary = await fetchCommentIfExists(db, issue!.conversationBoundaryCommentId);
+  const wake = await fetchOwnedCommentIfExists(db, issue!.id, input.wakeCommentId);
+  const neighborBoundaryId = neighborBoundary?.id ?? null;
+
   const lookbackSince = new Date(
     input.now.getTime() - input.settings.lookbackHours * 60 * 60 * 1000,
   );
   const fetched = await fetchNeighborRows(db, {
     companyId: input.companyId,
     neighbor,
+    neighborBoundaryId,
     lookbackSince,
     limit: input.settings.messages + 1,
   });
@@ -282,8 +354,12 @@ async function buildCrossChannelContextUnsafe(
   const droppedByLimit = overflow
     ? Math.max(
         0,
-        (await countNeighborRows(db, { companyId: input.companyId, neighbor, lookbackSince })) -
-          kept.length,
+        (await countNeighborRows(db, {
+          companyId: input.companyId,
+          neighbor,
+          neighborBoundaryId,
+          lookbackSince,
+        })) - kept.length,
       )
     : 0;
 
@@ -304,7 +380,8 @@ async function buildCrossChannelContextUnsafe(
   const cursor = await findDeltaCursor(db, {
     companyId: input.companyId,
     issue: issue!,
-    wakeCommentId: input.wakeCommentId,
+    issueBoundaryId: issueBoundary?.id ?? null,
+    wakeId: wake?.id ?? null,
   });
   const deltaChronological = cursor
     ? chronological.filter((row) => row.createdAt.getTime() > cursor.createdAt.getTime())
@@ -331,6 +408,7 @@ async function buildCrossChannelContextUnsafe(
           (await countNeighborRowsAfter(db, {
             companyId: input.companyId,
             neighbor,
+            neighborBoundaryId,
             lookbackSince,
             after: cursor.createdAt,
           })) - deltaChronological.length,
