@@ -7,6 +7,10 @@
 //               -> start (waits for health). The gateway never boots without its
 //               profile, and a failed step leaves a stopped container whose
 //               missing marker makes the next pass write the profile again.
+//               An image that does not declare the bot runtime contract
+//               (template.ts BOT_RUNTIME_CONTRACT_LABEL: API_SERVER_KEY from
+//               hermes/.env, among others) is refused before anything exists,
+//               so no pass creates a container whose gateway cannot start.
 //   stopped  -> nothing can be running in it, so no maintenance window: recreate
 //               if the template drifted, write the profile if it changed (or was
 //               never verifiably applied), then start.

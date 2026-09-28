@@ -75,12 +75,15 @@ export interface BotContainerDriver {
   templateDrift(spec: BotContainerSpec): Promise<boolean>;
   /** Creates the bot's container from `spec` without starting it, after
    *  preparing its volumes (created if absent, owned by the container's uid,
-   *  mode 0700). Throws if the image is not present locally. */
+   *  mode 0700). Throws, before creating anything, if the image is not present
+   *  locally or does not declare a supported bot runtime contract (the image
+   *  label template.ts BOT_RUNTIME_CONTRACT_LABEL). */
   create(spec: BotContainerSpec): Promise<void>;
   /** Replaces a drifted container with one built from `spec`, left stopped.
-   *  Checks the new image is present and creates the replacement before the old
-   *  container is touched, then stops the old one gracefully (never a bare
-   *  force-kill) and swaps the replacement in under the bot's name. */
+   *  Checks the new image the same way as `create` and creates the
+   *  replacement before the old container is touched, then stops the old one
+   *  gracefully (never a bare force-kill) and swaps the replacement in under
+   *  the bot's name. */
   recreate(spec: BotContainerSpec): Promise<void>;
   /** Lays the compiled profile's files down in the bot's volumes. Works whether
    *  the container is running or stopped (does not exec into it); the reconciler

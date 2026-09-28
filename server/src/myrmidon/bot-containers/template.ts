@@ -133,6 +133,49 @@ export const BOT_LABEL_KEYS = {
 } as const;
 
 /**
+ * Image label through which a bot runtime image declares the runtime contract
+ * this driver relies on. Being present on the host and matching
+ * MYRMIDON_BOT_IMAGE_ALLOWLIST is not enough: create/recreate refuse an image
+ * that does not declare one of SUPPORTED_BOT_RUNTIME_CONTRACTS, before
+ * anything is created (docker-driver.ts). An image that exists but was built
+ * for another contract would otherwise only fail after the container is
+ * created and started, and then crash-loop under its restart policy on every
+ * pass.
+ *
+ * Contract "1":
+ *  - the gateway runs as uid:gid 10001:10001 with HERMES_HOME=/data/hermes and
+ *    /workspace as its working directory: the driver mounts exactly
+ *    /data/hermes, /workspace and /scratch, owned by 10001, mode 0700;
+ *  - every secret the gateway needs, API_SERVER_KEY included, is read from
+ *    $HERMES_HOME/.env (dotenv `KEY="value"` lines, read as data and never
+ *    executed by a shell). The driver never puts a secret in the container's
+ *    environment, where `docker inspect` shows it, so the image must not
+ *    require one there;
+ *  - it writes nothing outside those three mounts, /tmp (a tmpfs) and volumes
+ *    the image declares itself: the driver runs it with a read-only root
+ *    filesystem;
+ *  - /bin/sh with find, mv (with -T), mkdir -p, rm, chmod, chown and dirname:
+ *    the driver's helper containers run its scripts with the image's own shell.
+ */
+export const BOT_RUNTIME_CONTRACT_LABEL = "myrmidon.bot-runtime.contract";
+export const SUPPORTED_BOT_RUNTIME_CONTRACTS: readonly string[] = ["1"];
+
+/** Throws unless the image labels (`Config.Labels` of `GET /images/{name}/json`,
+ *  which Docker returns as null for an image without labels) declare a
+ *  supported bot runtime contract. */
+export function assertBotRuntimeContract(image: string, labels: Record<string, string> | null | undefined): void {
+  const declared = labels?.[BOT_RUNTIME_CONTRACT_LABEL];
+  if (declared !== undefined && SUPPORTED_BOT_RUNTIME_CONTRACTS.includes(declared)) return;
+  const wanted = SUPPORTED_BOT_RUNTIME_CONTRACTS.map((version) => `${BOT_RUNTIME_CONTRACT_LABEL}=${version}`).join(" or ");
+  throw new BotContainerTemplateError(
+    declared === undefined
+      ? `image "${image}" does not declare the bot runtime contract (image label ${wanted}); ` +
+          "nothing is created from an image not known to take API_SERVER_KEY from $HERMES_HOME/.env"
+      : `image "${image}" declares bot runtime contract "${declared}", this driver supports only ${wanted}`,
+  );
+}
+
+/**
  * Identification labels for a bot container. Deliberately carries no profile
  * hashes: Docker cannot change a container's labels after creation, so a hash
  * label would only ever mean "desired when the container was created", never

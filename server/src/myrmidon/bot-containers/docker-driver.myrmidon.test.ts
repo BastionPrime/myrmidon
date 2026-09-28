@@ -22,7 +22,8 @@ import {
   type DockerDriverConfig,
 } from "./docker-driver.js";
 import type { BotContainerDriver, BotContainerSpec } from "./driver.js";
-import { BOT_LABEL_KEYS, BotContainerTemplateError } from "./template.js";
+import { reconcileBot, type BotMaintenancePort } from "./reconciler.js";
+import { BOT_LABEL_KEYS, BOT_RUNTIME_CONTRACT_LABEL, BotContainerTemplateError } from "./template.js";
 import type { CompiledProfile, CompiledProfileFile } from "./types.js";
 import { buildUstarArchive, parseUstarArchive, type UstarReadEntry } from "./ustar.js";
 
@@ -48,15 +49,25 @@ function plainFile(p: string, content: string): CompiledProfileFile {
   return { path: p, content, mode: 0o644, secret: false };
 }
 
+/** hermes/.env the way the profile compiler (G2) writes it: sorted, every value double-quoted. */
+const TEST_DOTENV = 'API_SERVER_KEY="test-api-server-key-0123456789"\nEXAMPLE_SETTING="1"\n';
+
 function testProfile(
-  opts: { skills?: string[]; extra?: CompiledProfileFile[]; restartHash?: string; filesHash?: string; botKey?: string } = {},
+  opts: {
+    skills?: string[];
+    extra?: CompiledProfileFile[];
+    restartHash?: string;
+    filesHash?: string;
+    botKey?: string;
+    dotenv?: string;
+  } = {},
 ): CompiledProfile {
   const skills = opts.skills ?? ["skill-a"];
   return {
     botKey: opts.botKey ?? "agent-a",
     files: [
       plainFile("hermes/config.yaml", "model:\n  default: example-model\n"),
-      { path: "hermes/.env", content: "EXAMPLE_SETTING=1\n", mode: 0o600, secret: true },
+      { path: "hermes/.env", content: opts.dotenv ?? TEST_DOTENV, mode: 0o600, secret: true },
       plainFile("hermes/hindsight/config.json", "{}\n"),
       ...skills.map((name) => plainFile(`hermes/skills-board/${name}/SKILL.md`, `# ${name}\n`)),
       plainFile("workspace/AGENTS.md", "instructions\n"),
@@ -319,7 +330,13 @@ describe("demuxDockerLogs", () => {
 //  - a missing bind source is created as root:root 0755 when volumes are mounted;
 //  - a process can only change a directory it owns: the fake refuses to run a
 //    non-root helper while any existing directory in its volumes belongs to
-//    someone else — what `mv`/`rm` would hit as EACCES.
+//    someone else — what `mv`/`rm` would hit as EACCES;
+//  - `GET /images/{name}/json` returns the image's labels (`Config.Labels`,
+//    null when it has none).
+// A bot container "boots" by the bot runtime contract (template.ts
+// BOT_RUNTIME_CONTRACT_LABEL): it exits 1 unless its volumes are owned by uid
+// 10001, config.yaml is in place and API_SERVER_KEY (16+ characters) is in the
+// container's environment or in hermes/.env, read as dotenv data.
 // Helper containers run their script for real with /bin/sh against the host
 // directories (through a symlinked "container root"); `chown` is recorded by a
 // shim instead of executed, since tests do not run as root.
@@ -330,6 +347,7 @@ interface FakeContainer {
   name: string;
   body: {
     Image: string;
+    Env?: string[];
     User?: string;
     Entrypoint?: string[];
     Cmd?: string[];
@@ -378,13 +396,40 @@ function isInside(child: string, parent: string): boolean {
   return child === parent || child.startsWith(`${parent}/`);
 }
 
-async function startFakeDaemon(tmp: string, images: string[]): Promise<FakeDaemon> {
+/** The value `key` gets from a dotenv file read as data (last assignment wins;
+ *  `export `, double quotes with backslash escapes and single quotes handled),
+ *  or undefined. */
+function readDotenvValue(file: string, key: string): string | undefined {
+  if (!fs.existsSync(file)) return undefined;
+  let value: string | undefined;
+  for (const raw of fs.readFileSync(file, "utf8").split("\n")) {
+    const line = raw.trim();
+    const eq = line.indexOf("=");
+    if (line.startsWith("#") || eq === -1) continue;
+    if (line.slice(0, eq).replace(/^export\s+/, "").trim() !== key) continue;
+    let v = line.slice(eq + 1).trim();
+    if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1).replace(/\\(.)/g, "$1");
+    else if (v.length >= 2 && v.startsWith("'") && v.endsWith("'")) v = v.slice(1, -1);
+    value = v;
+  }
+  return value;
+}
+
+const CONTRACT_LABELS: Record<string, string> = { [BOT_RUNTIME_CONTRACT_LABEL]: "1" };
+
+/** `images`: image reference -> its labels (null: an image without labels). */
+async function startFakeDaemon(tmp: string, images: Record<string, Record<string, string> | null>): Promise<FakeDaemon> {
   const socketPath = path.join(tmp, "docker.sock");
   const containers = new Map<string, FakeContainer>();
   const owners = new Map<string, Owner>();
   const requests: RecordedRequest[] = [];
   const options: FakeDaemon["options"] = { healthOnStart: "healthy", failMarkerRead: false, bootNeedsProfile: true };
-  const knownImages = new Set([...images, ...images.map(imageIdFor)]);
+  const imageLabels = new Map<string, Record<string, string> | null>();
+  for (const [ref, labels] of Object.entries(images)) {
+    imageLabels.set(ref, labels);
+    imageLabels.set(imageIdFor(ref), labels);
+  }
+  const knownImages = new Set(imageLabels.keys());
   const shimDir = path.join(tmp, "shim");
   const chownLog = path.join(tmp, "chown.log");
   fs.mkdirSync(shimDir, { recursive: true });
@@ -474,14 +519,23 @@ async function startFakeDaemon(tmp: string, images: string[]): Promise<FakeDaemo
   function bootBot(container: FakeContainer): void {
     mountVolumes(container);
     if (options.bootNeedsProfile) {
-      // What the bot image's entrypoint checks before the gateway starts.
+      // What the bot image checks before its gateway serves (runtime contract "1").
       const binds = parseBinds(container);
       const notOwned = binds.find(({ source }) => owners.get(source)?.uid !== BOT_CONTAINER_UID);
       const hermes = binds.find(({ destination }) => destination === "/data/hermes");
-      if (notOwned || !hermes || !fs.existsSync(path.join(hermes.source, "config.yaml"))) {
+      const envKey = container.body.Env?.find((entry) => entry.startsWith("API_SERVER_KEY="))?.slice("API_SERVER_KEY=".length);
+      const apiKey = (hermes && readDotenvValue(path.join(hermes.source, ".env"), "API_SERVER_KEY")) ?? envKey;
+      const refusal = notOwned
+        ? `${notOwned.destination} is not writable by uid ${BOT_CONTAINER_UID}`
+        : !hermes || !fs.existsSync(path.join(hermes.source, "config.yaml"))
+          ? "config.yaml missing"
+          : !apiKey || apiKey.length < 16
+            ? "API_SERVER_KEY is required (at least 16 characters)"
+            : null;
+      if (refusal) {
         container.state = "exited";
         container.exitCode = 1;
-        container.logs = notOwned ? `${notOwned.destination} is not writable by uid ${BOT_CONTAINER_UID}` : "config.yaml missing";
+        container.logs = refusal;
         return;
       }
     }
@@ -512,7 +566,8 @@ async function startFakeDaemon(tmp: string, images: string[]): Promise<FakeDaemo
 
     if ((m = route.match(/^\/images\/(.+)\/json$/)) && method === "GET") {
       const ref = m[1].split("/").map(decodeURIComponent).join("/");
-      return knownImages.has(ref) ? send(200, { Id: imageIdFor(ref) }) : send(404, { message: `No such image: ${ref}` });
+      if (!knownImages.has(ref)) return send(404, { message: `No such image: ${ref}` });
+      return send(200, { Id: ref.startsWith("sha256:") ? ref : imageIdFor(ref), Config: { Labels: imageLabels.get(ref) ?? null } });
     }
     if (route === "/containers/create" && method === "POST") {
       const name = query.name;
@@ -544,7 +599,7 @@ async function startFakeDaemon(tmp: string, images: string[]): Promise<FakeDaemo
       return send(200, {
         Id: container.id,
         Image: container.body.Image.startsWith("sha256:") ? container.body.Image : imageIdFor(container.body.Image),
-        Config: { Image: container.body.Image, Labels: container.body.Labels ?? {}, User: container.body.User },
+        Config: { Image: container.body.Image, Env: container.body.Env ?? [], Labels: container.body.Labels ?? {}, User: container.body.User },
         State: {
           Status: container.state,
           ExitCode: container.exitCode,
@@ -657,7 +712,12 @@ describe("dockerBotContainerDriver against a fake Docker daemon", () => {
 
   beforeEach(async () => {
     tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "myr-bot-")));
-    daemon = await startFakeDaemon(tmp, ["myrmidon-hermes:1.1.0", "myrmidon-hermes:1.2.0"]);
+    daemon = await startFakeDaemon(tmp, {
+      "myrmidon-hermes:1.1.0": CONTRACT_LABELS,
+      "myrmidon-hermes:1.2.0": CONTRACT_LABELS,
+      "myrmidon-hermes:1.0.0": null, // built before the runtime contract: no label at all
+      "myrmidon-hermes:3.0.0": { [BOT_RUNTIME_CONTRACT_LABEL]: "2" }, // a contract this driver does not know
+    });
     const volumeRoot = path.join(tmp, "bots");
     volumes = {
       hermes: path.join(volumeRoot, "agent-a", "hermes"),
@@ -703,7 +763,12 @@ describe("dockerBotContainerDriver against a fake Docker daemon", () => {
     await driver.writeProfile("agent-a", testProfile());
     expect(bot()?.state).toBe("created");
     await driver.start("agent-a");
-    expect(bot()?.state).toBe("running"); // the fake entrypoint refused to boot without owned volumes + config.yaml
+    // the fake entrypoint refuses to boot without owned volumes, config.yaml and API_SERVER_KEY
+    expect(bot()?.state).toBe("running");
+
+    // the key reached the gateway through hermes/.env only, never the container environment
+    expect(bot()?.body.Env).toBeUndefined();
+    expect(JSON.stringify(bot()?.body)).not.toContain("test-api-server-key");
 
     // every archive went to a volume mount point, never to "/"
     const puts = daemon.requests.filter((r) => r.method === "PUT");
@@ -880,6 +945,17 @@ describe("dockerBotContainerDriver against a fake Docker daemon", () => {
       await expect(driver.start("agent-a")).rejects.toThrow(/exited \(exit code 1\)/);
     });
 
+    it.each([
+      { label: "no API_SERVER_KEY at all", dotenv: 'EXAMPLE_SETTING="1"\n' },
+      { label: "a key shorter than 16 characters", dotenv: 'API_SERVER_KEY="short"\n' },
+      { label: "only a commented-out key", dotenv: '# API_SERVER_KEY="test-api-server-key-0123456789"\n' },
+    ])("start rejects a profile with $label: hermes/.env is the gateway's only source of the key", async ({ dotenv }) => {
+      await driver.create(spec());
+      await driver.writeProfile("agent-a", testProfile({ dotenv }));
+      await expect(driver.start("agent-a")).rejects.toThrow(/exited \(exit code 1\)/);
+      expect(bot()?.logs).toContain("API_SERVER_KEY");
+    });
+
     it("restart is graceful (stop timeout) and waits for health", async () => {
       await driver.create(spec());
       await driver.writeProfile("agent-a", testProfile());
@@ -894,6 +970,27 @@ describe("dockerBotContainerDriver against a fake Docker daemon", () => {
     it("create refuses an image the host does not have, before creating anything", async () => {
       await expect(driver.create(spec({ image: "myrmidon-hermes:9.9.9" }))).rejects.toThrow(/not present on the Docker host/);
       expect(daemon.containers.size).toBe(0);
+    });
+
+    it.each([
+      { label: "declares no bot runtime contract", image: "myrmidon-hermes:1.0.0", error: /does not declare the bot runtime contract/ },
+      { label: "declares a contract this driver does not support", image: "myrmidon-hermes:3.0.0", error: /declares bot runtime contract "2"/ },
+    ])("create refuses an image that $label, before preparing or creating anything", async ({ image, error }) => {
+      await expect(driver.create(spec({ image }))).rejects.toThrow(error);
+      expect(daemon.requests.map((r) => `${r.method} ${r.path}`)).toEqual([`GET /images/${image}/json`]);
+      expect(daemon.containers.size).toBe(0);
+      expect(fs.existsSync(volumes.hermes)).toBe(false);
+    });
+
+    it("recreate refuses an image without the runtime contract and leaves the running container untouched", async () => {
+      await driver.create(spec());
+      await driver.writeProfile("agent-a", testProfile());
+      await driver.start("agent-a");
+      const before = daemon.requests.length;
+      await expect(driver.recreate(spec({ image: "myrmidon-hermes:1.0.0" }))).rejects.toThrow(BotContainerTemplateError);
+      expect(daemon.requests.slice(before).map((r) => `${r.method} ${r.path}`)).toEqual(["GET /images/myrmidon-hermes:1.0.0/json"]);
+      expect(bot()?.state).toBe("running");
+      expect(bot()?.body.Image).toBe("myrmidon-hermes:1.1.0");
     });
 
     it("recreate checks the new image first and leaves the running container untouched when it is missing", async () => {
@@ -954,5 +1051,40 @@ describe("dockerBotContainerDriver against a fake Docker daemon", () => {
   it("refuses to write another bot's profile", async () => {
     await driver.create(spec());
     await expect(driver.writeProfile("agent-a", testProfile({ botKey: "agent-b" }))).rejects.toThrow(BotContainerTemplateError);
+  });
+
+  describe("reconcileBot over this driver: first boot", () => {
+    const unused = async (): Promise<never> => {
+      throw new Error("a first boot needs no maintenance window");
+    };
+    const noMaintenance: BotMaintenancePort = { enter: unused, status: unused, exit: unused };
+    const reconcile = (image: string) =>
+      reconcileBot({
+        agentId: "agent-a",
+        botKey: "agent-a",
+        spec: spec({ image }),
+        compile: async () => testProfile(),
+        driver,
+        maintenance: noMaintenance,
+      });
+
+    it("a missing bot converges in one pass with the key only in hermes/.env, and the next pass changes nothing", async () => {
+      expect(await reconcile("myrmidon-hermes:1.1.0")).toEqual({ kind: "created" });
+      expect(await driver.status("agent-a")).toMatchObject({ state: "running", restartHash: "restart-1", filesHash: "files-1" });
+      const before = daemon.requests.length;
+      expect(await reconcile("myrmidon-hermes:1.1.0")).toEqual({ kind: "unchanged" });
+      expect(daemon.requests.slice(before).every((r) => r.method === "GET")).toBe(true);
+    });
+
+    it("an image without the runtime contract fails every pass the same way, leaving no container or volume behind", async () => {
+      for (let pass = 0; pass < 2; pass++) {
+        const outcome = await reconcile("myrmidon-hermes:1.0.0");
+        expect(outcome).toMatchObject({ kind: "error" });
+        expect(outcome.kind === "error" ? outcome.message : "").toMatch(/does not declare the bot runtime contract/);
+      }
+      expect(daemon.containers.size).toBe(0);
+      expect(fs.existsSync(volumes.hermes)).toBe(false);
+      expect(daemon.requests.some((r) => r.method !== "GET")).toBe(false);
+    });
   });
 });

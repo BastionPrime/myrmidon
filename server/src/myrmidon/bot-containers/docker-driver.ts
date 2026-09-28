@@ -33,12 +33,20 @@
 // place as its very last step, and status() reads it back with
 // `GET /containers/{id}/archive`, which works in every container state. No marker
 // means "nothing verified applied", never "unchanged".
+//
+// Secrets and the image. The create body carries no `Env`: anything there is
+// shown by `docker inspect`. API_SERVER_KEY and every other secret reach the
+// gateway only as the profile's hermes/.env, so the image has to read them from
+// there. Whether it does is part of the runtime contract an image declares
+// (template.ts BOT_RUNTIME_CONTRACT_LABEL); create/recreate refuse an image
+// that does not declare it, before anything is created.
 
 import { randomBytes } from "node:crypto";
 import http from "node:http";
 import type { BotContainerDriver, BotContainerSpec, BotContainerStatus } from "./driver.js";
 import type { CompiledProfile } from "./types.js";
 import {
+  assertBotRuntimeContract,
   BOT_LABEL_KEYS,
   BOT_MANAGED_DIRS,
   BOT_KEY_PATTERN,
@@ -135,7 +143,8 @@ export interface DockerCreateContainerBody {
 /**
  * Pure builder for the `POST /containers/create` body — the actual "fixed
  * template" enforcement. Never adds anything a caller passed beyond `spec`'s
- * fields: no arbitrary binds, no host network, no privileged mode. Throws on an
+ * fields: no arbitrary binds, no host network, no privileged mode, and no
+ * `Env` (secrets travel only in the profile's hermes/.env). Throws on an
  * image outside the allowlist or a network other than the one configured for
  * this driver.
  */
@@ -675,12 +684,21 @@ export function dockerBotContainerDriver(
     if (res.status >= 400 && res.status !== 404) throw describeFailure(`docker remove ${name}`, res);
   }
 
-  async function requireImage(image: string): Promise<void> {
+  /** The image must be on the host (the driver never pulls) and declare a
+   *  supported bot runtime contract (template.ts BOT_RUNTIME_CONTRACT_LABEL). */
+  async function requireBotImage(image: string): Promise<void> {
     const res = await request({ method: "GET", path: `/images/${nameSegment(image)}/json` });
     if (res.status === 404) {
       throw new Error(`image "${image}" is not present on the Docker host; build or pull it first (the driver never pulls)`);
     }
     if (res.status >= 400) throw describeFailure(`docker image inspect ${image}`, res);
+    let labels: Record<string, string> | null | undefined;
+    try {
+      labels = (JSON.parse(res.body.toString("utf8")) as { Config?: { Labels?: Record<string, string> | null } }).Config?.Labels;
+    } catch {
+      labels = undefined;
+    }
+    assertBotRuntimeContract(image, labels);
   }
 
   async function putArchive(containerName: string, mountPath: string, archive: Buffer): Promise<void> {
@@ -800,7 +818,7 @@ export function dockerBotContainerDriver(
 
   async function create(spec: BotContainerSpec): Promise<void> {
     const body = buildCreateContainerRequestBody(spec, config);
-    await requireImage(spec.image);
+    await requireBotImage(spec.image);
     await removeByName(replacementContainerNameFor(spec.botKey)); // stale, from an interrupted recreate
     await prepareVolumes(spec.botKey, spec.image);
     await createNamed(containerNameFor(spec.botKey), body);
@@ -813,7 +831,7 @@ export function dockerBotContainerDriver(
     // Everything that can fail for a reason of its own (missing image, rejected
     // template, daemon refusing the create) happens while the old container is
     // still intact.
-    await requireImage(spec.image);
+    await requireBotImage(spec.image);
     await removeByName(replacement);
     await prepareVolumes(spec.botKey, spec.image);
     await createNamed(replacement, body);

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertBotRuntimeContract,
   BOT_KEY_PATTERN,
   BOT_LABEL_KEYS,
+  BOT_RUNTIME_CONTRACT_LABEL,
   BotContainerTemplateError,
   buildBinds,
   buildLabels,
@@ -200,5 +202,26 @@ describe("buildLabels", () => {
     const labels = buildLabels({ botKey: "agent-a", image: "myrmidon-hermes:1.1.0" });
     expect(Object.keys(labels).sort()).toEqual([BOT_LABEL_KEYS.bot, BOT_LABEL_KEYS.image].sort());
     expect(Object.keys(labels).some((key) => key.includes("hash"))).toBe(false);
+  });
+});
+
+describe("assertBotRuntimeContract", () => {
+  it("accepts an image that declares a supported contract, whatever else it is labelled with", () => {
+    expect(() =>
+      assertBotRuntimeContract("myrmidon-hermes:1.1.0", {
+        "org.opencontainers.image.title": "myrmidon-hermes",
+        [BOT_RUNTIME_CONTRACT_LABEL]: "1",
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    { label: "no labels (Docker's null)", labels: null },
+    { label: "no labels (absent)", labels: undefined },
+    { label: "other labels only", labels: { "org.opencontainers.image.title": "myrmidon-hermes" } },
+    { label: "an empty contract", labels: { [BOT_RUNTIME_CONTRACT_LABEL]: "" } },
+    { label: "an unknown contract", labels: { [BOT_RUNTIME_CONTRACT_LABEL]: "2" } },
+  ])("refuses an image with $label", ({ labels }) => {
+    expect(() => assertBotRuntimeContract("myrmidon-hermes:1.0.0", labels)).toThrow(BotContainerTemplateError);
   });
 });
