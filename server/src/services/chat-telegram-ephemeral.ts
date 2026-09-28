@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+// myrmidon(B1): product name in the user-facing text below; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 
 export const TELEGRAM_EPHEMERAL_WINDOW_MS = 15_000;
-export const TELEGRAM_PRIVATE_ACTION_UNAVAILABLE =
-  "This Paperclip action is no longer available. Open the linked task or ask an operator to link this account.";
+export const TELEGRAM_PRIVATE_ACTION_UNAVAILABLE = `This ${PRODUCT_NAME} action is no longer available. Open the linked task or ask an operator to link this account.`;
 
 export interface TelegramCallbackReceipt {
   version: 1;

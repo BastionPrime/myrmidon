@@ -17,6 +17,8 @@ import {
   type ModalResponse,
   type SelectOptionElement,
 } from "chat";
+// myrmidon(B1): product name in the user-facing form-denial text below; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 
 const TOKEN_BYTES = 16;
 const OPEN_ACTION_PREFIX = "pcf:";
@@ -133,8 +135,7 @@ export type ChatQuestionFormValidationResult =
       fieldErrors: Record<string, string>;
     };
 
-const CHAT_QUESTION_FORM_DENIAL_MESSAGE =
-  "This form is no longer authorized. Close it and open the linked Paperclip task.";
+const CHAT_QUESTION_FORM_DENIAL_MESSAGE = `This form is no longer authorized. Close it and open the linked ${PRODUCT_NAME} task.`;
 
 /**
  * Provider callbacks must be acknowledged after Paperclip has durably denied a

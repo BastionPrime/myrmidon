@@ -4158,8 +4158,8 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       endpointId: endpoint.id,
       provider: "github",
       thread: makeThread({
-        channelId: "PaperclipAI/Myrmidon",
-        id: "github:PaperclipAI/Myrmidon:issue:17",
+        channelId: "PaperclipAI/Paperclip",
+        id: "github:PaperclipAI/Paperclip:issue:17",
         name: "paperclipai/paperclip",
       }).thread,
       message: makeMessage({
@@ -8781,9 +8781,9 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       endpointId: endpoint.id,
       provider: "github",
       thread: makeThread({
-        channelId: "PaperclipAI/Myrmidon",
-        id: "github:PaperclipAI/Myrmidon:issue:77",
-        name: "PaperclipAI/Myrmidon",
+        channelId: "PaperclipAI/Paperclip",
+        id: "github:PaperclipAI/Paperclip:issue:77",
+        name: "PaperclipAI/Paperclip",
       }).thread,
       message: makeMessage({
         id: "github-rename-root",

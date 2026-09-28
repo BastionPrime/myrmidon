@@ -84,7 +84,7 @@ describe("durable inbound queue notice", () => {
       "Your follow-up is queued.",
     );
     expect(inboundWakePublicationText("not_started")).toBe(
-      "This follow-up was not started. Open the task in Paperclip for details.",
+      "This follow-up was not started. Open the task in Myrmidon for details.",
     );
     expect(inboundWakePublicationText("removed")).toBe(
       "This queued message was removed.",

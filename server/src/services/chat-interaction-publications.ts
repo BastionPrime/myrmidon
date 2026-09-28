@@ -18,6 +18,8 @@ import type {
   SafeExternalChatCardAction,
 } from "@paperclipai/shared";
 import { readConfigFile } from "../config-file.js";
+// myrmidon(B1): product name in the user-facing text below; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 import { projectSafeChatPublication } from "./chat-publication-projection.js";
 import { safeChatTaskUrl } from "./chat-task-url.js";
 import {
@@ -45,12 +47,12 @@ function terminalNativeInteractionCopy(
       const outcome = interaction.result?.outcome;
       const body =
         outcome === "skipped"
-          ? "Skipped in Paperclip"
+          ? `Skipped in ${PRODUCT_NAME}`
           : outcome === "withdrawn"
-            ? "Withdrawn in Paperclip"
+            ? `Withdrawn in ${PRODUCT_NAME}`
             : outcome === "addressee_deleted"
               ? "Cancelled: addressed agent was removed"
-              : "Cancelled in Paperclip";
+              : `Cancelled in ${PRODUCT_NAME}`;
       return { body, text: `${body}.` };
     }
     if (interaction.status === "expired") {
@@ -63,7 +65,7 @@ function terminalNativeInteractionCopy(
               ? "Expired: target is no longer current"
               : interaction.result?.outcome === "issue_closed"
                 ? "Expired: task is closed"
-                : "Expired in Paperclip";
+                : `Expired in ${PRODUCT_NAME}`;
       return { body, text: `${body}.` };
     }
     return null;
@@ -89,10 +91,10 @@ function terminalNativeInteractionCopy(
     const outcome = interaction.result?.outcome;
     const body =
       outcome === "skipped"
-        ? "Skipped in Paperclip."
+        ? `Skipped in ${PRODUCT_NAME}.`
         : outcome === "withdrawn"
-          ? "Withdrawn in Paperclip."
-          : "Cancelled in Paperclip.";
+          ? `Withdrawn in ${PRODUCT_NAME}.`
+          : `Cancelled in ${PRODUCT_NAME}.`;
     return { body, text: body };
   }
   if (interaction.status === "expired") {
@@ -104,7 +106,7 @@ function terminalNativeInteractionCopy(
           ? "Expired: replaced by a newer request"
           : interaction.result?.outcome === "issue_closed"
             ? "Expired: task is closed"
-            : "Expired in Paperclip";
+            : `Expired in ${PRODUCT_NAME}`;
     return { body, text: `${body}.` };
   }
   return null;
@@ -209,18 +211,18 @@ function textForQuestionInteraction(
   }
   lines.push(
     taskUrl
-      ? `Open the task in Paperclip to respond: ${taskUrl}`
-      : "Open the task in Paperclip to respond.",
+      ? `Open the task in ${PRODUCT_NAME} to respond: ${taskUrl}`
+      : `Open the task in ${PRODUCT_NAME} to respond.`,
   );
   return lines.join("\n");
 }
 
 function genericInteractionText(taskUrl: string | null): string {
   return [
-    "This task needs an authorized response in Paperclip.",
+    `This task needs an authorized response in ${PRODUCT_NAME}.`,
     taskUrl
-      ? `Open the task in Paperclip to respond: ${taskUrl}`
-      : "Open the task in Paperclip to respond.",
+      ? `Open the task in ${PRODUCT_NAME} to respond: ${taskUrl}`
+      : `Open the task in ${PRODUCT_NAME} to respond.`,
   ]
     .filter((value): value is string => Boolean(value))
     .join("\n\n");
@@ -376,7 +378,7 @@ export async function enqueueIssueInteractionChatPublications(
             ? [
                 {
                   type: "link" as const,
-                  label: "Open in Paperclip",
+                  label: `Open in ${PRODUCT_NAME}`,
                   url: taskUrl,
                 },
               ]
@@ -407,13 +409,13 @@ export async function enqueueIssueInteractionChatPublications(
                 "Input needed")
               : interaction.kind === "request_confirmation"
                 ? interaction.payload.prompt
-                : "Response needed in Paperclip",
+                : `Response needed in ${PRODUCT_NAME}`,
           body:
             interaction.kind === "ask_user_questions"
               ? (question?.helpText ?? undefined)
               : interaction.kind === "request_confirmation"
                 ? (interaction.payload.detailsMarkdown ?? undefined)
-                : "Open the task in Paperclip to review and respond.",
+                : `Open the task in ${PRODUCT_NAME} to review and respond.`,
           actions,
         },
       },

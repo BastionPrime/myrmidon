@@ -687,7 +687,7 @@ describe("chat question forms", () => {
       action: "errors",
       errors: {
         [payload.fields[0]!.fieldId]:
-          "This form is no longer authorized. Close it and open the linked Paperclip task.",
+          "This form is no longer authorized. Close it and open the linked Myrmidon task.",
       },
     });
     expect(chatQuestionFormDenialResponse()).toEqual({ action: "clear" });
