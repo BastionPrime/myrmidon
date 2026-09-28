@@ -966,9 +966,11 @@ describe("execute — operator cancellation (G4)", () => {
       // all hang until their own signal fires — none of them get a response
       // from this fixture.
       return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
+        const signal = init?.signal;
+        if (!signal) return;
+        signal.addEventListener(
           "abort",
-          () => reject(init.signal!.reason ?? new DOMException("aborted", "AbortError")),
+          () => reject(signal.reason ?? new DOMException("aborted", "AbortError")),
           { once: true },
         );
       });
@@ -1020,9 +1022,11 @@ describe("execute — operator cancellation (G4)", () => {
       // Hermes never gets a chance to answer within this test.
       opCancel.abort();
       return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
+        const signal = init?.signal;
+        if (!signal) return;
+        signal.addEventListener(
           "abort",
-          () => reject(init.signal!.reason ?? new DOMException("aborted", "AbortError")),
+          () => reject(signal.reason ?? new DOMException("aborted", "AbortError")),
           { once: true },
         );
       });
