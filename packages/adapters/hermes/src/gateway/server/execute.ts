@@ -545,6 +545,14 @@ function truncateForLog(value: string, maxChars: number): string {
   return `${trimmed.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
+/** Unlike nonEmpty(), this never trims: a delta chunk's own leading/trailing
+ * whitespace (in particular a trailing "\n" ending a line) is exactly what
+ * flushCompactDeltaLines()'s line splitting depends on. */
+function rawDeltaText(record: Record<string, unknown> | null): string {
+  const raw = record?.delta ?? record?.text_delta;
+  return typeof raw === "string" ? raw : "";
+}
+
 function toolNameFromEvent(record: Record<string, unknown> | null): string {
   return nonEmpty(record?.tool) ?? nonEmpty(record?.tool_name) ?? nonEmpty(record?.name) ?? "tool";
 }
@@ -677,8 +685,10 @@ async function reportRuntimeProgress(input: {
     currentToolName = toolNameFromEvent(record);
     message = eventName === "tool.started" ? `Using ${currentToolName}` : `Used ${currentToolName}`;
   } else if (eventName === "message.delta") {
-    const delta = nonEmpty(record?.delta) ?? nonEmpty(record?.text_delta);
-    if (delta) {
+    // myrmidon(G4): the untrimmed chunk, not nonEmpty()'s trimmed one — same
+    // reasoning as flushCompactDeltaLines below.
+    const delta = rawDeltaText(record);
+    if (delta.trim().length > 0) {
       lastAssistantSnippet = redactText(delta);
       message = lastAssistantSnippet;
     }
@@ -768,7 +778,10 @@ async function handleEvent(input: {
     if (debugEvents) {
       await ctx.onLog("stdout", sanitizedDelta);
     } else {
-      state.deltaLineBuffer += sanitizedDelta;
+      // myrmidon(G4): the raw (untrimmed) chunk — nonEmpty()'s trimmed
+      // `delta` above would swallow the very newline flushCompactDeltaLines
+      // splits lines on, so a chunk ending a line would never flush.
+      state.deltaLineBuffer += redactText(rawDeltaText(record));
       await flushCompactDeltaLines(ctx, state);
     }
   }
