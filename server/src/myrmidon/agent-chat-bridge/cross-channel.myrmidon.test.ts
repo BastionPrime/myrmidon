@@ -1,14 +1,19 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, createDb, issues, type Db } from "@paperclipai/db";
+import { agents, companies, createDb, heartbeatRuns, issues, type Db } from "@paperclipai/db";
 
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "../../__tests__/helpers/embedded-postgres.js";
+import { REDACTED_EVENT_VALUE } from "../../redaction.js";
 import { instanceSettingsService } from "../../services/instance-settings.js";
 import { issueService } from "../../services/issues.js";
+import { createRunSecretRedactionRegistry } from "../../services/run-secret-redaction.js";
 import { appendCrossChannelDelta, buildCrossChannelContext } from "./cross-channel.js";
 import { telegramConversationUserId } from "./identity.js";
 
@@ -100,8 +105,14 @@ async function seedPair(db: Db) {
 describeEmbeddedPostgres("cross-channel context (X8d)", () => {
   let database: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
   let db: ReturnType<typeof createDb>;
+  const previousKeyFile = process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
+  const secretsTmpDir = path.join(os.tmpdir(), `paperclip-myrmidon-cross-channel-secrets-${randomUUID()}`);
 
   beforeAll(async () => {
+    // Needed only by the redaction test below (createRunSecretRedactionRegistry
+    // uses the local_encrypted provider, which requires a master key file).
+    mkdirSync(secretsTmpDir, { recursive: true });
+    process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = path.join(secretsTmpDir, "master.key");
     database = await startEmbeddedPostgresTestDatabase("paperclip-myrmidon-cross-channel-");
     db = createDb(database.connectionString);
     await instanceSettingsService(db).updateExperimental({ enableAgentChat: true });
@@ -110,6 +121,9 @@ describeEmbeddedPostgres("cross-channel context (X8d)", () => {
   afterAll(async () => {
     await db?.$client.end({ timeout: 0 });
     await database?.cleanup();
+    if (previousKeyFile === undefined) delete process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
+    else process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = previousKeyFile;
+    rmSync(secretsTmpDir, { recursive: true, force: true });
   });
 
   it("quotes the web conversation's newest messages into the Telegram conversation's turn, oldest first, with a count of what's missing", async () => {
@@ -200,6 +214,39 @@ describeEmbeddedPostgres("cross-channel context (X8d)", () => {
     expect(context!.full).toContain("web message from user-a");
     expect(context!.full).not.toContain("user-b");
     expect(context!.full).not.toContain("secret");
+  });
+
+  it("redacts a secret registered against the sibling conversation before quoting it", async () => {
+    // A secret pasted in the web conversation is registered for redaction
+    // against the web issue's own heartbeat runs (secrets.ts's
+    // registerForRedaction -> run-secret-redaction.ts, scoped by issueId).
+    // heartbeat.ts's later redaction pass only covers the CURRENT
+    // conversation's issueId, so buildCrossChannelContext must scrub the
+    // sibling's own registered secrets itself before handing the quote back.
+    const { companyId, agentId, web, tg, webUserId } = await seedPair(db);
+    const secretValue = "sk-cross-channel-guard-secret-value";
+    await userMsg(db, web.id, webUserId, `here is my key: ${secretValue}`, at(0));
+
+    const heartbeatRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: heartbeatRunId,
+      companyId,
+      agentId,
+      status: "running",
+      contextSnapshot: { issueId: web.id },
+    });
+    await createRunSecretRedactionRegistry(db).register(companyId, heartbeatRunId, secretValue);
+
+    const context = await buildCrossChannelContext(db, {
+      companyId,
+      issueId: tg.id,
+      wakeCommentId: null,
+    });
+
+    expect(context).not.toBeNull();
+    expect(context!.full).toContain("here is my key");
+    expect(context!.full).toContain(REDACTED_EVENT_VALUE);
+    expect(context!.full).not.toContain(secretValue);
   });
 
   it("respects the sibling's own /new boundary: messages before it are invisible", async () => {

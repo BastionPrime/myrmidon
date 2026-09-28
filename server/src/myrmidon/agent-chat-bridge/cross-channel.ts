@@ -24,6 +24,7 @@ import { and, desc, eq, gt, gte, isNotNull, isNull, or, sql } from "drizzle-orm"
 import { issueComments, issues, type Db } from "@paperclipai/db";
 
 import { logger } from "../../middleware/logger.js";
+import { createRunSecretRedactionRegistry } from "../../services/run-secret-redaction.js";
 import {
   isLowTrustQuarantined,
   sanitizeQuarantinedCommentForHigherTrust,
@@ -341,7 +342,18 @@ async function buildCrossChannelContextUnsafe(
   const delta = renderBlock("delta", neighborChannel, renderContent(deltaLines, deltaK));
 
   if (!full && !delta) return null;
-  return { full, delta };
+  // myrmidon(X8d): a secret a person pasted in the sibling conversation is
+  // registered for redaction against THAT conversation's heartbeat runs
+  // (run-secret-redaction.ts scopes by issueId). The quoted rows above come
+  // straight from the sibling's comments, so `redactForIssue` on this
+  // conversation's own issueId (heartbeat.ts's later pass) would never see
+  // it. Scrub the rendered blocks against the sibling's own registry here,
+  // before they are handed back to be spliced into this conversation's
+  // prompt.
+  return createRunSecretRedactionRegistry(db).redactForIssue(input.companyId, neighbor.id, {
+    full,
+    delta,
+  });
 }
 
 export async function buildCrossChannelContext(
