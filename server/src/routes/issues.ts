@@ -9224,6 +9224,7 @@ export function issueRoutes(
                       action: settled,
                       actor: { actorType: actor.actorType, actorId: actor.actorId },
                       note: resolutionNote ?? null,
+                      postCommitActivityPublications,
                     })
                   : settled;
               return {
@@ -9488,6 +9489,11 @@ export function issueRoutes(
         return { issue, recoveryAction, chatRetry };
       });
       if (result.replayed) {
+        // myrmidon(L2): clearSettledReplayBlock's activity write (above) uses
+        // this same deferred array — flush it here too, since this branch
+        // returns before the flush loop below.
+        for (const publication of postCommitActivityPublications)
+          publishActivity(publication);
         res.json({
           issue: result.issue,
           recoveryAction: result.recoveryAction,

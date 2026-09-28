@@ -6,7 +6,7 @@
 // docs/myrmidon/DIVERGENCE.md "L2".
 import { eq } from "drizzle-orm";
 import { issueRecoveryActions, type Db } from "@paperclipai/db";
-import { persistActivity } from "../../services/activity-log.js";
+import { logActivity, type ActivityPublication } from "../../services/activity-log.js";
 
 type IssueRecoveryAction = typeof issueRecoveryActions.$inferSelect;
 
@@ -30,8 +30,16 @@ export async function clearSettledReplayBlock(input: {
   action: IssueRecoveryAction;
   actor: ClearSettledReplayBlockActor;
   note: string | null;
+  /**
+   * Same deferred-publication array the caller's other `logActivity` calls
+   * in this transaction use (routes/issues.ts's resolve handler); when
+   * given, the `activity.logged` live event is queued for the caller to
+   * publish once the transaction is known to commit instead of firing
+   * immediately from inside it. See services/activity-log.ts's `logActivity`.
+   */
+  postCommitActivityPublications?: ActivityPublication[];
 }): Promise<IssueRecoveryAction> {
-  const { db, companyId, action, actor, note } = input;
+  const { db, companyId, action, actor, note, postCommitActivityPublications } = input;
   const automaticRecovery = (action.evidence.automaticRecovery ?? {}) as Record<string, unknown>;
   const clearedAt = new Date();
   const evidence = {
@@ -50,8 +58,15 @@ export async function clearSettledReplayBlock(input: {
     .set({ evidence, updatedAt: clearedAt })
     .where(eq(issueRecoveryActions.id, action.id))
     .returning();
-  const cleared = updated ?? { ...action, evidence, updatedAt: clearedAt };
-  await persistActivity(db, {
+  // myrmidon(L2): a 0-row update means `action.id` no longer matches a row
+  // (deleted, or its evidence/status changed since the caller read it) —
+  // never synthesize a cleared record for a write that did not happen.
+  if (!updated) {
+    throw new Error(
+      `clearSettledReplayBlock: recovery action ${action.id} was not found for update`,
+    );
+  }
+  await logActivity(db, {
     companyId,
     actorType: actor.actorType,
     actorId: actor.actorId,
@@ -64,6 +79,6 @@ export async function clearSettledReplayBlock(input: {
       recoveryActionStatus: action.status,
       note,
     },
-  });
-  return cleared;
+  }, postCommitActivityPublications);
+  return updated;
 }

@@ -7,6 +7,8 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "../../__tests__/helpers/embedded-postgres.js";
+import { publishActivity, type ActivityPublication } from "../../services/activity-log.js";
+import { subscribeCompanyLiveEvents } from "../../services/live-events.js";
 import { clearSettledReplayBlock } from "./clear.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -91,5 +93,54 @@ describeEmbeddedPostgres("clearSettledReplayBlock (L2)", () => {
       action: "issue.execution_recovery_replay_cleared", entityType: "issue", entityId: issueId,
     });
     expect(entry!.details).toMatchObject({ recoveryActionId: action.id, cause: action.cause, recoveryActionStatus: "resolved" });
+  });
+
+  it("publishes the activity.logged live event immediately when no deferred array is given", async () => {
+    const { companyId, action } = await seed();
+    const events: unknown[] = [];
+    const unsubscribe = subscribeCompanyLiveEvents(companyId, (event) => {
+      if (event.type === "activity.logged") events.push(event);
+    });
+    try {
+      await clearSettledReplayBlock({
+        db, companyId, action, actor: { actorType: "user", actorId: "board" }, note: null,
+      });
+    } finally {
+      unsubscribe();
+    }
+    expect(events).toHaveLength(1);
+  });
+
+  it("defers the live event into the given array instead of publishing before the caller's transaction commits", async () => {
+    const { companyId, action } = await seed();
+    const events: unknown[] = [];
+    const unsubscribe = subscribeCompanyLiveEvents(companyId, (event) => {
+      if (event.type === "activity.logged") events.push(event);
+    });
+    const postCommitActivityPublications: ActivityPublication[] = [];
+    try {
+      await clearSettledReplayBlock({
+        db, companyId, action, actor: { actorType: "user", actorId: "board" }, note: null,
+        postCommitActivityPublications,
+      });
+      // Not published yet: a caller inside a DB transaction queues the event
+      // here and flushes it only after the transaction is known to commit.
+      expect(events).toHaveLength(0);
+      expect(postCommitActivityPublications).toHaveLength(1);
+      for (const publication of postCommitActivityPublications) publishActivity(publication);
+      expect(events).toHaveLength(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("throws instead of silently returning an unwritten record when the action id no longer matches a row", async () => {
+    const { companyId, action } = await seed();
+    await expect(
+      clearSettledReplayBlock({
+        db, companyId, action: { ...action, id: randomUUID() },
+        actor: { actorType: "user", actorId: "board" }, note: null,
+      }),
+    ).rejects.toThrow(/not found/);
   });
 });
