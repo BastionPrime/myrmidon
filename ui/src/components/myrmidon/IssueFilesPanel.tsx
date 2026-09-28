@@ -158,7 +158,7 @@ interface IssueFilesPanelProps {
   workProducts: IssueWorkProduct[];
   /** Display name for the agent or user who delivered the file. */
   resolveAuthor?: (entry: Pick<IssueFileEntry, "createdByAgentId" | "createdByUserId">) => string | null;
-  // myrmidon(U1): lets a host (e.g. the on-demand files drawer) close itself
+  // myrmidon(U3): lets a host (e.g. the on-demand files drawer) close itself
   // when the reader follows a file to its comment, in addition to the link's
   // own anchor navigation.
   /** Called when a file's "comment" link is clicked, alongside the anchor jump. */

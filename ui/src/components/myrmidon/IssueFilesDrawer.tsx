@@ -6,7 +6,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { cn } from "@/lib/utils";
 import { buildIssueFileEntries, IssueFilesPanel, type IssueFileEntry } from "./IssueFilesPanel";
 
-// myrmidon(U1): task files move from a fixed card at the top of the chat
+// myrmidon(U3): task files move from a fixed card at the top of the chat
 // shell into an on-demand drawer triggered from the task header, so they no
 // longer crowd the transcript on small screens. Desktop opens a resizable
 // side panel; mobile opens a near-full-height bottom sheet. Width is

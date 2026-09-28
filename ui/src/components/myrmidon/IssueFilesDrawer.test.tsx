@@ -31,6 +31,35 @@ if (!globalThis.ResizeObserver) {
   };
 }
 
+// jsdom's own PointerEvent constructor (when a given jsdom version ships
+// one) is not a reliable superset of MouseEventInit: some releases accept a
+// PointerEventInit dictionary but silently drop MouseEvent-inherited fields
+// such as clientX instead of throwing, which zeroes out drag math without
+// any error. Building the event on the long-stable MouseEvent constructor
+// and stamping the pointer-specific fields on as own properties afterwards
+// keeps the coordinates this test asserts on correct no matter which jsdom
+// CI happens to run, instead of depending on PointerEvent's own (version
+// -dependent) dictionary handling. React reads native event properties by
+// name regardless of the constructor used, so this still drives the
+// component's onPointerDown/onPointerMove/onPointerUp handlers faithfully.
+interface FiredPointerEventInit {
+  pointerId: number;
+  clientX: number;
+  button?: number;
+}
+
+function firePointerEvent(target: EventTarget, type: string, init: FiredPointerEventInit): void {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX: init.clientX,
+    button: init.button ?? 0,
+  });
+  Object.defineProperty(event, "pointerId", { value: init.pointerId, configurable: true });
+  Object.defineProperty(event, "pointerType", { value: "mouse", configurable: true });
+  target.dispatchEvent(event);
+}
+
 function act(callback: () => void | Promise<void>) {
   let result: void | Promise<void> | undefined;
   flushSync(() => {
@@ -145,23 +174,17 @@ describe("IssueFilesDrawer", () => {
 
     // The grip sits on the panel's left border: dragging left widens it.
     act(() => {
-      grip?.dispatchEvent(
-        new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1, clientX: 500, button: 0 }),
-      );
+      if (grip) firePointerEvent(grip, "pointerdown", { pointerId: 1, clientX: 500, button: 0 });
     });
     act(() => {
-      grip?.dispatchEvent(
-        new PointerEvent("pointermove", { bubbles: true, cancelable: true, pointerId: 1, clientX: 400 }),
-      );
+      if (grip) firePointerEvent(grip, "pointermove", { pointerId: 1, clientX: 400 });
     });
     expect(drawer?.style.width).toBe("520px");
     // Not persisted until the drag ends.
     expect(window.localStorage.getItem(WIDTH_STORAGE_KEY)).toBeNull();
 
     act(() => {
-      grip?.dispatchEvent(
-        new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 1, clientX: 400 }),
-      );
+      if (grip) firePointerEvent(grip, "pointerup", { pointerId: 1, clientX: 400 });
     });
     expect(window.localStorage.getItem(WIDTH_STORAGE_KEY)).toBe("520");
   });
