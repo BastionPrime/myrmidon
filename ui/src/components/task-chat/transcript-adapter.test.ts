@@ -990,7 +990,7 @@ describe("buildActivityPhases provider summaries", () => {
       providerTool("block", "paperclip_block", "edit", "paperclip"),
     ];
     expect(buildActivityPhases(items, false)[0]?.summary).toBe(
-      "Searched available tools 6 times, read from Paperclip 3 times, used Paperclip 3 times",
+      "Searched available tools 6 times, read from Myrmidon 3 times, used Myrmidon 3 times",
     );
   });
 });

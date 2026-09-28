@@ -203,7 +203,7 @@ describe("AuditFeed", () => {
     expect(container.textContent).toContain("Looks good to me");
     expect(container.textContent).toContain("on behalf of Dotta");
     expect(container.querySelector('a[href="/agents/agent-1/runs/run-1"]')).toBeTruthy();
-    expect(container.textContent).toContain("Recorded by Paperclip");
+    expect(container.textContent).toContain("Recorded by Myrmidon");
   });
 
   it("filters and renders connection tests in the same audit row shape", async () => {
