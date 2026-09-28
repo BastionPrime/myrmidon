@@ -4,8 +4,10 @@ import { z } from "zod";
 import { heartbeatRuns, issueComments, issues, issueRecoveryActions, type Db } from "@paperclipai/db";
 import { EXECUTION_RECONCILIATION_CAUSES, type ExecutionBlocker } from "@paperclipai/shared";
 // myrmidon(L2): an explicitly authorized wake ignores a settled "do not
-// replay" hold; see settled-holds/predicate.ts and docs/myrmidon/DIVERGENCE.md "L2".
-import { explicitWakeExecutionBlockerPredicate } from "../myrmidon/settled-holds/predicate.js";
+// replay" hold once its named run (if any) is verified to have released its
+// execution claim; see settled-holds/explicit-wake-bypass.ts and
+// docs/myrmidon/DIVERGENCE.md "L2".
+import { explicitWakeBypassesSettledHold } from "../myrmidon/settled-holds/explicit-wake-bypass.js";
 
 /** Resolved recovery bookkeeping can still carry an effective no-replay hold. */
 export function executionBlockerPredicate() {
@@ -46,16 +48,16 @@ export async function getExecutionBlocker(db: Db, companyId: string, issueId: st
   const [action] = await db.select().from(issueRecoveryActions).where(and(
     eq(issueRecoveryActions.companyId, companyId),
     eq(issueRecoveryActions.sourceIssueId, issueId),
-    // myrmidon(L2): an explicitly authorized wake ignores a settled "do not
-    // replay" hold. The caller decides `explicitWake` (settled-holds/
-    // explicit-wake-gate.ts), which already applies
-    // MYRMIDON_SETTLED_HOLDS_BLOCK_EXPLICIT_WAKES.
-    options?.explicitWake
-      ? explicitWakeExecutionBlockerPredicate()
-      : executionBlockerPredicate(),
+    executionBlockerPredicate(),
     boundary ? gt(issueRecoveryActions.createdAt, boundary.createdAt) : undefined,
   )).orderBy(desc(issueRecoveryActions.updatedAt), desc(issueRecoveryActions.id)).limit(1);
   if (!action) return null;
+  // myrmidon(L2): an explicitly authorized wake ignores a settled "do not
+  // replay" hold once its named run (if any) is verified to have released
+  // its execution claim. The caller decides `explicitWake` (settled-holds/
+  // explicit-wake-gate.ts), which already applies
+  // MYRMIDON_SETTLED_HOLDS_BLOCK_EXPLICIT_WAKES.
+  if (options?.explicitWake && await explicitWakeBypassesSettledHold(db, companyId, action)) return null;
   const parsedRunId = z.string().guid().safeParse(action.evidence.runId ?? action.evidence.sourceRunId);
   const runId = parsedRunId.success ? parsedRunId.data : null;
   const [run] = runId ? await db.select({ agentId: heartbeatRuns.agentId }).from(heartbeatRuns).where(and(
