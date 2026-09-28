@@ -1,6 +1,11 @@
 import type { SVGProps } from "react";
 import { cn } from "../lib/utils";
 
+// myrmidon(B1a): known gap, not a text substitution — this is the vendor's
+// literal paperclip glyph, and the draw-in animation below is calibrated
+// (stroke-dasharray) to this exact path's length. Swapping in the ant mark
+// needs the animation redone for different geometry, which we don't have
+// design input for; see docs/myrmidon/DIVERGENCE.md's B1a known-gaps row.
 export function AnimatedPaperclipIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
   return (
     <svg

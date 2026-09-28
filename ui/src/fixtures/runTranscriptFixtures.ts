@@ -70,14 +70,14 @@ export const runTranscriptFixtureEntries: TranscriptEntry[] = [
     kind: "tool_result",
     ts: "2026-03-11T15:21:19.034Z",
     toolUseId: "item_1",
-    content: "command: sed -n '1,220p' doc/GOAL.md\nstatus: completed\nexit_code: 0\n\n# Myrmidon\n\nPaperclip is the backbone of the autonomous economy.",
+    content: "command: sed -n '1,220p' doc/GOAL.md\nstatus: completed\nexit_code: 0\n\n# Myrmidon\n\nMyrmidon is the backbone of the autonomous economy.",
     isError: false,
   },
   {
     kind: "tool_result",
     ts: "2026-03-11T15:21:19.035Z",
     toolUseId: "item_2",
-    content: "command: sed -n '1,320p' doc/SPEC-implementation.md\nstatus: completed\nexit_code: 0\n\n# Myrmidon V1 Implementation Spec\n\nPaperclip V1 must provide a full control-plane loop for autonomous agents.",
+    content: "command: sed -n '1,320p' doc/SPEC-implementation.md\nstatus: completed\nexit_code: 0\n\n# Myrmidon V1 Implementation Spec\n\nMyrmidon V1 must provide a full control-plane loop for autonomous agents.",
     isError: false,
   },
   {

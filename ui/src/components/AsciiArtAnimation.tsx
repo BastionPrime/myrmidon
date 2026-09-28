@@ -4,6 +4,10 @@ const CHARS = [" ", ".", "·", "▪", "▫", "○"] as const;
 const TARGET_FPS = 24;
 const FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
 
+// myrmidon(B1a): known gap, not a text substitution — these box-drawing
+// sprites are geometry shaped like the vendor's paperclip glyph, rendered on
+// the sign-in screen. Redrawing them as ant sprites needs design input we
+// don't have; see docs/myrmidon/DIVERGENCE.md's B1a known-gaps row.
 const PAPERCLIP_SPRITES = [
   [
     "  ╭────╮ ",

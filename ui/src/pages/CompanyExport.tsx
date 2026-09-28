@@ -23,6 +23,7 @@ import { MarkdownBody } from "../components/MarkdownBody";
 import { toCompanyRelativePath } from "@/lib/company-routes";
 import { cn } from "../lib/utils";
 import { queryKeys } from "../lib/queryKeys";
+import { PRODUCT_NAME, UPSTREAM_ATTRIBUTION } from "@/lib/myrmidon-product"; // myrmidon(B1a)
 import { formatBytes } from "../lib/issue-output";
 import { createZipArchive, estimateZipArchiveSize } from "../lib/zip";
 import {
@@ -490,10 +491,14 @@ function generateReadmeFromSelection(
   lines.push("npx paperclipai company import this-github-url-or-folder");
   lines.push("```");
   lines.push("");
-  lines.push("See [Paperclip](https://paperclip.ing) for more information.");
+  // myrmidon(B1a): this file is exported for the recipient to read standalone,
+  // so it names the exporting product (not the upstream project) and carries
+  // its own MIT attribution line rather than pointing to paperclip.ing as "us".
+  lines.push("See the [Agent Company format](https://paperclip.ing) for more information.");
   lines.push("");
   lines.push("---");
-  lines.push(`Exported from [Paperclip](https://paperclip.ing) on ${new Date().toISOString().split("T")[0]}`);
+  lines.push(`Exported from ${PRODUCT_NAME} on ${new Date().toISOString().split("T")[0]}`);
+  lines.push(`[${UPSTREAM_ATTRIBUTION.text}](${UPSTREAM_ATTRIBUTION.href})`);
   lines.push("");
 
   return lines.join("\n");
