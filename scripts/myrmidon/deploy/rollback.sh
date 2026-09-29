@@ -12,6 +12,12 @@
 # restore asks to type RESTORE, or takes --yes-restore-database. It runs
 # RESTORE_COMMAND with DUMP_FILE set while the server service is stopped.
 # Maintenance stays on until the old image passes the health check.
+#
+# Rollback is the emergency path and is never blocked by where the target image
+# came from. It does check the target the way deploy.sh checks a new image (a
+# CI image in the registry, built from a commit on origin/main or a myr-v* tag)
+# and prints a WARNING when it is not one: the first rollback from a vendor
+# image, or from an image built by hand, is expected to warn.
 set -euo pipefail
 # shellcheck source=lib.sh source-path=SCRIPTDIR
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -28,7 +34,7 @@ while (($#)); do
     --expect-version) expect_version="$2"; shift 2 ;;
     --expect-commit) expect_commit="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -53,6 +59,12 @@ fi
 [[ "$ref" =~ ^[A-Za-z0-9./_:@-]+$ ]] || die "rollback target is not an image reference: $ref"
 current="$(current_digest)"
 current_ref="$(current_image)"
+
+# Does not block: says loudly when the target is not a verified CI image.
+if ! check_ci_image "$ref"; then
+  log "WARNING: rollback target is not a verified CI image: $CI_CHECK_REASON"
+  log "WARNING: continuing anyway, rollback is the emergency path"
+fi
 
 if [[ -n "$restore_dump" ]]; then
   [[ -n "$RESTORE_COMMAND" ]] || die "RESTORE_COMMAND is not set; cannot restore $restore_dump"

@@ -28,6 +28,139 @@ require_cmd() {
 
 valid_digest() { [[ "$1" =~ ^sha256:[0-9a-f]{64}$ ]]; }
 
+# --- CI-only images ----------------------------------------------------------
+# Only images built by the "Myrmidon image" workflow from main or from a myr-v*
+# tag reach production. deploy.sh refuses anything else before it changes
+# anything; rollback.sh only warns (it is the emergency path). There is
+# deliberately no flag or setting that skips these checks.
+MYR_CI_IMAGE="ghcr.io/itkadr-git/myrmidon"
+MYR_CI_SOURCE="https://github.com/itkadr-git/myrmidon"
+MYR_CI_ORIGIN_RE='(^|[/@])github\.com[:/]itkadr-git/myrmidon(\.git)?/?$'
+MYR_NET_TIMEOUT_SEC=90
+CI_CHECK_REASON=""
+CI_IMAGE_REVISION=""
+CI_IMAGE_VERSION=""
+
+# Runs a network command with a time limit, so a dead registry or remote cannot hang the script.
+with_timeout() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$MYR_NET_TIMEOUT_SEC" "$@"
+  else
+    "$@"
+  fi
+}
+
+# Explains, in one line, why a reference is not exactly $MYR_CI_IMAGE@sha256:<64 hex>.
+image_ref_problem() {
+  local ref="$1" repo digest
+  if [[ -z "$ref" ]]; then
+    echo "no image given: pass the digest of an image built by CI as sha256:<64 hex>"
+  elif [[ "$ref" == *@* ]]; then
+    repo="${ref%@*}"
+    digest="${ref#*@}"
+    if [[ "$repo" != "$MYR_CI_IMAGE" ]]; then
+      echo "image '$repo' is not $MYR_CI_IMAGE: only images built by CI in this repository are deployed"
+    else
+      echo "digest '$digest' must be sha256: followed by 64 lowercase hex characters"
+    fi
+  elif [[ "$ref" == sha256:* ]]; then
+    echo "digest '$ref' must be sha256: followed by 64 lowercase hex characters"
+  else
+    echo "'$ref' has no digest (it is a tag or a name); tags can be moved. CI images are referenced as $MYR_CI_IMAGE@sha256:<64 hex>, the digest is in the CI run summary"
+  fi
+}
+
+# Sets `digest` from a bare sha256:<64 hex> or from $MYR_CI_IMAGE@sha256:<64 hex>; dies on anything else.
+parse_digest_arg() {
+  local arg="$1"
+  if valid_digest "$arg"; then
+    digest="$arg"
+  elif [[ "$arg" == "$MYR_CI_IMAGE@"* ]] && valid_digest "${arg#"$MYR_CI_IMAGE@"}"; then
+    digest="${arg#"$MYR_CI_IMAGE@"}"
+  else
+    die "$(image_ref_problem "$arg")"
+  fi
+}
+
+# Checks that a commit is on origin/main or carries a release tag myr-v<x>.<y>.<z>, using the git
+# clone that holds these scripts. Sets CI_CHECK_REASON and returns 1 when it cannot say yes.
+commit_is_reviewed() {
+  local rev="$1" clone url tags sha name
+  local tag_re='^refs/tags/myr-v[0-9]+\.[0-9]+\.[0-9]+(\^\{\})?$'
+  if ! command -v git >/dev/null 2>&1; then
+    CI_CHECK_REASON="git is not installed, so commit ${rev:0:12} cannot be checked against main; run the script from a git clone of itkadr-git/myrmidon"
+    return 1
+  fi
+  if ! clone="$(git -C "$MYR_SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)" || [[ -z "$clone" ]]; then
+    CI_CHECK_REASON="the deploy scripts are not inside a git clone, so commit ${rev:0:12} cannot be checked against main; run them from a clone of itkadr-git/myrmidon"
+    return 1
+  fi
+  if ! url="$(git -C "$clone" remote get-url origin 2>/dev/null)" || [[ ! "$url" =~ $MYR_CI_ORIGIN_RE ]]; then
+    CI_CHECK_REASON="remote 'origin' of the clone does not point to github.com/itkadr-git/myrmidon, so main cannot be trusted"
+    return 1
+  fi
+  if ! GIT_TERMINAL_PROMPT=0 with_timeout git -C "$clone" fetch --quiet --no-tags origin '+refs/heads/main:refs/remotes/origin/main' >/dev/null 2>&1; then
+    CI_CHECK_REASON="git fetch origin main failed (no network or no access?), so commit ${rev:0:12} cannot be checked against main"
+    return 1
+  fi
+  if git -C "$clone" merge-base --is-ancestor "$rev" refs/remotes/origin/main >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! tags="$(GIT_TERMINAL_PROMPT=0 with_timeout git -C "$clone" ls-remote --tags origin 'refs/tags/myr-v*' 2>/dev/null)"; then
+    CI_CHECK_REASON="commit ${rev:0:12} is not on origin/main and the release tags of origin could not be read"
+    return 1
+  fi
+  # An annotated tag is listed twice; the line ending in ^{} carries the commit.
+  while read -r sha name; do
+    if [[ "$sha" == "$rev" && "$name" =~ $tag_re ]]; then
+      return 0
+    fi
+  done <<<"$tags"
+  CI_CHECK_REASON="commit ${rev:0:12} of the image is neither on origin/main nor tagged myr-v*: it was built from a branch or from code that never went through a PR"
+  return 1
+}
+
+# The whole check for one image reference (registry, labels, commit). Returns 0 when
+# the image is a CI image; otherwise sets CI_CHECK_REASON and returns 1.
+check_ci_image() {
+  local ref="$1" out err rc=0 labels revision image_source
+  CI_CHECK_REASON="" CI_IMAGE_REVISION="" CI_IMAGE_VERSION=""
+
+  if [[ "$ref" != *@* || "${ref%@*}" != "$MYR_CI_IMAGE" ]] || ! valid_digest "${ref#*@}"; then
+    CI_CHECK_REASON="$(image_ref_problem "$ref")"
+    return 1
+  fi
+
+  # Reads the manifest and config from the registry without pulling the layers. A
+  # locally built image is not there.
+  err="$(mktemp)"
+  out="$(with_timeout docker buildx imagetools inspect "$ref" --format '{{json .Image}}' 2>"$err")" || rc=$?
+  if ((rc != 0)); then
+    out="$(tail -n1 "$err")"
+    out="${out#ERROR: }"
+    CI_CHECK_REASON="$ref cannot be read from the registry (never pushed there, deleted, or the registry is unreachable): ${out#"$ref": }"
+    rm -f "$err"
+    return 1
+  fi
+  rm -f "$err"
+
+  labels="$(jq -c '[.. | objects | select(has("Labels")) | .Labels | select(type == "object")] | first // {}' <<<"$out" 2>/dev/null)" || labels="{}"
+  revision="$(jq -r '."org.opencontainers.image.revision" // ""' <<<"$labels" 2>/dev/null)" || revision=""
+  image_source="$(jq -r '."org.opencontainers.image.source" // ""' <<<"$labels" 2>/dev/null)" || image_source=""
+  CI_IMAGE_VERSION="$(jq -r '."org.opencontainers.image.version" // ""' <<<"$labels" 2>/dev/null)" || CI_IMAGE_VERSION=""
+
+  if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+    CI_CHECK_REASON="$ref has no org.opencontainers.image.revision label with a full commit sha, so it was not built by the CI image workflow"
+    return 1
+  fi
+  if [[ "$image_source" != "$MYR_CI_SOURCE" ]]; then
+    CI_CHECK_REASON="$ref has org.opencontainers.image.source '${image_source:-<none>}', expected $MYR_CI_SOURCE: it was not built by the CI image workflow"
+    return 1
+  fi
+  CI_IMAGE_REVISION="$revision"
+  commit_is_reviewed "$revision"
+}
+
 # Loads the settings file (see deploy.env.example) and applies defaults.
 load_config() {
   local file="$1"
