@@ -60,6 +60,10 @@ describe("docker/bot-runtime/Dockerfile", () => {
     assert.match(dockerfile, /^ENTRYPOINT \["\/usr\/bin\/tini", "--",/m);
   });
 
+  it("installs the ssh client without recommended packages", () => {
+    assert.match(dockerfileInstructions, /--no-install-recommends[\s\S]*?\bopenssh-client\b/);
+  });
+
   it("declares a HEALTHCHECK against a real gateway endpoint", () => {
     assert.match(dockerfile, /^HEALTHCHECK /m);
     // gateway/platforms/api_server.py: GET /health needs no auth; GET

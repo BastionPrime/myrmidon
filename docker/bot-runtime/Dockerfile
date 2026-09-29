@@ -205,7 +205,8 @@ LABEL org.opencontainers.image.title="myrmidon-hermes" \
       myrmidon.bot-runtime.contract="1"
 
 # ripgrep: hermes' file-search tool shells out to `rg`. git: workspace tools
-# (status/diff/commit) for coding-agent bots. curl: HEALTHCHECK only.
+# (status/diff/commit) for coding-agent bots. curl: HEALTHCHECK only. openssh-client:
+# key-based ssh from a bot (-i <tmp key>, -o UserKnownHostsFile=<writable dir>).
 # No media tools (ffmpeg, yt-dlp, ...): forbidden by docs/myrmidon/CONVENTIONS.md §8
 # and out of scope — media handling is a separate service outside this image.
 RUN apt-get update \
@@ -213,6 +214,7 @@ RUN apt-get update \
     ca-certificates \
     curl \
     git \
+    openssh-client \
     ripgrep \
     tini \
   && rm -rf /var/lib/apt/lists/*
