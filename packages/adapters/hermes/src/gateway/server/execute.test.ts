@@ -889,8 +889,13 @@ describe("execute — operator cancellation (G4)", () => {
     // The mirror image of the test above: fetchFinalStatus never observes a
     // terminal Hermes status (the GET keeps failing), so the adapter must
     // not claim "acknowledged" — an honest "unverified" lets the platform's
-    // own 409 stand instead of a false all-clear.
+    // own 409 stand instead of a false all-clear. It only gives up once
+    // STOP_GRACE_MS is used up, not on the first failed GET, hence the fake
+    // clock: the real one would make this test sit out the whole grace period.
+    vi.useFakeTimers();
     const controller = new AbortController();
+    let stopped = false;
+    let statusChecksAfterStop = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/v1/runs")) {
@@ -900,8 +905,68 @@ describe("execute — operator cancellation (G4)", () => {
         controller.abort();
         return new Promise<Response>(() => {});
       }
-      if (url.endsWith("/stop")) return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
-      if (init?.method === "GET") return new Response(JSON.stringify({ error: "unreachable" }), { status: 503 });
+      if (url.endsWith("/stop")) {
+        stopped = true;
+        return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      }
+      if (init?.method === "GET") {
+        if (stopped) statusChecksAfterStop += 1;
+        return new Response(JSON.stringify({ error: "unreachable" }), { status: 503 });
+      }
+      return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+    ctx.signal = controller.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    let settled = false;
+    const resultPromise = execute(ctx).finally(() => {
+      settled = true;
+    });
+    for (let advanced = 0; !settled && advanced <= 2 * STOP_GRACE_MS; advanced += 500) {
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    const result = await resultPromise;
+    vi.useRealTimers();
+
+    expect(result.errorCode).toBe("hermes_gateway_cancelled");
+    expect(result.resultJson?.executionCancellation).toBeUndefined();
+    // Kept asking for the whole grace period instead of giving up on the
+    // first failed check.
+    expect(statusChecksAfterStop).toBeGreaterThan(2);
+  });
+
+  it("keeps polling the run status after one failed check and confirms the stop once a later check sees it terminal", async () => {
+    // myrmidon(G4): fetchFinalStatus used to `return null` on the first
+    // thrown GET (a 5xx, or its own request timeout), so a single blip
+    // dropped the confirmation, the platform's Stop 409'd, and the run went
+    // to manual reconciliation although the very next check would have seen
+    // the run stopped.
+    const controller = new AbortController();
+    let stopped = false;
+    let statusChecksAfterStop = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-cancel-blip", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        controller.abort();
+        return new Promise<Response>(() => {});
+      }
+      if (url.endsWith("/stop")) {
+        stopped = true;
+        return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      }
+      if (init?.method === "GET" && stopped) {
+        statusChecksAfterStop += 1;
+        if (statusChecksAfterStop === 1) {
+          return new Response(JSON.stringify({ error: "unreachable" }), { status: 503 });
+        }
+        return new Response(JSON.stringify({ status: "cancelled", last_event: "run.cancelled" }), { status: 200 });
+      }
       return new Response(JSON.stringify({ status: "running" }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -912,8 +977,13 @@ describe("execute — operator cancellation (G4)", () => {
 
     const result = await execute(ctx);
 
+    expect(statusChecksAfterStop).toBe(2);
     expect(result.errorCode).toBe("hermes_gateway_cancelled");
-    expect(result.resultJson?.executionCancellation).toBeUndefined();
+    expect(result.resultJson?.status).toBe("cancelled");
+    expect(result.resultJson?.executionCancellation).toMatchObject({
+      state: "acknowledged",
+      forced: false,
+    });
   });
 
   it("acknowledges cancellation without creating a run when ctx.signal is already aborted", async () => {
@@ -999,12 +1069,21 @@ describe("execute — operator cancellation (G4)", () => {
     ctx.onCancellationReady = vi.fn(async () => undefined);
 
     const before = Date.now();
-    const resultPromise = execute(ctx);
-    // First /stop's own request timeout, then fetchFinalStatus's GET's.
-    await vi.advanceTimersByTimeAsync(STOP_REQUEST_TIMEOUT_MS);
-    await vi.advanceTimersByTimeAsync(STOP_GRACE_MS);
+    const timing = { finishedAt: null as number | null };
+    const resultPromise = execute(ctx).then((value) => {
+      timing.finishedAt = Date.now();
+      return value;
+    });
+    // The /stop request times out first, then each of fetchFinalStatus's GETs
+    // in turn until STOP_GRACE_MS is used up (a failed check no longer ends
+    // the confirmation early), so the last GET can start just inside the
+    // deadline and still run out its own request timeout.
+    const worstCaseMs = STOP_REQUEST_TIMEOUT_MS + STOP_GRACE_MS + STOP_REQUEST_TIMEOUT_MS;
+    for (let advanced = 0; timing.finishedAt === null && advanced <= worstCaseMs; advanced += 500) {
+      await vi.advanceTimersByTimeAsync(500);
+    }
     const result = await resultPromise;
-    const elapsedMs = Date.now() - before;
+    const elapsedMs = (timing.finishedAt ?? Date.now()) - before;
 
     stopTimeouts.restore();
     vi.useRealTimers();
@@ -1015,6 +1094,7 @@ describe("execute — operator cancellation (G4)", () => {
       expect((signal.reason as DOMException | undefined)?.name).toBe("TimeoutError");
     }
     expect(elapsedMs).toBeLessThan(60_000);
+    expect(elapsedMs).toBeLessThanOrEqual(worstCaseMs);
     expect(result.errorCode).toBe("hermes_gateway_cancelled");
     // Every /stop and status-check request timed out — fetchFinalStatus
     // never observed a terminal Hermes status, so termination is
@@ -1104,8 +1184,20 @@ describe("execute — operator cancellation (G4)", () => {
     expect(createSignals[0]?.aborted).toBe(true);
     expect(createTimeouts.signals.length).toBe(1);
     expect((createTimeouts.signals[0]?.reason as DOMException | undefined)?.name).toBe("TimeoutError");
-    expect(result.timedOut).toBe(true);
+    // myrmidon(G4): not timedOut — the platform turns timedOut into outcome
+    // "timed_out" and overwrites errorCode with a bare "timeout", which would
+    // lose this code and present a 15s create failure as a timeout of the
+    // whole run. As a plain failure (non-zero exit, error message, no
+    // signal) the adapter's own errorCode is what gets recorded.
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.signal).toBeNull();
     expect(result.errorCode).toBe("hermes_gateway_create_timeout");
+    expect(result.errorFamily).toBe("transient_upstream");
+    expect(result.errorMessage).toContain(`${CREATE_REQUEST_TIMEOUT_MS}ms`);
+    // No recovery evidence: Hermes may already have admitted the run under
+    // this Idempotency-Key, so the platform must keep holding any automatic
+    // retry for reconciliation (legacyExecutionNeedsReconciliation).
     expect(result.executionRecovery).toBeUndefined();
     expect(result.resultJson?.executionCancellation).toBeUndefined();
   });
@@ -1444,6 +1536,116 @@ describe("execute — approval auto-deny (G4)", () => {
     expect(result.exitCode).toBe(0);
     const logText = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line)).join("\n");
     expect(logText).toContain("approval auto-deny request failed");
+  });
+});
+
+describe("execute — subagent lifecycle events (G4)", () => {
+  // Hermes forwards subagent.start / subagent.complete on the run's event
+  // stream, and subagent.complete carries the child's own `status`
+  // (completed / failed / interrupted / error). The delegating parent run
+  // keeps going afterwards; only run.<status> ends it. Frames below use the
+  // real wire shape: data-only, the event name inside the JSON.
+  const dataFrame = (payload: Record<string, unknown>): string => `data: ${JSON.stringify(payload)}\n\n`;
+
+  it.each(["completed", "failed", "interrupted", "error"])(
+    "does not end the run on a subagent.complete with status %s; only run.* events are terminal",
+    async (childStatus) => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/v1/runs")) {
+          return new Response(JSON.stringify({ run_id: "run-subagent-1", status: "started" }), { status: 200 });
+        }
+        if (url.endsWith("/events")) {
+          return new Response(
+            sseStream(
+              [
+                dataFrame({ event: "message.delta", run_id: "run-subagent-1", delta: "Before the subagent." }),
+                dataFrame({ event: "subagent.start", run_id: "run-subagent-1", subagent_id: "child-1", goal: "look it up" }),
+                dataFrame({
+                  event: "subagent.complete",
+                  run_id: "run-subagent-1",
+                  subagent_id: "child-1",
+                  status: childStatus,
+                  summary: "child result",
+                  duration_seconds: 1.5,
+                }),
+                // Arrives after the first subagent finished: the run is not over.
+                dataFrame({ event: "message.delta", run_id: "run-subagent-1", delta: "After the subagent." }),
+                dataFrame({ event: "run.completed", run_id: "run-subagent-1", timestamp: 1 }),
+              ].join(""),
+            ),
+            { status: 200, headers: { "content-type": "text/event-stream" } },
+          );
+        }
+        return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await execute(makeCtx({
+        apiBaseUrl: "http://127.0.0.1:8642",
+        apiKey: "secret-key",
+        timeoutSec: 5,
+      }));
+
+      // Ended on run.completed, not on the child's status: a failed or
+      // interrupted child does not fail the parent run, and the output is
+      // the whole reply, including what came after the subagent.
+      expect(result.exitCode).toBe(0);
+      expect(result.errorCode).toBeUndefined();
+      expect(result.resultJson?.last_event).toBe("run.completed");
+      expect(result.resultJson?.status).toBe("completed");
+      expect(result.summary).toContain("Before the subagent.");
+      expect(result.summary).toContain("After the subagent.");
+      expect(result.summary).not.toContain("child result");
+    },
+  );
+
+  it("keeps supervising the run after a subagent.complete, so a later operator cancellation still stops it", async () => {
+    // Before, the child's `status: "completed"` ended execute() with the
+    // partial output: /stop was never called, the Hermes run went on
+    // unsupervised, and a cancellation in that window could be acknowledged
+    // for a run that was not stopped.
+    const opCancel = new AbortController();
+    let stopCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-subagent-2", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        // One subagent.complete, then the stream stays open: the parent run
+        // is still going. The operator cancels shortly after.
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                dataFrame({ event: "subagent.complete", run_id: "run-subagent-2", status: "completed", summary: "child result" }),
+              ),
+            );
+          },
+        });
+        setTimeout(() => opCancel.abort(), 50);
+        return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      if (url.endsWith("/stop")) {
+        stopCalls += 1;
+        return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: stopCalls > 0 ? "cancelled" : "running" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+    ctx.signal = opCancel.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    const result = await execute(ctx);
+
+    expect(stopCalls).toBe(1);
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("hermes_gateway_cancelled");
+    expect(result.resultJson?.last_event).toBe("subagent.complete");
+    expect(result.resultJson?.executionCancellation).toMatchObject({ state: "acknowledged", forced: false });
   });
 });
 

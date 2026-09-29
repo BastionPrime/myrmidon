@@ -882,7 +882,15 @@ async function handleEvent(input: {
     await denyApproval({ ctx, state, record, baseUrl, headers: approvalHeaders, redactText });
   }
 
-  const status = extractStatus(parsed) ?? (eventName?.startsWith("run.") ? eventName.slice(4) : null);
+  // myrmidon(G4): only a run.* event can end the run. Hermes forwards a
+  // per-child "status" (completed/failed/interrupted/error) on
+  // subagent.start/subagent.complete events, and the delegating parent run
+  // keeps going after its first child finishes — reading `status` off any
+  // event would end this execution on the first subagent with partial output,
+  // leave the Hermes run unsupervised, and let the cancellation branch
+  // acknowledge a stop that never happened. The real terminal events are
+  // run.<status> (completed/failed/cancelled/interrupted).
+  const status = eventName?.startsWith("run.") ? (extractStatus(parsed) ?? eventName.slice(4)) : null;
   if (status && TERMINAL_STATUSES.has(status)) {
     if (!debugEvents) await flushCompactDeltaLines(ctx, state, { final: true });
     markTerminal(state, {
@@ -1159,7 +1167,10 @@ async function fetchFinalStatus(input: {
       const normalized = extractStatus(status);
       if (normalized && TERMINAL_STATUSES.has(normalized)) return record;
     } catch {
-      return null;
+      // myrmidon(G4): one failed GET (a 5xx, or the STOP_REQUEST_TIMEOUT_MS
+      // guard above firing) says nothing about the run — keep polling until
+      // the deadline, so a stop that lands a moment later is still confirmed
+      // instead of the whole verification giving up on the first blip.
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -1471,11 +1482,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       // cancelled outcomes) but, unlike the before-dispatch branch, carries
       // neither executionCancellation nor executionRecovery: the outcome is
       // unverified. A create that merely timed out gets its own code.
+      // timedOut stays false in both cases: the platform maps timedOut to
+      // outcome "timed_out" and overwrites the run's errorCode with a bare
+      // "timeout", which would both drop hermes_gateway_create_timeout and
+      // present a 15s create failure as a timeout of the whole run (even
+      // with timeoutSec=1800). As a plain failure the adapter's errorCode is
+      // kept; with no executionRecovery evidence the platform still holds
+      // any automatic retry for reconciliation, as for any other create
+      // failure that may have reached Hermes.
       const cancelled = Boolean(ctx.signal?.aborted);
       return {
         exitCode: 1,
         signal: cancelled ? "SIGTERM" : null,
-        timedOut: !cancelled,
+        timedOut: false,
         errorCode: cancelled ? "hermes_gateway_cancelled" : "hermes_gateway_create_timeout",
         errorMessage: cancelled
           ? "Hermes gateway run was cancelled while POST /v1/runs was still in flight; whether Hermes accepted it could not be confirmed."
