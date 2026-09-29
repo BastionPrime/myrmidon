@@ -2764,3 +2764,6 @@ export * from "./ai-connections.js";
 export * from "./types/email.js";
 export * from "./validators/email.js";
 export * from "./announcements.js";
+
+// myrmidon(C0): live run-admission limits shared by the server, the UI and the settings validator.
+export * from "./myrmidon-runtime-limits.js";

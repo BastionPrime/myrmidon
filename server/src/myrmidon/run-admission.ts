@@ -1,4 +1,9 @@
 import { readFileSync } from "node:fs";
+import {
+  RUN_LIMITS_ENV_KEYS,
+  readRunLimitsFromEnv,
+  type RunLimits,
+} from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 
 /**
@@ -29,39 +34,21 @@ import { logger } from "../middleware/logger.js";
  * without awaiting anything, so two agents cannot both take the last slot.
  */
 
-export const MAX_CONCURRENT_RUNS_ENV = "MYRMIDON_MAX_CONCURRENT_RUNS";
-export const MAX_RUN_STARTS_PER_MINUTE_ENV = "MYRMIDON_MAX_RUN_STARTS_PER_MINUTE";
-export const MIN_FREE_MEMORY_MB_ENV = "MYRMIDON_MIN_FREE_MEMORY_MB";
-export const RUN_MEMORY_ESTIMATE_MB_ENV = "MYRMIDON_RUN_MEMORY_ESTIMATE_MB";
+export const MAX_CONCURRENT_RUNS_ENV = RUN_LIMITS_ENV_KEYS.maxConcurrentRuns;
+export const MAX_RUN_STARTS_PER_MINUTE_ENV = RUN_LIMITS_ENV_KEYS.maxStartsPerMinute;
+export const MIN_FREE_MEMORY_MB_ENV = RUN_LIMITS_ENV_KEYS.minFreeMemoryMb;
+export const RUN_MEMORY_ESTIMATE_MB_ENV = RUN_LIMITS_ENV_KEYS.runMemoryEstimateMb;
 
-const DEFAULT_RUN_MEMORY_ESTIMATE_MB = 300;
 const START_WINDOW_MS = 60_000;
 // A run started this recently has not grown into the cgroup memory yet.
 const MEMORY_SETTLE_MS = 30_000;
 const MB = 1024 * 1024;
 
-function readLimit(env: NodeJS.ProcessEnv, key: string): number | null {
-  const raw = env[key]?.trim();
-  if (!raw) return null;
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) return null;
-  return value;
-}
+export type RunAdmissionLimits = RunLimits;
 
-export interface RunAdmissionLimits {
-  maxConcurrentRuns: number | null;
-  maxStartsPerMinute: number | null;
-  minFreeMemoryMb: number | null;
-  runMemoryEstimateMb: number;
-}
-
+/** The limits as the environment declares them, with the built-in defaults. */
 export function readRunAdmissionLimits(env: NodeJS.ProcessEnv = process.env): RunAdmissionLimits {
-  return {
-    maxConcurrentRuns: readLimit(env, MAX_CONCURRENT_RUNS_ENV),
-    maxStartsPerMinute: readLimit(env, MAX_RUN_STARTS_PER_MINUTE_ENV),
-    minFreeMemoryMb: readLimit(env, MIN_FREE_MEMORY_MB_ENV),
-    runMemoryEstimateMb: readLimit(env, RUN_MEMORY_ESTIMATE_MB_ENV) ?? DEFAULT_RUN_MEMORY_ESTIMATE_MB,
-  };
+  return readRunLimitsFromEnv(env);
 }
 
 /** Why the memory guard cannot see a limit; `reason` goes to the log verbatim. */
@@ -150,6 +137,15 @@ export interface RunAdmission {
   syncRunning(running: number): void;
   /** True when the last `reserve` gave fewer slots than wanted because of a limit. */
   limited(): boolean;
+  /**
+   * Replace the limits in force. Written into the object `reserve` reads, so
+   * the next reservation sees the new ceiling without a restart (no run in
+   * flight has to be dropped) and without re-creating the singleton, which
+   * would lose the running count and the start window.
+   */
+  updateLimits(next: RunAdmissionLimits): void;
+  /** The limits in force right now, as a copy. */
+  limits(): RunAdmissionLimits;
 }
 
 export function createRunAdmission(options: {
@@ -216,6 +212,15 @@ export function createRunAdmission(options: {
     limited() {
       return lastLimited;
     },
+    updateLimits(next) {
+      limits.maxConcurrentRuns = next.maxConcurrentRuns;
+      limits.maxStartsPerMinute = next.maxStartsPerMinute;
+      limits.minFreeMemoryMb = next.minFreeMemoryMb;
+      limits.runMemoryEstimateMb = next.runMemoryEstimateMb;
+    },
+    limits() {
+      return { ...limits };
+    },
   };
 }
 
@@ -278,4 +283,21 @@ export function sharedRunAdmission(): RunAdmission {
 export function resetSharedRunAdmissionForTests(): void {
   shared = null;
   memoryLimitWarningLogged = false;
+}
+
+/**
+ * Put limits in force on the process-wide admission (myrmidon C0,
+ * RUNTIME-LIMITS). The server calls this at startup, after reading
+ * `instance_settings.general.runLimits`, and again on every settings write, so
+ * a changed ceiling reaches the queue without a restart. Called before any
+ * route has touched the admission, it creates the singleton with these values
+ * instead of the environment ones.
+ */
+export function applyRunAdmissionLimits(limits: RunAdmissionLimits): void {
+  sharedRunAdmission().updateLimits(limits);
+}
+
+/** The limits the process-wide admission enforces right now. */
+export function currentRunAdmissionLimits(): RunAdmissionLimits {
+  return sharedRunAdmission().limits();
 }
