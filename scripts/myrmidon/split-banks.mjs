@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // myrmidon(MEMORY-ISOLATION): the split-banks transfer tool. Splits a shared
 // hindsight bank into per-direction banks (adm/fleet-bbq/fleet-work/...) by
-// moving whole documents, per the memory-isolation project (OPE-3132, §5.5).
+// moving whole documents, per the memory-isolation project (section 5.5).
 //
 // Steps, each with --dry-run, each idempotent (state in a JSON file, a repeat
 // does not duplicate):
