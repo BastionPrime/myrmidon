@@ -75,6 +75,12 @@ export interface IssueWriteDenialContext {
   count?: number | null;
   /** ISO timestamp at which log-only rollout becomes enforcement. */
   enforceAt?: string | null;
+  /**
+   * The heartbeat run backing an `issue_write_assignee_run_lock` denial
+   * (myrmidon L5): named in the copy so "a run is live" is a verifiable
+   * claim, not just a status-derived one.
+   */
+  liveRunId?: string | null;
 }
 
 export function isIssueWriteDenialCode(
@@ -203,7 +209,12 @@ export function describeIssueWriteDenial(
       };
     }
 
-    case "issue_write_assignee_run_lock":
+    case "issue_write_assignee_run_lock": {
+      // myrmidon(L5): name the live run so this claim is checkable, not just
+      // asserted — the caller only reaches this code once it has confirmed
+      // that run is still non-terminal (running/queued/scheduled_retry, see
+      // issue-write-run-lock.ts).
+      const liveRunNote = context.liveRunId ? ` (run ${context.liveRunId})` : "";
       return {
         code,
         status: 409,
@@ -211,7 +222,7 @@ export function describeIssueWriteDenial(
         boundary: "Run checkout lock",
         title: "Another agent's run owns this task",
         description:
-          `${assignee} has ${issue} checked out and a run is live. Checkout and run ` +
+          `${assignee} has ${issue} checked out and a run is live${liveRunNote}. Checkout and run ` +
           `ownership stay assignee-scoped even though writes are open, so field edits ` +
           `belong to the run that holds the lock until it finishes.`,
         whoCanAct:
@@ -220,6 +231,7 @@ export function describeIssueWriteDenial(
           `Comment instead of patching — comments stay open and wake ${assignee} — or ` +
           `wait for the run to release the lock and retry.`,
       };
+    }
 
     case "cross_issue_influence_cap_exceeded": {
       const cap = context.cap ?? 20;

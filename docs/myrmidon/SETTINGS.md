@@ -46,6 +46,7 @@
 | `MYRMIDON_TOOL_BREAKER_WINDOW_MS` | P9 | `600000` | Окно, в котором считаются сбои одного инструмента | — |
 | `MYRMIDON_TOOL_TIMEOUT_MAX_MS` | P9 | `180000` | Потолок бюджета одного вызова инструмента (у вендора 60 с) | — |
 | `MYRMIDON_TOOL_TIMEOUT_SLOW_MS` | P9 | `45000` | Бюджет по умолчанию для навигационных инструментов (`navigate`, `goto`, `click`, `type`, `fill`, `press`, `reload`, `wait` в имени); остальные — 10 с, как у вендора | На подключении: `config.toolTimeouts` — бюджет по имени инструмента |
+| `MYRMIDON_WRITE_LOCK_REQUIRES_LIVE_RUN` | L5 | `1` | 409 `issue_write_assignee_run_lock` требует, чтобы `checkoutRunId`/`executionRunId` задачи указывал на прогон в статусе `running`, `queued` или `scheduled_retry` (вендорская тройка «не terminal», см. `EXECUTION_PATH_HEARTBEAT_RUN_STATUSES`/`CANCELLABLE_HEARTBEAT_RUN_STATUSES`), а не только на статус задачи `in_progress` | `0`/`false` — прежняя блокировка по одному статусу `in_progress`, живость прогона не проверяется. Как выдать `tasks:manage_active_checkouts` (обход блокировки) конфигом — `docs/myrmidon/design/issue-write-lock.md` |
 
 ## Трек 4 — чаты и навыки
 

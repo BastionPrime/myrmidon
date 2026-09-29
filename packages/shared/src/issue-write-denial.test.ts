@@ -107,6 +107,21 @@ describe("describeIssueWriteDenial", () => {
     expect(copy.sanctionedPath).toContain("CodexCoder");
   });
 
+  // myrmidon(L5): the run lock only fires once the caller has confirmed a
+  // live run, so the 409 names it — making "a run is live" checkable.
+  it("names the live run in the run-lock description when given one", () => {
+    const withRun = describeIssueWriteDenial("issue_write_assignee_run_lock", {
+      assigneeLabel: "CodexCoder",
+      liveRunId: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(withRun.description).toContain("11111111-1111-4111-8111-111111111111");
+
+    const withoutRun = describeIssueWriteDenial("issue_write_assignee_run_lock", {
+      assigneeLabel: "CodexCoder",
+    });
+    expect(withoutRun.description).not.toMatch(/undefined|null/);
+  });
+
   it("reuses responsible-user ceiling copy and keeps on-behalf-of terminology", () => {
     const ceiling = describeIssueWriteDenial("issue_write_responsible_user_ceiling", {
       responsibleUserName: "Dotta",
