@@ -10,9 +10,10 @@
 // reads only the `container` sub-object of the card, not the whole adapterConfig
 // (which can carry a long instructions text and env bindings): reconcile needs
 // nothing else, and everything else about the bot is read by the profile
-// compiler by agent id. `container.enabled` is compared as the JSON text `true`,
-// so a string "true" or a number does not qualify, exactly like
-// readBotContainerAgentConfig, which the sweep applies to each row afterwards.
+// compiler by agent id. `container.enabled` is compared as the jsonb value `true`
+// (not as extracted text, which would also match the string "true"), so a string
+// or a number does not qualify, exactly like readBotContainerAgentConfig, which
+// the sweep applies to each row afterwards.
 
 import { agents, type Db } from "@paperclipai/db";
 import { and, eq, ne, sql } from "drizzle-orm";
@@ -36,7 +37,7 @@ export function listBotContainerAgents(db: Db): () => Promise<BotContainerAgent[
         and(
           eq(agents.adapterType, HERMES_GATEWAY_ADAPTER_TYPE),
           ne(agents.status, "terminated"),
-          sql`${agents.adapterConfig} #>> '{container,enabled}' = 'true'`,
+          sql`${agents.adapterConfig} #> '{container,enabled}' = 'true'::jsonb`,
         ),
       );
     return rows.map((row) => ({

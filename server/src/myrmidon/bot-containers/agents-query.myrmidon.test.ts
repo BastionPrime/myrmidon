@@ -41,7 +41,7 @@ describe("listBotContainerAgents query shape", () => {
     expect(rendered.params).toEqual(["hermes_gateway", "terminated"]);
     expect(rendered.sql).toMatch(/"adapter_type" = \$1/);
     expect(rendered.sql).toMatch(/"status" <> \$2/);
-    expect(rendered.sql).toMatch(/"adapter_config" #>> '\{container,enabled\}' = 'true'/);
+    expect(rendered.sql).toMatch(/"adapter_config" #> '\{container,enabled\}' = 'true'::jsonb/);
   });
 
   it("reads the container sub-object, not the whole adapterConfig", async () => {
