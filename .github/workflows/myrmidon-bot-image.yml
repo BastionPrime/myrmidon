@@ -86,7 +86,9 @@ jobs:
             org.opencontainers.image.source=https://github.com/itkadr-git/myrmidon
             org.opencontainers.image.licenses=MIT
 
-      # PR: docker build only, no push — just a "does it build" check.
+      # PR: docker build only, no push — a "does it build" check. The image is
+      # loaded into the runner's local daemon (never pushed) so the next step can
+      # check the finished image's own metadata instead of trusting the Dockerfile.
       - name: Build (pull request, no push)
         if: ${{ github.event_name == 'pull_request' }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
@@ -94,9 +96,25 @@ jobs:
           context: docker/bot-runtime
           platforms: linux/amd64
           labels: ${{ steps.meta.outputs.labels }}
+          tags: myrmidon-hermes:pr-check
           push: false
-          load: false
+          load: true
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+
+      # The G3 container driver refuses to create a container from an image that does
+      # not carry this label, and the `labels:` input above is merged with the
+      # Dockerfile's LABELs — check the finished image, not the source, and that the
+      # runtime stage really has uv (hermes' lazy installs shell out to it).
+      - name: Check the bot-runtime contract on the built image
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          got="$(docker image inspect --format '{{ index .Config.Labels "myrmidon.bot-runtime.contract" }}' myrmidon-hermes:pr-check)"
+          if [ "$got" != "1" ]; then
+            echo "::error::built image carries myrmidon.bot-runtime.contract='$got', expected '1'"
+            exit 1
+          fi
+          docker run --rm --entrypoint uv myrmidon-hermes:pr-check --version
 
       # push to main / myr-v* tag: build, push by digest, tag after.
       - name: Build and push by digest

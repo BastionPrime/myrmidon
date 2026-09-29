@@ -169,6 +169,15 @@ describe("myrmidon-bot-image.yml", () => {
     assert.match(workflow, /push: false/);
   });
 
+  it("checks the built image's own bot-runtime contract label on pull requests, without pushing it", () => {
+    // The pull-request build is loaded locally (never pushed) so the finished image's
+    // metadata can be inspected — the `labels:` input is merged with the Dockerfile's
+    // LABELs, and only the built image shows what the G3 driver would actually see.
+    assert.match(workflow, /tags: myrmidon-hermes:pr-check\n\s+push: false\n\s+load: true/);
+    assert.match(workflow, /docker image inspect[^\n]*myrmidon\.bot-runtime\.contract[^\n]*myrmidon-hermes:pr-check/);
+    assert.match(workflow, /docker run --rm --entrypoint uv myrmidon-hermes:pr-check --version/);
+  });
+
   it("builds on push to main and myr-v* tags", () => {
     assert.match(workflow, /branches: \[main\]/);
     assert.match(workflow, /tags: \["myr-v\*"\]/);
