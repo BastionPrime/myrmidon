@@ -28,10 +28,11 @@
 // A `paused` assignee is exempt from all of the above: pausing is not
 // stranding. L3's pause-drain (`../../myrmidon/pause-drain.ts`) leaves
 // in-progress work exactly where it is and wakes it itself
-// (`resumeAgentAfterPause`) once the agent resumes, so this policy takes no
-// action at all — no retry wake (which would just throw: paused is not
-// invokable), no manager handoff, no board card — while the assignee is
-// paused.
+// (`resumeAgentAfterPause`) once the agent resumes, so this policy adds
+// nothing of its own while the assignee is paused — no retry wake (which
+// would just throw: paused is not invokable) and no manager handoff — and
+// the vendor's own handling of a non-invokable assignee applies unchanged,
+// as it did before this policy existed (`vendor_default`).
 //
 // The attempt count is derived from persisted heartbeat runs tagged with
 // `STRANDED_AUTO_POLICY_RETRY_SOURCE`, not a separate mutable counter, so
@@ -131,7 +132,19 @@ export function decideStrandedAutoPolicy(input: {
   attemptsInWindow: number;
   maxAttemptsPerDay: number;
   managerAgentId: string | null;
+  /**
+   * The assignee is operator-paused. Pausing is not stranding: an auto-retry
+   * wake to a paused agent can only throw (paused is not invokable), and a
+   * manager handoff would move the paused agent's active work under review
+   * over something that is not stuck (L3's pause-drain resumes that work
+   * itself). L4 therefore adds nothing here — the decision is the vendor's
+   * own, unchanged handling of a non-invokable assignee.
+   */
+  assigneePaused?: boolean;
 }): StrandedAutoPolicyDecision {
+  if (input.assigneePaused) {
+    return { kind: "vendor_default", attemptsInWindow: input.attemptsInWindow, maxAttemptsPerDay: input.maxAttemptsPerDay };
+  }
   if (input.maxAttemptsPerDay > 0 && input.attemptsInWindow < input.maxAttemptsPerDay) {
     return { kind: "retry", attempt: input.attemptsInWindow + 1, maxAttemptsPerDay: input.maxAttemptsPerDay };
   }

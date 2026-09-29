@@ -3837,22 +3837,24 @@ export function recoveryService(
       // myrmidon(L4): a paused assignee is not stranded — L3's pause-drain
       // (`../../myrmidon/pause-drain.ts`) leaves this exact in-progress work
       // where it is and wakes it itself once the agent resumes
-      // (`resumeAgentAfterPause`). Neither branch below is appropriate here:
+      // (`resumeAgentAfterPause`). Neither L4 branch is appropriate for it:
       // an auto-retry wake would just throw (paused is not invokable), and a
       // manager handoff would move someone else's actively-paused work under
-      // review over something that isn't actually stuck. Stand down as a
-      // true no-op — no wake, no handoff, no board card — and leave the
-      // resume to L3. A terminated or pending_approval assignee is a
-      // genuinely different case (the work really is abandoned) and keeps
-      // going through the branches below.
-      if (assigneeAgent?.companyId === input.issue.companyId && assigneeAgent.status === "paused") {
-        return input.issue;
-      }
-
+      // review over something that isn't actually stuck. `assigneePaused`
+      // makes the decision `vendor_default`, so L4 does nothing of its own
+      // here — no wake, no handoff, no activity row — and the vendor's own
+      // handling of a non-invokable assignee (which its own suite pins,
+      // including the paused-with-a-non-current-wait cases) applies exactly
+      // as it did before L4. A terminated or pending_approval assignee is a
+      // genuinely different case (the work really is abandoned) and is
+      // unaffected by this flag.
+      const assigneePaused =
+        assigneeAgent?.companyId === input.issue.companyId && assigneeAgent.status === "paused";
       const autoPolicyDecision = decideStrandedAutoPolicy({
         attemptsInWindow,
         maxAttemptsPerDay,
         managerAgentId,
+        assigneePaused,
       });
 
       if (autoPolicyDecision.kind === "retry") {

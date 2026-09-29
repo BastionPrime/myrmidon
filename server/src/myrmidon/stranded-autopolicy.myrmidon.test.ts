@@ -121,6 +121,36 @@ describe("decideStrandedAutoPolicy", () => {
     });
   });
 
+  it("adds nothing of its own for a paused assignee, whatever the counter and the manager", () => {
+    // Pausing is not stranding: a retry wake to a paused agent can only
+    // throw, and a manager handoff would take its active work under review.
+    expect(
+      decideStrandedAutoPolicy({
+        attemptsInWindow: 0,
+        maxAttemptsPerDay: 2,
+        managerAgentId: "manager-1",
+        assigneePaused: true,
+      }),
+    ).toEqual({ kind: "vendor_default", attemptsInWindow: 0, maxAttemptsPerDay: 2 });
+    expect(
+      decideStrandedAutoPolicy({
+        attemptsInWindow: 2,
+        maxAttemptsPerDay: 2,
+        managerAgentId: "manager-1",
+        assigneePaused: true,
+      }),
+    ).toEqual({ kind: "vendor_default", attemptsInWindow: 2, maxAttemptsPerDay: 2 });
+    // Not paused (explicitly false or absent) keeps the normal decision.
+    expect(
+      decideStrandedAutoPolicy({
+        attemptsInWindow: 2,
+        maxAttemptsPerDay: 2,
+        managerAgentId: "manager-1",
+        assigneePaused: false,
+      }).kind,
+    ).toBe("reassign_to_manager");
+  });
+
   it("treats a zero cap as no automatic retries at all", () => {
     expect(
       decideStrandedAutoPolicy({ attemptsInWindow: 0, maxAttemptsPerDay: 0, managerAgentId: "manager-1" }),

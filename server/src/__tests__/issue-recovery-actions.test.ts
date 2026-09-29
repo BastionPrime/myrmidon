@@ -1295,14 +1295,16 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       expect(activity).toHaveLength(1);
     });
 
-    it("stands down without any action while the assignee is paused, leaving the resume to L3", async () => {
+    it("does not hand a paused assignee's work to the manager or spend a retry, and keeps the vendor's own handling", async () => {
       // Review finding #4: pausing is not stranding. L3's pause-drain
       // (`../myrmidon/pause-drain.ts`) leaves this exact in-progress work
       // where it is and wakes it itself once the agent resumes — an
       // auto-retry wake here would just throw (paused is not invokable),
       // and (worse, once the retry cap is exhausted and the manager is
       // active) a manager handoff would move the paused agent's active work
-      // under review over something that is not actually stuck.
+      // under review over something that is not actually stuck. L4 does
+      // nothing of its own for a paused assignee; the vendor's handling of
+      // a non-invokable assignee (which its own suite pins) is unchanged.
       const { companyId, coderId, sourceIssue } = await seedCompany();
       await db.update(agents).set({ status: "paused" }).where(eq(agents.id, coderId));
       await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
@@ -1310,30 +1312,39 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       const enqueueWakeup = vi.fn(async () => null);
       const recovery = recoveryService(db, { enqueueWakeup });
 
-      const updated = await recovery.escalateStrandedAssignedIssue({
+      await recovery.escalateStrandedAssignedIssue({
         issue: sourceIssue,
         previousStatus: "in_progress",
         latestRun: await succeededRun({ companyId, agentId: coderId }),
         recoveryCause: "stranded_assigned_issue",
       });
 
-      expect(updated).toEqual(sourceIssue);
       expect(enqueueWakeup).not.toHaveBeenCalled();
       const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
-      expect(persisted?.status).toBe("in_progress");
+      // Never `in_review` under the manager: the source assignee is kept and
+      // no execution policy was installed.
+      expect(persisted?.status).not.toBe("in_review");
       expect(persisted?.assigneeAgentId).toBe(coderId);
       expect(persisted?.executionPolicy).toBeNull();
-      expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id))).toHaveLength(0);
-      const activity = await db
-        .select()
-        .from(activityLog)
-        .where(
-          and(
-            eq(activityLog.entityId, sourceIssue.id),
-            eq(activityLog.action, "issue.stranded_autopolicy_reassigned_to_manager"),
-          ),
-        );
-      expect(activity).toHaveLength(0);
+      expect(persisted?.executionState).toBeNull();
+      for (const action of [
+        "issue.stranded_autopolicy_reassigned_to_manager",
+        "issue.stranded_autopolicy_retried",
+      ]) {
+        const activity = await db
+          .select()
+          .from(activityLog)
+          .where(and(eq(activityLog.entityId, sourceIssue.id), eq(activityLog.action, action)));
+        expect(activity).toHaveLength(0);
+      }
+      // The vendor's own board escalation is unchanged for a non-invokable
+      // assignee: parked `blocked` behind a board-owned recovery action.
+      expect(persisted?.status).toBe("blocked");
+      const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id));
+      expect(action).toMatchObject({
+        ownerType: "board",
+        wakePolicy: expect.objectContaining({ type: "board_escalation" }),
+      });
     });
   });
 
