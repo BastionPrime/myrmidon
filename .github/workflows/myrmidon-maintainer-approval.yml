@@ -1,0 +1,51 @@
+name: Myrmidon maintainer approval
+
+# Merge lock: the required status "maintainer approval" turns green only when the current head
+# commit of a PR has an approval comment signed with a key that only the maintainer holds.
+# GitHub reviews and labels cannot serve here, because the development team and the maintainer
+# act through one account. See docs/myrmidon/ci.md, section "Maintainer approval lock".
+#
+# Safety rules for this workflow (do not relax them):
+#  - pull_request_target and issue_comment run the workflow file and scripts from the default
+#    branch, with access to secrets. Code from the PR is NEVER checked out or executed.
+#  - The job name below must differ from the status context "maintainer approval": otherwise a
+#    green job would satisfy the required check by itself.
+#  - Least privilege: only commit statuses can be written.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  statuses: write
+  pull-requests: read
+  contents: read
+
+concurrency:
+  group: myrmidon-maintainer-approval-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  approval-lock:
+    name: approval lock check
+    # For comments: only comments on pull requests, not on plain issues.
+    if: ${{ github.event_name == 'pull_request_target' || github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the default branch (trusted code only, never the PR)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: scripts/myrmidon/ci
+
+      - name: Verify approval and publish the commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          MAINTAINER_APPROVAL_KEY: ${{ secrets.MAINTAINER_APPROVAL_KEY }}
+        run: node scripts/myrmidon/ci/verify-maintainer-approval.mjs
