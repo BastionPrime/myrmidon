@@ -28,6 +28,12 @@
 | R1 | Версии CLI агентов в стадии `production` закреплены аргументами сборки вместо `@latest` | `Dockerfile`; + `.github/workflows/myrmidon-image.yml` | Воспроизводимая сборка образа | `scripts/myrmidon/image/image.test.mjs` | Никогда, наше поведение. При переносе: если вендор поменяет список CLI, перенести его в ARG с точными версиями | R1/R4: checks, plugins, image, deploy (T1) |
 | TEL | CLI не проверяет обновления в `registry.npmjs.org` по умолчанию; проверка идёт только при явном `PAPERCLIP_UPDATE_CHECK_URL` | `cli/src/update-notice.ts`, тест вендора `cli/src/__tests__/update-notice.test.ts`; + `cli/src/__tests__/update-notice.myrmidon.test.ts` | Не обращаться к вендору без явной настройки | `cli/src/__tests__/update-notice.myrmidon.test.ts` | Никогда, наше поведение. При переносе сохранять куски с меткой `myrmidon(TEL)` | TEL: update check off by default, README and NOTICE (T1) |
 
+## L3b — пауза оператора не эскалирует задачи как зависшие
+
+| ID | Что меняем | Файлы вендора | Причина | Тест-сторож | Как снимать | PR |
+|---|---|---|---|---|---|---|
+| L3b | Периодический разбор зависших назначенных задач (`reconcileStrandedAssignedIssues`) пропускает задачу `todo`/`in_progress`, если её агент на паузе оператора (`status = "paused"`, `pause_reason = "manual"`, `MYRMIDON_PAUSE_DRAINS` не выключена): с живым прогоном задача дорабатывает, без него ждёт снятия паузы (resume её будит) — ни блокировки, ни карточки владельцу. Бюджетная и прочие системные паузы, агент без причины паузы, задачи `in_review` и выключенная настройка идут по вендорскому пути | `server/src/services/recovery/service.ts` (одна точка вызова и импорт с меткой myrmidon(L3b)) + `server/src/myrmidon/paused-stranded.ts` | Вендорский обход проверяет «агент не вызываем» раньше живого пути исполнения, поэтому каждая задача агента на паузе получает эскалацию `stranded_assigned_issue` (задача уходит в `blocked`, красная карточка), даже когда прогон ещё сливается; заблокированную задачу resume уже не будит. После L3 пауза оператора значит «не давать новую работу», и эскалация ложная | `server/src/myrmidon/paused-stranded.myrmidon.test.ts`, `server/src/__tests__/stranded-operator-pause.myrmidon.test.ts` | Когда вендор различит паузу оператора и брошенную задачу в этом обходе — удалить куски `myrmidon(L3b)`, модуль и тесты | [#109](https://github.com/itkadr-git/myrmidon/pull/109) |
+
 ## Трек 2 — ядро побудок и прогонов
 
 | ID | Что меняем | Файлы вендора | Причина | Тест-сторож | Как снимать | PR |
