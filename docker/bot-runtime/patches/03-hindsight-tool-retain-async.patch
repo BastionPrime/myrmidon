@@ -1,0 +1,19 @@
+diff --git a/plugins/memory/hindsight/__init__.py b/plugins/memory/hindsight/__init__.py
+index 330f2b5..97d0906 100644
+--- a/plugins/memory/hindsight/__init__.py
++++ b/plugins/memory/hindsight/__init__.py
+@@ -1223,7 +1223,13 @@ class HindsightMemoryProvider(MemoryProvider):
+                                          occurred_at=args.get("occurred_at"))
+         logger.debug("Tool hindsight_retain: bank=%s, content_len=%d, context=%s",
+                      self._bank_id, len(content), context)
+-        self._retain_batch(item, bank_id=self._bank_id)
++        # myrmidon(G1): pass the configured retain_async here as the turn-sync path does.
++        # Without it the client's own default applies (a synchronous retain), so the tool
++        # call waits for the server to finish extracting facts, bounded only by the shared
++        # client timeout, and a busy bank turns a stored memory into a false "not stored"
++        # error. With memory_mode "tools" and auto-retain off, this tool is the only
++        # retain path.
++        self._retain_batch(item, bank_id=self._bank_id, retain_async=self._retain_async)
+         logger.debug("Tool hindsight_retain: success")
+         return "Memory stored successfully."
+ 
