@@ -13,8 +13,13 @@ describe("staticUiCacheControl", () => {
     expect(staticUiCacheControl(path.join("/srv", "ui-dist", "sw.js"))).toBe("no-cache");
   });
 
+  it("forces revalidation for tab icons and the manifest", () => {
+    for (const name of ["favicon.ico", "favicon.svg", "apple-touch-icon.png", "site.webmanifest"]) {
+      expect(staticUiCacheControl(path.join("/srv", "ui-dist", name)), name).toBe("no-cache");
+    }
+  });
+
   it("leaves other static files on the middleware default", () => {
-    expect(staticUiCacheControl(path.join("/srv", "ui-dist", "favicon.ico"))).toBeUndefined();
     expect(staticUiCacheControl(path.join("/srv", "ui-dist", "robots.txt"))).toBeUndefined();
     // Lookalikes keep the default: only the exact worker filename is special.
     expect(staticUiCacheControl(path.join("/srv", "ui-dist", "sw.js.map"))).toBeUndefined();

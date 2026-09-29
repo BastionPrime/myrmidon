@@ -368,7 +368,12 @@ COPY --chown=root:root node-tools/smoke.cjs /opt/node-tools/smoke.cjs
 # any working directory through NODE_PATH — this covers CommonJS `require()`
 # only; ES module `import` ignores NODE_PATH, so an .mjs script imports these
 # packages by absolute path or through `createRequire` (README.md).
-ENV PATH=/opt/node/bin:/scratch/npm-global/bin:$PATH \
+#
+# PATH must not hold any writable volume (/data, /workspace, /scratch, /tmp): the
+# dockergate image check rejects it, since a bot could plant a binary there. So the
+# global prefix's bin directory is deliberately not on PATH; bots use the packages
+# preinstalled in /opt/node-tools.
+ENV PATH=/opt/node/bin:$PATH \
     NODE_TOOLS_DIR=/opt/node-tools \
     NODE_PATH=/opt/node-tools/node_modules:/scratch/npm-global/lib/node_modules \
     NPM_CONFIG_CACHE=/scratch/npm-cache \

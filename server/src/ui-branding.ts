@@ -137,11 +137,24 @@ function escapeHtmlAttribute(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
+// The Myrmidon ant mark (same geometry as ui/public/brand/myrmidon/myrmidon-favicon.svg),
+// recoloured per worktree: plate = worktree colour, strokes = readable text colour.
+const ANT_VIEW_BOX = "-8.73684 151.263 789.474 789.474";
+const ANT_STROKE_PATHS = [
+  "M346,516 L246,470 L263,392 L227,361 M426,516 L526,470 L509,392 L545,361 M351,564 L254,531 L204,622 L170,622 M421,564 L518,531 L568,622 L602,622 M360,603 L264,634 L208,818 L170,818 M412,603 L508,634 L564,818 L602,818",
+  "M287,268 L386,414 L485,268",
+  "M386,330 C421,330 445,357 452,391 C457,417 447,435 426,447 L386,472 L346,447 C325,435 315,417 320,391 C327,357 351,330 386,330 Z",
+  "M386,466 L421,497 C428,503 431,512 429,521 L417,589 C415,599 409,607 401,613 L386,628 L371,613 C363,607 357,599 355,589 L343,521 C341,512 344,503 351,497 Z",
+  "M386,620 L437,654 C455,666 463,688 459,712 C453,749 426,795 405,817 C399,823 393,826 386,826 C379,826 373,823 367,817 C346,795 319,749 313,712 C309,688 317,666 335,654 Z",
+];
+
 function createFaviconDataUrl(background: string, foreground: string): string {
   const svg = [
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">',
-    `<rect width="24" height="24" rx="6" fill="${background}"/>`,
-    `<path stroke="${foreground}" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.15" d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${ANT_VIEW_BOX}" width="32" height="32">`,
+    `<rect x="-8.73684" y="151.263" width="789.474" height="789.474" rx="157.895" fill="${background}"/>`,
+    `<g fill="none" stroke="${foreground}" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">`,
+    ...ANT_STROKE_PATHS.map((d) => `<path d="${d}"/>`),
+    "</g>",
     "</svg>",
   ].join("");
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;

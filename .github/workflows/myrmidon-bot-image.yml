@@ -122,6 +122,16 @@ jobs:
             exit 1
           fi
           docker run --rm --entrypoint uv myrmidon-hermes:pr-check --version
+          # dockergate refuses an image whose PATH has a directory under a writable
+          # volume (tools/dockergate/internal/policy/image.go, unsafeRoots).
+          img_path="$(docker image inspect --format '{{ range .Config.Env }}{{ println . }}{{ end }}' myrmidon-hermes:pr-check | sed -n 's/^PATH=//p')"
+          echo "PATH=$img_path"
+          for el in ${img_path//:/ }; do
+            case "$el" in
+              /data|/data/*|/workspace|/workspace/*|/scratch|/scratch/*|/tmp|/tmp/*)
+                echo "::error::image PATH element $el is under a writable root"; exit 1 ;;
+            esac
+          done
 
       # push to main / myr-v* tag: build, push by digest, tag after.
       - name: Build and push by digest
@@ -251,6 +261,16 @@ jobs:
             exit 1
           fi
           docker run --rm --entrypoint uv myrmidon-hermes-node:pr-check --version
+          # dockergate refuses an image whose PATH has a directory under a writable
+          # volume (tools/dockergate/internal/policy/image.go, unsafeRoots).
+          img_path="$(docker image inspect --format '{{ range .Config.Env }}{{ println . }}{{ end }}' myrmidon-hermes-node:pr-check | sed -n 's/^PATH=//p')"
+          echo "PATH=$img_path"
+          for el in ${img_path//:/ }; do
+            case "$el" in
+              /data|/data/*|/workspace|/workspace/*|/scratch|/scratch/*|/tmp|/tmp/*)
+                echo "::error::image PATH element $el is under a writable root"; exit 1 ;;
+            esac
+          done
 
       # Node variant only: as the image's own user (uid 10001) on a read-only root,
       # the preinstalled packages must load and do real work, and node/npm must

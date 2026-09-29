@@ -52,6 +52,16 @@ describe("ui branding", () => {
     expect(links).toContain('rel="shortcut icon"');
   });
 
+  it("draws the Myrmidon ant, not the vendor paperclip, in the worktree favicon", () => {
+    const branding = getWorktreeUiBranding({
+      PAPERCLIP_IN_WORKTREE: "true",
+      PAPERCLIP_WORKTREE_COLOR: "#4f86f7",
+    });
+    const svg = decodeURIComponent((branding.faviconHref ?? "").replace("data:image/svg+xml,", ""));
+    expect(svg).toContain("M386,330 C421,330"); // ant head
+    expect(svg).not.toContain("m16 6-8.414 8.586"); // paperclip glyph
+  });
+
   it("renders runtime branding metadata for the ui", () => {
     const meta = renderRuntimeBrandingMeta(
       getWorktreeUiBranding({
