@@ -84,12 +84,22 @@ function readSpecificModelField(config: Record<string, unknown>, key: string): s
   return value && !isSpecialModelValue(value) ? value : null;
 }
 
+/**
+ * myrmidon(X8-texts): the bridged Telegram DM answers in Russian. The three
+ * source labels below are shown to the chat owner, so they read as Russian
+ * prose; the value beside them (a model name, a reasoning level) stays as the
+ * adapter spells it.
+ */
+export type ChatValueSource = "этот чат" | "по умолчанию у агента" | "по умолчанию у адаптера";
+
+const ADAPTER_DEFAULT_LABEL = "по умолчанию у адаптера";
+
 /** The card's own value for this key, or the literal "adapter default" when the card sets none. */
 export function describeCardValue(
   cardAdapterConfig: Record<string, unknown>,
   key: "model" | "effort",
 ): string {
-  return readSpecificModelField(cardAdapterConfig, key) ?? "adapter default";
+  return readSpecificModelField(cardAdapterConfig, key) ?? ADAPTER_DEFAULT_LABEL;
 }
 
 /** The value this chat actually uses right now, and who decided it. */
@@ -97,11 +107,13 @@ export function describeEffectiveChatValue(
   overrideAdapterConfig: Record<string, unknown>,
   cardAdapterConfig: Record<string, unknown>,
   key: "model" | "effort",
-): { value: string; source: "this chat" | "agent default" | "adapter default" } {
+): { value: string; source: ChatValueSource } {
   const override = readSpecificModelField(overrideAdapterConfig, key);
-  if (override) return { value: override, source: "this chat" };
+  if (override) return { value: override, source: "этот чат" };
   const card = readSpecificModelField(cardAdapterConfig, key);
-  return card ? { value: card, source: "agent default" } : { value: "adapter default", source: "adapter default" };
+  return card
+    ? { value: card, source: "по умолчанию у агента" }
+    : { value: ADAPTER_DEFAULT_LABEL, source: "по умолчанию у адаптера" };
 }
 
 function readModelFallbacks(cardAdapterConfig: Record<string, unknown>): string[] {
@@ -182,13 +194,15 @@ export function formatChatChoiceList(candidates: ChatModelCandidate[]): string {
 
 /** One of /model or /think: what it is called, which adapterConfig key it edits, and how it lists candidates. */
 export interface ChatModelChooser {
-  /** Lowercase noun used in prose: "model" / "reasoning effort". */
-  noun: string;
-  /** Capitalized label for status-style lines: "Model" / "Reasoning". */
+  /** Label for status-style lines: "Модель" / "Рассуждения". */
   statusLabel: string;
   /** Command name, used in "/model"/"/think" usage hints. */
   commandName: "model" | "think";
   adapterConfigKey: "model" | "effort";
+  /** Sentence shown when this chooser cannot be used for the agent's adapter. */
+  unavailableText: string;
+  /** Prose that names the value a rejected argument would have set. */
+  unknownValueLabel: string;
   isAllowedAdapterType: (adapterType: string) => boolean;
   listCandidates: (
     adapterType: string,
@@ -197,19 +211,21 @@ export interface ChatModelChooser {
 }
 
 export const MODEL_CHOOSER: ChatModelChooser = {
-  noun: "model",
-  statusLabel: "Model",
+  statusLabel: "Модель",
   commandName: "model",
   adapterConfigKey: "model",
+  unavailableText: "Смена модели недоступна для этого агента.",
+  unknownValueLabel: "Неизвестная модель",
   isAllowedAdapterType: (adapterType) => MODEL_OVERRIDE_ALLOWED_ADAPTER_TYPES.includes(adapterType),
   listCandidates: listModelCandidates,
 };
 
 export const THINK_CHOOSER: ChatModelChooser = {
-  noun: "reasoning effort",
-  statusLabel: "Reasoning",
+  statusLabel: "Рассуждения",
   commandName: "think",
   adapterConfigKey: "effort",
+  unavailableText: "Смена глубины рассуждений недоступна для этого агента.",
+  unknownValueLabel: "Неизвестная глубина рассуждений",
   isAllowedAdapterType: (adapterType) => THINK_OVERRIDE_ALLOWED_ADAPTER_TYPES.includes(adapterType),
   listCandidates: async () => listThinkCandidates(),
 };
@@ -234,7 +250,7 @@ export async function checkChooserAvailability(
  * read here and the later, authoritative check right before the write
  * report the same refusal in the same words.
  */
-export const TURN_IN_PROGRESS_TEXT = "A reply is in progress. Try again after it or send /stop.";
+export const TURN_IN_PROGRESS_TEXT = "Сейчас идёт ответ. Попробуйте после него или отправьте /stop.";
 
 export type ChooserSelectionResult =
   | { kind: "set"; candidate: ChatModelCandidate }
@@ -255,7 +271,7 @@ export async function resolveChooserSelection(input: {
 }): Promise<ChooserSelectionResult> {
   const availability = await checkChooserAvailability(input.chooser, input.agent);
   if (!availability.available) {
-    return { kind: "error", text: `Switching the ${input.chooser.noun} is not available for this agent.` };
+    return { kind: "error", text: input.chooser.unavailableText };
   }
   if (input.checkTurnInProgress && input.turnInProgress) {
     return { kind: "error", text: TURN_IN_PROGRESS_TEXT };
@@ -268,7 +284,7 @@ export async function resolveChooserSelection(input: {
   if (!candidate) {
     return {
       kind: "error",
-      text: `Unknown ${input.chooser.noun} "${trimmed}".\n${formatChatChoiceList(availability.candidates)}`,
+      text: `${input.chooser.unknownValueLabel} «${trimmed}».\n${formatChatChoiceList(availability.candidates)}`,
     };
   }
   return { kind: "set", candidate };

@@ -10,7 +10,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, like } from "drizzle-orm";
 import {
   agents,
   agentWakeupRequests,
@@ -56,6 +56,7 @@ import { CHAT_RUN_PRESENTATION_AUTHORIZATION_REASON } from "../services/heartbea
 import { issueService } from "../services/issues.js";
 import { recoveryService } from "../services/recovery/service.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import { enqueueChatRunMilestones } from "../services/chat-run-publications.js";
 import { telegramConversationUserId } from "../myrmidon/agent-chat-bridge/identity.js";
 import { TELEGRAM_DM_CONVERSATIONS_ENV } from "../myrmidon/agent-chat-bridge/settings.js";
 
@@ -1746,6 +1747,83 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
       if (previousPublicUrl === undefined) delete process.env.PAPERCLIP_PUBLIC_URL;
       else process.env.PAPERCLIP_PUBLIC_URL = previousPublicUrl;
     }
+  });
+
+  it("keeps the vendor's routine progress milestones out of the bridged DM (X8h)", async () => {
+    const fixture = await seedCompany();
+    const { callbacks, endpoint } = await configuredTelegramEndpoint(fixture);
+    await linkTelegramPrincipal({
+      companyId: fixture.companyId,
+      endpointId: endpoint.id,
+      userId: "700030",
+      boardUserId: "owner-user",
+    });
+    await sendTelegramDm({
+      callbacks,
+      endpointId: endpoint.id,
+      channelId: "700030",
+      text: "Привет",
+      userId: "700030",
+      messageId: 1,
+    });
+
+    const [conversationIssue] = await db
+      .select()
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, fixture.companyId),
+          eq(issues.conversationUserId, telegramConversationUserId("owner-user")),
+        ),
+      );
+    const [inboundComment] = await db
+      .select()
+      .from(issueComments)
+      .where(eq(issueComments.issueId, conversationIssue!.id));
+    const conversation = await conversationRow(endpoint.id, "700030");
+    // The shape chat-channels.ts wakes a bridged conversation's run with; the
+    // milestone sweep only considers runs that carry it.
+    const wakeContext = {
+      issueId: conversationIssue!.id,
+      source: "chat:telegram",
+      wakeCommentId: inboundComment!.id,
+      wakeCommentIds: [inboundComment!.id],
+    };
+    const insertRun = (values: Partial<typeof heartbeatRuns.$inferInsert>) =>
+      db.insert(heartbeatRuns).values({
+        id: randomUUID(),
+        companyId: fixture.companyId,
+        agentId: fixture.assignedAgentId,
+        contextSnapshot: wakeContext,
+        ...values,
+      });
+    const milestonePublications = async () =>
+      await db
+        .select({ idempotencyKey: chatPublications.idempotencyKey })
+        .from(chatPublications)
+        .where(
+          and(
+            eq(chatPublications.conversationId, conversation!.id),
+            like(chatPublications.idempotencyKey, "run:%"),
+          ),
+        );
+
+    // A turn the agent is running right now: the vendor would publish
+    // "… is queued." and then "… is working…" into this conversation.
+    await insertRun({ status: "running", startedAt: new Date() });
+    await enqueueChatRunMilestones(db);
+
+    // A turn the chat owner stopped from the chat itself (the X8c /stop
+    // error code): /stop has already answered, so no milestone either.
+    await insertRun({ status: "cancelled", errorCode: "chat_session_stopped" });
+    await enqueueChatRunMilestones(db);
+
+    expect(await milestonePublications()).toEqual([]);
+
+    // A failed turn is the one thing the person must still learn about.
+    await insertRun({ status: "failed", errorCode: "some_other_error" });
+    expect(await enqueueChatRunMilestones(db)).toBeGreaterThan(0);
+    expect(await milestonePublications()).toHaveLength(1);
   });
 
   describe("with a mocked command module", () => {
