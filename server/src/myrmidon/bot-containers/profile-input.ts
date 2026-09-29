@@ -15,6 +15,7 @@
 // message is safe to show in the reconcile activity log.
 
 import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS } from "@paperclipai/shared";
+import { BOT_BOARD_GATEWAY_SERVER_NAME } from "./board-gateway.js";
 import type {
   HermesProfileAdapterConfig,
   HermesProfileEnvEntry,
@@ -141,6 +142,9 @@ function parseHttpUrl(value: string): boolean {
  * "" sends the raw token), `noAuth: true` in place of `tokenSecret` for a server
  * that takes no token. An entry with neither `tokenSecret` nor `noAuth` is an
  * error, so a forgotten secret never becomes an unauthenticated server.
+ * The name of the bot's own board tool gateway server is reserved: that server is
+ * issued per bot by the board, so a declaration under its name (which would carry
+ * one instance-wide token into every bot) is an error, not a silent override.
  * Errors name the entry and the field, never a value.
  */
 export function parseBotMcpServers(raw: string | null): { servers: BotStaticMcpServer[]; error: string | null } {
@@ -162,6 +166,9 @@ export function parseBotMcpServers(raw: string | null): { servers: BotStaticMcpS
     const rawName = typeof record.name === "string" ? record.name : "";
     const name = sanitizeMcpServerName(rawName);
     if (!name) return fail(`${label} has no usable "name"`);
+    if (name === sanitizeMcpServerName(BOT_BOARD_GATEWAY_SERVER_NAME)) {
+      return fail(`${label} ("${name}") uses a reserved server name: the board tool gateway of each bot is issued by the board and cannot be declared here`);
+    }
     if (seen.has(name)) return fail(`${label} ("${name}") repeats a server name`);
     seen.add(name);
     const url = typeof record.url === "string" ? record.url.trim() : "";

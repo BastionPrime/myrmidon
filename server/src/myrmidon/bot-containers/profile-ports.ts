@@ -8,13 +8,15 @@
 //
 // Two rules apply to everything in this file:
 //  - It runs on every reconcile tick (once a minute per bot), so it never writes
-//    unless something is missing, and it resolves the secrets it reads without
-//    a binding/audit context (no access event per secret per bot per minute):
-//    two secrets this file created itself, the instance-wide gateway key and
-//    the MCP tokens. The exception is the card's own env, which a card's author
-//    controls: card-env.ts resolves it WITH a binding context (the board checks
-//    that the secret is bound to this agent) and keeps the result in memory,
-//    re-resolving only when the card's bindings or those secrets' versions change.
+//    unless something is missing or due (an expiring gateway token), and it
+//    resolves the secrets it reads without a binding/audit context (no access
+//    event per secret per bot per minute): the secrets this file created itself
+//    (the bot's gateway key, its board API key and its board tool gateway token)
+//    and the MCP tokens. The exception is the card's own env, which a card's
+//    author controls: card-env.ts resolves it WITH a binding context (the board
+//    checks that the secret is bound to this agent) and keeps the result in
+//    memory, re-resolving only when the card's bindings or those secrets'
+//    versions change.
 //  - A secret it creates is get-or-create by a deterministic name, so a second
 //    call returns the same value (compile must give the same hashes tick after
 //    tick, or the bot restarts every minute).
@@ -39,6 +41,13 @@ import {
 } from "../../services/index.js";
 import { skillVersionSelectionMap } from "../../services/runtime-skill-selections.js";
 import { BOT_AGENT_API_KEY_NAME, ensureBotAgentKey } from "./agent-key.js";
+import { createBotBoardGatewayDeps, releaseStrayBotGateways } from "./board-gateway-ports.js";
+import {
+  BOT_BOARD_GATEWAY_SERVER_NAME,
+  botBoardGatewayUrl,
+  botGatewaySecretName,
+  ensureBotBoardGateway,
+} from "./board-gateway.js";
 import { createBotCardSync, type BotCardSyncPorts, type BotCardSyncResult } from "./card-sync.js";
 import { createCardEnvResolver } from "./card-env.js";
 import { loadBotInstructionsBundle } from "./instructions-source.js";
@@ -185,15 +194,15 @@ function toAgentRecord(row: {
 }
 
 /**
- * The board's data behind `createBotProfileCompile`. `listMcpServers` is NOT
- * provided: the board tool gateway's run-scoped tokens live one hour and cannot
- * sit in a container's long-lived profile, and a durable gateway token is a
- * security decision that has no owner yet (see the PR's "Решения без владельца").
- * Until that is decided, a bot's profile carries no board-gateway MCP server, and
- * compile says so in the activity log (a warning, once per change) instead of
- * staying silent. The instance-wide servers (ragflow and the like) do NOT depend
- * on this port: they are declared in MYRMIDON_BOT_MCP_SERVERS, and compile
- * resolves their tokens through `readCompanySecret`.
+ * The board's data behind `createBotProfileCompile`. `listMcpServers` gives the
+ * bot its OWN board tool gateway (board-gateway.ts): a gateway owned by this
+ * agent, and a token that opens only that gateway, kept as the company secret
+ * `myrmidon-bot-<agentId>-board-gateway-token`. The run-scoped tokens hermes_local
+ * uses live one hour and cannot sit in a container's long-lived profile; this one
+ * expires in 30 days and is rotated here. The instance-wide servers (ragflow and
+ * the like) do NOT come through this port: they are declared in
+ * MYRMIDON_BOT_MCP_SERVERS, and compile resolves their tokens through
+ * `readCompanySecret`.
  */
 export function createDbBotProfilePorts(db: Db): BotProfilePorts {
   const agents = agentService(db);
@@ -336,6 +345,48 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
       );
     },
 
+    async listMcpServers(agent, context) {
+      const secretName = botGatewaySecretName(agent.id);
+      const deps = createBotBoardGatewayDeps(db, agent, {
+        async readSecret() {
+          const secret = await secrets.getByName(agent.companyId, secretName);
+          if (!secret) return null;
+          return { secretId: secret.id, value: await secrets.resolveSecretValue(agent.companyId, secret.id, "latest") };
+        },
+        async storeSecret(existing, token) {
+          if (existing) {
+            await secrets.rotate(existing.secretId, { value: token }, SYSTEM_ACTOR);
+            return;
+          }
+          await secrets.create(
+            agent.companyId,
+            {
+              name: secretName,
+              provider: getConfiguredSecretProvider(),
+              value: token,
+              description: `Board tool gateway token of the bot container for agent ${agent.name}`,
+            },
+            SYSTEM_ACTOR,
+          );
+        },
+      });
+      // Switched off: the same path as "nothing assigned", which releases what was made and delivers nothing.
+      const ensured = await ensureBotBoardGateway(
+        context.enabled ? deps : { ...deps, resolveAssignment: async () => ({ assignment: null, warnings: [] }) },
+      );
+      if (!ensured.gateway) return { servers: [], warnings: ensured.warnings };
+      return {
+        servers: [
+          {
+            name: BOT_BOARD_GATEWAY_SERVER_NAME,
+            url: botBoardGatewayUrl(context.boardUrl, ensured.gateway.publicId),
+            token: ensured.gateway.token,
+          },
+        ],
+        warnings: ensured.warnings,
+      };
+    },
+
     async loadSkills(agent) {
       const warnings: string[] = [];
       const preference = readPaperclipSkillSyncPreference(agent.adapterConfig);
@@ -400,14 +451,14 @@ export function createDbBotCardSyncPorts(db: Db, profilePorts: BotProfilePorts =
 }
 
 /**
- * The two fields of `BotContainerRuntimeDeps` W2a fills, bound to the database:
+ * The fields of `BotContainerRuntimeDeps` W2a fills, bound to the database:
  *
  *   startBotContainerReconciliation(listAgents, { driver, maintenance, network, activity, ...botProfileWiring(db, { activity }) })
  *
  * (the call is startup.ts, `startBotContainers`, with `listAgents` from agents-query.ts).
  *
- * Profile warnings (a skipped skill, a bundle file over the limit, the missing board
- * gateway) go to `opts.onWarnings`, or, when only `opts.activity` is given, to that
+ * Profile warnings (a skipped skill, a bundle file over the limit, an assigned
+ * connection left out of the board gateway) go to `opts.onWarnings`, or, when only `opts.activity` is given, to that
  * activity log: the same place the reconciler writes its own events.
  */
 export function botProfileWiring(
@@ -416,6 +467,7 @@ export function botProfileWiring(
 ): {
   compile: (agentId: string, botKey: string) => Promise<CompiledProfile>;
   syncCard: (agentId: string, botKey: string) => Promise<BotCardSyncResult>;
+  releaseStrayGateways: (keepAgentIds: ReadonlySet<string>) => Promise<{ released: number; warnings: string[] }>;
 } {
   const ports = createDbBotProfilePorts(db);
   const { activity, ...compileOptions } = opts;
@@ -423,5 +475,6 @@ export function botProfileWiring(
   return {
     compile: createBotProfileCompile(ports, { ...compileOptions, ...(onWarnings ? { onWarnings } : {}) }),
     syncCard: createBotCardSync(createDbBotCardSyncPorts(db, ports)),
+    releaseStrayGateways: (keepAgentIds) => releaseStrayBotGateways(db, keepAgentIds),
   };
 }

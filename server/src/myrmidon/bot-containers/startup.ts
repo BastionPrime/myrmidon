@@ -79,7 +79,7 @@ export interface BotContainersStartupPorts {
   profileWiring(
     db: Db,
     opts: { activity: BotContainerActivitySink; env: NodeJS.ProcessEnv },
-  ): Pick<BotContainerRuntimeDeps, "compile" | "syncCard">;
+  ): Pick<BotContainerRuntimeDeps, "compile" | "syncCard" | "releaseStrayGateways">;
   maintenancePort(db: Db): BotMaintenancePort;
   listAgents(db: Db): () => Promise<BotContainerAgent[]>;
   activitySink(): BotContainerActivitySink;
@@ -149,11 +149,12 @@ function build(
   try {
     const driverConfig = ports.readDriverConfig(env);
     const activity = ports.activitySink();
-    const { compile, syncCard } = ports.profileWiring(db, { activity, env });
+    const { compile, syncCard, releaseStrayGateways } = ports.profileWiring(db, { activity, env });
     const runtime: BotContainerRuntimeDeps = {
       driver: ports.createDriver(driverConfig),
       compile,
       syncCard,
+      ...(releaseStrayGateways ? { releaseStrayGateways } : {}),
       maintenance: ports.maintenancePort(db),
       activity,
       network: driverConfig.network,

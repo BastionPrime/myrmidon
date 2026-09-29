@@ -123,6 +123,10 @@ export interface BotContainerRuntimeDeps {
    *  container. A failure is recorded in the activity log; it does not change the
    *  reconcile outcome, since the container itself is fine. */
   syncCard?: (agentId: string, botKey: string) => Promise<{ changedKeys: string[] }>;
+  /** Optional. Called by every sweep with the ids of the agents the sweep reconciles: releases the board
+   *  tool gateways made for any other agent (deleted, terminated, switched to another adapter or with the
+   *  container turned off), which no reconcile pass reaches any more (board-gateway-ports.ts). */
+  releaseStrayGateways?: (keepAgentIds: ReadonlySet<string>) => Promise<{ released: number; warnings: string[] }>;
   maintenance: BotMaintenancePort;
   activity?: BotContainerActivitySink;
   network: string;
@@ -213,6 +217,53 @@ async function syncCardAfterReconcile(
   }
 }
 
+/** Never throws: a failing release (or a failing activity sink) must not fail the sweep. */
+async function releaseStrayGatewaysOfSweep(
+  agents: readonly BotContainerAgent[],
+  deps: BotContainerRuntimeDeps,
+): Promise<void> {
+  if (!deps.releaseStrayGateways) return;
+  const keep = new Set<string>();
+  for (const agent of agents) {
+    if (readBotContainerAgentConfig(agent.adapterType, agent.adapterConfig).ok && botKeyForAgent(agent.agentId)) {
+      keep.add(agent.agentId);
+    }
+  }
+  try {
+    const { released, warnings } = await deps.releaseStrayGateways(keep);
+    if (released > 0) {
+      await deps.activity?.record({
+        level: "info",
+        agentId: "*",
+        botKey: "*",
+        message: "released board tool gateways of agents that are no longer reconciled",
+        details: { released },
+      });
+    }
+    if (warnings.length > 0) {
+      await deps.activity?.record({
+        level: "error",
+        agentId: "*",
+        botKey: "*",
+        message: "releasing board tool gateways of agents that are no longer reconciled failed in part",
+        details: { warnings },
+      });
+    }
+  } catch (err) {
+    try {
+      await deps.activity?.record({
+        level: "error",
+        agentId: "*",
+        botKey: "*",
+        message: "releasing board tool gateways of agents that are no longer reconciled failed",
+        details: { error: err instanceof Error ? err.message : String(err) },
+      });
+    } catch {
+      // nothing left to report to
+    }
+  }
+}
+
 export const DEFAULT_RECONCILE_INTERVAL_MS = 60_000;
 
 /**
@@ -280,6 +331,8 @@ export function startBotContainerReconciliation(
         });
         return;
       }
+      // Only after a successful listing: a failed one must not read as "no agents", which would release every gateway.
+      await releaseStrayGatewaysOfSweep(agents, deps);
       await runWithConcurrency(agents, RECONCILE_CONCURRENCY, async (agent) => {
         if (stopped) return;
         // reconcileBot (inside applyBotContainerNow) never throws; this catch only

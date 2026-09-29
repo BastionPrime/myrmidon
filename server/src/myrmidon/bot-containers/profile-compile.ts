@@ -14,6 +14,7 @@
 //     get-or-create by a deterministic name (the ports' job), never per-call.
 //   - warnings are reported when they change, not on every tick.
 
+import { isBotBoardGatewayEnabled } from "./board-gateway.js";
 import {
   compileHermesProfileDetailed,
   type HermesProfileEnvEntry,
@@ -69,14 +70,24 @@ export function createActivityWarningSink(activity: BotContainerActivitySink): B
 }
 
 /**
- * Said for every bot while the board tool gateway is not part of the profile
- * (`listMcpServers` unset). The gateway's run-scoped tokens live one hour and
- * cannot sit in a container's long-lived profile; a durable token is an owner
- * decision that is still open. The bot works without the gateway, but has no
- * board tools through MCP, and this line makes that visible instead of silent.
+ * Said for every bot when the ports provide no board tool gateway
+ * (`listMcpServers` unset; the database ports do provide it, see board-gateway.ts).
+ * The bot works without the gateway, but has no board tools through MCP, and this
+ * line makes that visible instead of silent.
  */
 export const NO_BOARD_GATEWAY_WARNING =
-  "the profile has no board tool gateway MCP server: a durable gateway token for containers is an open owner decision";
+  "the profile has no board tool gateway MCP server: the ports provide no gateway for containers";
+
+/** What compile tells `listMcpServers` about this instance. */
+export interface BotMcpServersContext {
+  /** MYRMIDON_BOT_BOARD_URL: the board as the container reaches it. */
+  boardUrl: string;
+  /** False when MYRMIDON_BOT_BOARD_GATEWAY switches per-bot board gateways off: the port releases what it made and delivers nothing. */
+  enabled: boolean;
+}
+
+/** What `listMcpServers` returns: the servers, optionally with notes for the activity log (an assigned connection left out, a failed cleanup). */
+export type BotMcpServersResult = BotMcpSource[] | { servers: BotMcpSource[]; warnings: string[] };
 
 /** Everything compile needs from the board. Implemented over the database in
  *  profile-ports.ts; faked in tests. Every method is read-or-get-or-create: none
@@ -102,11 +113,11 @@ export interface BotProfilePorts {
   loadInstructions(
     agent: BotProfileAgentRecord,
   ): Promise<{ files: HermesProfileWorkspaceFile[]; warnings: string[] }>;
-  /** MCP servers for the bot: the board tool gateway and assigned connections. Optional:
-   *  without it the profile carries no gateway server (compile then says so in its
+  /** MCP servers for the bot: the bot's OWN board tool gateway, with a token only this bot holds.
+   *  Optional: without it the profile carries no gateway server (compile then says so in its
    *  warnings). Instance-wide servers such as ragflow do not come through here: they
    *  are declared in MYRMIDON_BOT_MCP_SERVERS and resolved by compile itself. */
-  listMcpServers?(agent: BotProfileAgentRecord): Promise<BotMcpSource[]>;
+  listMcpServers?(agent: BotProfileAgentRecord, context: BotMcpServersContext): Promise<BotMcpServersResult>;
   /** Instance-wide compression/retention defaults. Optional. */
   instanceDefaults?(): Promise<HermesProfileInstanceDefaults>;
 }
@@ -176,6 +187,7 @@ export function createBotProfileCompile(
 
   return async function compile(agentId: string, botKey: string): Promise<CompiledProfile> {
     const settings = readBotProfileSettings(opts.env);
+    const boardGatewayEnabled = isBotBoardGatewayEnabled(opts.env);
     // Before any lookup or secret creation: an unconfigured instance fails here
     // and leaves nothing behind.
     assertBotProfileSettings(settings);
@@ -197,16 +209,22 @@ export function createBotProfileCompile(
     // ports below create the bot's keys, so a broken instance setting leaves nothing behind.
     const staticMcpServers = await resolveStaticMcpServers(ports, agent.companyId, settings);
 
-    const [cardEnv, skills, instructions, apiServerKey, paperclipApiKey, gatewayMcpServers, instanceDefaults] =
+    const [cardEnv, skills, instructions, apiServerKey, paperclipApiKey, gatewayResult, instanceDefaults] =
       await Promise.all([
         ports.resolveCardEnv(agent),
         ports.loadSkills(agent),
         ports.loadInstructions(agent),
         ports.ensureApiServerKey(agent),
         ports.ensureAgentApiKey(agent),
-        ports.listMcpServers ? ports.listMcpServers(agent) : Promise.resolve([] as BotMcpSource[]),
+        ports.listMcpServers
+          ? // settings.boardUrl is non-null here: assertBotProfileSettings threw otherwise.
+            ports.listMcpServers(agent, { boardUrl: settings.boardUrl as string, enabled: boardGatewayEnabled })
+          : Promise.resolve([] as BotMcpSource[]),
         ports.instanceDefaults ? ports.instanceDefaults() : Promise.resolve(undefined),
       ]);
+
+    const gatewayMcpServers = Array.isArray(gatewayResult) ? gatewayResult : gatewayResult.servers;
+    const gatewayWarnings = Array.isArray(gatewayResult) ? [] : gatewayResult.warnings;
 
     // The gateway key is only fetched for a card that goes through the gateway, and only
     // when the card's own env does not carry it: a card with a native provider gets neither
@@ -231,7 +249,8 @@ export function createBotProfileCompile(
         llmApiKey,
         apiServerKey: apiServerKey.value,
         paperclipApiKey: paperclipApiKey.value,
-        // Declared servers first: a same-named server from the gateway port loses to the operator's declaration.
+        // The gateway server's name cannot be declared (profile-input.ts rejects it), so it is never displaced;
+        // for any other name shared by two sources the declared server comes first and wins.
         mcpServers: [...staticMcpServers, ...gatewayMcpServers],
         instanceDefaults,
       },
@@ -241,6 +260,7 @@ export function createBotProfileCompile(
     const result = compileHermesProfileDetailed(built.input);
     await reportWarnings(agentId, botKey, [
       ...(ports.listMcpServers ? [] : [NO_BOARD_GATEWAY_WARNING]),
+      ...gatewayWarnings,
       ...cardEnv.warnings,
       ...(paperclipApiKey.warnings ?? []),
       ...skills.warnings,
