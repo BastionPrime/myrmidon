@@ -10030,6 +10030,12 @@ export function issueService(db: Db) {
 
         const values = {
           ...issueData,
+          // myrmidon(S5): issue descriptions are stored with secret values masked.
+          // Applied here (the single write point for create) so every creation
+          // path — board, agent, API — stores the masked description.
+          ...(issueData.description
+            ? { description: maskSecretsInText(issueData.description) }
+            : {}),
           originRunId: issueData.originRunId ?? actorRunId ?? null,
           responsibleUserId,
           requestDepth: clampIssueRequestDepth(issueData.requestDepth),
@@ -10585,6 +10591,12 @@ export function issueService(db: Db) {
 
       const patch: Partial<typeof issues.$inferInsert> = {
         ...issueData,
+        // myrmidon(S5): issue descriptions are stored with secret values masked.
+        // The single write point for update: every path that PATCHes the
+        // description (board edit, agent amend, API) stores the masked text.
+        ...(issueData.description
+          ? { description: maskSecretsInText(issueData.description) }
+          : {}),
         updatedAt: new Date(),
       };
       if (existing.status !== "blocked" && issueData.status === "blocked") {
