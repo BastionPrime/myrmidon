@@ -218,6 +218,31 @@ pnpm --filter @paperclipai/server exec tsx ../scripts/myrmidon/plugin-compat/che
 Новая версия плагина на установке: поменять версию в `plugins.json` и обновить снимок
 манифеста (JSON того, что экспортирует `dist/manifest.js` пакета).
 
+### Локальный форк hindsight
+
+Развёртывания, где память ботов разнесена по банкам, ставят не npm-пакет
+`@vectorize-io/hindsight-paperclip`, а его локальный форк
+`packages/plugins/hindsight-paperclip` (тот же id плагина `paperclip-plugin-hindsight`,
+версия `0.3.0-myrmidon.1`). Каталог `plugin-compat` это не отслеживает: он проверяет
+сторонние npm-пакеты, а форк живёт в репозитории. Его проверки:
+
+- юнит-тесты форка: `pnpm --filter @myrmidon/hindsight-paperclip test` (мок-транспорт,
+  сеть не нужна); lane — `scripts/myrmidon/ci/extra-test-lanes.json`, как у остальных
+  пакетов с тестами;
+- проверки хоста при установке: `check-fork-manifest.ts` в этом каталоге — схема
+  манифеста, версия API плагинов, согласованность возможностей и запуск воркера
+  через `createPluginWorkerHandle` (как `check.ts`, но манифест читается из собранного
+  `dist` форка):
+
+```sh
+pnpm --filter @myrmidon/hindsight-paperclip build
+pnpm --filter @paperclipai/server exec tsx ../scripts/myrmidon/plugin-compat/check-fork-manifest.ts
+```
+
+Установка на инстансе — как у любого локального плагина: `POST /api/plugins/install`
+с `localPath` на каталог пакета (загрузчик сам соберёт его: каталог внутри
+`packages/plugins`), либо при обновлении — `upgrade` с тем же путём.
+
 ## Образ
 
 Workflow [`myrmidon-image.yml`](../../.github/workflows/myrmidon-image.yml), job `image`.
