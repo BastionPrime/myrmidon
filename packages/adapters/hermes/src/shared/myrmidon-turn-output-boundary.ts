@@ -5,39 +5,38 @@
  * `_run_single_query_mode` (cli.py) prints the ENTIRE stdin payload Paperclip
  * sent (agent instructions + wake context + task markdown) as `Query: …`
  * before the turn starts, and Rich word-wraps that at the console width with
- * no per-line marker of its own. Two independent consumers need to agree on
- * exactly where that echo ends:
+ * no per-line marker of its own.
  *
- *  - the server-side, whole-stdout stripper (`stripQueryEcho`, this
- *    directory's `../server/myrmidon-live-progress.ts`) that cuts the echo
- *    out of the captured final response and out of the persisted run log
- *    (`execute.ts`'s `wrappedOnLog`, via `createLiveLogSanitizer`);
+ * myrmidon(G5): the server side no longer guesses where that echo ends: it
+ * knows the prompt it sent and cuts the echo exactly by it
+ * (`../server/myrmidon-query-echo.ts`), which is the only sound way — an echo
+ * can hold anything, including whole pasted hermes runs. This line-shape check
+ * is what remains for the two places that cannot do that:
+ *
  *  - the UI's line-at-a-time live transcript parser
- *    (`../ui/parse-stdout.ts`'s `createHermesStdoutParser`).
+ *    (`../ui/parse-stdout.ts`'s `createHermesStdoutParser`), which sees only
+ *    log lines and never the prompt; for a run recorded by the current
+ *    adapter the echo is already gone from the log, so this only matters for
+ *    a log that still contains one;
+ *  - the run-log sanitizer's FALLBACK (`createLiveLogSanitizer`), used only
+ *    after the text following `Query:` turned out not to be the prompt that
+ *    was sent (the alignment is lost): it then keeps dropping lines until one
+ *    that can only be turn output, trading possibly dropped real output for
+ *    not leaking a possibly secret-bearing echo into the log.
  *
- * If those two disagreed about the boundary, one side could still show/store
- * echo garbage that the other believes it already removed. Both import this
- * single check instead of keeping their own copy.
+ * Being a heuristic it can be fooled by an echo that quotes a frame or a
+ * tool-progress line; that is exactly why the server does not rely on it.
  *
- * myrmidon(G5): deliberately narrow. This only recognizes markers that are
+ * Deliberately narrow. This only recognizes markers that are
  * visually/structurally distinctive — box-drawing frame lines, and
  * `TOOL_OUTPUT_PREFIX`-led tool-progress lines — never a bare, ordinary
  * English line like `session_id:` or `Resume this session with:`. Both of
  * those are sentences a prompt (agent instructions, wake context, task
  * markdown) can legitimately contain verbatim — this repo's own doc
  * comments and test fixtures are proof — so treating either as sufficient
- * on its own let a look-alike line inside the STILL-ECHOING prompt end
- * suppression early and leak the rest of the (unredacted) prompt into the
- * persisted log / live transcript as if it were real turn output. Neither
- * consumer of this function can safely recover from that by looking ahead:
- * both process one line at a time as it arrives (the log sanitizer and the
- * live UI transcript are real streaming consumers; a genuinely bare
- * `Resume this session with:` — with no follow-on lines to check yet — is
- * exactly the ambiguous case). The one caller that captures the whole
- * stdout up front (`stripQueryEcho`, ../server/myrmidon-live-progress.ts)
- * additionally validates the exit summary's full multi-line skeleton via
- * its own `EXIT_SUMMARY_RE` as a safety net for the rare case where no
- * marker recognized here ever appears before it.
+ * on its own would end suppression early on a look-alike line inside the
+ * STILL-ECHOING prompt. Neither remaining consumer can look ahead: both
+ * process one line at a time as it arrives.
  */
 
 import { TOOL_OUTPUT_PREFIX } from "./constants.js";

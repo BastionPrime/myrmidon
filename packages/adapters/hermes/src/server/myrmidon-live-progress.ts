@@ -40,23 +40,36 @@
  * instructions + wake context + task markdown), not a short title. `-Q`
  * never reaches this line (`_run_quiet_single_query` exits first), so it is
  * new production behavior once quiet is bypassed. Rich's `Console.print`
- * word-wraps a long string at the console width with no marker of its own,
- * so `stripQueryEcho` below cuts from that line up to the first line that
- * starts real turn output (tool progress, the answer frame, or the exit
- * summary) rather than trying to reconstruct the wrapped text.
+ * word-wraps it at the console width, changing only whitespace. The echo is
+ * the one place where text of ours can look like the CLI's own output (frames,
+ * tool lines, a pasted hermes run with its exit summary), so it is not cut by
+ * guessing where "real output" starts: we know the prompt we sent, and
+ * ./myrmidon-query-echo.ts cuts the echo where the prompt's own text ends.
+ * Everything AFTER that point is the CLI's own output, and only that is looked
+ * at for the exit summary, the frames and the failure signals. If the text
+ * after `Query:` cannot be aligned with the prompt (the CLI changed it in a way
+ * we do not model), nothing after it is trusted and the run fails closed.
  *
- * Two consequences of running without `-Q` decide what this module does with
- * the stdout it is handed (see `analyzeLiveTurn`):
+ * Consequences of running without `-Q` that decide what this module does with
+ * the stdout it is handed (see `analyzeLiveRun`, `analyzeLiveTurn`):
  *
  *  - the answer is the LAST frame only. Everything else the CLI prints
- *    around it — the turn divider, earlier streamed boxes, tool lines, diffs,
- *    the prompt echo — is not part of the answer, so it is never taken from
- *    "everything that is not the exit summary";
+ *    around it — the turn divider, earlier streamed boxes, tool lines, diffs —
+ *    is not part of the answer, so it is never taken from "everything that is
+ *    not the exit summary";
  *  - the CLI exits 0 whatever happened, so a failed turn is recognized from
  *    the text and reported as an error with an EMPTY answer (the server
  *    builds the run summary and the auto-comment from the answer whatever the
  *    outcome). What real failures print was taken from captured output of the
- *    installed CLI, see myrmidon-live-progress.real-output.fixtures.ts.
+ *    installed CLI, see myrmidon-live-progress.real-output.fixtures.ts, and
+ *    from the vendor source for the branches that set `failed=True` without
+ *    any narration (./myrmidon-live-failure-markers.ts);
+ *  - a turn that ended with an exit summary but no answer frame at all (a
+ *    resumed session that failed to initialize, an exception in `chat()`, an
+ *    `@`-context block) is a failure too, not an empty success;
+ *  - the vendor's own text is not dropped from the run log: after the echo it
+ *    reaches the log as printed (redacted), and an early exit puts its first
+ *    lines into the error message.
  *
  * Both formats verified by reading the installed Hermes Agent CLI sources
  * and by capturing its real output (not guessed from the analysis report
@@ -65,13 +78,16 @@
  */
 
 import {
-  findRichFrameSpans,
+  findRichFrameSpansFromEnd,
   isPanelRuleLine,
   stripRichPanelFrames,
 } from "../shared/myrmidon-panel-frame.js";
 import type { RichFrame, RichFrameSpan } from "../shared/myrmidon-panel-frame.js";
 import { redactSecretsForLog } from "../shared/myrmidon-secret-redaction.js";
 import { isTurnOutputBoundaryLine } from "../shared/myrmidon-turn-output-boundary.js";
+import { findVendorFailureMarker } from "./myrmidon-live-failure-markers.js";
+import { compileEchoPrompt, EchoMatcher, QUERY_ECHO_LINE_RE, splitQueryEcho } from "./myrmidon-query-echo.js";
+import type { QueryEchoState } from "./myrmidon-query-echo.js";
 
 /**
  * Env flag: ignore `adapterConfig.quiet: true` and run without `-Q`, so the
@@ -138,117 +154,83 @@ export const LIVE_SESSION_ID_REGEX = /^Session:[ \t]+(\S+)/m;
 
 /**
  * The interactive exit summary's fixed skeleton (`_print_exit_summary()`,
- * hermes_cli/cli_session_mixin.py): the anchor line, immediately followed by
- * one or two `  hermes --resume <id>`/`  hermes -c "<title>"` hints, a blank
- * separator line, then the `Session:` field:
+ * hermes_cli/cli_session_mixin.py), the LAST thing the CLI prints:
  *
  *   Resume this session with:
  *     hermes --resume <id>
+ *     hermes -c "<title>"          (optional)
  *
  *   Session:        <id>
+ *   Title:          <title>        (optional)
  *   Duration:       <elapsed>
  *   Messages:       <n> (<u> user, <t> tool calls)
  *
- * myrmidon(G5): matching only the anchor line (`^Resume this session
- * with:...$`) is NOT safe to cut on — it is an ordinary English sentence a
- * prompt can legitimately contain (this very file's own doc comments do, and
- * so does this PR's own test data), so a bare match could anchor on the
- * prompt's own text instead of the real exit summary and truncate the real
- * answer that follows it. Requiring the immediate follow-on structure makes
- * an accidental match on free-form text effectively impossible: nothing but
- * `_print_exit_summary()` itself prints a `hermes --resume <id>` hint
- * followed by a blank line and a `Session:` field right after that phrase.
- */
-const EXIT_SUMMARY_RE =
-  /^Resume this session with:[ \t]*\r?\n(?:[ \t]*hermes (?:--resume|-c)\b[^\r\n]*\r?\n){1,2}[ \t]*\r?\nSession:[ \t]+\S+/m;
-
-/**
- * Index where the real exit summary starts in `stdout`, or undefined when no
- * occurrence of the anchor line is followed by the rest of the fixed
- * skeleton (e.g. a killed run, an unrecognized format, or a look-alike
- * anchor line in the agent's own answer/prompt with no real summary after
- * it). See `EXIT_SUMMARY_RE`'s doc comment for why the whole skeleton, not
- * just the anchor, is required.
- */
-function findExitSummaryStart(stdout: string): number | undefined {
-  return EXIT_SUMMARY_RE.exec(stdout)?.index;
-}
-
-/**
- * Session id from a non-quiet (no `-Q`) run's stdout, or undefined when the
- * exit summary is missing (e.g. a killed run, or an unrecognized format).
+ * myrmidon(G5): the summary is recognized by its WHOLE shape AND by being the
+ * end of the output — each field line after `Session:` is `Label: value`, and
+ * only whitespace may follow the last one. The anchor sentence alone is not
+ * safe (it is ordinary English a prompt or a model answer can contain), and
+ * even the whole skeleton can be quoted (a pasted earlier hermes run ends with
+ * one). Text the model wrote lies BEFORE the real summary, never after it, so
+ * requiring the end of the output means a quoted summary can only win if the
+ * real one is missing — and the prompt echo, the one place a whole run gets
+ * quoted, is cut off before this is looked at. Callers pass the text after the
+ * echo (`splitQueryEcho`), and the LAST match is the only one that can anchor.
  *
- * myrmidon(G5): scoped to the exit-summary tail (from `findExitSummaryStart`
- * onward), not the whole stdout. The agent's own answer is free-form text
- * the model wrote — a coding/ops assistant plausibly discussing sessions,
- * auth, or status fields could produce a line shaped like `Session:   foo`,
- * and a non-global regex's `.match()` returns the FIRST hit in the string.
- * Searching the whole stdout risked matching that instead of the real id
- * from `_print_exit_summary()`, which only ever appears after the validated
- * exit-summary skeleton.
+ * The price of this precision: a vendor release that prints something after
+ * the summary, or a field line not shaped `Label: value`, makes the summary
+ * unrecognized and a clean exit is reported as a failure (with the vendor's
+ * text in the message). That is the safe direction, and is listed in
+ * DIVERGENCE.md.
  */
-export function extractLiveSessionId(stdout: string): string | undefined {
-  const summaryStart = findExitSummaryStart(stdout);
-  if (summaryStart === undefined) return undefined;
-  return stdout.slice(summaryStart).match(LIVE_SESSION_ID_REGEX)?.[1];
+const EXIT_SUMMARY_TAIL_RE = new RegExp(
+  String.raw`(?<![^\n])Resume this session with:[ \t]*\r?\n` +
+    String.raw`(?:[ \t]*hermes (?:--resume|-c)\b[^\r\n]*\r?\n){1,2}` +
+    String.raw`[ \t]*\r?\n` +
+    String.raw`Session:[ \t]+\S+[^\r\n]*` +
+    String.raw`(?:\r?\n[A-Z][A-Za-z ]{0,20}:[ \t]+[^\r\n]*)*` +
+    String.raw`\s*$`,
+);
+
+/** Where the exit summary starts in `text` and the session id it carries, or undefined. */
+function findExitSummary(text: string): { start: number; sessionId: string } | undefined {
+  const match = EXIT_SUMMARY_TAIL_RE.exec(text);
+  if (!match) return undefined;
+  const sessionId = text.slice(match.index).match(LIVE_SESSION_ID_REGEX)?.[1];
+  return sessionId === undefined ? undefined : { start: match.index, sessionId };
 }
 
 /**
- * Cut the interactive exit summary off the end of a non-quiet run's stdout,
- * leaving the tool-progress lines and the answer's Rich Panel intact for
- * `cleanResponse()`/`stripRichPanelFrames()` to reduce to the plain answer.
+ * Session id from a non-quiet (no `-Q`) run's output AFTER the prompt echo, or
+ * undefined when the exit summary is missing (e.g. a killed run, an early
+ * exit, or an unrecognized format). See `EXIT_SUMMARY_TAIL_RE` for what counts
+ * as the summary. The agent's own answer is free-form text — a line shaped
+ * `Session:   foo` in it is never taken, because only the summary at the very
+ * end is read.
  */
-export function stripExitSummary(stdout: string): string {
-  const start = findExitSummaryStart(stdout);
-  return start === undefined ? stdout : stdout.slice(0, start);
+export function extractLiveSessionId(textAfterEcho: string): string | undefined {
+  return findExitSummary(textAfterEcho)?.sessionId;
 }
 
-/** The vendor CLI's prompt echo, first line only (cli.py `_run_single_query_mode`). */
-const QUERY_ECHO_START_RE = /^Query:\s/;
+/**
+ * Cut the interactive exit summary off the end of a non-quiet run's output
+ * (after the prompt echo), leaving the tool-progress lines and the answer's
+ * frame intact for `analyzeLiveTurn`.
+ */
+export function stripExitSummary(textAfterEcho: string): string {
+  const found = findExitSummary(textAfterEcho);
+  return found === undefined ? textAfterEcho : textAfterEcho.slice(0, found.start);
+}
 
 /**
- * Cut the vendor CLI's `Query: <prompt>` echo off the front of a non-quiet
- * run's stdout. `_query_label` is the ENTIRE prompt Paperclip sent on stdin
- * (agent instructions + wake context + task markdown), and `cli.console.print`
- * word-wraps it at the console width with no per-line marker — so instead of
- * matching the echoed text itself, this cuts from the `Query:` line up to the
- * first line that unambiguously starts real turn output.
- *
- * If no such boundary is found before the end of stdout (e.g. a run killed
- * before any tool call, reasoning, or answer text printed), this is a no-op:
- * leaving the echo in a mangled response is safer than a wrong guess that
- * could delete the real answer along with it.
+ * Remove the vendor CLI's `Query: <prompt>` echo from a non-quiet run's stdout,
+ * cutting it exactly by the prompt that was sent (see ./myrmidon-query-echo.ts),
+ * and return what the CLI itself printed. When the echo cannot be aligned with
+ * the prompt, or the output ends inside it, nothing after the `Query:` line is
+ * returned: it cannot be told from echo.
  */
-export function stripQueryEcho(stdout: string): string {
-  const lines = stdout.split("\n");
-  let start = 0;
-  while (start < lines.length && lines[start].trim() === "") start++;
-  if (start >= lines.length || !QUERY_ECHO_START_RE.test(lines[start].trim())) return stdout;
-
-  let end = start + 1;
-  while (end < lines.length && !isTurnOutputBoundaryLine(lines[end].trim())) end++;
-
-  if (end >= lines.length) {
-    // myrmidon(G5): `isTurnOutputBoundaryLine` deliberately only recognizes
-    // visually-unique, per-line markers (tool progress, the answer's frame)
-    // — it does NOT treat a bare "Resume this session with:" line as
-    // sufficient on its own, because that sentence is ordinary English the
-    // echoed prompt can legitimately contain (see EXIT_SUMMARY_RE's doc
-    // comment). Unlike the shared per-line check, this function sees the
-    // WHOLE captured stdout up front (it runs after the child process has
-    // already exited, not while it streams), so it can afford the one thing
-    // the per-line scan cannot: validating the exit summary's full
-    // multi-line skeleton before trusting it as a boundary. This only
-    // matters for a turn that reached no tool call and — for whatever
-    // reason — never printed the answer's own frame either; in every other
-    // case the loop above already found a real boundary before running off
-    // the end of `lines`.
-    const exitSummaryStart = findExitSummaryStart(stdout);
-    if (exitSummaryStart === undefined) return stdout; // no recognized boundary: leave it alone
-    end = stdout.slice(0, exitSummaryStart).split("\n").length - 1;
-  }
-
-  return [...lines.slice(0, start), ...lines.slice(end)].join("\n");
+export function stripQueryEcho(stdout: string, prompt: string): string {
+  const split = splitQueryEcho(stdout, prompt);
+  return split.before + split.after;
 }
 
 /** Title of the vendor's billing call-to-action Panel (`_chat_print_response_panel`'s "Out of credits"). */
@@ -272,34 +254,34 @@ const TURN_FAILURE_NARRATION_RE = /^❌/;
 const MAX_FAILURE_MESSAGE_CHARS = 1000;
 
 /**
- * What `analyzeLiveTurn` concluded about a non-quiet run's stdout (already
- * cut at the exit summary).
+ * What `analyzeLiveTurn` concluded about a non-quiet run's output (after the
+ * prompt echo, before the exit summary).
  *
  * `answer` is the last frame that is not the billing call to action, and is
  * present only when the turn did NOT fail — a failed turn has no answer, so
  * nothing from its error text can leak into the stored response, the run
  * summary or the auto-comment built from it. `failureMessage` is present iff
- * the turn is judged to have failed.
+ * the turn is judged to have failed. Both are undefined when the turn printed
+ * no frame at all.
  */
 export interface LiveTurnAnalysis {
   answer: RichFrame | undefined;
   failureMessage: string | undefined;
 }
 
-/** True when the last-non-CTA answer panel sits after a turn-loop `❌` narration line. */
+/**
+ * True when a turn-loop `❌` narration line sits between the answer frame and
+ * whatever precedes it: the previous frame's end, or the turn's own divider —
+ * the run of `─` the CLI prints once when a turn starts
+ * (cli_chat_turn_mixin.py) — or, for the first frame, the start of the text.
+ */
 function hasFailureNarrationBefore(lines: string[], spans: RichFrameSpan[], answerIdx: number): boolean {
-  // The region to look at starts after the previous frame (if any) or, for
-  // the first frame, after the turn's own divider — the run of `─` the CLI
-  // prints once when a turn starts (cli_chat_turn_mixin.py). Anything before
-  // the divider is the vendor's echo of the whole prompt, which can contain
-  // any text, so without one of those two anchors nothing is claimed.
   const floor = answerIdx > 0 ? spans[answerIdx - 1].endLine : -1;
-  let found = false;
   for (let k = spans[answerIdx].startLine - 1; k > floor; k--) {
-    if (isPanelRuleLine(lines[k].trim())) return found; // the turn's divider
-    if (TURN_FAILURE_NARRATION_RE.test(lines[k].replace(/\r$/, ""))) found = true;
+    if (isPanelRuleLine(lines[k].trim())) return false; // the turn's divider: nothing above it is this turn
+    if (TURN_FAILURE_NARRATION_RE.test(lines[k].replace(/\r$/, ""))) return true;
   }
-  return answerIdx > 0 ? found : false;
+  return false;
 }
 
 /**
@@ -322,23 +304,27 @@ function hasFailureNarrationBefore(lines: string[], spans: RichFrameSpan[], answ
  *    the answer is a streaming box: it is only ever printed on failure);
  *  - the Panel body starts with `Error:`;
  *  - a turn-loop `❌` narration line sits between the previous frame (or the
- *    turn's divider) and the Panel.
+ *    turn's divider, or the start of the text) and the Panel;
+ *  - the Panel body starts with one of the vendor's turn-ending failure
+ *    sentences, which print no narration (`findVendorFailureMarker`).
  *
  * A streaming-box answer is never a failure by itself, whatever it says: it
  * is model prose (`already_streamed` requires "not an error response"). A
- * Panel answer with none of the three markers is accepted as an answer — this
- * is what a successful turn looks like when `display.streaming` is off. The
- * residual risk is a failed turn whose Panel carries no marker at all; that
- * is stored as a normal answer.
+ * Panel answer with none of the markers is accepted as an answer — this is
+ * what a successful turn looks like when `display.streaming` is off. The
+ * residual risk is a failed turn whose Panel carries none of them (see
+ * DIVERGENCE.md); that is stored as a normal answer.
  *
- * `answer` is the LAST non-call-to-action frame — everything earlier is the
- * turn divider, superseded streamed commentary and inline tool diffs, none of
- * which sit inside the last frame's own border. No frame means no answer.
- * Pass the stdout with the exit summary already cut off (`stripExitSummary`).
+ * `answer` is the LAST non-call-to-action frame, found scanning from the end
+ * of the text — everything earlier is the turn divider, superseded streamed
+ * commentary and inline tool diffs, none of which sit inside the last frame's
+ * own border. No frame means no answer and no verdict here; `analyzeLiveRun`
+ * decides what that means. Pass the output AFTER the prompt echo with the exit
+ * summary already cut off (`stripExitSummary`).
  */
-export function analyzeLiveTurn(stdoutBeforeExitSummary: string): LiveTurnAnalysis {
-  const lines = stdoutBeforeExitSummary.split("\n");
-  const spans = findRichFrameSpans(stdoutBeforeExitSummary);
+export function analyzeLiveTurn(turnText: string): LiveTurnAnalysis {
+  const lines = turnText.split("\n");
+  const spans = findRichFrameSpansFromEnd(turnText);
   const isCallToAction = (f: RichFrameSpan) => f.kind === "panel" && OUT_OF_CREDITS_TITLE_RE.test(f.title);
   const callToAction = spans.filter(isCallToAction);
   let answerIdx = -1;
@@ -355,7 +341,8 @@ export function analyzeLiveTurn(stdoutBeforeExitSummary: string): LiveTurnAnalys
     const firstContentLine = answerSpan.bodyLines.map((l) => l.trim()).find((l) => l.length > 0);
     failed =
       (firstContentLine !== undefined && ERROR_PREFIX_RE.test(firstContentLine)) ||
-      hasFailureNarrationBefore(lines, spans, answerIdx);
+      hasFailureNarrationBefore(lines, spans, answerIdx) ||
+      findVendorFailureMarker(answerSpan.bodyLines.join("\n")) !== undefined;
   }
 
   if (!failed) {
@@ -375,6 +362,115 @@ export function analyzeLiveTurn(stdoutBeforeExitSummary: string): LiveTurnAnalys
 // Re-exported so execute.ts's response cleaning needs a single G5 import.
 export { stripRichPanelFrames };
 
+/** The vendor's message when `--resume` names a session it does not have or cannot resume (cli_agent_setup_mixin.py). */
+const STALE_SESSION_RE = /^(?:Session not found|Cannot resume session):/m;
+
+/** How many vendor lines an error message quotes, and how long that quote may get. */
+const MAX_EXCERPT_LINES = 5;
+const MAX_EXCERPT_CHARS = 500;
+
+/** Lines that say nothing about why a run ended: the CLI's own chrome. */
+function isExcerptNoise(trimmed: string): boolean {
+  return trimmed === "" || trimmed === "Initializing agent..." || trimmed.startsWith("Goodbye!") || isPanelRuleLine(trimmed);
+}
+
+/** The first meaningful lines of vendor output, redacted and bounded, for an error message. */
+function excerptOf(text: string): string {
+  const kept: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (isExcerptNoise(trimmed)) continue;
+    kept.push(trimmed);
+    if (kept.length >= MAX_EXCERPT_LINES) break;
+  }
+  return redactSecretsForLog(kept.join(" | ")).slice(0, MAX_EXCERPT_CHARS);
+}
+
+function withExcerpt(message: string, text: string): string {
+  const excerpt = excerptOf(text);
+  return excerpt === "" ? `${message} It printed nothing else.` : `${message} It printed: ${excerpt}`;
+}
+
+const ECHO_LOST_MESSAGE =
+  "hermes exited 0 in live-progress mode, but the text after its `Query:` line is not the prompt that was sent, " +
+  "so nothing it printed could be trusted (the CLI changed how it echoes the query?).";
+const EARLY_EXIT_MESSAGE =
+  "hermes exited 0 in live-progress mode without printing an exit summary: it stopped before a turn completed " +
+  "(missing credentials, a --resume target that was not found, ...) or printed a shape this adapter does not recognize.";
+const NO_ANSWER_FRAME_MESSAGE =
+  "hermes ended a turn in live-progress mode without printing an answer (the turn failed before it produced one, " +
+  "for example a resumed session that could not be initialized).";
+
+/** What `analyzeLiveRun` concluded about one run's captured stdout. */
+export interface LiveRunAnalysis {
+  /** stdout as the CLI printed it, minus the prompt echo (see `stripQueryEcho`). */
+  visibleStdout: string;
+  /** How the prompt echo was found. */
+  echo: QueryEchoState;
+  /** Session id from the exit summary; only from a summary that ends the CLI's own output. */
+  sessionId: string | undefined;
+  /** The turn's answer frame; absent for a failed turn. */
+  answer: RichFrame | undefined;
+  /** Set when the run must be recorded as a failure although the CLI exited 0. */
+  errorMessage: string | undefined;
+  /** The CLI said the `--resume` session is gone or cannot be resumed: the stored session id is dead. */
+  staleSession: boolean;
+}
+
+/**
+ * Judge a non-quiet run from its captured stdout, the prompt that was sent on
+ * stdin, and how the process ended.
+ *
+ * The output after the echo is examined in this order: no exit summary and a
+ * clean exit -> early exit (the vendor's first lines go into the message);
+ * exit summary -> `analyzeLiveTurn` on what precedes it, and a turn with no
+ * frame at all on a clean exit is a failure too. A run that timed out or exited
+ * nonzero gets no verdict of its own here: `execute()` already reports those.
+ * When the echo cannot be aligned, a clean exit is a failure and nothing after
+ * the `Query:` line is used.
+ */
+export function analyzeLiveRun(
+  rawStdout: string,
+  prompt: string,
+  run: { timedOut: boolean; exitCode: number | null | undefined },
+): LiveRunAnalysis {
+  const split = splitQueryEcho(rawStdout, prompt);
+  const exitedCleanly = !run.timedOut && run.exitCode === 0;
+  const result: LiveRunAnalysis = {
+    visibleStdout: split.before + split.after,
+    echo: split.state,
+    sessionId: undefined,
+    answer: undefined,
+    errorMessage: undefined,
+    staleSession: false,
+  };
+  if (split.state === "lost") {
+    if (exitedCleanly) result.errorMessage = ECHO_LOST_MESSAGE;
+    return result;
+  }
+
+  const output = split.after;
+  const summary = findExitSummary(output);
+  if (summary === undefined) {
+    // The stored session is stale only when the CLI itself said so before any turn ran.
+    result.staleSession = STALE_SESSION_RE.test(output);
+    if (exitedCleanly) result.errorMessage = withExcerpt(EARLY_EXIT_MESSAGE, output);
+    return result;
+  }
+
+  result.sessionId = summary.sessionId;
+  const turnText = output.slice(0, summary.start);
+  const turn = analyzeLiveTurn(turnText);
+  if (turn.failureMessage !== undefined) {
+    result.errorMessage = turn.failureMessage;
+  } else if (turn.answer !== undefined) {
+    result.answer = turn.answer;
+  } else if (exitedCleanly) {
+    result.errorMessage = withExcerpt(NO_ANSWER_FRAME_MESSAGE, turnText);
+  }
+  return result;
+}
+
 /**
  * Per-run, per-stream sanitizer for the raw stdout/stderr chunks forwarded to
  * Paperclip's live/persisted run log (`execute.ts`'s `wrappedOnLog`) while
@@ -387,32 +483,28 @@ export { stripRichPanelFrames };
  *    token in the next) matched nothing in either call. This buffers each
  *    stream's trailing partial line across calls and only redacts complete,
  *    reassembled lines.
- *  - the `Query: <prompt>` echo (see `stripQueryEcho` above) was previously
- *    only cut from the *parsed final response*: every raw chunk of it still
- *    reached the persisted run log, protected only by `redactSecretsForLog`'s
+ *  - the `Query: <prompt>` echo (see the module doc) would otherwise be copied
+ *    into the run log, protected only by `redactSecretsForLog`'s
  *    pattern-based redaction — which "can only mask shapes it recognizes"
  *    (../shared/myrmidon-secret-redaction.ts) and would miss a credential
  *    pasted as free prose in the agent's own instructions or the task
- *    markdown. This drops the whole echoed block from the log stream itself,
- *    using the same `isTurnOutputBoundaryLine` scan `stripQueryEcho` uses,
- *    applied incrementally as lines arrive instead of over the whole
- *    (post-hoc) stdout.
+ *    markdown. This drops the echoed block from the log stream, cutting it
+ *    exactly by the known prompt with the same matcher `stripQueryEcho` uses,
+ *    fed line by line as lines arrive.
  *
- * Construct one instance per run (per `execute()` call) — the suppression
- * flag and the per-stream buffers are run-scoped state, never module-level.
+ * Only the echo is dropped. Everything the CLI prints after it — including the
+ * vendor's own message when it stops before a turn ("Session not found", "No
+ * API key found ...") — reaches the log, redacted.
  *
- * myrmidon(G5): unlike `stripQueryEcho`, this processes lines one at a time
- * as they arrive and can never look ahead — so, per `isTurnOutputBoundaryLine`'s
- * doc comment, it does NOT treat a bare exit-summary anchor line as a
- * boundary on its own (only `stripQueryEcho`, which sees the whole captured
- * stdout up front, can safely validate that). The one turn shape this can't
- * recover from is one with no tool call AND, for whatever reason, no
- * Panel/streaming-box frame either — everything after `Query:` would then
- * stay suppressed in this live/persisted log stream for the rest of the
- * run (the STORED response is unaffected: `parseHermesOutput`'s post-hoc
- * `stripQueryEcho` still finds the real, validated exit summary). Accepted:
- * every real turn's final answer is wrapped in one of those two frames
- * (see ../shared/myrmidon-panel-frame.ts), so this is not the normal case.
+ * If the text after `Query:` turns out not to be the prompt (the alignment is
+ * lost), the sanitizer falls back to the heuristic this module used before it
+ * knew the prompt: drop lines until one that can only be turn output
+ * (`isTurnOutputBoundaryLine`). That keeps a possibly secret-bearing echo out of
+ * the log at the price of possibly dropping some real output; the stored
+ * result is decided separately and fails closed (`analyzeLiveRun`).
+ *
+ * Construct one instance per run (per `execute()` call) — the phase, the
+ * matcher and the per-stream buffers are run-scoped state, never module-level.
  */
 export interface LiveLogSanitizer {
   /**
@@ -420,7 +512,7 @@ export interface LiveLogSanitizer {
    * sanitized lines (each WITHOUT a trailing newline — the caller decides
    * how to rejoin them) that are safe to forward now; an empty array means
    * nothing is ready yet (still buffering a partial line, or the whole
-   * chunk was inside a suppressed `Query:` echo).
+   * chunk was inside the `Query:` echo).
    */
   push(stream: "stdout" | "stderr", rawChunk: string): string[];
   /**
@@ -428,29 +520,54 @@ export interface LiveLogSanitizer {
    * coming): flushes each stream's trailing partial line, redacted and
    * tagged with the stream it came from (the caller still needs that, e.g.
    * to reclassify a benign stderr line as stdout). A partial line still
-   * inside an unterminated `Query:` echo (no boundary ever arrived — e.g.
-   * the run was killed mid-echo) is dropped rather than forwarded: at that
-   * point it can only be echoed prompt, never real turn output.
+   * inside an unfinished echo (the run was killed mid-echo) is dropped rather
+   * than forwarded: at that point it can only be echoed prompt.
    */
   flush(): Array<{ stream: "stdout" | "stderr"; line: string }>;
 }
 
-export function createLiveLogSanitizer(): LiveLogSanitizer {
+type EchoPhase = "before-echo" | "in-echo" | "after-echo" | "alignment-lost";
+
+export function createLiveLogSanitizer(prompt: string): LiveLogSanitizer {
+  const compiled = compileEchoPrompt(prompt);
   const pending: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
-  let suppressingQueryEcho = false;
+  // With no prompt text there is no echo to align against, and nothing to hide.
+  let phase: EchoPhase = compiled.significant.length === 0 ? "after-echo" : "before-echo";
+  let matcher: EchoMatcher | null = null;
+
+  /** One line of the echo (from index `from`): stay inside, finish it, or lose the alignment. */
+  function feedEchoLine(line: string, from: number): string | null {
+    const result = matcher!.feed(`${line}\n`, from);
+    if (result.status === "more") return null;
+    matcher = null;
+    if (result.status === "lost") {
+      phase = "alignment-lost";
+      return null;
+    }
+    phase = "after-echo";
+    const rest = line.slice(Math.min(result.end, line.length));
+    return rest.trim() === "" ? null : redactSecretsForLog(rest);
+  }
 
   function sanitizeCompleteLine(stream: "stdout" | "stderr", line: string): string | null {
-    const trimmed = line.trim();
-    if (stream === "stdout") {
-      if (suppressingQueryEcho) {
-        if (!isTurnOutputBoundaryLine(trimmed)) return null; // still inside the echo: drop
-        suppressingQueryEcho = false; // boundary reached: keep this line, resume normally
-      } else if (QUERY_ECHO_START_RE.test(trimmed)) {
-        suppressingQueryEcho = true; // drop the "Query:" line itself too
-        return null;
+    if (stream === "stderr") return redactSecretsForLog(line);
+    switch (phase) {
+      case "before-echo": {
+        const start = QUERY_ECHO_LINE_RE.exec(line);
+        if (start === null) return redactSecretsForLog(line);
+        matcher = new EchoMatcher(compiled);
+        phase = "in-echo";
+        return feedEchoLine(line, start[0].length);
       }
+      case "in-echo":
+        return feedEchoLine(line, 0);
+      case "alignment-lost":
+        if (!isTurnOutputBoundaryLine(line.trim())) return null;
+        phase = "after-echo";
+        return redactSecretsForLog(line);
+      case "after-echo":
+        return redactSecretsForLog(line);
     }
-    return redactSecretsForLog(line);
   }
 
   return {
@@ -471,7 +588,7 @@ export function createLiveLogSanitizer(): LiveLogSanitizer {
         const remainder = pending[stream];
         pending[stream] = "";
         if (!remainder) continue;
-        if (stream === "stdout" && suppressingQueryEcho) continue; // no boundary ever arrived: drop
+        if (stream === "stdout" && (phase === "in-echo" || phase === "alignment-lost")) continue; // never left the echo: drop
         out.push({ stream, line: redactSecretsForLog(remainder) });
       }
       return out;

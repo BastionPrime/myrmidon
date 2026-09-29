@@ -74,12 +74,9 @@ import { materializeHermesRunModels } from "./myrmidon-profile-config.js";
 // (buffered redaction + Query-echo suppression) for the raw chunks forwarded
 // to Paperclip's persisted run log
 import {
-  analyzeLiveTurn,
+  analyzeLiveRun,
   createLiveLogSanitizer,
-  extractLiveSessionId,
   resolveHermesQuietMode,
-  stripExitSummary,
-  stripQueryEcho,
   stripRichPanelFrames,
 } from "./myrmidon-live-progress.js";
 
@@ -264,6 +261,8 @@ interface ParsedOutput {
   usage?: UsageSummary;
   costUsd?: number;
   errorMessage?: string;
+  // myrmidon(G5): the CLI itself said the `--resume` session is gone (live-progress mode).
+  staleSession?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -318,57 +317,45 @@ function parseHermesOutput(
   // `Hermes exited with code ${exitCode}` fallback (or a real stderr
   // diagnostic), and must not be overridden by this vaguer message.
   exitCode: number | null | undefined,
+  // myrmidon(G5): the prompt that was sent on stdin; the CLI's `Query:` echo is
+  // cut exactly by it (myrmidon-query-echo.ts), not guessed at.
+  prompt: string,
 ): ParsedOutput {
-  // myrmidon(G5): live progress mode (no -Q) echoes the whole prompt as a
-  // "Query: <prompt>" line before any turn output (cli.py
-  // _run_single_query_mode); strip it before anything else parses stdout so
-  // it never lands in the stored response or (via SESSION_ID_REGEX_LEGACY)
-  // gets mistaken for session chrome. No-op for quiet-mode stdout, which
-  // never contains this line. See myrmidon-live-progress.ts.
-  const stdout = stripQueryEcho(rawStdout);
-  const combined = stdout + "\n" + stderr;
   const result: ParsedOutput = {};
+  let stdout = rawStdout;
 
   if (!useQuiet) {
-    // myrmidon(G5): live progress (no -Q). The turn is finished only when the
-    // CLI printed its interactive exit summary (cli.py _print_exit_summary);
-    // that block is the one trustworthy source of the session id and the
-    // completion marker, so quiet mode's stderr "session_id:" line and the
-    // legacy loose regex are deliberately NOT consulted here — on a run that
-    // never reached a turn ("Session not found: <id>", missing credentials)
-    // the loose regex would capture a word of the vendor's own message and
-    // store it as the next run's --resume target. See myrmidon-live-progress.ts.
-    const liveSessionId = extractLiveSessionId(stdout);
-    if (liveSessionId) {
-      result.sessionId = liveSessionId;
-      // The answer is ONLY the last frame before the exit summary, and a
-      // failed turn has no answer: without -Q the CLI exits 0 even when the
-      // provider refused the request, and the server builds the run summary
-      // and the auto-comment from the response whatever the outcome, so a
-      // failed turn's error text (or the whole divider/tool-line/diff
-      // transcript around it) must never land there. See analyzeLiveTurn.
-      const turn = analyzeLiveTurn(stripExitSummary(stdout));
-      if (turn.failureMessage) {
-        result.errorMessage = turn.failureMessage;
-      } else if (turn.answer) {
-        result.response = cleanResponse(turn.answer.bodyLines.join("\n"));
-      }
-    } else if (!timedOut && exitCode === 0) {
-      // No exit summary and not killed by our own timeout: the CLI exited
-      // before it ever reached a turn (no credentials configured, or
-      // --resume pointed at a session that was not found or is over the
-      // history cap) or printed a shape we do not recognize. Without -Q that
-      // early exit is exit code 0 with no errorMessage (only quiet mode's
-      // _run_quiet_single_query calls sys.exit(1)), so the run would be
-      // recorded as succeeded and the failure recovery path would never
-      // trigger. Any text on stdout is unfinished output, never an answer.
-      result.errorMessage =
-        "hermes chat exited 0 without a recognized exit summary in live-progress " +
-        "mode (an early exit before any turn ran — e.g. missing credentials, or " +
-        "--resume pointed at a session that was not found or is over the history " +
-        "cap — or an unrecognized output shape)";
-    }
+    // myrmidon(G5): live progress (no -Q). The CLI echoes the whole prompt as a
+    // "Query: <prompt>" line before any turn output (cli.py
+    // _run_single_query_mode); analyzeLiveRun cuts it by the known prompt, so
+    // it never lands in the stored response, and looks for the exit summary,
+    // the answer frame and the failure signals only AFTER it. Quiet mode
+    // never prints this line and is left as it was. The turn is finished only
+    // when the CLI printed its interactive exit summary (cli.py
+    // _print_exit_summary); that block, at the very end of the output, is the
+    // one trustworthy source of the session id, so quiet mode's stderr
+    // "session_id:" line and the legacy loose regex are deliberately NOT
+    // consulted here — on a run that never reached a turn ("Session not
+    // found: <id>", missing credentials) the loose regex would capture a word
+    // of the vendor's own message and store it as the next run's --resume
+    // target. See myrmidon-live-progress.ts.
+    const live = analyzeLiveRun(rawStdout, prompt, { timedOut, exitCode });
+    stdout = live.visibleStdout;
+    result.sessionId = live.sessionId;
+    // The answer is ONLY the last frame before the exit summary, and a failed
+    // turn has no answer: without -Q the CLI exits 0 even when the provider
+    // refused the request, and the server builds the run summary and the
+    // auto-comment from the response whatever the outcome, so a failed turn's
+    // error text (or the whole divider/tool-line/diff transcript around it)
+    // must never land there. A clean exit that shows no answer and no exit
+    // summary, or an exit summary and no frame, is a failure too (the exit
+    // code is 0 for both); a run that already exited nonzero or timed out is
+    // diagnosed by execute() itself and gets no verdict here.
+    if (live.errorMessage !== undefined) result.errorMessage = live.errorMessage;
+    if (live.answer) result.response = cleanResponse(live.answer.bodyLines.join("\n"));
+    if (live.staleSession) result.staleSession = true;
   } else {
+    const combined = stdout + "\n" + stderr;
     // In quiet mode, Hermes outputs:
     //   <response text>
     //
@@ -393,6 +380,8 @@ function parseHermesOutput(
       }
     }
   }
+
+  const combined = stdout + "\n" + stderr;
 
   // Extract token usage
   const usageMatch = combined.match(TOKEN_USAGE_REGEX);
@@ -700,11 +689,13 @@ export async function execute(
   // vendor CLI's whole-prompt `Query:` echo (myrmidon-live-progress.ts).
   // createLiveLogSanitizer buffers each stream's trailing partial line so a
   // secret or that echo's boundary can't hide by straddling two `data`
-  // events, redacts secret-shaped text, and drops the echo before any of it
-  // reaches Paperclip's persisted run log / live transcript. Quiet mode
-  // (-Q) never prints either in the first place, so it skips the sanitizer
-  // entirely and stays byte-for-byte unchanged.
-  const liveLogSanitizer = useQuiet ? null : createLiveLogSanitizer();
+  // events, redacts secret-shaped text, and drops the echo — cut exactly by
+  // the prompt sent on stdin — before any of it reaches Paperclip's persisted
+  // run log / live transcript. Everything the CLI prints after the echo
+  // reaches the log (redacted), including its own message when it stops
+  // before a turn. Quiet mode (-Q) never prints either in the first place, so
+  // it skips the sanitizer entirely and stays byte-for-byte unchanged.
+  const liveLogSanitizer = useQuiet ? null : createLiveLogSanitizer(prompt);
 
   const wrappedOnLog = async (stream: "stdout" | "stderr", rawChunk: string) => {
     if (!liveLogSanitizer) {
@@ -748,7 +739,14 @@ export async function execute(
   }
 
   // ── Parse output ───────────────────────────────────────────────────────
-  const parsed = parseHermesOutput(result.stdout || "", result.stderr || "", useQuiet, result.timedOut, result.exitCode);
+  const parsed = parseHermesOutput(
+    result.stdout || "",
+    result.stderr || "",
+    useQuiet,
+    result.timedOut,
+    result.exitCode,
+    prompt, // myrmidon(G5)
+  );
 
   await ctx.onLog(
     "stdout",
@@ -798,6 +796,15 @@ export async function execute(
   if (persistSession && parsed.sessionId) {
     executionResult.sessionParams = { sessionId: parsed.sessionId };
     executionResult.sessionDisplayId = parsed.sessionId.slice(0, 16);
+  }
+
+  // myrmidon(G5): the CLI said the session it was asked to resume is gone
+  // ("Session not found: <id>", "Cannot resume session: ..."). The stored id
+  // is dead, and every later run would fail the same way until someone cleared
+  // it by hand, so ask the server to drop it (as claude-local does for a
+  // poisoned session). Only when we actually passed --resume.
+  if (parsed.staleSession && persistSession && prevSessionId) {
+    executionResult.clearSession = true;
   }
 
   return executionResult;

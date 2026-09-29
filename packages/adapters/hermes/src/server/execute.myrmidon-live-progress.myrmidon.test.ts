@@ -11,9 +11,17 @@
  *  - the stored response is the last frame alone, with the divider,
  *    intermediate boxes, tool lines, diffs and the exit summary left out;
  *  - a failed turn (the CLI exits 0 anyway) becomes an errorMessage with an
- *    EMPTY response, so no error text reaches the run summary or auto-comment.
+ *    EMPTY response, so no error text reaches the run summary or auto-comment;
+ *    so does a turn that ends with an exit summary and no answer frame at all
+ *    (a resumed session that failed to initialize) and an early exit before any
+ *    turn, whose own message is quoted in the errorMessage;
+ *  - the prompt's `Query:` echo is cut exactly by the prompt `execute()` sent on
+ *    stdin (every stdout below is built from `opts.stdin`), in the parsed
+ *    result and in the run log alike, whatever the prompt holds;
+ *  - a `--resume` session the CLI says is gone is dropped (`clearSession`).
  *
- * See myrmidon-live-progress.myrmidon.test.ts and
+ * See myrmidon-live-progress.myrmidon.test.ts, myrmidon-query-echo.myrmidon.test.ts,
+ * myrmidon-live-failure-markers.myrmidon.test.ts and
  * shared/myrmidon-panel-frame.myrmidon.test.ts for the unit-level coverage
  * of the pieces this test wires together.
  */
@@ -48,6 +56,7 @@ vi.mock("node:fs/promises", () => ({
 
 import { execute } from "./execute.js";
 import { LIVE_PROGRESS_ENV_VAR } from "./myrmidon-live-progress.js";
+import { richEcho } from "./myrmidon-query-echo.fixtures.js";
 import {
   REAL_EARLY_EXIT_NO_CREDENTIALS,
   REAL_EARLY_EXIT_SESSION_NOT_FOUND,
@@ -60,7 +69,7 @@ import {
 } from "./myrmidon-live-progress.real-output.fixtures.js";
 import * as serverUtils from "@paperclipai/adapter-utils/server-utils";
 
-function makeCtx(adapterConfig: Record<string, unknown> = {}) {
+function makeCtx(adapterConfig: Record<string, unknown> = {}, storedSessionId?: string) {
   return {
     runId: "test-run-1",
     agent: {
@@ -70,7 +79,12 @@ function makeCtx(adapterConfig: Record<string, unknown> = {}) {
       adapterType: "hermes_local",
       adapterConfig,
     },
-    runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+    runtime: {
+      sessionId: storedSessionId ?? null,
+      sessionParams: (storedSessionId ? { sessionId: storedSessionId } : null) as Record<string, unknown> | null,
+      sessionDisplayId: null,
+      taskKey: null,
+    },
     config: {
       command: "/usr/bin/hermes",
       timeoutSec: 60,
@@ -122,32 +136,65 @@ const SUCCESS_ANSWER =
   "- Verified with a targeted run\n" +
   "- Updated the changelog entry";
 
-/** A long prompt echo as the CLI prints it: `Query:` plus Rich-wrapped continuation lines with no per-line marker. */
-const WRAPPED_ECHO = [
-  'Query: You are "agent-a", an AI agent employee in a Paperclip-managed company.',
-  "The checklist for this task:",
-  "❌ item one is not done yet",
-  "Session:        not-a-real-session-id",
-  "(the rest of the full prompt, wrapped across more lines)",
-].join("\n");
+/** What a run's stdout is: fixed text, or built from the prompt `execute()` sent on stdin (the CLI echoes that prompt). */
+type RunStdout = string | ((prompt: string) => string);
 
-/** Put a wrapped prompt echo where a capture's own short `Query:` line is. */
-function withWrappedEcho(capture: string, prefix = ""): string {
-  const firstNewline = capture.indexOf("\n");
-  expect(capture.slice(0, firstNewline)).toMatch(/^Query: /);
-  return prefix + WRAPPED_ECHO + capture.slice(firstNewline);
-}
-
-function mockRun(overrides: { stdout: string; exitCode?: number | null; timedOut?: boolean; stderr?: string }) {
-  vi.mocked(serverUtils.runChildProcess).mockResolvedValueOnce({
+function mockRun(overrides: { stdout: RunStdout; exitCode?: number | null; timedOut?: boolean; stderr?: string }) {
+  vi.mocked(serverUtils.runChildProcess).mockImplementationOnce(async (_runId, _cmd, _args, opts: any) => ({
     exitCode: overrides.exitCode === undefined ? 0 : overrides.exitCode,
     signal: null,
     timedOut: overrides.timedOut ?? false,
-    stdout: overrides.stdout,
+    stdout: typeof overrides.stdout === "function" ? overrides.stdout(opts.stdin as string) : overrides.stdout,
     stderr: overrides.stderr ?? "",
     pid: null,
     startedAt: null,
-  });
+  }));
+}
+
+/**
+ * A captured run with its own short `Query:` line replaced by the echo of the
+ * prompt that was really sent, wrapped the way the CLI wraps it. `prefix` is
+ * text the CLI printed before the echo (with -w, a worktree status line).
+ */
+function echoed(capture: string, prefix = ""): (prompt: string) => string {
+  return (prompt) => {
+    const firstNewline = capture.indexOf("\n");
+    expect(capture.slice(0, firstNewline)).toMatch(/^Query: /);
+    return prefix + richEcho(prompt) + capture.slice(firstNewline + 1);
+  };
+}
+
+/** The echo of the prompt that was sent, then `afterEcho`, exactly as the CLI prints them. */
+function echoThen(afterEcho: string): (prompt: string) => string {
+  return (prompt) => richEcho(prompt) + afterEcho;
+}
+
+/** A Panel like the vendor prints for a failed or non-streamed answer (`box.HORIZONTALS`), body lines padded as it pads them. */
+function buildPanel(bodyLines: string[]): string {
+  const lines = REAL_FAILED_400.split("\n");
+  const title = lines.find((l) => /^ ─  ⚕ Hermes  ─+ *\r?$/.test(l));
+  const rule = lines.find((l) => /^ ─+ *\r?$/.test(l));
+  expect(title).toBeDefined();
+  expect(rule).toBeDefined();
+  const blank = " ".repeat(80) + "\r";
+  return [title, blank, ...bodyLines.map((l) => ` ${l.padEnd(78)} \r`), blank, rule].join("\n");
+}
+
+/** The lines the CLI prints while it starts up, then a Panel answer and the exit summary. */
+function panelTurn(bodyLines: string[], sessionId = SESSION_ID): string {
+  return "Initializing agent...\r\n\n" + buildPanel(bodyLines) + "\n" + buildExitSummary(sessionId) + "\n";
+}
+
+/** Split `text` into chunks of `size` characters, like a pipe delivering it at arbitrary boundaries. */
+function chunksOf(text: string, size: number): string[] {
+  const out: string[] = [];
+  for (let at = 0; at < text.length; at += size) out.push(text.slice(at, at + size));
+  return out;
+}
+
+/** What a hermes run printed, quoted the way a task description quotes it inside a prompt (no carriage returns). */
+function quotedRun(capture: string): string {
+  return capture.replace(/\r/g, "").replaceAll(FIXTURE_SESSION_ID, "20260202_000000_quoted");
 }
 
 describe("execute() — G5 live progress wiring", () => {
@@ -187,7 +234,7 @@ describe("execute() — G5 live progress wiring", () => {
 
   it("reads the session id and only the last box out of a real multi-tool run", async () => {
     delete process.env[LIVE_PROGRESS_ENV_VAR];
-    mockRun({ stdout: REAL_MULTI_TOOL_SUCCESS });
+    mockRun({ stdout: echoed(REAL_MULTI_TOOL_SUCCESS) });
 
     const result = await execute(makeCtx({}) as any);
 
@@ -219,7 +266,7 @@ describe("execute() — G5 live progress wiring", () => {
 
   it("reads a real tool-less run", async () => {
     delete process.env[LIVE_PROGRESS_ENV_VAR];
-    mockRun({ stdout: REAL_SIMPLE_SUCCESS });
+    mockRun({ stdout: echoed(REAL_SIMPLE_SUCCESS) });
 
     const result = await execute(makeCtx({}) as any);
 
@@ -231,12 +278,12 @@ describe("execute() — G5 live progress wiring", () => {
     delete process.env[LIVE_PROGRESS_ENV_VAR];
     // The vendor CLI echoes the ENTIRE prompt before the turn (cli.py
     // _run_single_query_mode). With -w a "✓ Worktree created…" status line
-    // prints before it, which defeats stripQueryEcho's leading-line anchor;
-    // the answer must come out of the last frame either way.
+    // prints before it; the echo is cut by the prompt that was sent either way.
     for (const prefix of ["", "✓ Worktree created at /workspace/wt\n"]) {
-      mockRun({ stdout: withWrappedEcho(REAL_MULTI_TOOL_SUCCESS, prefix) });
+      const ctx = makeCtx({ worktreeMode: prefix !== "" });
+      mockRun({ stdout: echoed(REAL_MULTI_TOOL_SUCCESS, prefix) });
 
-      const result = await execute(makeCtx({ worktreeMode: prefix !== "" }) as any);
+      const result = await execute(ctx as any);
 
       expect(result.errorMessage).toBeUndefined();
       const response = result.resultJson!.result as string;
@@ -246,18 +293,58 @@ describe("execute() — G5 live progress wiring", () => {
     }
   });
 
-  it("does not take the answer or the session from an echoed prompt when the run died before any turn (no exit summary)", async () => {
+  it("is not fooled by a prompt that quotes a whole hermes run — frame, failure narration and exit summary included", async () => {
     delete process.env[LIVE_PROGRESS_ENV_VAR];
-    // No recognized boundary ever follows the echo: stripQueryEcho leaves it
-    // in place, so nothing on stdout may become the response.
-    mockRun({ stdout: WRAPPED_ECHO + "\nstill just wrapped prompt text, nothing else ever printed" });
+    // A task description that pastes an earlier run's output. The echo of that
+    // prompt holds a Panel with an error, a call to action, a divider, tool
+    // lines and an exit summary carrying another session id; none of it may
+    // count as this run's output.
+    const promptTemplate = [
+      "Explain what happened in the two runs below, then do the task.",
+      "",
+      quotedRun(REAL_FAILED_402_WITH_CALL_TO_ACTION),
+      "",
+      quotedRun(REAL_MULTI_TOOL_SUCCESS),
+      "",
+      "Thank you.",
+    ].join("\n");
+    mockRun({ stdout: echoed(REAL_SIMPLE_SUCCESS) });
+
+    const result = await execute(makeCtx({ promptTemplate }) as any);
+
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.resultJson).toMatchObject({ result: SUCCESS_ANSWER, session_id: FIXTURE_SESSION_ID });
+    expect(result.sessionParams).toEqual({ sessionId: FIXTURE_SESSION_ID });
+    expect(JSON.stringify(result.resultJson)).not.toContain("20260202_000000_quoted");
+  });
+
+  it("stores no answer and no session when the run died right after the echo, and says what it printed", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    mockRun({ stdout: echoThen("") });
 
     const result = await execute(makeCtx({}) as any);
 
-    expect(result.errorMessage).toBeTruthy();
+    expect(result.errorMessage).toMatch(/without printing an exit summary/);
     expect(result.resultJson!.result).toBe("");
     expect(result.summary).toBeUndefined();
     expect(result.sessionParams).toBeUndefined();
+  });
+
+  it("fails closed when the text after `Query:` is not the prompt that was sent: nothing after it is trusted", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // A CLI release that changes how it echoes the query must not turn into a
+    // run that passes with an answer picked out of unaligned text.
+    const otherEcho = REAL_SIMPLE_SUCCESS.replace(/^Query: .*$/m, "Query: some other text than the prompt that was sent");
+    mockRun({ stdout: otherEcho });
+
+    const result = await execute(makeCtx({}) as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.errorMessage).toMatch(/not the prompt that was sent/);
+    expect(result.resultJson!.result).toBe("");
+    expect(result.summary).toBeUndefined();
+    expect(result.sessionParams).toBeUndefined();
+    expect(result.resultJson!.session_id).toBeNull();
   });
 
   it("flags every real failed turn as failed and leaves the response empty, though the CLI exits 0 with a valid exit summary", async () => {
@@ -269,7 +356,7 @@ describe("execute() — G5 live progress wiring", () => {
       ["HTTP 500 after retries", REAL_FAILED_500_AFTER_RETRIES, /^API call failed after 3 retries: HTTP 500/],
     ];
     for (const [label, stdout, expected] of cases) {
-      mockRun({ stdout, exitCode: 0 });
+      mockRun({ stdout: echoed(stdout), exitCode: 0 });
 
       const result = await execute(makeCtx({}) as any);
 
@@ -282,23 +369,147 @@ describe("execute() — G5 live progress wiring", () => {
     }
   });
 
+  it("flags a `--resume` turn that failed to initialize the agent: an exit summary and no frame is a failure, not a success", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // hermes prints its narration, no answer at all, and then the exit summary
+    // of the session that was resumed; exit code 0. Without the check the run
+    // is recorded as a success with an empty answer.
+    const resumed = "20260103_090000_feed01";
+    const ctx = makeCtx({}, resumed);
+    mockRun({
+      stdout: echoThen(
+        "Initializing agent...\r\n" +
+          "❌ Failed to initialize agent: provider returned an unexpected response\r\n" +
+          buildExitSummary(resumed) +
+          "\n",
+      ),
+    });
+
+    const result = await execute(ctx as any);
+
+    const args = vi.mocked(serverUtils.runChildProcess).mock.calls.at(-1)![2] as string[];
+    expect(args).toContain("--resume");
+    expect(result.exitCode).toBe(0);
+    expect(result.errorMessage).toMatch(/without printing an answer/);
+    expect(result.errorMessage).toContain("Failed to initialize agent");
+    expect(result.resultJson!.result).toBe("");
+    expect(result.summary).toBeUndefined();
+    // The CLI did resume that session, so it is still the one to resume next.
+    expect(result.clearSession).toBeUndefined();
+  });
+
+  it("flags a failed turn the CLI printed as a plain sentence, with no `Error:` and no cross mark, by the vendor's own wording", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    mockRun({
+      stdout: echoThen(
+        panelTurn(["Context length exceeded (131072 tokens). Cannot compress further.", "Try /new to start a fresh session."]),
+      ),
+    });
+
+    const result = await execute(makeCtx({}) as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.errorMessage).toMatch(/^Context length exceeded \(131072 tokens\)/);
+    expect(result.resultJson!.result).toBe("");
+    expect(result.summary).toBeUndefined();
+  });
+
+  it("still accepts an ordinary non-streamed answer Panel, including one that merely quotes a vendor failure sentence", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    for (const body of [
+      ["Fixed the missing null check in the session lookup."],
+      ["The log says: Context length exceeded (131072 tokens). That is the limit of the old model."],
+    ]) {
+      mockRun({ stdout: echoThen(panelTurn(body)) });
+
+      const result = await execute(makeCtx({}) as any);
+
+      expect(result.errorMessage).toBeUndefined();
+      expect(result.resultJson!.result).toBe(body.join("\n"));
+      expect(result.sessionParams).toEqual({ sessionId: SESSION_ID });
+    }
+  });
+
   it("flags a run that exits 0 before any turn (missing credentials, --resume not found) and stores no session", async () => {
     delete process.env[LIVE_PROGRESS_ENV_VAR];
     // Real early exits: no frame, no exit summary, exit code 0. The loose
     // legacy session regex used to capture the word "from" out of the vendor's
     // own text on this shape and store it as the next run's --resume target.
-    for (const stdout of [REAL_EARLY_EXIT_NO_CREDENTIALS, REAL_EARLY_EXIT_SESSION_NOT_FOUND, "Goodbye! ⚕\n", ""]) {
+    const cases: Array<[RunStdout, RegExp]> = [
+      [echoed(REAL_EARLY_EXIT_NO_CREDENTIALS), /No API key found for provider 'openrouter'/],
+      [echoed(REAL_EARLY_EXIT_SESSION_NOT_FOUND), /Session not found: 20200101_000000_nosuch/],
+      ["Goodbye! ⚕\n", /printed nothing else/],
+      ["", /printed nothing else/],
+    ];
+    for (const [stdout, vendorMessage] of cases) {
       mockRun({ stdout });
 
       const result = await execute(makeCtx({}) as any);
 
-      expect(result.errorMessage).toBeTruthy();
+      expect(result.errorMessage).toMatch(/without printing an exit summary/);
+      // What the vendor said is in the message, so the failure has a cause.
+      expect(result.errorMessage).toMatch(vendorMessage);
       expect(result.exitCode).toBe(0);
       expect(result.sessionParams).toBeUndefined();
       expect(result.sessionDisplayId).toBeUndefined();
       expect(result.resultJson!.result).toBe("");
       expect(result.resultJson!.session_id).toBeNull();
+      // No `--resume` was passed, so there is no stored session to drop.
+      expect(result.clearSession).toBeUndefined();
     }
+  });
+
+  it("drops the stored session when the CLI says the one it was asked to resume is gone or cannot be resumed", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    const stale = "20200101_000000_nosuch";
+    const cases: Array<[string, RunStdout]> = [
+      ["not found", echoed(REAL_EARLY_EXIT_SESSION_NOT_FOUND)],
+      [
+        "over the history cap",
+        echoThen("Initializing agent...\r\nCannot resume session: 2400 messages of history, over the 2000 message cap\r\n\nGoodbye! ⚕\n"),
+      ],
+    ];
+    for (const [label, stdout] of cases) {
+      mockRun({ stdout });
+
+      const result = await execute(makeCtx({}, stale) as any);
+
+      const args = vi.mocked(serverUtils.runChildProcess).mock.calls.at(-1)![2] as string[];
+      expect(args, label).toContain("--resume");
+      expect(result.errorMessage, label).toBeTruthy();
+      expect(result.clearSession, label).toBe(true);
+      expect(result.sessionParams, label).toBeUndefined();
+    }
+  });
+
+  it("does not drop the stored session for an early exit that is not about the session (missing credentials)", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    mockRun({ stdout: echoed(REAL_EARLY_EXIT_NO_CREDENTIALS) });
+
+    const result = await execute(makeCtx({}, "20260103_090000_feed01") as any);
+
+    expect(result.errorMessage).toMatch(/No API key found/);
+    expect(result.clearSession).toBeUndefined();
+  });
+
+  it("does not drop the stored session for a turn whose answer merely quotes the CLI's session message", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    const stored = "20260103_090000_feed01";
+    mockRun({
+      stdout: echoThen(
+        "Initializing agent...\r\n" +
+          buildStreamBox("⚕ Hermes", ["The CLI answers a bad id with:", "Session not found: 20200101_000000_nosuch", "Nothing to do here."]) +
+          "\n" +
+          buildExitSummary(stored) +
+          "\n",
+      ),
+    });
+
+    const result = await execute(makeCtx({}, stored) as any);
+
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.clearSession).toBeUndefined();
+    expect(result.sessionParams).toEqual({ sessionId: stored });
   });
 
   it("does not flag a killed (timed-out) run the same way — its own timeout diagnostics own that case — and gives it no answer", async () => {
@@ -306,7 +517,7 @@ describe("execute() — G5 live progress wiring", () => {
     mockRun({
       exitCode: null,
       timedOut: true,
-      stdout: '[tool] terminal: curl -s "https://example.com"\n' + buildStreamBox("⚕ Hermes", ["Let me keep going."]),
+      stdout: echoThen('[tool] terminal: curl -s "https://example.com"\n' + buildStreamBox("⚕ Hermes", ["Let me keep going."])),
     });
 
     const result = await execute(makeCtx({}) as any);
@@ -334,7 +545,7 @@ describe("execute() — G5 live progress wiring", () => {
       ]) +
       "\n" +
       buildExitSummary(SESSION_ID);
-    mockRun({ stdout });
+    mockRun({ stdout: echoThen(stdout) });
 
     const result = await execute(makeCtx({}) as any);
 
@@ -347,13 +558,28 @@ describe("execute() — G5 live progress wiring", () => {
       buildStreamBox("⚕ Hermes", ["The quiet-mode CLI prints:", "session_id: not-the-real-session-id", "Done."]) +
       "\n" +
       buildExitSummary(SESSION_ID);
-    mockRun({ stdout });
+    mockRun({ stdout: echoThen(stdout) });
 
     const result = await execute(makeCtx({}) as any);
 
     expect(result.sessionParams).toEqual({ sessionId: SESSION_ID });
     expect(result.resultJson).toMatchObject({ session_id: SESSION_ID });
     expect(result.resultJson!.result).toContain("Done.");
+  });
+
+  it("takes the session id from the exit summary at the very end, not from one an answer prints in the same shape", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    const quotedSummary = buildExitSummary("20260202_000000_quoted");
+    const stdout =
+      buildStreamBox("⚕ Hermes", ["The CLI ends every run with a block like this:", ...quotedSummary.split("\n"), "and that is all."]) +
+      "\n" +
+      buildExitSummary(SESSION_ID);
+    mockRun({ stdout: echoThen(stdout) });
+
+    const result = await execute(makeCtx({}) as any);
+
+    expect(result.sessionParams).toEqual({ sessionId: SESSION_ID });
+    expect(result.errorMessage).toBeUndefined();
   });
 
   it("parses quiet-mode stdout exactly as before when -Q is in effect (card quiet, flag unset)", async () => {
@@ -377,6 +603,7 @@ describe("execute() — G5 live progress wiring", () => {
       // Simulates a `terminal` tool-progress line live progress mode prints
       // (agent/display.py), which the vendor's own redact_tool_args_for_display
       // does not cover — see shared/myrmidon-secret-redaction.ts.
+      await opts.onLog("stdout", richEcho(opts.stdin));
       await opts.onLog("stdout", `[done] ┊ 💻 $         curl -H "Authorization: Bearer ${fakeToken}"  0.1s\n`);
       return { exitCode: 0, signal: null, timedOut: false, stdout: "Done.", stderr: "", pid: null, startedAt: null };
     });
@@ -397,6 +624,7 @@ describe("execute() — G5 live progress wiring", () => {
     // the test above uses across two chunks, landing mid-token.
     const fakeToken = "sk-ant-" + "abcdef0123456789";
     vi.mocked(serverUtils.runChildProcess).mockImplementationOnce(async (_runId, _cmd, _args, opts: any) => {
+      await opts.onLog("stdout", richEcho(opts.stdin));
       const line = `[done] ┊ 💻 $         curl -H "Authorization: Bearer ${fakeToken}"  0.1s\n`;
       const splitAt = line.indexOf(fakeToken) + 6; // mid-token, not a clean line/word boundary
       await opts.onLog("stdout", line.slice(0, splitAt));
@@ -417,13 +645,10 @@ describe("execute() — G5 live progress wiring", () => {
     // Simulates cli.py's _run_single_query_mode echoing the whole prompt to
     // stdout across several `data` events before any tool or answer output —
     // the raw echo must never reach the persisted run log, not just the
-    // parsed final response (stripQueryEcho, covered by the "strips the
-    // 'Query:' prompt echo…" test above operates on `result.stdout`, a
+    // parsed final response (the parsed result comes from `result.stdout`, a
     // different code path from `ctx.onLog`).
     vi.mocked(serverUtils.runChildProcess).mockImplementationOnce(async (_runId, _cmd, _args, opts: any) => {
-      await opts.onLog("stdout", "Query: You are \"agent-a\", an AI age");
-      await opts.onLog("stdout", "nt employee in a Paperclip-managed company.\n");
-      await opts.onLog("stdout", "(the rest of the prompt, wrapped with no per-line marker)\n");
+      for (const chunk of chunksOf(richEcho(opts.stdin), 37)) await opts.onLog("stdout", chunk);
       await opts.onLog("stdout", '[done] ┊ 💻 $         curl -s "https://example.com"  0.1s\n');
       return { exitCode: 0, signal: null, timedOut: false, stdout: "Done.", stderr: "", pid: null, startedAt: null };
     });
@@ -434,8 +659,80 @@ describe("execute() — G5 live progress wiring", () => {
     const logged = ctx.onLog.mock.calls.map((call) => call[1] as string).join("");
     expect(logged).not.toContain("Query:");
     expect(logged).not.toContain("Paperclip-managed company");
-    expect(logged).not.toContain("wrapped with no per-line marker");
+    expect(logged).not.toContain("Safe multiline update pattern");
     // Real turn output after the echo still reaches the persisted log.
+    expect(logged).toContain("curl -s");
+  });
+
+  it("cuts a prompt echo that quotes frames, tool lines, rules and an exit summary out of the log, and only that", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // An echo can hold anything a hermes run prints; the log must drop exactly
+    // the echo, and forward what the CLI prints after it — the answer frame
+    // and the exit summary here.
+    const promptTemplate = [
+      "Notes from the previous runs:",
+      "╭─ ⚕ Hermes ────────────────────────────────╮",
+      "  ┊ 💻 $         cat /workspace/quoted-file.txt  0.1s",
+      "────────────────────────────────────────",
+      quotedRun(REAL_FAILED_400),
+      "Now the task itself.",
+    ].join("\n");
+    vi.mocked(serverUtils.runChildProcess).mockImplementationOnce(async (_runId, _cmd, _args, opts: any) => {
+      for (const chunk of chunksOf(richEcho(opts.stdin), 53)) await opts.onLog("stdout", chunk);
+      await opts.onLog("stdout", "Initializing agent...\r\n");
+      await opts.onLog("stdout", "  ┊ 💻 $         cat /workspace/real-file.txt  0.1s\r\n");
+      await opts.onLog("stdout", "Done.\n");
+      return { exitCode: 0, signal: null, timedOut: false, stdout: "Done.", stderr: "", pid: null, startedAt: null };
+    });
+
+    const ctx = makeCtx({ promptTemplate });
+    await execute(ctx as any);
+
+    const logged = ctx.onLog.mock.calls.map((call) => call[1] as string).join("");
+    expect(logged).not.toContain("quoted-file.txt");
+    expect(logged).not.toContain("Notes from the previous runs");
+    expect(logged).not.toContain("Now the task itself");
+    expect(logged).not.toContain("20260202_000000_quoted");
+    expect(logged).toContain("real-file.txt");
+    expect(logged).toContain("Done.");
+  });
+
+  it("forwards what the CLI printed after the echo when it stopped before a turn, so the vendor's message is in the run log", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    vi.mocked(serverUtils.runChildProcess).mockImplementationOnce(async (_runId, _cmd, _args, opts: any) => {
+      for (const chunk of chunksOf(richEcho(opts.stdin), 41)) await opts.onLog("stdout", chunk);
+      await opts.onLog("stdout", "\n⚠️  No API key found for provider 'openrouter'.\n");
+      await opts.onLog("stdout", "   Run 'hermes model' to choose a provider, or 'hermes setup' for first-time setup.\n\nGoodbye! ⚕\n");
+      return { exitCode: 0, signal: null, timedOut: false, stdout: "", stderr: "", pid: null, startedAt: null };
+    });
+
+    const ctx = makeCtx({});
+    const result = await execute(ctx as any);
+
+    const logged = ctx.onLog.mock.calls.map((call) => call[1] as string).join("");
+    expect(logged).toContain("No API key found for provider 'openrouter'");
+    expect(logged).toContain("hermes setup");
+    expect(logged).not.toContain("Paperclip-managed company");
+    expect(result.errorMessage).toBeTruthy();
+  });
+
+  it("keeps a possibly secret-bearing echo out of the log even when the text after `Query:` is not the prompt", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    // Alignment lost: the sanitizer falls back to dropping lines until one that
+    // can only be turn output.
+    vi.mocked(serverUtils.runChildProcess).mockImplementationOnce(async (_runId, _cmd, _args, opts: any) => {
+      await opts.onLog("stdout", "Query: a query that is not the prompt, with a pasted credential in free text\n");
+      await opts.onLog("stdout", "and a second line of it that must not reach the log either\n");
+      await opts.onLog("stdout", '[done] ┊ 💻 $         curl -s "https://example.com"  0.1s\n');
+      return { exitCode: 0, signal: null, timedOut: false, stdout: "", stderr: "", pid: null, startedAt: null };
+    });
+
+    const ctx = makeCtx({});
+    await execute(ctx as any);
+
+    const logged = ctx.onLog.mock.calls.map((call) => call[1] as string).join("");
+    expect(logged).not.toContain("pasted credential");
+    expect(logged).not.toContain("second line of it");
     expect(logged).toContain("curl -s");
   });
 

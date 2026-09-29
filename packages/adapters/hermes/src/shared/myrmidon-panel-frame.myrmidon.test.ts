@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   findRichFrameSpans,
+  findRichFrameSpansFromEnd,
   findRichFrames,
   isPanelRuleLine,
   isPanelTitleLine,
@@ -11,6 +12,7 @@ import {
 } from "./myrmidon-panel-frame.js";
 import {
   REAL_FAILED_402_WITH_CALL_TO_ACTION,
+  REAL_FAILED_429_AFTER_RETRIES,
   REAL_MULTI_TOOL_SUCCESS,
 } from "../server/myrmidon-live-progress.real-output.fixtures.js";
 
@@ -344,5 +346,74 @@ describe("findRichFrameSpans", () => {
       ["panel", "⚕ Hermes"],
       ["panel", "⚡ Out of credits"],
     ]);
+  });
+});
+
+describe("findRichFrameSpansFromEnd", () => {
+  const HEADER = "╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────╮";
+  const FOOTER = `╰${"─".repeat(78)}╯`;
+  const RULE = "─".repeat(40);
+
+  it("finds the same frames as the forward scan on well-formed text, in document order", () => {
+    const text = [buildStreamBox("⚕ Hermes", ["One."]), buildPanelBlock("⚕ Hermes", ["Two."])].join("\n");
+    expect(findRichFrameSpansFromEnd(text)).toEqual(findRichFrameSpans(text));
+  });
+
+  it("agrees with the forward scan on every real capture that has frames", () => {
+    for (const capture of [
+      REAL_MULTI_TOOL_SUCCESS,
+      REAL_FAILED_402_WITH_CALL_TO_ACTION,
+      REAL_FAILED_429_AFTER_RETRIES,
+    ]) {
+      // The prompt echo is a single line here, so the scan sees only real output.
+      const spans = findRichFrameSpansFromEnd(capture);
+      expect(spans.length).toBeGreaterThan(0);
+      expect(spans).toEqual(findRichFrameSpans(capture));
+    }
+  });
+
+  it("does not let an earlier header that never got its footer swallow the real, later box", () => {
+    const text = [
+      HEADER,
+      "A stream that died before its footer was printed.",
+      "  ┊ 💻 $ ls  0.1s",
+      HEADER,
+      "The real answer.",
+      FOOTER,
+    ].join("\n");
+    const [only] = findRichFrameSpansFromEnd(text);
+    expect(findRichFrameSpansFromEnd(text)).toHaveLength(1);
+    expect(only.bodyLines).toEqual(["The real answer."]);
+    expect(only.startLine).toBe(3);
+    // The forward scan pairs the first header with the last footer.
+    expect(findRichFrameSpans(text)[0].bodyLines).toContain("The real answer.");
+    expect(findRichFrameSpans(text)[0].bodyLines).toContain(HEADER);
+  });
+
+  it("skips a lone rule (the turn divider) instead of pairing it with a title higher up", () => {
+    const text = [buildPanelBlock("⚕ Hermes", ["First."]), "", RULE, "", buildStreamBox("⚕ Hermes", ["Answer."])].join("\n");
+    const spans = findRichFrameSpansFromEnd(text);
+    expect(spans.map((s) => [s.kind, s.bodyLines.join("|").trim()])).toEqual([
+      ["panel", expect.stringContaining("First.")],
+      ["stream", "Answer."],
+    ]);
+  });
+
+  it("does not return a title or header that has no close below it", () => {
+    expect(findRichFrameSpansFromEnd(["─ ⚕ Hermes ─────────", "body with no bottom rule"].join("\n"))).toEqual([]);
+    expect(findRichFrameSpansFromEnd([HEADER, "body with no footer"].join("\n"))).toEqual([]);
+  });
+
+  it("does not re-examine the inside of a frame it already found", () => {
+    // A model answer that draws its own rule line inside the streaming box.
+    const text = [HEADER, "Section one", RULE, "Section two", FOOTER].join("\n");
+    const spans = findRichFrameSpansFromEnd(text);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].bodyLines).toEqual(["Section one", RULE, "Section two"]);
+  });
+
+  it("is empty for plain text and for empty input", () => {
+    expect(findRichFrameSpansFromEnd("just some text\nmore text")).toEqual([]);
+    expect(findRichFrameSpansFromEnd("")).toEqual([]);
   });
 });

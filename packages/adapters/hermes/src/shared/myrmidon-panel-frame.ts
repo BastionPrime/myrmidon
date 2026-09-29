@@ -189,6 +189,78 @@ export function findRichFrameSpans(text: string): RichFrameSpan[] {
 }
 
 /**
+ * myrmidon(G5): the same frames as `findRichFrameSpans`, but paired from the
+ * END of the text, still returned in document order.
+ *
+ * The forward scan opens a frame at the first title/header and closes it at
+ * the first rule/footer after it, so one header that never got its footer (a
+ * stream cut short by a failed call, before the turn retried and printed a new
+ * box) swallows the next, real frame: the later box's own header line ends up
+ * inside the earlier "frame" and the later footer is taken as its close. The
+ * answer of a turn is the LAST frame, so this scan starts from the bottom
+ * instead: a closing rule pairs with the nearest title above it, a footer with
+ * the nearest header above it, and everything inside a frame that was found is
+ * skipped rather than re-examined.
+ *
+ *  - a rule with no title above it before the next rule is not a frame's
+ *    close: it is the turn divider (or any other lone rule) and is skipped;
+ *  - a footer with no header above it before the next footer is skipped;
+ *  - a title or header with no close below it is never returned (same "don't
+ *    guess" rule as the forward scan).
+ */
+export function findRichFrameSpansFromEnd(text: string): RichFrameSpan[] {
+  const lines = text.split("\n");
+  const found: RichFrameSpan[] = [];
+  let i = lines.length - 1;
+  while (i >= 0) {
+    const trimmed = lines[i].trim();
+    let open = -1;
+    let kind: RichFrame["kind"] | undefined;
+    if (isPanelRuleLine(trimmed)) {
+      kind = "panel";
+      for (let j = i - 1; j >= 0; j--) {
+        const above = lines[j].trim();
+        if (isPanelRuleLine(above)) break; // the next rule up: this one closes nothing
+        if (isPanelTitleLine(above)) {
+          open = j;
+          break;
+        }
+      }
+    } else if (isStreamBoxFooterLine(trimmed)) {
+      kind = "stream";
+      for (let j = i - 1; j >= 0; j--) {
+        const above = lines[j].trim();
+        if (isStreamBoxFooterLine(above)) break;
+        if (isStreamBoxHeaderLine(above)) {
+          open = j;
+          break;
+        }
+      }
+    }
+    if (kind === undefined || open === -1) {
+      i--;
+      continue;
+    }
+    const openTrimmed = lines[open].trim();
+    if (kind === "panel") {
+      const bodyLines: string[] = [];
+      for (let k = open + 1; k < i; k++) bodyLines.push(unwrapPanelRow(lines[k]));
+      found.push({ kind, title: panelTitleText(openTrimmed), bodyLines, startLine: open, endLine: i });
+    } else {
+      found.push({
+        kind,
+        title: streamBoxTitleText(openTrimmed),
+        bodyLines: lines.slice(open + 1, i),
+        startLine: open,
+        endLine: i,
+      });
+    }
+    i = open - 1;
+  }
+  return found.reverse();
+}
+
+/**
  * Same scan as `findRichFrameSpans`, projected down to the frame kind and
  * body only, for callers that do not care where a frame sits.
  */

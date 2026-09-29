@@ -32,8 +32,10 @@ import {
   isStreamBoxFooterLine,
   isStreamBoxHeaderLine,
 } from "../shared/myrmidon-panel-frame.js";
-// myrmidon(G5): shared with the server-side stripQueryEcho so both agree on
-// exactly where the vendor CLI's wrapped "Query:" echo ends
+// myrmidon(G5): the UI never knows the prompt, so it recognizes the end of the
+// vendor CLI's wrapped "Query:" echo by line shape; the server cuts the echo
+// exactly by the prompt it sent, so the run log this parser reads has no echo
+// left unless a log predates that
 import { isTurnOutputBoundaryLine } from "../shared/myrmidon-turn-output-boundary.js";
 
 // ── Kaomoji / noise stripping ──────────────────────────────────────────────
@@ -392,10 +394,12 @@ export function parseHermesStdoutLine(
  * carries a "still inside the echo" flag across calls: once a `Query:` line
  * is seen, further lines stay suppressed until `isTurnOutputBoundaryLine`
  * recognizes one that can't be part of the echo (a tool-progress line, the
- * answer's Panel/streaming-box frame, or the exit summary) — the same
- * boundary set the server-side `stripQueryEcho` (myrmidon-live-progress.ts)
- * scans for over the whole (post-hoc) stdout, shared via
- * `../shared/myrmidon-turn-output-boundary.ts` so the two can't disagree.
+ * answer's Panel/streaming-box frame, or the exit summary). This is a
+ * heuristic (`../shared/myrmidon-turn-output-boundary.ts`): the server side
+ * does not use it for the stored result — it cuts the echo exactly by the
+ * known prompt (`../server/myrmidon-query-echo.ts`) and keeps the echo out of
+ * the run log this parser reads, so this matters only for a log that still
+ * holds an echo.
  *
  * Matches the `createStdoutParser` contract other adapters in this monorepo
  * already use for cross-line state (see e.g. `grok-local`'s
