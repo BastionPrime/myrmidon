@@ -28,8 +28,21 @@ import { errorHandler } from "../middleware/index.js";
 import { issueRoutes } from "../routes/issues.js";
 import { buildPaperclipWakePayload, heartbeatService } from "../services/heartbeat.js";
 import { deliverReconciledExecutions } from "../services/execution-recovery-resolution.js";
+import {
+  applyIssueExecutionPolicyTransition,
+  normalizeIssueExecutionPolicy,
+} from "../services/issue-execution-policy.js";
 import { issueRecoveryActionService } from "../services/issue-recovery-actions.js";
+import { issueService } from "../services/issues.js";
 import { recoveryService } from "../services/recovery/service.js";
+// myrmidon(L4): DB-backed coverage for the auto-policy's counters and its
+// two live-write branches; see ../myrmidon/stranded-autopolicy.myrmidon.test.ts
+// for the pure-function coverage.
+import {
+  countStrandedAutoPolicyAttemptsInWindow,
+  findActiveManagerAgentId,
+  STRANDED_AUTO_POLICY_RETRY_SOURCE,
+} from "../myrmidon/stranded-autopolicy.js";
 import { noticeMetadataReferencesRecoveryAction } from "../services/recovery/successful-run-handoff.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -663,9 +676,900 @@ describeEmbeddedPostgres("issue recovery actions", () => {
           preservesSourceAssignee: true,
         }),
       });
-      expect(enqueueWakeup).not.toHaveBeenCalled();
+      // myrmidon(L4): a succeeded run with `successful_run_missing_state` is
+      // the auto-policy's scope (stranded-autopolicy.ts). With the seeded
+      // coder having zero prior attempts today, it first tries one more
+      // continuation retry through this same `enqueueWakeup`; this fixture's
+      // mock declines every wake (`async () => null`), so the policy falls
+      // back to the vendor's own board escalation unchanged — but the retry
+      // is still attempted once before that fallback.
+      if (errorCode === "adapter_failed" && explicitCause === "successful_run_missing_state") {
+        expect(enqueueWakeup).toHaveBeenCalledTimes(1);
+        expect(enqueueWakeup).toHaveBeenCalledWith(
+          coderId,
+          expect.objectContaining({
+            contextSnapshot: expect.objectContaining({ source: "myrmidon.stranded_autopolicy_retry" }),
+          }),
+        );
+      } else {
+        expect(enqueueWakeup).not.toHaveBeenCalled();
+      }
     },
   );
+
+  describe("L4 stranded auto-policy", () => {
+    // A `latestRun` fixture matching the shape the surrounding tests already
+    // use for `escalateStrandedAssignedIssue` (see the `it.each` above):
+    // `LatestIssueRun` only needs these fields in practice here. It also
+    // seeds a real `heartbeat_runs` row for that id — the manager-handoff
+    // branch logs `activity_log.run_id = latestRun.id`, and that column has
+    // a live FK to `heartbeat_runs.id`, so an in-memory-only id 23503s.
+    async function succeededRun(input: { companyId: string; agentId: string }) {
+      const id = randomUUID();
+      await seedHeartbeatRun({ companyId: input.companyId, agentId: input.agentId, runId: id, status: "succeeded" });
+      return {
+        id,
+        agentId: input.agentId,
+        status: "succeeded",
+        error: null,
+        errorCode: null,
+        contextSnapshot: {},
+        livenessState: null,
+        resultJson: null,
+      } as const;
+    }
+
+    async function seedStrandedAutoPolicyRetryRun(input: {
+      companyId: string;
+      agentId: string;
+      issueId: string;
+      createdAt?: Date;
+    }) {
+      await db.insert(heartbeatRuns).values({
+        id: randomUUID(),
+        companyId: input.companyId,
+        agentId: input.agentId,
+        invocationSource: "automation",
+        status: "queued",
+        startedAt: input.createdAt,
+        createdAt: input.createdAt,
+        contextSnapshot: { issueId: input.issueId, source: STRANDED_AUTO_POLICY_RETRY_SOURCE },
+      });
+    }
+
+    // myrmidon(L4): the manager's decision on a handed-off issue, applied the
+    // way the PATCH route applies any execution-stage decision
+    // (`server/src/routes/issues.ts`): run the vendor's own transition as the
+    // manager agent over the persisted row, merge the requested status with
+    // the transition's patch, and persist through the issue service. The
+    // route's access and wake plumbing is deliberately not part of this — the
+    // outcome of the decision on the persisted issue is.
+    async function decideAsManager(input: {
+      issueId: string;
+      managerId: string;
+      status: "done" | "in_progress";
+      comment: string;
+    }) {
+      const [row] = await db.select().from(issues).where(eq(issues.id, input.issueId));
+      const policy = normalizeIssueExecutionPolicy(row!.executionPolicy);
+      const transition = applyIssueExecutionPolicyTransition({
+        issue: row!,
+        policy,
+        previousPolicy: policy,
+        requestedStatus: input.status,
+        requestedAssigneePatch: {},
+        actor: { agentId: input.managerId, userId: null },
+        commentBody: input.comment,
+      });
+      return issueService(db).update(input.issueId, {
+        status: input.status,
+        ...transition.patch,
+      } as Partial<typeof issues.$inferInsert>);
+    }
+
+    // myrmidon(L4): a minimal stand-in for heartbeat.ts's real `enqueueWakeup`
+    // that actually persists a `heartbeat_runs` row and (when the caller
+    // passed one) an `agent_wakeup_requests` row tagged with the same
+    // `idempotencyKey` — just enough real side effect for the retry branch's
+    // own idempotency pre-check (`findExistingStrandedAutoPolicyRetryWake`)
+    // to observe it on a later call, the same way it would observe the real
+    // function's write.
+    function fakeRetryWakeEnqueue(input: { companyId: string }) {
+      return vi.fn(async (agentId: string, opts: any) => {
+        const runId = randomUUID();
+        await db.insert(heartbeatRuns).values({
+          id: runId,
+          companyId: input.companyId,
+          agentId,
+          invocationSource: "automation",
+          status: "queued",
+          contextSnapshot: opts?.contextSnapshot ?? {},
+        });
+        const idempotencyKey = opts?.idempotencyKey as string | undefined;
+        if (idempotencyKey) {
+          await db.insert(agentWakeupRequests).values({
+            companyId: input.companyId,
+            agentId,
+            source: opts?.source ?? "automation",
+            status: "queued",
+            idempotencyKey,
+            payload: opts?.payload ?? {},
+            requestedByActorType: "system",
+            requestedByActorId: null,
+          });
+        }
+        const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+        return run ?? null;
+      });
+    }
+
+    it("countStrandedAutoPolicyAttemptsInWindow counts only this issue's tagged retries inside the window, against a live database", async () => {
+      const { companyId, coderId, sourceIssueId } = await seedCompany();
+      const now = new Date("2026-09-28T12:00:00.000Z");
+      const insideWindow = new Date(now.getTime() - 60 * 60 * 1000);
+      const outsideWindow = new Date(now.getTime() - 30 * 60 * 60 * 1000);
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssueId, createdAt: insideWindow });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssueId, createdAt: outsideWindow });
+      // A differently-sourced run for the same issue/agent must not count.
+      await db.insert(heartbeatRuns).values({
+        id: randomUUID(),
+        companyId,
+        agentId: coderId,
+        invocationSource: "automation",
+        status: "queued",
+        startedAt: insideWindow,
+        createdAt: insideWindow,
+        contextSnapshot: { issueId: sourceIssueId, source: "issue_continuation_needed" },
+      });
+
+      const count = await countStrandedAutoPolicyAttemptsInWindow(db, {
+        companyId,
+        issueId: sourceIssueId,
+        agentId: coderId,
+        now,
+      });
+      expect(count).toBe(1);
+    });
+
+    it("findActiveManagerAgentId resolves the direct manager and stops once they are paused, against a live database", async () => {
+      const { managerId, coderId } = await seedCompany();
+      expect(await findActiveManagerAgentId(db, coderId)).toBe(managerId);
+
+      await db.update(agents).set({ status: "paused" }).where(eq(agents.id, managerId));
+      expect(await findActiveManagerAgentId(db, coderId)).toBeNull();
+    });
+
+    it("the retry wake's instruction actually reaches buildPaperclipWakePayload's rendered prompt", async () => {
+      // Regression for a review finding: the instruction text was built but
+      // spread under a bare `instruction` key that buildPaperclipWakePayload
+      // never reads, so it never rendered into the agent's prompt even
+      // though the queued wake carried the right `source` tag.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "successful_run_missing_state",
+      });
+
+      expect(enqueueWakeup).toHaveBeenCalledTimes(1);
+      const [, wakeOpts] = enqueueWakeup.mock.calls[0] as unknown as [
+        string,
+        { contextSnapshot?: Record<string, unknown> },
+      ];
+      const contextSnapshot = wakeOpts.contextSnapshot ?? {};
+      expect(contextSnapshot).toMatchObject({
+        source: STRANDED_AUTO_POLICY_RETRY_SOURCE,
+        livenessContinuationState: "successful_run_missing_state",
+        livenessContinuationAttempt: 1,
+        livenessContinuationMaxAttempts: 2,
+      });
+
+      const payload = await buildPaperclipWakePayload({ db, companyId, contextSnapshot });
+      expect(payload?.livenessContinuation).toMatchObject({ attempt: 1, maxAttempts: 2 });
+      expect(payload?.livenessContinuation?.instruction).toContain("retry 1 of 2");
+      expect(payload?.livenessContinuation?.instruction).toContain("Record exactly one of the following");
+    });
+
+    it("hands the issue to the direct manager once the daily retry cap is exhausted, end to end", async () => {
+      const { companyId, managerId, coderId, sourceIssue } = await seedCompany();
+      // Exhaust the default daily cap (2) with two prior tagged retry runs.
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const updated = await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      expect(updated?.status).toBe("in_review");
+      expect(updated?.assigneeAgentId).toBe(managerId);
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("in_review");
+      expect(persisted?.assigneeAgentId).toBe(managerId);
+
+      const comments = await db
+        .select()
+        .from(issueComments)
+        .where(and(eq(issueComments.issueId, sourceIssue.id), eq(issueComments.authorType, "system")));
+      expect(comments.some((row) => row.body.includes("moved this issue to review"))).toBe(true);
+      // Review finding: the comment used to (falsely) claim the assignment
+      // was unchanged and would resume once review cleared.
+      expect(comments.some((row) => row.body.includes("closes the issue as done"))).toBe(true);
+      expect(comments.some((row) => row.body.includes("unchanged"))).toBe(false);
+
+      expect(enqueueWakeup).toHaveBeenCalledTimes(1);
+      // Review finding: the manager's wake used to carry a generic
+      // `issue_assigned` reason with no execution-stage context at all.
+      expect(enqueueWakeup).toHaveBeenCalledWith(
+        managerId,
+        expect.objectContaining({
+          reason: "execution_review_requested",
+          payload: expect.objectContaining({
+            executionStage: expect.objectContaining({
+              wakeRole: "reviewer",
+              allowedActions: ["approve", "request_changes"],
+            }),
+          }),
+        }),
+      );
+
+      const activity = await db
+        .select()
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.entityId, sourceIssue.id),
+            eq(activityLog.action, "issue.stranded_autopolicy_reassigned_to_manager"),
+          ),
+        );
+      expect(activity).toHaveLength(1);
+    });
+
+    // Senior review, round 2: the outcome of the manager's decision was not
+    // pinned anywhere. Approving the only stage closes the issue as done (the
+    // manager stays the assignee — no stage to return into); only requesting
+    // changes sends it back to the original assignee.
+    it("the manager approving the handed-off issue closes it as done and stays its assignee", async () => {
+      const { companyId, managerId, coderId, sourceIssue } = await seedCompany();
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const recovery = recoveryService(db, { enqueueWakeup: vi.fn(async () => null) });
+      const handedOff = await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+      expect(handedOff?.status).toBe("in_review");
+      expect(handedOff?.assigneeAgentId).toBe(managerId);
+
+      await decideAsManager({
+        issueId: sourceIssue.id,
+        managerId,
+        status: "done",
+        comment: "Checked the result; the work is complete.",
+      });
+
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("done");
+      expect(persisted?.assigneeAgentId).toBe(managerId);
+      const state = persisted?.executionState as {
+        status?: string;
+        lastDecisionOutcome?: string;
+        currentParticipant?: unknown;
+      } | null;
+      expect(state?.status).toBe("completed");
+      expect(state?.lastDecisionOutcome).toBe("approved");
+      expect(state?.currentParticipant).toBeNull();
+    });
+
+    it("the manager requesting changes sends the handed-off issue back to the original assignee and counts one round", async () => {
+      const { companyId, managerId, coderId, sourceIssue } = await seedCompany();
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const recovery = recoveryService(db, { enqueueWakeup: vi.fn(async () => null) });
+      const handedOff = await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+      expect(handedOff?.assigneeAgentId).toBe(managerId);
+
+      await decideAsManager({
+        issueId: sourceIssue.id,
+        managerId,
+        status: "in_progress",
+        comment: "Not finished: the edge case still has no test.",
+      });
+
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("in_progress");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      const state = persisted?.executionState as {
+        status?: string;
+        lastDecisionOutcome?: string;
+        changesRequestedCount?: number;
+      } | null;
+      expect(state?.status).toBe("changes_requested");
+      expect(state?.lastDecisionOutcome).toBe("changes_requested");
+      expect(state?.changesRequestedCount).toBe(1);
+    });
+
+    it("falls back to the vendor's own board escalation once the cap is exhausted with no manager", async () => {
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      await db.update(agents).set({ reportsTo: null }).where(eq(agents.id, coderId));
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      // Unchanged vendor behavior: the source assignee is preserved and the
+      // issue is parked `blocked` behind a board-owned recovery action,
+      // never reassigned to anyone.
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id));
+      expect(action).toMatchObject({
+        ownerType: "board",
+        wakePolicy: expect.objectContaining({ type: "board_escalation" }),
+      });
+    });
+
+    it("does not apply the L4 auto-policy to a todo-status escalation with a succeeded last run", async () => {
+      // Third-round review finding: `stranded_assigned_issue` is the generic
+      // catch-all `resolveStrandedRecoveryCause` returns for ANY call here
+      // that passes no explicit cause, including pre-existing, unrelated
+      // escalation reasons for a `todo` issue — the re-dispatch-failure path
+      // (`wasTodoHandedBackDuringOrAfterLatestRun` + `didAutomaticRecoveryFail`)
+      // and the "assignee not invokable"/"over budget" catch-all just above
+      // it in `reconcileStrandedAssignedIssues` — both reachable with a
+      // succeeded latest run. Without a scope check on
+      // `previousStatus`/`issue.status`, those dispatch failures would
+      // wrongly get an agent retry-wake or a manager `in_review` handoff
+      // instead of the vendor's own `blocked` board escalation the "no live
+      // execution path" notice describes. The assignee here is invokable
+      // and has an active manager with retries available, so if the scope
+      // check were missing, L4 would engage (retry) instead of escalating.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      await db.update(issues).set({ status: "todo" }).where(eq(issues.id, sourceIssue.id));
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const updated = await recovery.escalateStrandedAssignedIssue({
+        issue: { ...sourceIssue, status: "todo" },
+        previousStatus: "todo",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        notice: {
+          body:
+            "Paperclip automatically retried dispatch for this assigned `todo` issue after a lost wake/run, " +
+            "but it still has no live execution path. " +
+            "Moving it to `blocked` so it is visible for intervention.",
+          title: "No live execution path",
+          tone: "danger",
+        },
+      });
+
+      expect(enqueueWakeup).not.toHaveBeenCalled();
+      expect(updated?.status).toBe("blocked");
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id));
+      expect(action?.ownerType).toBe("board");
+    });
+
+    it("does not crash the caller when the guarded wake throws for a non-invokable or over-budget assignee, and falls back to the vendor's own board escalation", async () => {
+      // Review finding: heartbeat.ts's real `enqueueWakeup` *throws* (not a
+      // falsy return) when the target agent turns out not to be invokable or
+      // is over its invocation budget. A succeeded run whose assignee was
+      // paused or terminated right after finishing is a realistic, in-scope
+      // L4 case (`reconcileStrandedAssignedIssues`'s own "assignee not
+      // invokable" and "over budget" branches reach this function with a
+      // succeeded latest run and the default `stranded_assigned_issue`
+      // cause), and was previously left unguarded here.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      const enqueueWakeup = vi.fn(async () => {
+        throw Object.assign(new Error("Agent is not invokable: paused"), { status: 409 });
+      });
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const updated = await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      expect(enqueueWakeup).toHaveBeenCalledTimes(1);
+      expect(updated?.status).toBe("blocked");
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id));
+      expect(action?.ownerType).toBe("board");
+    });
+
+    it("reprocessing the same successful run through the retry branch is idempotent: a second call does not queue a second continuation wake", async () => {
+      // Review finding: the retry branch had no guard against two calls
+      // (e.g. two sweep ticks racing, or the sweep and a direct heartbeat.ts
+      // caller) reaching it for the same stranded issue with an identical
+      // stale `latestRun` snapshot — each would independently decide
+      // "retry" and could each queue their own continuation wake.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      const enqueueWakeup = fakeRetryWakeEnqueue({ companyId });
+      const recovery = recoveryService(db, { enqueueWakeup });
+      const latestRun = await succeededRun({ companyId, agentId: coderId });
+
+      await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun,
+        recoveryCause: "stranded_assigned_issue",
+      });
+      expect(enqueueWakeup).toHaveBeenCalledTimes(1);
+
+      // A later sweep tick (or a racing direct caller) can reprocess the
+      // same issue against the same stale `latestRun` snapshot before the
+      // queued continuation run has itself started — it must stand down
+      // instead of queuing a second continuation wake for the exact same
+      // successful run.
+      const second = await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun,
+        recoveryCause: "stranded_assigned_issue",
+      });
+      expect(enqueueWakeup).toHaveBeenCalledTimes(1);
+
+      const wakes = await db
+        .select()
+        .from(agentWakeupRequests)
+        .where(eq(agentWakeupRequests.companyId, companyId));
+      expect(wakes).toHaveLength(1);
+
+      // Third-round review finding: the duplicate-detected call used to fall
+      // through into the vendor's own board escalation below (setting the
+      // issue `blocked` and posting a board-escalation comment) instead of
+      // standing down as a true no-op — re-triggering the very owner-card
+      // escalation this policy exists to eliminate on every redundant sweep
+      // tick. It must leave the issue exactly as the first call did.
+      expect(second?.status).toBe("in_progress");
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("in_progress");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id))).toHaveLength(0);
+    });
+
+    it("keeps the manager handoff committed even when the reviewer wake itself throws", async () => {
+      // Review finding: the manager-review wake is dispatched after the
+      // issue is already durably `in_review` with the comment already
+      // posted; an unguarded throw there (e.g. the manager itself becoming
+      // non-invokable or over budget in that narrow window) must not undo
+      // or fail that already-committed handoff.
+      const { companyId, managerId, coderId, sourceIssue } = await seedCompany();
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const enqueueWakeup = vi.fn(async (agentId: string) => {
+        if (agentId === managerId) {
+          throw Object.assign(new Error("Agent is not invokable: paused"), { status: 409 });
+        }
+        return null;
+      });
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const updated = await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      expect(updated?.status).toBe("in_review");
+      expect(updated?.assigneeAgentId).toBe(managerId);
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("in_review");
+      expect(persisted?.assigneeAgentId).toBe(managerId);
+      const comments = await db
+        .select()
+        .from(issueComments)
+        .where(and(eq(issueComments.issueId, sourceIssue.id), eq(issueComments.authorType, "system")));
+      expect(comments.some((row) => row.body.includes("moved this issue to review"))).toBe(true);
+    });
+
+    it("two racing manager-handoff calls for the same exhausted issue do not double the comment, the wake or the activity log entry", async () => {
+      const { companyId, managerId, coderId, sourceIssue } = await seedCompany();
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+      const latestRun = await succeededRun({ companyId, agentId: coderId });
+
+      // Both calls carry the same stale issue snapshot, simulating two
+      // callers (e.g. the sweep and a direct heartbeat.ts caller) that both
+      // read the issue before either wrote — the row lock in the
+      // reassign-to-manager branch must serialize them so only the first
+      // actually hands the issue off; the second must not repeat it.
+      await Promise.all([
+        recovery.escalateStrandedAssignedIssue({
+          issue: sourceIssue,
+          previousStatus: "in_progress",
+          latestRun,
+          recoveryCause: "stranded_assigned_issue",
+        }),
+        recovery.escalateStrandedAssignedIssue({
+          issue: sourceIssue,
+          previousStatus: "in_progress",
+          latestRun,
+          recoveryCause: "stranded_assigned_issue",
+        }),
+      ]);
+
+      const managerWakeCalls = (enqueueWakeup.mock.calls as unknown as Array<[string, unknown]>).filter(
+        ([agentId]) => agentId === managerId,
+      );
+      expect(managerWakeCalls).toHaveLength(1);
+
+      const comments = await db
+        .select()
+        .from(issueComments)
+        .where(and(eq(issueComments.issueId, sourceIssue.id), eq(issueComments.authorType, "system")));
+      expect(comments.filter((row) => row.body.includes("moved this issue to review"))).toHaveLength(1);
+
+      const activity = await db
+        .select()
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.entityId, sourceIssue.id),
+            eq(activityLog.action, "issue.stranded_autopolicy_reassigned_to_manager"),
+          ),
+        );
+      expect(activity).toHaveLength(1);
+
+      // Third-round review finding: the losing call used to fall through
+      // into the vendor's own board-escalation `blocked` update after the
+      // winning call had already committed `in_review` — silently reverting
+      // a handoff that had already succeeded. No board-escalation action
+      // should exist, and the issue must stay exactly where the winner left
+      // it.
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("in_review");
+      expect(persisted?.assigneeAgentId).toBe(managerId);
+      expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id))).toHaveLength(0);
+    });
+
+    it("does not overwrite an owner-configured execution policy when handing off to the manager", async () => {
+      // Review finding #1: an issue whose owner already configured a review
+      // stage (e.g. requiring a human approval) before this stranding must
+      // not have that policy silently replaced by a brand-new single-stage
+      // manager-review policy. Its stages have not started yet — the
+      // policy only runs on a transition to in_review/done — so
+      // executionState is still null, exactly the pre-started shape a real
+      // owner-configured issue would have.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      const ownerApprovalUserId = randomUUID();
+      const ownerExecutionPolicy = {
+        mode: "normal",
+        commentRequired: true,
+        stages: [
+          {
+            id: randomUUID(),
+            type: "approval",
+            approvalsNeeded: 1,
+            participants: [{ id: randomUUID(), type: "user", agentId: null, userId: ownerApprovalUserId }],
+          },
+        ],
+      };
+      await db
+        .update(issues)
+        .set({ executionPolicy: ownerExecutionPolicy })
+        .where(eq(issues.id, sourceIssue.id));
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const [issueWithPolicy] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      const updated = await recovery.escalateStrandedAssignedIssue({
+        issue: issueWithPolicy!,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      // Vendor's own board escalation, not a manager handoff: the assignee
+      // and the owner's approval policy are both untouched, a human can
+      // still not be bypassed.
+      expect(updated?.status).toBe("blocked");
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      expect(persisted?.executionPolicy).toEqual(ownerExecutionPolicy);
+      expect(persisted?.executionState).toBeNull();
+      const activity = await db
+        .select()
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.entityId, sourceIssue.id),
+            eq(activityLog.action, "issue.stranded_autopolicy_reassigned_to_manager"),
+          ),
+        );
+      expect(activity).toHaveLength(0);
+    });
+
+    it("does not replace a stage-less execution policy that carries the trust boundary when handing off to the manager", async () => {
+      // Senior review, round 2: a policy is not only its stages. This one has
+      // none, yet it holds the task's trust preset and boundary and its
+      // assignment policy; the handoff builds a brand-new single-stage policy,
+      // so on this issue it would drop all of that and the manager (and, after
+      // a changes request, the original assignee) would run under the standard
+      // preset.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      const trustPolicy = {
+        mode: "normal",
+        commentRequired: true,
+        stages: [],
+        authorizationPolicy: {
+          trustPreset: "low_trust_review",
+          trustBoundary: {
+            mode: "low_trust_review",
+            allowedAgentIds: [coderId],
+            allowedToolClasses: ["git.read", "tests.local"],
+          },
+          assignmentPolicy: { mode: "protected" },
+        },
+      };
+      await db
+        .update(issues)
+        .set({ executionPolicy: trustPolicy })
+        .where(eq(issues.id, sourceIssue.id));
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const [issueWithPolicy] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      const updated = await recovery.escalateStrandedAssignedIssue({
+        issue: issueWithPolicy!,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      // Vendor's own board escalation, no handoff: the policy is byte-for-byte
+      // what the owner configured and the issue is still with its assignee.
+      expect(updated?.status).toBe("blocked");
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      expect(persisted?.executionPolicy).toEqual(trustPolicy);
+      expect(persisted?.executionState).toBeNull();
+      expect(enqueueWakeup).not.toHaveBeenCalled();
+      const activity = await db
+        .select()
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.entityId, sourceIssue.id),
+            eq(activityLog.action, "issue.stranded_autopolicy_reassigned_to_manager"),
+          ),
+        );
+      expect(activity).toHaveLength(0);
+    });
+
+    it("does not hand off to the manager an issue whose idle execution state still holds a cleared monitor, and keeps the monitor's history", async () => {
+      // Senior review, round 3: after a monitor is cleared the vendor drops it
+      // from a stage-less policy (the policy column is null) but the state
+      // keeps `{ status: "idle", monitor: {...} }`. The handoff builds its
+      // transition from an empty state, so it would rebuild the monitor from
+      // the issue's columns and lose the recorded clear reason and time.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      const idleStateWithClearedMonitor = {
+        status: "idle",
+        currentStageId: null,
+        currentStageIndex: null,
+        currentStageType: null,
+        currentParticipant: null,
+        returnAssignee: null,
+        reviewRequest: null,
+        completedStageIds: [],
+        lastDecisionId: null,
+        lastDecisionOutcome: null,
+        monitor: {
+          status: "cleared",
+          nextCheckAt: null,
+          lastTriggeredAt: null,
+          attemptCount: 1,
+          notes: "waiting for the external build",
+          scheduledBy: "assignee",
+          clearedAt: "2026-09-20T10:00:00.000Z",
+          clearReason: "manual",
+        },
+      };
+      await db
+        .update(issues)
+        .set({ executionPolicy: null, executionState: idleStateWithClearedMonitor })
+        .where(eq(issues.id, sourceIssue.id));
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const [issueWithState] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      const updated = await recovery.escalateStrandedAssignedIssue({
+        issue: issueWithState!,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      // Vendor's own board escalation, no handoff: the state (and with it the
+      // monitor's status and clear reason) is exactly what was stored.
+      expect(updated?.status).toBe("blocked");
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      expect(persisted?.executionPolicy).toBeNull();
+      expect(persisted?.executionState).toEqual(idleStateWithClearedMonitor);
+      const persistedMonitor = (persisted?.executionState as { monitor?: { status?: string; clearReason?: string } } | null)?.monitor;
+      expect(persistedMonitor?.status).toBe("cleared");
+      expect(persistedMonitor?.clearReason).toBe("manual");
+      expect(enqueueWakeup).not.toHaveBeenCalled();
+      const activity = await db
+        .select()
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.entityId, sourceIssue.id),
+            eq(activityLog.action, "issue.stranded_autopolicy_reassigned_to_manager"),
+          ),
+        );
+      expect(activity).toHaveLength(0);
+    });
+
+    it("does not hand off to the manager a second time after an earlier handoff sent the issue back with changes requested", async () => {
+      // Review finding #2: without this guard, every later stranding on the
+      // same issue re-triggers a manager handoff (the retry-attempt window
+      // is per source run, not per handoff), building a brand-new
+      // single-stage policy each time and silently resetting the
+      // changes-requested round counter that is supposed to escalate to a
+      // human — an unbounded agent<->manager ping-pong.
+      const { companyId, managerId, coderId, sourceIssue } = await seedCompany();
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const firstEnqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup: firstEnqueueWakeup });
+
+      const firstHandoff = await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+      expect(firstHandoff?.status).toBe("in_review");
+      expect(firstHandoff?.assigneeAgentId).toBe(managerId);
+
+      // The manager requests changes: back to the original assignee,
+      // in_progress, same policy, changesRequestedCount now 1 — the decision
+      // the manager's PATCH persists (`applyIssueExecutionStageTransition`'s
+      // changes-requested branch), applied through the issue service.
+      await decideAsManager({
+        issueId: sourceIssue.id,
+        managerId,
+        status: "in_progress",
+        comment: "Please add a test for the edge case.",
+      });
+      const [backWithCoder] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(backWithCoder?.status).toBe("in_progress");
+      expect(backWithCoder?.assigneeAgentId).toBe(coderId);
+      expect((backWithCoder?.executionState as { changesRequestedCount?: number } | null)?.changesRequestedCount).toBe(1);
+
+      // The coder runs again, still without a final disposition — a second
+      // stranding. The retry cap is exhausted again (two fresh tagged
+      // retries), and the manager is still active, so without the guard
+      // this would hand the issue to the manager a second time.
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const secondEnqueueWakeup = vi.fn(async () => null);
+      const secondRecovery = recoveryService(db, { enqueueWakeup: secondEnqueueWakeup });
+
+      const secondHandoffAttempt = await secondRecovery.escalateStrandedAssignedIssue({
+        issue: backWithCoder!,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      // Vendor's own board escalation this time, not a second handoff: the
+      // policy and its round counter are exactly as the manager's decision
+      // left them, and only the one earlier handoff was ever logged.
+      expect(secondHandoffAttempt?.status).toBe("blocked");
+      expect(secondEnqueueWakeup).not.toHaveBeenCalled();
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      expect((persisted?.executionState as { changesRequestedCount?: number } | null)?.changesRequestedCount).toBe(1);
+      const activity = await db
+        .select()
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.entityId, sourceIssue.id),
+            eq(activityLog.action, "issue.stranded_autopolicy_reassigned_to_manager"),
+          ),
+        );
+      expect(activity).toHaveLength(1);
+    });
+
+    it("does not hand a paused assignee's work to the manager or spend a retry, and keeps the vendor's own handling", async () => {
+      // Review finding #4: pausing is not stranding. An auto-retry wake here
+      // would just throw (paused is not invokable), and (worse, once the
+      // retry cap is exhausted and the manager is active) a manager handoff
+      // would move the paused agent's work under review over something that
+      // is not actually stuck. L4 does nothing of its own for a paused
+      // assignee; the vendor's handling of a non-invokable assignee (which
+      // its own suite pins, and which still parks the issue behind a board
+      // card) is unchanged.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      await db.update(agents).set({ status: "paused" }).where(eq(agents.id, coderId));
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      expect(enqueueWakeup).not.toHaveBeenCalled();
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      // Never `in_review` under the manager: the source assignee is kept and
+      // no execution policy was installed.
+      expect(persisted?.status).not.toBe("in_review");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      expect(persisted?.executionPolicy).toBeNull();
+      expect(persisted?.executionState).toBeNull();
+      for (const action of [
+        "issue.stranded_autopolicy_reassigned_to_manager",
+        "issue.stranded_autopolicy_retried",
+      ]) {
+        const activity = await db
+          .select()
+          .from(activityLog)
+          .where(and(eq(activityLog.entityId, sourceIssue.id), eq(activityLog.action, action)));
+        expect(activity).toHaveLength(0);
+      }
+      // The vendor's own board escalation is unchanged for a non-invokable
+      // assignee: parked `blocked` behind a board-owned recovery action.
+      expect(persisted?.status).toBe("blocked");
+      const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id));
+      expect(action).toMatchObject({
+        ownerType: "board",
+        wakePolicy: expect.objectContaining({ type: "board_escalation" }),
+      });
+    });
+  });
 
   it("stands down while the latest run was cancelled by a board operator", async () => {
     const { companyId, coderId, sourceIssueId } = await seedCompany();

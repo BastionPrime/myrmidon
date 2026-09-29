@@ -620,9 +620,13 @@ import { hasOtherActionableWork, skipIdleHeartbeatsEnabled } from "../myrmidon/h
 import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
 // myrmidon(L3): pause drains instead of cancelling; resume wakes stranded work
 import {
-  isAgentNotInvokableConflict,
+  isSkippableStartupRecoveryConflict,
   resumeAgentAfterPause as pauseResumeWakeAgent,
 } from "../myrmidon/pause-drain.js";
+// myrmidon(L1): an agent pause is infrastructure, not a provider failure;
+// retry the original executor once it is invokable again instead of an
+// immediate operator escalation
+import { shouldRetryOriginalExecutorForInfraInterrupt } from "../myrmidon/infra-interrupts.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -19212,9 +19216,12 @@ export function heartbeatService(
       );
     let enqueued = 0;
     for (const session of sessions) {
-      // myrmidon(L3): a paused (or otherwise non-invokable) agent must not
-      // crash startup recovery for every other agent; skip it here, resume
-      // wakes its stranded work later (myrmidon/pause-drain.ts)
+      // myrmidon(L3): a non-invokable agent (paused, ...) or one blocked by a
+      // budget hard-stop must not crash startup recovery for every other
+      // agent on the instance; skip it here. A paused agent's stranded work
+      // is woken later on resume (myrmidon/pause-drain.ts); a budget block
+      // clears itself once the policy is resolved and the next scheduled
+      // wakeup or resweep picks the session goal back up.
       let run: Awaited<ReturnType<typeof enqueueWakeup>> | null = null;
       try {
         run = await enqueueWakeup(session.agentId, {
@@ -19232,10 +19239,10 @@ export function heartbeatService(
           },
         });
       } catch (err) {
-        if (!isAgentNotInvokableConflict(err)) throw err;
+        if (!isSkippableStartupRecoveryConflict(err)) throw err;
         logger.warn(
           { agentId: session.agentId, sessionId: session.id },
-          "startup session-goal recovery skipped a non-invokable agent",
+          "startup session-goal recovery skipped a blocked agent",
         );
       }
       if (run) enqueued += 1;
@@ -19327,9 +19334,9 @@ export function heartbeatService(
         continue;
       }
 
-      // myrmidon(L3): a paused (or otherwise non-invokable) agent must not
-      // crash startup recovery for every other agent; skip it here, resume
-      // wakes its stranded work later (myrmidon/pause-drain.ts)
+      // myrmidon(L3): a non-invokable agent (paused, ...) or one blocked by a
+      // budget hard-stop must not crash startup recovery for every other
+      // agent on the instance; skip it here (myrmidon/pause-drain.ts).
       let run: Awaited<ReturnType<typeof enqueueWakeup>> | null = null;
       try {
         run = await enqueueWakeup(action.agentId, {
@@ -19356,10 +19363,10 @@ export function heartbeatService(
           },
         });
       } catch (err) {
-        if (!isAgentNotInvokableConflict(err)) throw err;
+        if (!isSkippableStartupRecoveryConflict(err)) throw err;
         logger.warn(
           { agentId: action.agentId, actionId: action.id },
-          "startup session-goal action recovery skipped a non-invokable agent",
+          "startup session-goal action recovery skipped a blocked agent",
         );
       }
       if (run) enqueued += 1;
@@ -28691,9 +28698,22 @@ export function heartbeatService(
         run.runtimeMode !== "native"
           ? captureAdapterStopOwnership(run.id)
           : undefined;
+      // myrmidon(L1): services/recovery/service.ts retries this issue once the
+      // agent is invokable again; suppress the immediate escalation this
+      // release would otherwise fire while it is merely paused. Gated to
+      // this run's own claimed adapter (runnerProfileJson.adapterDispatch,
+      // already present on `run`) qualifying -- see infra-interrupts.ts's
+      // module comment: a process/webhook-style adapter still escalates
+      // immediately, same as the vendor, since a blind retry of it could
+      // replay whatever external action the paused run already took.
+      const suppressImmediateRecoveryForInfraInterrupt =
+        shouldRetryOriginalExecutorForInfraInterrupt({ ...run, errorCode });
       try {
         if (stopOwnership?.control) {
-          await cancelRunInternal(run.id, reason, { errorCode });
+          await cancelRunInternal(run.id, reason, {
+            errorCode,
+            suppressImmediateRecovery: suppressImmediateRecoveryForInfraInterrupt,
+          });
           continue;
         }
         if (run.runtimeMode === "native") {
@@ -28747,7 +28767,9 @@ export function heartbeatService(
           status: "cancelled",
           failureReason: reason,
         });
-        await releaseIssueExecutionAndPromote(run);
+        await releaseIssueExecutionAndPromote(run, {
+          suppressImmediateRecovery: suppressImmediateRecoveryForInfraInterrupt,
+        });
       } finally {
         stopOwnership?.release();
       }
