@@ -614,7 +614,16 @@ import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/main
 import { createStaleActiveLeaseSweep } from "../myrmidon/leases-stale-sweep.js";
 // myrmidon(M3): skip idle timer heartbeats
 import { hasOtherActionableWork, skipIdleHeartbeatsEnabled } from "../myrmidon/heartbeat-idle-skip.js";
-import { sharedRunAdmission } from "../myrmidon/run-admission.js";
+import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
+// myrmidon(L3): pause drains instead of cancelling; resume wakes stranded work
+import {
+  isSkippableStartupRecoveryConflict,
+  resumeAgentAfterPause as pauseResumeWakeAgent,
+} from "../myrmidon/pause-drain.js";
+// myrmidon(L1): an agent pause is infrastructure, not a provider failure;
+// retry the original executor once it is invokable again instead of an
+// immediate operator escalation
+import { shouldRetryOriginalExecutorForInfraInterrupt } from "../myrmidon/infra-interrupts.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -19137,10 +19146,33 @@ export function heartbeatService(
       // myrmidon: oldest waiting run first, so capped admission stays fair
       .orderBy(asc(heartbeatRuns.createdAt));
 
+    // myrmidon: keep the admission count honest against the database
+    const [{ running }] = await db
+      .select({ running: sql<number>`count(*)` })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.status, "running"));
+    sharedRunAdmission().syncRunning(Number(running ?? 0));
+
     const agentIds = [...new Set(queuedRuns.map((r) => r.agentId))];
     for (const agentId of agentIds) {
-      await startNextQueuedRunForAgent(agentId);
+      // myrmidon: one agent's failure (e.g. a duplicate routine issue on claim)
+      // must not stop the sweep for every agent queued after it
+      try {
+        await startNextQueuedRunForAgent(agentId);
+      } catch (err) {
+        logger.error({ err, agentId }, "queued run sweep: start failed for agent");
+      }
     }
+  }
+
+  // myrmidon: when admission held runs back, sweep again once the start window
+  // moves instead of waiting for the next scheduler tick (5 min on vm-core)
+  function scheduleAdmissionResweep() {
+    scheduleQueuedResweep(() =>
+      resumeQueuedRuns().catch((err) =>
+        logger.error({ err }, "queued run resweep after admission limit failed"),
+      ),
+    );
   }
 
   async function recoverActiveSessionGoals() {
@@ -19173,20 +19205,35 @@ export function heartbeatService(
       );
     let enqueued = 0;
     for (const session of sessions) {
-      const run = await enqueueWakeup(session.agentId, {
-        source: "automation",
-        triggerDetail: "system",
-        reason: "goal_control",
-        payload: { issueId: session.issueId, intent: "goal_recovery" },
-        idempotencyKey: `goal_recovery:${session.id}:${session.revision}`,
-        requestedByActorType: "system",
-        contextSnapshot: {
-          issueId: session.issueId,
-          taskKey: session.issueId,
-          resumeSessionGoalHeartbeat: true,
-          skipIssueComment: true,
-        },
-      });
+      // myrmidon(L3): a non-invokable agent (paused, ...) or one blocked by a
+      // budget hard-stop must not crash startup recovery for every other
+      // agent on the instance; skip it here. A paused agent's stranded work
+      // is woken later on resume (myrmidon/pause-drain.ts); a budget block
+      // clears itself once the policy is resolved and the next scheduled
+      // wakeup or resweep picks the session goal back up.
+      let run: Awaited<ReturnType<typeof enqueueWakeup>> | null = null;
+      try {
+        run = await enqueueWakeup(session.agentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "goal_control",
+          payload: { issueId: session.issueId, intent: "goal_recovery" },
+          idempotencyKey: `goal_recovery:${session.id}:${session.revision}`,
+          requestedByActorType: "system",
+          contextSnapshot: {
+            issueId: session.issueId,
+            taskKey: session.issueId,
+            resumeSessionGoalHeartbeat: true,
+            skipIssueComment: true,
+          },
+        });
+      } catch (err) {
+        if (!isSkippableStartupRecoveryConflict(err)) throw err;
+        logger.warn(
+          { agentId: session.agentId, sessionId: session.id },
+          "startup session-goal recovery skipped a blocked agent",
+        );
+      }
       if (run) enqueued += 1;
     }
     return { scanned: sessions.length, enqueued };
@@ -19276,29 +19323,41 @@ export function heartbeatService(
         continue;
       }
 
-      const run = await enqueueWakeup(action.agentId, {
-        source: "automation",
-        triggerDetail: "system",
-        reason: "goal_control",
-        payload: {
-          issueId: action.issueId,
-          requestId: action.requestId,
-          intent: "goal_control_recovery",
-        },
-        idempotencyKey: `goal_control_recovery:${action.id}`,
-        requestedByActorType: "system",
-        contextSnapshot: {
-          issueId: action.issueId,
-          taskKey: action.issueId,
-          // Goal controls reconcile the provider session itself and remain
-          // valid after issue terminalization (for example, clearing a
-          // completed goal from its retained widget).
-          resumeIntent: true,
-          goalControlRequestId: action.requestId,
-          runnerGoalControl: control,
-          skipIssueComment: true,
-        },
-      });
+      // myrmidon(L3): a non-invokable agent (paused, ...) or one blocked by a
+      // budget hard-stop must not crash startup recovery for every other
+      // agent on the instance; skip it here (myrmidon/pause-drain.ts).
+      let run: Awaited<ReturnType<typeof enqueueWakeup>> | null = null;
+      try {
+        run = await enqueueWakeup(action.agentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "goal_control",
+          payload: {
+            issueId: action.issueId,
+            requestId: action.requestId,
+            intent: "goal_control_recovery",
+          },
+          idempotencyKey: `goal_control_recovery:${action.id}`,
+          requestedByActorType: "system",
+          contextSnapshot: {
+            issueId: action.issueId,
+            taskKey: action.issueId,
+            // Goal controls reconcile the provider session itself and remain
+            // valid after issue terminalization (for example, clearing a
+            // completed goal from its retained widget).
+            resumeIntent: true,
+            goalControlRequestId: action.requestId,
+            runnerGoalControl: control,
+            skipIssueComment: true,
+          },
+        });
+      } catch (err) {
+        if (!isSkippableStartupRecoveryConflict(err)) throw err;
+        logger.warn(
+          { agentId: action.agentId, actionId: action.id },
+          "startup session-goal action recovery skipped a blocked agent",
+        );
+      }
       if (run) enqueued += 1;
     }
     return { scanned: pending.length, enqueued, alreadyQueued, invalid };
@@ -19573,6 +19632,9 @@ export function heartbeatService(
         }
       } finally {
         admission.release(admitted - claimedRuns.length);
+      }
+      if (admitted < availableSlots && admitted < prioritizedRuns.length) {
+        scheduleAdmissionResweep();
       }
       if (claimedRuns.length === 0) return [];
 
@@ -28621,9 +28683,22 @@ export function heartbeatService(
         run.runtimeMode !== "native"
           ? captureAdapterStopOwnership(run.id)
           : undefined;
+      // myrmidon(L1): services/recovery/service.ts retries this issue once the
+      // agent is invokable again; suppress the immediate escalation this
+      // release would otherwise fire while it is merely paused. Gated to
+      // this run's own claimed adapter (runnerProfileJson.adapterDispatch,
+      // already present on `run`) qualifying -- see infra-interrupts.ts's
+      // module comment: a process/webhook-style adapter still escalates
+      // immediately, same as the vendor, since a blind retry of it could
+      // replay whatever external action the paused run already took.
+      const suppressImmediateRecoveryForInfraInterrupt =
+        shouldRetryOriginalExecutorForInfraInterrupt({ ...run, errorCode });
       try {
         if (stopOwnership?.control) {
-          await cancelRunInternal(run.id, reason, { errorCode });
+          await cancelRunInternal(run.id, reason, {
+            errorCode,
+            suppressImmediateRecovery: suppressImmediateRecoveryForInfraInterrupt,
+          });
           continue;
         }
         if (run.runtimeMode === "native") {
@@ -28677,7 +28752,9 @@ export function heartbeatService(
           status: "cancelled",
           failureReason: reason,
         });
-        await releaseIssueExecutionAndPromote(run);
+        await releaseIssueExecutionAndPromote(run, {
+          suppressImmediateRecovery: suppressImmediateRecoveryForInfraInterrupt,
+        });
       } finally {
         stopOwnership?.release();
       }
@@ -29108,6 +29185,12 @@ export function heartbeatService(
     retryScheduledRetryNow,
 
     resumeQueuedRuns,
+
+    // myrmidon(L3): wakes queued runs and stranded assigned todo/in_progress
+    // issues a drained pause left idle; logic in myrmidon/pause-drain.ts.
+    // Its sole caller is the agent resume route.
+    resumeAgentAfterPause: (agentId: string) =>
+      pauseResumeWakeAgent({ db, startNextQueuedRunForAgent, enqueueWakeup }, agentId),
 
     scheduleBoundedRetry: async (
       runId: string,

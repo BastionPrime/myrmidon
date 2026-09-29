@@ -91,6 +91,14 @@ export interface RunAdmission {
   reserve(wanted: number): number;
   release(unused: number): void;
   finish(): void;
+  /**
+   * Raise the in-process count to the runs the database has in `running`: an
+   * execution can settle while its row is still running (hand-off, deferred
+   * finish), and the count must not drift below reality.
+   */
+  syncRunning(running: number): void;
+  /** True when the last `reserve` gave fewer slots than wanted because of a limit. */
+  limited(): boolean;
 }
 
 export function createRunAdmission(options: {
@@ -103,6 +111,7 @@ export function createRunAdmission(options: {
   const now = options.now ?? Date.now;
   const starts: number[] = [];
   let active = 0;
+  let lastLimited = false;
 
   function prune(at: number) {
     while (starts.length > 0 && at - starts[0]! >= START_WINDOW_MS) starts.shift();
@@ -131,6 +140,7 @@ export function createRunAdmission(options: {
         }
       }
       allowed = Math.max(0, allowed);
+      lastLimited = allowed < wanted;
       active += allowed;
       for (let i = 0; i < allowed; i += 1) starts.push(at);
       return allowed;
@@ -143,7 +153,30 @@ export function createRunAdmission(options: {
     finish() {
       active = Math.max(0, active - 1);
     },
+    syncRunning(running) {
+      // Only raise: lowering could drop slots reserved for claims still in flight.
+      if (Number.isInteger(running) && running > active) active = running;
+    },
+    limited() {
+      return lastLimited;
+    },
   };
+}
+
+const RESWEEP_DELAY_MS = 15_000;
+let resweepTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Run `sweep` once after a short delay, when admission held runs back. One
+ * pending timer per process: repeated calls before it fires do nothing.
+ */
+export function scheduleQueuedResweep(sweep: () => unknown, delayMs = RESWEEP_DELAY_MS): void {
+  if (resweepTimer) return;
+  resweepTimer = setTimeout(() => {
+    resweepTimer = null;
+    void sweep();
+  }, delayMs);
+  resweepTimer.unref?.();
 }
 
 let shared: RunAdmission | null = null;
