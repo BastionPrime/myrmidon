@@ -1702,6 +1702,9 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
         issueId: conversationIssue.id,
         source: "chat:telegram",
         commentId: inboundComment.id,
+        // A standing conversation only accepts a reply from a run that belongs
+        // to the conversation's current session.
+        conversationSessionGeneration: conversationIssue.conversationSessionGeneration,
       },
     });
 
