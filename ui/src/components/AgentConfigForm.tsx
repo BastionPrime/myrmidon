@@ -77,6 +77,8 @@ import { MarkdownEditor } from "./MarkdownEditor";
 import { ChoosePathButton } from "./PathInstructionsModal";
 // myrmidon(M1): extra models on the agent card
 import { AgentCardModelsFields } from "./myrmidon/AgentCardModelsFields";
+// myrmidon(W2b): bot container settings on the agent card
+import { AgentCardContainerFields } from "./myrmidon/AgentCardContainerFields";
 import { OpenCodeLogoIcon } from "./OpenCodeLogoIcon";
 import { ReportsToPicker } from "./ReportsToPicker";
 import {
@@ -1710,6 +1712,16 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           )}
 
           {renderAdapterFields("adapter")}
+          {/* myrmidon(W2b): bot container settings on the agent card */}
+          {!isCreate && adapterType === "hermes_gateway" && (
+            <AgentCardContainerFields
+              agentId={props.agent.id}
+              value={eff("adapterConfig", "container", config.container)}
+              savedValue={props.agent.adapterConfig?.container}
+              unsaved={"container" in overlay.adapterConfig || overlay.adapterType !== undefined}
+              onChange={(next) => mark("adapterConfig", "container", next)}
+            />
+          )}
           {isLocal && (<>
               <ModelDropdown
                 models={models}
