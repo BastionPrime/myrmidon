@@ -26,7 +26,35 @@ const dockerfileInstructions = dockerfile
   .filter((line) => !line.trim().startsWith("#"))
   .join("\n");
 
+// The roots come from the dockergate policy itself, so the test and the policy
+// cannot drift apart.
+const policySource = fs.readFileSync(path.join(ROOT, "tools/dockergate/internal/policy/image.go"), "utf8");
+const unsafeRootsMatch = policySource.match(/var unsafeRoots = \[\]string\{([^}]*)\}/);
+const unsafeRoots = unsafeRootsMatch ? [...unsafeRootsMatch[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]) : [];
+
 describe("docker/bot-runtime/Dockerfile", () => {
+  it("keeps every writable volume out of PATH in every stage (dockergate image check)", () => {
+    assert.ok(unsafeRoots.length >= 4, "unsafeRoots must be read from the dockergate policy");
+    for (const root of ["/data", "/workspace", "/scratch", "/tmp"]) {
+      assert.ok(unsafeRoots.includes(root), `dockergate policy no longer lists ${root}`);
+    }
+    // Join line continuations, then look at every ENV instruction's PATH value.
+    const joined = dockerfile.replace(/\\\n/g, " ");
+    const values = [];
+    for (const line of joined.split("\n")) {
+      if (!/^\s*ENV\s/.test(line)) continue;
+      for (const m of line.matchAll(/(?:^|\s)PATH=(\S+)/g)) values.push(m[1]);
+    }
+    assert.ok(values.length >= 2, "expected PATH to be set in the runtime and runtime-node stages");
+    for (const value of values) {
+      for (const el of value.split(":")) {
+        for (const root of unsafeRoots) {
+          assert.ok(el !== root && !el.startsWith(`${root}/`), `PATH element ${el} is under writable root ${root}`);
+        }
+      }
+    }
+  });
+
   it("pins the hermes version and a matching git tag through build args with exact defaults", () => {
     // hermes-agent's git tags (vYYYY.M.D, calendar-based) and its
     // pyproject.toml `version` field (0.x.y, bumped independently) do not
