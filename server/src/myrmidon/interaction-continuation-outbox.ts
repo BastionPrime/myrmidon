@@ -329,7 +329,7 @@ async function findDurableWake(
         eq(agentWakeupRequests.agentId, input.agentId),
         inArray(agentWakeupRequests.status, [...DURABLE_WAKE_STATUSES]),
         sql`${agentWakeupRequests.payload}->>'interactionId' = ${input.interactionId}`,
-        ne(agentWakeupRequests.id, input.intentId ?? undefined),
+        ...(input.intentId ? [ne(agentWakeupRequests.id, input.intentId)] : []),
         or(
           isNull(agentWakeupRequests.requestedByActorId),
           ne(agentWakeupRequests.requestedByActorId, OUTBOX_ACTOR_ID),
