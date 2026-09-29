@@ -1607,6 +1607,105 @@ describe("IssueDetail", () => {
     ).toBe(false);
   });
 
+  // myrmidon(U3): regression test for a senior-review finding on the
+  // files-drawer PR (#89): the trigger was only ever rendered inside
+  // "hidden md:flex" (desktop-only) or a classic-header-only mobile row
+  // gated on !streamlinedTaskDetailEnabled — the default streamlined header
+  // (enableStreamlinedUi: true, set in beforeEach above) has no other
+  // mobile action row at all, so ordinary tickets had no way to open task
+  // files on a phone.
+  it("keeps the files drawer trigger reachable on mobile with the default streamlined header", async () => {
+    mockSidebarState.isMobile = true;
+    mockIssuesApi.get.mockResolvedValue(createIssue());
+    mockIssuesApi.listAttachments.mockResolvedValue([
+      createAttachment({ id: "att-mobile-reach" }),
+    ]);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitForAssertion(() => {
+      const found = Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          '[data-testid="issue-files-drawer-trigger"]',
+        ),
+      );
+      expect(found.length).toBeGreaterThan(0);
+      // Not disabled: the attachment above has loaded and counted.
+      expect(found.some((t) => t.disabled)).toBe(false);
+    });
+
+    const triggers = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="issue-files-drawer-trigger"]',
+      ),
+    );
+    // At least one mounted instance must sit in a wrapper that is visible by
+    // default and only disappears at the md breakpoint ("md:hidden", not a
+    // bare "hidden" class) — i.e. reachable at a phone-width viewport.
+    const mobileReachable = triggers.some((button) => {
+      const classes = button.parentElement?.className.split(/\s+/) ?? [];
+      return classes.includes("md:hidden") && !classes.includes("hidden");
+    });
+    expect(mobileReachable).toBe(true);
+  });
+
+  // myrmidon(U3): regression test for a senior-review finding on the
+  // files-drawer PR (#89): the desktop trigger used to render inside
+  // `task-title-actions`, which the default streamlined header positions
+  // `absolute right-0 top-0` over the title row — a row whose own `md:pr-8`
+  // reserves just enough space for the kebab menu already in that box. The
+  // wider "Files (N)" button pushed past that reserved space and sat on top
+  // of the title text, intercepting clicks meant for the title/identifier
+  // instead of opening the files drawer. It must render as a plain flow
+  // sibling of `task-title-actions`, not a descendant of it.
+  it("does not nest the desktop files drawer trigger inside the absolutely positioned title-actions box", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue());
+    mockIssuesApi.listAttachments.mockResolvedValue([
+      createAttachment({ id: "att-desktop-placement" }),
+    ]);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitForAssertion(() => {
+      const found = container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="issue-files-drawer-trigger"]',
+      );
+      expect(found.length).toBeGreaterThan(0);
+    });
+
+    const titleActions = container.querySelector(
+      '[data-slot="task-title-actions"]',
+    );
+    expect(titleActions).not.toBeNull();
+    expect(titleActions?.className).toContain("absolute");
+
+    const triggers = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="issue-files-drawer-trigger"]',
+      ),
+    );
+    // The desktop instance is the one NOT wrapped in the mobile-only
+    // "md:hidden" twin's container (see the test above).
+    const desktopTrigger = triggers.find((button) => {
+      const classes = button.parentElement?.className.split(/\s+/) ?? [];
+      return !classes.includes("md:hidden");
+    });
+    expect(desktopTrigger).toBeTruthy();
+    expect(titleActions?.contains(desktopTrigger ?? null)).toBe(false);
+  });
+
   it.each([false, true])(
     "preserves explicit upload receipt IDs through the page mutation (reassign=%s)",
     async (reassign) => {

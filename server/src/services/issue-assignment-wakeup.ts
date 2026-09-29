@@ -1,4 +1,5 @@
 import { logger } from "../middleware/logger.js";
+import { isConversation } from "./agent-conversations.js";
 import type { DurableChatWakeupRequest } from "./durable-chat-wakeup.js";
 
 type WakeupTriggerDetail = "manual" | "ping" | "callback" | "system";
@@ -24,7 +25,13 @@ export interface IssueAssignmentWakeupDeps {
 
 export function queueIssueAssignmentWakeup(input: {
   heartbeat: IssueAssignmentWakeupDeps;
-  issue: { id: string; assigneeAgentId: string | null; status: string };
+  issue: {
+    id: string;
+    assigneeAgentId: string | null;
+    status: string;
+    conversationAgentId?: string | null;
+    conversationUserId?: string | null;
+  };
   reason: string;
   mutation: string;
   contextSource: string;
@@ -42,6 +49,14 @@ export function queueIssueAssignmentWakeup(input: {
 }) {
   if (!input.issue.assigneeAgentId || input.issue.status === "backlog") return;
 
+  // myrmidon(X8a): an Agent Chat conversation keeps one provider session
+  // keyed by issue id, regardless of the taskKey a caller passed in. Without
+  // this, a connector-driven conversation (taskKey = issue.identifier) and
+  // the web conversation UI (taskKey = issue.id, see agent-conversations.ts)
+  // race for the same issue on two different provider sessions, and /new
+  // -- which deletes the session by issue.id -- only ever clears one of them.
+  const taskKey = isConversation(input.issue) ? input.issue.id : input.taskKey;
+
   return input.heartbeat
     .wakeup(input.issue.assigneeAgentId, {
       source: "assignment",
@@ -50,7 +65,7 @@ export function queueIssueAssignmentWakeup(input: {
       payload: {
         issueId: input.issue.id,
         mutation: input.mutation,
-        ...(input.taskKey ? { taskKey: input.taskKey } : {}),
+        ...(taskKey ? { taskKey } : {}),
         ...(input.wakeCommentId ? { wakeCommentId: input.wakeCommentId } : {}),
       },
       requestedByActorType: input.requestedByActorType,
@@ -61,7 +76,7 @@ export function queueIssueAssignmentWakeup(input: {
       contextSnapshot: {
         issueId: input.issue.id,
         source: input.contextSource,
-        ...(input.taskKey ? { taskKey: input.taskKey } : {}),
+        ...(taskKey ? { taskKey } : {}),
         ...(input.wakeCommentId ? { wakeCommentId: input.wakeCommentId } : {}),
         ...(input.wakeCommentId && input.attachmentOmissionReasons
           ? {
