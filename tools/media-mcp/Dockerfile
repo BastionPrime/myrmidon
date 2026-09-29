@@ -13,6 +13,9 @@ RUN python -m venv /opt/venv \
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY src /app/src
+# The spool volume is mounted here. A named volume takes owner and mode from this directory on
+# first use, so it must exist and belong to the service user or nothing can be written.
+RUN mkdir -p /spool && chown 10001:10001 /spool && chmod 0750 /spool
 WORKDIR /app
 
 FROM base AS test

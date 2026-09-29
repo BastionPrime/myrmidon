@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 import resource
+import shutil
 import signal
 import time
 from pathlib import Path
@@ -27,17 +28,19 @@ from .config import BOT_KEY_RE, Settings, load_settings
 
 JOB_ID_RE = __import__("re").compile(r"^[0-9a-f]{32}$")
 TIMEOUTS = {"ffmpeg": 1800, "image": 60, "pdf_images": 180, "probe": 30, "loudness": 600}
+SYNC_KINDS = {"image", "pdf_images", "probe", "loudness"}  # the facade waits for these on one HTTP call
 NO_OUTPUT = {"probe", "loudness"}  # results come back as text, not files
-MAX_OUT_BYTES = 2 * 1024**3
+MAX_OUT_BYTES = 2 * 1024**3  # hard ceiling per file; the facade passes the bot's remaining quota, which is lower
+MIN_OUT_BYTES = 1 << 20
 CONCURRENCY = int(os.environ.get("WORKER_CONCURRENCY", "2"))
 
 
-def _limits(cpu_s: int):
+def _limits(cpu_s: int, fsize: int = MAX_OUT_BYTES):
     def apply():
         os.setsid()
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_CPU, (cpu_s * 2 + 30, cpu_s * 2 + 30))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_OUT_BYTES, MAX_OUT_BYTES))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
         resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
 
     return apply
@@ -54,6 +57,48 @@ class Worker:
         if not BOT_KEY_RE.match(bot) or not JOB_ID_RE.match(job):
             raise specs.SpecError("bad bot or job id")
         return self.cfg.data_dir / "bots" / bot / "jobs" / job
+
+    def timeout_for(self, kind: str) -> int:
+        """Short kinds must finish before the facade's HTTP call gives up, or the work runs on unseen."""
+        t = TIMEOUTS[kind]
+        return min(t, self.cfg.backend_timeout_s + 30) if kind in SYNC_KINDS else t
+
+    @staticmethod
+    def dir_bytes(p: Path) -> int:
+        total = 0
+        for root, _d, names in os.walk(p):
+            for n in names:
+                try:
+                    total += os.lstat(os.path.join(root, n)).st_size
+                except OSError:
+                    pass
+        return total
+
+    def out_limit(self, requested: int | None) -> int:
+        """Bytes this job may write: the bot's remaining quota, the ceiling, and the free space."""
+        lim = MAX_OUT_BYTES if not requested else max(MIN_OUT_BYTES, min(int(requested), MAX_OUT_BYTES))
+        if self.cfg.spool_min_free_bytes:
+            try:
+                free = shutil.disk_usage(self.cfg.data_dir).free - self.cfg.spool_min_free_bytes
+                lim = max(MIN_OUT_BYTES, min(lim, free))
+            except OSError:
+                pass
+        return lim
+
+    def fail(self, d: Path, error: str, status: str = "failed") -> None:
+        """Terminal non-success state: free the disk now instead of waiting for the TTL."""
+        for sub in ("in", "out"):
+            shutil.rmtree(d / sub, ignore_errors=True)
+        self.write_state(d, status=status, error=error, finished=time.time())
+
+    async def _watch(self, d: Path, proc: asyncio.subprocess.Process, limit: int, hit: list) -> None:
+        """Kill the job when everything it wrote together exceeds the limit (RLIMIT_FSIZE is per file)."""
+        while proc.returncode is None:
+            await asyncio.sleep(2)
+            if await asyncio.to_thread(self.dir_bytes, d / "out") > limit:
+                hit.append(True)
+                self._kill(proc)
+                return
 
     def state(self, d: Path) -> dict:
         try:
@@ -88,42 +133,52 @@ class Worker:
         st = self.state(d)
         kind, spec = st["kind"], st["spec"]
         if job in self.cancelled:
-            self.write_state(d, status="cancelled", finished=time.time())
+            self.fail(d, "cancelled", "cancelled")
             return
         try:
             argv = self.argv_for(kind, spec, d)
         except specs.SpecError as e:
-            self.write_state(d, status="failed", error=str(e), finished=time.time())
+            self.fail(d, str(e))
             return
         (d / "out").mkdir(exist_ok=True)
-        timeout = TIMEOUTS[kind]
+        timeout = self.timeout_for(kind)
+        limit = self.out_limit(st.get("max_out_bytes"))
         self.write_state(d, status="running", started=time.time())
         env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(d), "LANG": "C.UTF-8"}
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv, cwd=d / "in", env=env, stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                preexec_fn=_limits(timeout),
+                preexec_fn=_limits(timeout, limit),
             )
         except OSError as e:
-            self.write_state(d, status="failed", error=f"cannot start: {e.strerror}", finished=time.time())
+            self.fail(d, f"cannot start: {e.strerror}")
             return
         self.procs[job] = proc
+        hit: list = []
+        watcher = asyncio.create_task(self._watch(d, proc, limit, hit))
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout)
         except asyncio.TimeoutError:
             self._kill(proc)
-            self.write_state(d, status="failed", error=f"timeout after {timeout}s", finished=time.time())
+            self.fail(d, f"timeout after {timeout}s")
             return
         finally:
+            watcher.cancel()
             self.procs.pop(job, None)
         if job in self.cancelled:
-            self.write_state(d, status="cancelled", finished=time.time())
+            self.fail(d, "cancelled", "cancelled")
+            return
+        if hit or self.dir_bytes(d / "out") > limit:
+            self.fail(d, "output exceeds the storage available to this bot")
             return
         tail = err.decode("utf-8", "replace")[-1500:]
         files = sorted(p.name for p in (d / "out").iterdir() if p.is_file())
+        if proc.returncode == -signal.SIGXFSZ:
+            self.fail(d, "output exceeds the storage available to this bot")
+            return
         if proc.returncode != 0 or (kind not in NO_OUTPUT and not files):
-            self.write_state(d, status="failed", error=tail or f"exit {proc.returncode}", finished=time.time())
+            self.fail(d, tail or f"exit {proc.returncode}")
             return
         extra = {}
         if kind == "probe":
@@ -146,10 +201,11 @@ class Worker:
                 await self.run(bot, job)
             except Exception as e:  # never let the loop die
                 try:
-                    self.write_state(self.job_dir(bot, job), status="failed", error=f"internal: {type(e).__name__}")
+                    self.fail(self.job_dir(bot, job), f"internal: {type(e).__name__}")
                 except Exception:
                     pass
             finally:
+                self.cancelled.discard(job)
                 self.queue.task_done()
 
 
@@ -176,12 +232,15 @@ def build_app(cfg: Settings | None = None) -> Starlette:
             w.argv_for(kind, spec, d)  # validate now
         except (KeyError, specs.SpecError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
-        w.write_state(d, kind=kind, spec=spec, status="queued", created=time.time())
+        mob = body.get("max_out_bytes")
+        mob = mob if isinstance(mob, int) and not isinstance(mob, bool) and mob > 0 else None
+        w.write_state(d, kind=kind, spec=spec, status="queued", created=time.time(), max_out_bytes=mob)
         if kind == "ffmpeg":
             await w.queue.put((bot, job))
             return JSONResponse({"job": job, "status": "queued"}, status_code=202)
         async with sem:  # short jobs run inline, bounded by the same concurrency
             await w.run(bot, job)
+        w.cancelled.discard(job)
         return JSONResponse(w.state(d))
 
     async def status(request: Request):
@@ -207,7 +266,7 @@ def build_app(cfg: Settings | None = None) -> Starlette:
         if job in w.procs:
             w._kill(w.procs[job])
         if w.state(d).get("status") in ("queued",):
-            w.write_state(d, status="cancelled", finished=time.time())
+            w.fail(d, "cancelled", "cancelled")
         return JSONResponse({"job": job, "status": w.state(d).get("status")})
 
     async def health(_: Request):
@@ -221,6 +280,8 @@ def build_app(cfg: Settings | None = None) -> Starlette:
                 if s.get("status") in ("queued", "running"):
                     s.update(status="failed", error="worker restarted", finished=time.time())
                     st.write_text(json.dumps(s))
+                    for sub in ("in", "out"):
+                        shutil.rmtree(st.parent / sub, ignore_errors=True)
             except (OSError, ValueError):
                 pass
         tasks = [asyncio.create_task(w.loop()) for _ in range(CONCURRENCY)]

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import time
 import uuid
 from pathlib import Path
@@ -54,15 +55,18 @@ INSTRUCTIONS = (
 
 def build_app(cfg: Settings | None = None) -> Any:
     cfg = cfg or load_settings()
-    store = Store(cfg.data_dir, cfg.bot_quota_bytes, cfg.max_file_bytes, cfg.file_ttl_hours)
+    store = Store(cfg.data_dir, cfg.bot_quota_bytes, cfg.max_file_bytes, cfg.file_ttl_hours,
+                  spool_max_bytes=cfg.spool_max_bytes, spool_min_free_bytes=cfg.spool_min_free_bytes)
     be = Backends(cfg)
     auth = Authenticator(cfg)
-    locks: dict[str, asyncio.Lock] = {}
+    locks: dict[str, asyncio.Lock] = {}  # per job, dropped when the job is registered
+    bot_locks: dict[str, asyncio.Lock] = {}  # per bot (a bounded set): job admission is serial
 
     mcp = FastMCP(
         "media-tools", instructions=INSTRUCTIONS, stateless_http=True, json_response=True,
         host=cfg.listen_host, port=cfg.listen_port, max_request_body_size=cfg.max_request_bytes,
-        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True,
+                                                     allowed_hosts=list(cfg.allowed_hosts), allowed_origins=[]),
     )
 
     # ---- helpers ------------------------------------------------------------
@@ -128,51 +132,124 @@ def build_app(cfg: Settings | None = None) -> Any:
                 pass
         return n
 
-    def prepare_job(bot, files: dict[str, dict]) -> tuple[str, Path]:
+    def prepare_job(bot, files: dict[str, dict], queued: bool = False) -> tuple[str, Path]:
         job = uuid.uuid4().hex
         d = store.bot_dir(bot.key) / "jobs" / job
-        (d / "in").mkdir(parents=True)
-        (d / "out").mkdir()
-        for alias, meta in files.items():
-            src, dst = store.blob(bot.key, meta["id"]), d / "in" / alias
-            try:
-                os.link(src, dst)
-            except OSError:
-                shutil.copyfile(src, dst)
+        try:
+            (d / "in").mkdir(parents=True)
+            (d / "out").mkdir()
+            for alias, meta in files.items():
+                src, dst = store.blob(bot.key, meta["id"]), d / "in" / alias
+                try:
+                    os.link(src, dst)
+                except OSError:
+                    shutil.copyfile(src, dst)
+            if queued:  # visible to active_jobs at once, before the worker has seen the job
+                (d / "job.json").write_text(json.dumps({"status": "queued"}))
+        except BaseException:
+            shutil.rmtree(d, ignore_errors=True)
+            raise
         return job, d
+
+    def _register(bot, d: Path, st: dict) -> list[dict]:
+        """Move the job's outputs into the bot's store. Runs in a thread, under the bot's store lock."""
+        metas: list[dict] = []
+        with store.lock(bot.key):
+            try:
+                names = st.get("outputs", [])
+                if not isinstance(names, list):
+                    raise StoreError("bad job result")
+                for name in names:
+                    if not isinstance(name, str) or not specs.OUT_NAME_RE.match(name) or ".." in name:
+                        raise StoreError("the worker reported a bad output name")
+                    try:
+                        mode = os.lstat(d / "out" / name)
+                    except OSError:
+                        raise StoreError("a job output is missing") from None
+                    if not stat.S_ISREG(mode.st_mode):
+                        raise StoreError("a job output is not a regular file")
+                    if mode.st_size > cfg.max_file_bytes:
+                        raise StoreError(f"output larger than {cfg.max_file_bytes // 2**20} MiB")
+                    metas.append(store.put_path(bot.key, d / "out" / name, name, "result"))
+                if store.used_bytes(bot.key) > quota(bot):
+                    raise StoreError("bot storage quota exceeded: delete files with file_delete")
+            except StoreError as e:
+                for m in metas:
+                    store.delete(bot.key, m["id"])
+                # Refused for good: free the job's bytes now and remember why.
+                for sub in ("in", "out"):
+                    shutil.rmtree(d / sub, ignore_errors=True)
+                (d / "refused.json").write_text(json.dumps(str(e)))
+                raise
+            (d / "registered.json").write_text(json.dumps(metas))
+            for sub in ("in", "out"):
+                shutil.rmtree(d / sub, ignore_errors=True)
+        return metas
 
     async def register_outputs(bot, job: str, d: Path, st: dict) -> list[dict]:
         """Move job outputs into the bot's store once; idempotent."""
         lock = locks.setdefault(job, asyncio.Lock())
-        async with lock:
-            reg = d / "registered.json"
-            if reg.exists():
-                return json.loads(reg.read_text())
-            metas: list[dict] = []
-            for name in st.get("outputs", []):
-                p = d / "out" / name
+        try:
+            async with lock:
+                reg, refused = d / "registered.json", d / "refused.json"
+                if reg.exists():
+                    return json.loads(reg.read_text())
+                if refused.exists():
+                    raise ToolError(json.loads(refused.read_text()))
                 try:
-                    store.reserve(bot.key, p.stat().st_size, quota(bot))
+                    return await asyncio.to_thread(_register, bot, d, st)
                 except StoreError as e:
-                    for m in metas:
-                        store.delete(bot.key, m["id"])
                     raise ToolError(str(e)) from None
-                metas.append(await asyncio.to_thread(store.put_path, bot.key, p, name, "result"))
-            reg.write_text(json.dumps(metas))
-            shutil.rmtree(d / "in", ignore_errors=True)
-            return metas
+        finally:
+            locks.pop(job, None)
 
     async def run_sync(bot, kind: str, files: dict[str, dict], spec: dict) -> tuple[dict, list[dict]]:
+        await asyncio.to_thread(store.reserve, bot.key, 0, quota(bot))
         job, d = prepare_job(bot, files)
+        ok = False
         try:
-            st = await be.worker_submit(bot.key, job, kind, spec)
+            st = await be.worker_submit(bot.key, job, kind, spec, await max_out(bot))
             if st.get("status") != "done":
                 raise ToolError(st.get("error") or "processing failed")
             metas = [] if kind in ("probe", "loudness") else await register_outputs(bot, job, d, st)
+            ok = True
             return st, metas
         finally:
-            if kind in ("probe", "loudness"):
+            if kind in ("probe", "loudness") or not ok:
                 shutil.rmtree(d, ignore_errors=True)
+
+    async def max_out(bot) -> int:
+        """Bytes one job may write: what the bot has left, at most one file's worth."""
+        def calc() -> int:
+            left = min(store.remaining(bot.key, quota(bot)), store.spool_free_bytes())
+            if left <= 0:
+                raise StoreError("bot storage quota exceeded: delete files with file_delete")
+            return min(left, cfg.max_file_bytes)
+        return await asyncio.to_thread(calc)
+
+    def bot_lock(key: str) -> asyncio.Lock:
+        return bot_locks.setdefault(key, asyncio.Lock())
+
+    async def gotenberg_to_store(bot, route: str, files: list, fields: dict[str, str], name: str) -> dict:
+        """Convert with Gotenberg straight into a temporary file (size-capped), then register it."""
+        def cap() -> int:
+            left = min(store.remaining(bot.key, quota(bot)), store.spool_free_bytes())
+            if left <= 0:
+                raise StoreError("bot storage quota exceeded: delete files with file_delete")
+            return min(left, cfg.max_pdf_bytes, cfg.max_file_bytes)
+        limit = await asyncio.to_thread(cap)
+        tmp = store.new_tmp(bot.key)
+        try:
+            await be.gotenberg(route, files, fields, tmp, limit)
+
+            def fin() -> dict:
+                with store.lock(bot.key):
+                    store.reserve(bot.key, 0, quota(bot))  # the temporary is already counted
+                    return store.put_path(bot.key, tmp, name, "result")
+
+            return await asyncio.to_thread(fin)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def wrap(fn):
         @functools.wraps(fn)
@@ -210,7 +287,7 @@ def build_app(cfg: Settings | None = None) -> Any:
         """List your files with sizes and the remaining quota."""
         bot = gate("file_list")
         items = await asyncio.to_thread(store.list, bot.key)
-        used = sum(m["size"] for m in items)
+        used = await asyncio.to_thread(store.used_bytes, bot.key)
         return {"files": [public(m) for m in items], "used_bytes": used, "quota_bytes": quota(bot), "ttl_hours": cfg.file_ttl_hours}
 
     @tool
@@ -275,20 +352,30 @@ def build_app(cfg: Settings | None = None) -> Any:
         bot = gate("ffmpeg_submit")
         if not files:
             raise ToolError("files: at least one input")
-        if active_jobs(bot) >= cfg.max_active_jobs_per_bot:
-            raise ToolError(f"too many active jobs (limit {cfg.max_active_jobs_per_bot}); wait or job_cancel")
         aliases = {specs.check_alias(a) for a in files}
         specs.build_ffmpeg_argv(spec, aliases)  # validate before anything is created
-        metas: dict[str, dict] = {}
-        temps: list[dict] = []
-        for alias, ref in files.items():
-            m, t = await resolve(bot, ref)
-            metas[alias] = m
-            if t:
-                temps.append(m)
-        job, _ = prepare_job(bot, metas)
-        await drop(bot, temps)  # hard links keep the bytes for the job; the store entry can go
-        st = await be.worker_submit(bot.key, job, "ffmpeg", spec)
+        async with bot_lock(bot.key):  # the limit check and the job it guards are one step
+            if active_jobs(bot) >= cfg.max_active_jobs_per_bot:
+                raise ToolError(f"too many active jobs (limit {cfg.max_active_jobs_per_bot}); wait or job_cancel")
+            metas: dict[str, dict] = {}
+            temps: list[dict] = []
+            try:
+                for alias, ref in files.items():
+                    m, t = await resolve(bot, ref)
+                    metas[alias] = m
+                    if t:
+                        temps.append(m)
+                limit = await max_out(bot)
+                job, d = prepare_job(bot, metas, queued=True)
+            except BaseException:
+                await drop(bot, temps)
+                raise
+            await drop(bot, temps)  # hard links keep the bytes for the job; the store entry can go
+            try:
+                st = await be.worker_submit(bot.key, job, "ffmpeg", spec, limit)
+            except BaseException:
+                shutil.rmtree(d, ignore_errors=True)
+                raise
         return {"job_id": job, "status": st.get("status", "queued")}
 
     @tool
@@ -304,8 +391,10 @@ def build_app(cfg: Settings | None = None) -> Any:
         out = {"job_id": job_id, "status": st.get("status")}
         if st.get("status") == "done":
             out["outputs"] = [with_inline(m, inline) for m in await register_outputs(bot, job_id, d, st)]
-        elif st.get("status") == "failed":
+        elif st.get("status") in ("failed", "cancelled"):
             out["error"] = st.get("error", "")
+            for sub in ("in", "out"):  # normally the worker already did; belt and braces
+                shutil.rmtree(d / sub, ignore_errors=True)
         return out
 
     @tool
@@ -370,10 +459,12 @@ def build_app(cfg: Settings | None = None) -> Any:
                 if not __import__("re").fullmatch(r"[0-9,\- ]{1,40}", page_ranges):
                     raise ToolError("page_ranges looks like 1-3,5")
                 fields["nativePageRanges"] = page_ranges
+            if meta["size"] > cfg.max_convert_bytes:
+                raise ToolError(f"file larger than {cfg.max_convert_bytes // 2**20} MiB for conversion")
             with store.blob(bot.key, meta["id"]).open("rb") as fh:
-                pdf = await be.gotenberg("/forms/libreoffice/convert", [("files", (name, fh, "application/octet-stream"))], fields)
-            store.reserve(bot.key, len(pdf), quota(bot))
-            out = await asyncio.to_thread(store.put_bytes, bot.key, pdf, name.rsplit(".", 1)[0] + ".pdf", "result", quota(bot))
+                out = await gotenberg_to_store(bot, "/forms/libreoffice/convert",
+                                               [("files", (name, fh, "application/octet-stream"))], fields,
+                                               name.rsplit(".", 1)[0] + ".pdf")
         finally:
             if temp:
                 await drop(bot, [meta])
@@ -382,7 +473,7 @@ def build_app(cfg: Settings | None = None) -> Any:
     @tool
     async def html_to_pdf(html: str, assets: dict[str, FileInput] | None = None, paper: str = "A4", landscape: bool = False,
                           print_background: bool = True, margin_mm: float = 10, inline: bool = False) -> dict:
-        """Render an HTML string to PDF (headless Chromium, no network). Local assets (css, images, fonts) go in `assets`
+        """Render an HTML string to PDF (headless Chromium, JavaScript off, only your own assets load). Local assets (css, images, fonts) go in `assets`
         (alias -> file) and are referenced by relative name. No URL mode: to render a live page use the browser tool."""
         bot = gate("html_to_pdf")
         sizes = {"A4": (8.27, 11.69), "A3": (11.69, 16.54), "A5": (5.83, 8.27), "Letter": (8.5, 11)}
@@ -411,9 +502,7 @@ def build_app(cfg: Settings | None = None) -> Any:
                 fh = store.blob(bot.key, meta["id"]).open("rb")
                 opened.append(fh)
                 files.append(("files", (alias, fh, "application/octet-stream")))
-            pdf = await be.gotenberg("/forms/chromium/convert/html", files, fields)
-            store.reserve(bot.key, len(pdf), quota(bot))
-            out = await asyncio.to_thread(store.put_bytes, bot.key, pdf, "document.pdf", "result", quota(bot))
+            out = await gotenberg_to_store(bot, "/forms/chromium/convert/html", files, fields, "document.pdf")
         finally:
             for fh in opened:
                 fh.close()
@@ -424,17 +513,18 @@ def build_app(cfg: Settings | None = None) -> Any:
     async def extract_text(input: FileInput, ocr: bool = True, max_chars: int = 50_000) -> dict:
         """Text of a document (pdf, office, html, epub, ...) or OCR of an image/scan (Tesseract rus+eng) via Tika."""
         bot = gate("extract_text")
-        cap = min(max(int(max_chars), 1000), cfg.max_text_chars)
+        cap = min(max(int(max_chars), 1000), cfg.max_text_chars)  # the answer is cut off here, not after reading it all
         meta, temp = await resolve(bot, input)
         try:
-            data = await asyncio.to_thread(store.blob(bot.key, meta["id"]).read_bytes)
-            text = await be.tika_text(safe_name(meta["name"]), data, ocr)
+            if meta["size"] > cfg.max_convert_bytes:
+                raise ToolError(f"file larger than {cfg.max_convert_bytes // 2**20} MiB for text extraction")
+            with store.blob(bot.key, meta["id"]).open("rb") as fh:
+                text, cut = await be.tika_text(safe_name(meta["name"]), fh, meta["size"], ocr, cap)
         finally:
             if temp:
                 await drop(bot, [meta])
         text = text.strip()
-        return {"text": text[:cap], "chars": len(text), "truncated": len(text) > cap,
-                "empty": not text, "ocr": ocr}
+        return {"text": text, "chars": len(text), "truncated": cut, "empty": not text and not cut, "ocr": ocr}
 
     # ---- REST for big files -------------------------------------------------------
     async def put_file(request: Request):
@@ -442,23 +532,38 @@ def build_app(cfg: Settings | None = None) -> Any:
         name = request.query_params.get("name", "")
         if not name:
             return JSONResponse({"error": "name query parameter required"}, status_code=400)
-        declared = int(request.headers.get("content-length") or 0)
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            return JSONResponse({"error": "bad content-length"}, status_code=400)
+        tmp = None
         try:
             await asyncio.to_thread(store.reserve, bot.key, declared, quota(bot))
-            tmp = store.bot_dir(bot.key) / "files" / f".tmp-{uuid.uuid4().hex}"
-            total = 0
+            left = await asyncio.to_thread(lambda: min(store.remaining(bot.key, quota(bot)), store.spool_free_bytes()))
+            limit = min(cfg.max_file_bytes, left)
+            tmp = store.new_tmp(bot.key)
+            total, checked = 0, 0
             with tmp.open("wb") as f:
                 async for chunk in request.stream():
                     total += len(chunk)
-                    if total > cfg.max_file_bytes:
-                        raise StoreError("file too large")
+                    if total > limit:
+                        raise StoreError("file too large or storage quota exceeded")
                     f.write(chunk)
-            await asyncio.to_thread(store.reserve, bot.key, total, quota(bot))
-            meta = await asyncio.to_thread(store.put_path, bot.key, tmp, name, "upload")
+                    if total - checked >= 32 * 2**20:  # parallel uploads share the quota
+                        checked = total
+                        await asyncio.to_thread(store.reserve, bot.key, 0, quota(bot))
+
+            def fin() -> dict:
+                with store.lock(bot.key):
+                    store.reserve(bot.key, 0, quota(bot))  # the temporary is already counted
+                    return store.put_path(bot.key, tmp, name, "upload")
+
+            meta = await asyncio.to_thread(fin)
         except StoreError as e:
-            if "tmp" in locals():
-                tmp.unlink(missing_ok=True)
             return JSONResponse({"error": str(e)}, status_code=413)
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
         return JSONResponse(public(meta), status_code=201)
 
     async def get_file(request: Request):

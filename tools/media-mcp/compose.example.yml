@@ -3,8 +3,10 @@
 # same network as the bots use (MYRMIDON_BOT_NETWORK). `media-backend` is internal:
 # no route out and no route from the bots; only the facade and the worker sit on it.
 #
-# Before `up`: create ./config/bots.json (see README), the secret file
-# ./secrets/worker_token (random, >= 32 chars), and make ./spool writable by uid 10001.
+# Before `up`: create ./config/bots.json (see README) and the secret file
+# ./secrets/worker_token (random, >= 32 chars). The `spool` volume is a named volume: the images
+# create /spool owned by uid 10001, so Docker initialises the volume with that owner on first use.
+# A named volume has no size limit of its own; see the `spool` volume below.
 
 name: media-tools
 
@@ -16,7 +18,15 @@ networks:
     internal: true
 
 volumes:
+  # Everything the bots store and every job writes lives here (48 h TTL). Two limits protect the host:
+  # the service refuses new data past MEDIA_SPOOL_MAX_BYTES and when less than MEDIA_SPOOL_MIN_FREE_BYTES
+  # is free on this filesystem. The second one only helps if the volume is not the host's root disk, so
+  # put the spool on its own size-limited filesystem (a dedicated partition or LV, or a loop-mounted
+  # image, mounted e.g. at /srv/media-spool and chowned to 10001:10001) and use the driver_opts form.
   spool: {}
+  # spool:
+  #   driver: local
+  #   driver_opts: {type: none, o: bind, device: /srv/media-spool}
 
 x-hardening: &hardening
   read_only: true
@@ -45,6 +55,9 @@ services:
       MEDIA_GOTENBERG_URL: http://gotenberg:3000
       MEDIA_TIKA_URL: http://tika:9998
       MEDIA_WORKER_URL: http://media-worker:8081
+      MEDIA_ALLOWED_HOSTS: media-mcp,media-mcp:8080  # Host header values the MCP endpoint accepts
+      MEDIA_SPOOL_MAX_BYTES: "68719476736"  # 64 GiB for all bots together; keep below the spool filesystem size
+      MEDIA_SPOOL_MIN_FREE_BYTES: "2147483648"  # refuse writes when the spool filesystem has less free
     secrets: [worker_token]
     volumes:
       - ./config:/config:ro
@@ -61,6 +74,7 @@ services:
     environment:
       MEDIA_WORKER_TOKEN_FILE: /run/secrets/worker_token
       WORKER_CONCURRENCY: "2"
+      MEDIA_SPOOL_MIN_FREE_BYTES: "2147483648"
     secrets: [worker_token]
     volumes:
       - spool:/spool
@@ -75,6 +89,10 @@ services:
     command:
       - gotenberg
       - --api-timeout=120s
+      # HTML comes from bots: no scripts, and only the request's own files (in /tmp) and data: URIs load.
+      # Everything else, including http(s) to other services on this network, is refused.
+      - --chromium-disable-javascript=true
+      - --chromium-allow-list=^(file:///tmp/|data:)
       - --libreoffice-restart-after=25
       - --chromium-restart-after=25
     tmpfs: ["/tmp:size=1g", "/home/gotenberg:size=256m,uid=1001,gid=1001"]
