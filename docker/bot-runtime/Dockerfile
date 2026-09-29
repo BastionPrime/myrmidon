@@ -133,7 +133,23 @@ RUN set -eu; \
 # similarly no-ops) instead of a build- or start-time error. See README.md
 # "Sealed image: lazy installs and the write-safe root" for why lazy-installing them
 # at runtime instead is not a reliable fallback in this image.
-RUN uv sync --frozen --extra sms --extra mcp --extra hindsight \
+#
+# myrmidon(G1): the venv's `bin/python` is a symlink to whichever interpreter `uv sync`
+# picked, and the runtime stage copies only /opt/hermes-src, so that interpreter must exist
+# in the runtime stage too. hermes ships a `.python-version` (3.11, a dev-machine pin) that
+# `uv sync` honours: when the stage's Python is not 3.11 it silently downloads a managed
+# CPython into $HOME (/root/.local/share/uv/python/...) and links the venv to it — a path
+# absent from the runtime stage and unreadable by the bot user, so the image died at start
+# with "bad interpreter: Permission denied". pyproject.toml's `requires-python`
+# (>=3.11,<3.14) admits this stage's Python 3.13, and hermes' own upstream Docker image
+# runs Debian 13's system Python (3.13) the same way (its `uv sync` step sees only
+# pyproject.toml + uv.lock, never `.python-version`), so the venv is pinned to the base
+# image's interpreter. The builder and runtime stages MUST stay on the same
+# `python:3.13-slim`, so that path is the same interpreter in both; the runtime-stage
+# assertion below checks it. UV_PYTHON_DOWNLOADS=never turns any future mismatch into a
+# build error instead of a dangling link.
+ENV UV_PYTHON_DOWNLOADS=never
+RUN uv sync --frozen --extra sms --extra mcp --extra hindsight --python /usr/local/bin/python3 \
   && find /opt/hermes-src/.venv -name '__pycache__' -type d -prune -exec rm -rf {} +
 
 # Fail the build loudly if any of the three packages this image relies on being
@@ -269,6 +285,14 @@ USER 10001:10001
 WORKDIR /workspace
 VOLUME ["/data", "/workspace", "/scratch"]
 EXPOSE 8642
+
+# myrmidon(G1): build-time guard for the venv interpreter, run as the runtime user in the
+# runtime stage (not in the builder, where /root is readable and the interpreter always
+# exists): the venv's python must resolve outside /root and the hermes source must import
+# through the editable install (cwd /workspace, so nothing is found via the working dir).
+# A `bin/python` link into the builder's /root fails here, at build time, instead of when
+# the first container starts.
+RUN /opt/hermes-src/.venv/bin/python -c 'import os, sys; real = os.path.realpath(sys.executable); assert not real.startswith("/root/"), "venv python resolves into /root: " + real; import hermes_state'
 
 # /health needs no auth (unlike /v1/capabilities, which is Bearer-gated) —
 # see docker/bot-runtime/README.md and gateway/platforms/api_server.py.

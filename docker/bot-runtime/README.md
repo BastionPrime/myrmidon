@@ -16,7 +16,14 @@ Docker socket, no host mounts, and no media tools.
 
 ## What's in the image
 
-- Base: `python:3.13-slim`.
+- Base: `python:3.13-slim` in both build stages. The hermes venv is pinned to
+  that stage's own interpreter (`uv sync --python /usr/local/bin/python3`,
+  `UV_PYTHON_DOWNLOADS=never`): hermes' `.python-version` (3.11) would
+  otherwise make `uv` download a managed CPython into the builder's `/root`
+  and link the venv to it, and that link does not exist in the runtime
+  stage. A build-time check in the runtime stage, run as the `bot` user,
+  asserts that `/opt/hermes-src/.venv/bin/python` resolves outside `/root`
+  and imports `hermes_state`.
 - `hermes-agent`, pinned to a git tag (`HERMES_VERSION`/`HERMES_GIT_REF`
   build args, default `0.21.2` / `v2026.9.11`), installed **editable** from
   a clean clone of `https://github.com/NousResearch/hermes-agent` — see
