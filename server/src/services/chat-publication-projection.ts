@@ -5,6 +5,8 @@ import type {
   SafeExternalChatCardKind,
 } from "@paperclipai/shared";
 import { redactSensitiveText } from "../redaction.js";
+// myrmidon(B1): product name in the user-facing fallback text below; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 
 // Bound sanitization work, not the amount silently delivered. The Board accepts
 // 100k UTF-16 units; expansion from redaction/mention neutralization is allowed.
@@ -261,7 +263,7 @@ export function projectSafeChatPublicationText(input: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  if (!output) return "Update available in Paperclip.";
+  if (!output) return `Update available in ${PRODUCT_NAME}.`;
   if (output.length > MAX_TEXT_OUTPUT_LENGTH) {
     throw new UnsafeChatPublicationError(
       "External chat text exceeds its projected processing limit",

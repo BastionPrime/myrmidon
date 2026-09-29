@@ -3,6 +3,8 @@ import {
   assertDurableChatWakeupReceipt,
   createDurableChatWakeupRequest,
 } from "./durable-chat-wakeup.js";
+// myrmidon(B1): product name in the user-facing text below; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 
 type Action = typeof chatActions.$inferSelect;
 type Receipt = typeof agentWakeupRequests.$inferSelect;
@@ -41,7 +43,7 @@ export function inboundWakePublicationText(
   if (state === "removed") return "This queued message was removed.";
   return state === "queued"
     ? "Your follow-up is queued."
-    : "This follow-up was not started. Open the task in Paperclip for details.";
+    : `This follow-up was not started. Open the task in ${PRODUCT_NAME} for details.`;
 }
 
 function hasComment(

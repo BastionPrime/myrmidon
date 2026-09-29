@@ -968,7 +968,7 @@ index a42b61d58..a56ddef52 100644
 +        if (Date.now() < acknowledgementStartedAt + 2500)
 +          await interaction.reply({
 +            content:
-+              "This form could not be opened. Open the linked Paperclip task.",
++              "This form could not be opened. Open the linked Myrmidon task.",
 +            flags: DiscordInteractionResponseFlag.Ephemeral,
 +            allowedMentions: { parse: [] },
 +          });
@@ -982,7 +982,7 @@ index a42b61d58..a56ddef52 100644
 +      ) {
 +        await interaction.reply({
 +          content:
-+            "This action is no longer available. Open the linked Paperclip task or ask an operator to link this account.",
++            "This action is no longer available. Open the linked Myrmidon task or ask an operator to link this account.",
 +          flags: DiscordInteractionResponseFlag.Ephemeral,
 +        });
 +      }
@@ -1050,7 +1050,7 @@ index a42b61d58..a56ddef52 100644
 +        ? correction.message
 +        : response?.action === "clear"
 +          ? "Your response was received."
-+          : "This response was not accepted. Open the linked Paperclip task or reopen the question to try again.",
++          : "This response was not accepted. Open the linked Myrmidon task or reopen the question to try again.",
 +      flags: DiscordInteractionResponseFlag.Ephemeral,
 +      allowedMentions: { parse: [] },
 +      ...(safeCorrection

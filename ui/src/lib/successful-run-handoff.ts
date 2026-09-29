@@ -1,12 +1,24 @@
 import type { ActivityEvent, Issue, SuccessfulRunHandoffState } from "@paperclipai/shared";
+import {
+  SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY,
+  SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY,
+  matchesSuccessfulRunHandoffExhaustedNoticeBody,
+  matchesSuccessfulRunHandoffRequiredNoticeBody,
+} from "@paperclipai/shared/myrmidon-successful-run-handoff-notices";
 
 export const SUCCESSFUL_RUN_HANDOFF_REQUIRED_ACTION = "issue.successful_run_handoff_required";
 export const SUCCESSFUL_RUN_HANDOFF_RESOLVED_ACTION = "issue.successful_run_handoff_resolved";
 export const SUCCESSFUL_RUN_HANDOFF_ESCALATED_ACTION = "issue.successful_run_handoff_escalated";
-export const SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY =
-  "Paperclip needs a disposition before this issue can continue.";
-export const SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY =
-  "Paperclip could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.";
+// myrmidon(B1): the two notice bodies are defined once in @paperclipai/shared and
+// imported here and by server/src/services/recovery/successful-run-handoff.ts, so
+// this exact-text comment-type detection cannot drift from what the server posts.
+// The shared matchers also accept the pre-rename ("Paperclip ...") bodies, because
+// comments posted before the rename stay stored on older issues and must keep
+// their alert-card treatment.
+export {
+  SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY,
+  SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY,
+};
 
 export function isSuccessfulRunHandoffActivity(action: string) {
   return action === SUCCESSFUL_RUN_HANDOFF_REQUIRED_ACTION
@@ -69,14 +81,14 @@ export function successfulRunHandoffFromActivity(event: ActivityEvent): Successf
 
 export function isSuccessfulRunHandoffComment(text: string) {
   const trimmed = text.trim();
-  return trimmed === SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY
+  return matchesSuccessfulRunHandoffRequiredNoticeBody(trimmed)
     || /^##\s+(This issue still needs a next step|Run finished without a next step|Successful run missing issue disposition)/i.test(trimmed)
     || isSuccessfulRunHandoffEscalationComment(trimmed);
 }
 
 export function isSuccessfulRunHandoffEscalationComment(text: string) {
   const trimmed = text.trim();
-  return trimmed === SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY
+  return matchesSuccessfulRunHandoffExhaustedNoticeBody(trimmed)
     || /^Paperclip exhausted the bounded successful-run handoff correction\b/i.test(trimmed);
 }
 

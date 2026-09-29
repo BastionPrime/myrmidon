@@ -2,6 +2,8 @@
  * Generates README.md with Mermaid org chart for company exports.
  */
 import type { CompanyPortabilityManifest } from "@paperclipai/shared";
+// myrmidon(B1): product name and attribution in the exported README; see product.ts.
+import { PRODUCT_ATTRIBUTION, PRODUCT_NAME } from "../myrmidon/product.js";
 
 const ROLE_LABELS: Record<string, string> = {
   ceo: "CEO",
@@ -96,7 +98,7 @@ export function generateReadme(
   // What's Inside table
   lines.push("## What's Inside");
   lines.push("");
-  lines.push("> This is an [Agent Company](https://agentcompanies.io) package from [Paperclip](https://paperclip.ing)");
+  lines.push(`> This is an [Agent Company](https://agentcompanies.io) package from ${PRODUCT_NAME}. ${PRODUCT_ATTRIBUTION}.`);
   lines.push("");
 
   const counts: Array<[string, number]> = [];
@@ -160,12 +162,12 @@ export function generateReadme(
   lines.push("npx paperclipai company import this-github-url-or-folder");
   lines.push("```");
   lines.push("");
-  lines.push("See [Paperclip](https://paperclip.ing) for more information.");
+  lines.push(`See ${PRODUCT_NAME} (based on [Paperclip](https://paperclip.ing)) for more information.`);
   lines.push("");
 
   // Footer
   lines.push("---");
-  lines.push(`Exported from [Paperclip](https://paperclip.ing) on ${new Date().toISOString().split("T")[0]}`);
+  lines.push(`Exported from ${PRODUCT_NAME} on ${new Date().toISOString().split("T")[0]}`);
   lines.push("");
 
   return lines.join("\n");

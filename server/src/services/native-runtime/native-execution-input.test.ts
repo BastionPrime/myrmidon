@@ -413,7 +413,7 @@ describe("native execution input external-chat framing", () => {
         "Preparation does not confirm provider delivery",
       );
       expect(input.task.prompt).toContain(
-        "Paperclip owns recovery navigation for unavailable GitHub attachments",
+        "Myrmidon owns recovery navigation for unavailable GitHub attachments",
       );
       expect(input.task.prompt).toContain(
         "after an accepted response, only when the current source remains authorized and a safe configured Board URL is available",
@@ -425,7 +425,7 @@ describe("native execution input external-chat framing", () => {
         "Do not invent a URL or promise that a link will appear",
       );
       expect(input.task.prompt).toContain(
-        "Briefly explain the unavailable input and ask the user to attach it directly to this Paperclip task or paste the needed text",
+        "Briefly explain the unavailable input and ask the user to attach it directly to this Myrmidon task or paste the needed text",
       );
       expect(input.task.prompt).toContain(
         "Never infer the file's contents or substitute an older file",
@@ -446,7 +446,7 @@ describe("native execution input external-chat framing", () => {
           wakePayload: { ...wake, ...patch },
         });
         expect(unrelated.task.prompt).not.toContain(
-          "Paperclip owns recovery navigation for unavailable GitHub attachments",
+          "Myrmidon owns recovery navigation for unavailable GitHub attachments",
         );
       }
     },

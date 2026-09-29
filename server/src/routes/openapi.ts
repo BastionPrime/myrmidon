@@ -1,4 +1,6 @@
 import { experimentalApiMetadata } from "./experimental-api-metadata.js";
+// myrmidon(B1): product name in the OpenAPI document; see product.ts.
+import { PRODUCT_ATTRIBUTION, PRODUCT_NAME } from "../myrmidon/product.js";
 import {
   experimentalApiPaths,
   experimentalApiQueries,
@@ -11151,9 +11153,9 @@ export function buildOpenApiDocument(): any {
   return applyDocumentFixups({
     openapi: "3.0.0",
     info: {
-      title: "Paperclip API",
+      title: `${PRODUCT_NAME} API`,
       version: "1.0.0",
-      description: "REST API for the Paperclip AI agent management platform",
+      description: `REST API for the ${PRODUCT_NAME} agent management platform. ${PRODUCT_ATTRIBUTION}.`,
     },
     servers: [{ url: "/" }],
     components: registry.buildComponents(),

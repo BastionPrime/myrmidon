@@ -2,7 +2,7 @@
 // disposition (`stranded_assigned_issue` / `successful_run_missing_state`,
 // both only when the *last* run status is "succeeded" — a failed run is L1's
 // concern) resolves by policy instead of escalating straight to an owner
-// card ("Paperclip needs a disposition…" / "board decision is required").
+// card ("Myrmidon needs a disposition…" / "board decision is required").
 //
 // Policy, applied from the single choke point every such escalation already
 // passes through (`escalateStrandedAssignedIssue` in
@@ -58,6 +58,9 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { agents, heartbeatRuns, type Db } from "@paperclipai/db";
 import { isAgentStatusInvokable, type IssueExecutionPolicy } from "@paperclipai/shared";
 import { applyIssueExecutionPolicyTransition } from "../services/issue-execution-policy.js";
+// myrmidon(B1): the two texts below that people and agents read name the
+// product through product.ts, like the rest of the server-generated text.
+import { productPossessive } from "./product.js";
 
 export const STRANDED_AUTO_POLICY_CAUSES = [
   "stranded_assigned_issue",
@@ -249,7 +252,7 @@ export function buildStrandedAutoPolicyRetryInstruction(input: {
 }): string {
   return [
     `## Record a disposition (automatic retry ${input.attempt} of ${input.maxAttemptsPerDay} today)`,
-    `Paperclip's automatic policy noticed that ${causeLabel(input.cause)}.`,
+    `${productPossessive("automatic policy")} noticed that ${causeLabel(input.cause)}.`,
     "",
     "Record exactly one of the following before ending this run:",
     "1. `done` — the scope is complete.",
@@ -298,7 +301,7 @@ export function buildStrandedAutoPolicyManagerReviewComment(input: {
 }): string {
   const attemptWord = input.attemptsInWindow === 1 ? "attempt" : "attempts";
   return [
-    `Paperclip's automatic policy moved this issue to review: ${input.attemptsInWindow} automatic continuation ` +
+    `${productPossessive("automatic policy")} moved this issue to review: ${input.attemptsInWindow} automatic continuation ` +
       `${attemptWord} within 24 hours (cause \`${input.cause}\`) produced no final disposition ` +
       `(limit: ${input.maxAttemptsPerDay} per day).`,
     // myrmidon(L4): review finding — this used to say the assignment was

@@ -1,8 +1,29 @@
 import { createHash } from "node:crypto";
+// myrmidon(B1): product name in the user-facing text below; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 
 export const TELEGRAM_EPHEMERAL_WINDOW_MS = 15_000;
-export const TELEGRAM_PRIVATE_ACTION_UNAVAILABLE =
+export const TELEGRAM_PRIVATE_ACTION_UNAVAILABLE = `This ${PRODUCT_NAME} action is no longer available. Open the linked task or ask an operator to link this account.`;
+
+// myrmidon(B1b): the exact text this notice carried before the product rename.
+// Provider-effect rows written by an earlier build keep it in their stored
+// payload for good (a row quarantined as delivery_unknown is resolved by an
+// operator long after the deploy), so reading such a row must still accept it.
+// Only a stored row may carry it: nothing sends it, and the transport below
+// stays strict about the current text. Never edit this literal for a later
+// rename; add another legacy literal and extend the check instead.
+export const LEGACY_TELEGRAM_PRIVATE_ACTION_UNAVAILABLE_PAPERCLIP =
   "This Paperclip action is no longer available. Open the linked task or ask an operator to link this account.";
+
+/** True for the current notice text or the pre-rename text of an already stored row. */
+export function isStoredTelegramPrivateActionUnavailableText(
+  text: unknown,
+): boolean {
+  return (
+    text === TELEGRAM_PRIVATE_ACTION_UNAVAILABLE ||
+    text === LEGACY_TELEGRAM_PRIVATE_ACTION_UNAVAILABLE_PAPERCLIP
+  );
+}
 
 export interface TelegramCallbackReceipt {
   version: 1;
