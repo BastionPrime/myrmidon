@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  agents, agentWakeupRequests, companies, createDb, heartbeatRuns, issueRecoveryActions, issues,
+  agents, agentWakeupRequests, companies, createDb, heartbeatRuns, issueComments, issueRecoveryActions, issues,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -43,11 +43,17 @@ vi.mock("../../adapters/index.ts", async () => {
   };
 });
 
-import { heartbeatService } from "../../services/heartbeat.ts";
+import { heartbeatService } from "../../services/heartbeat.js";
 import { createPostgresRunDispatchAdapter } from "../../modules/run-dispatch/adapters/postgres.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
+
+// The first run in a fresh test process loads most of the server lazily and can
+// take well over ten seconds on a loaded CI worker, so waits are generous and
+// only ever cost time when something is actually wrong.
+const RUN_WAIT_MS = 60_000;
+const TEST_TIMEOUT_MS = 120_000;
 
 describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred comment (L2, round 1)", () => {
   let db!: ReturnType<typeof createDb>;
@@ -61,13 +67,13 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
   }, 30_000);
 
   afterEach(async () => {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    for (let attempt = 0; attempt < 600; attempt += 1) {
       const runs = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns);
       if (!runs.some((run) => run.status === "queued" || run.status === "running")) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     mockAdapterExecute.mockClear();
-  });
+  }, TEST_TIMEOUT_MS);
 
   afterAll(async () => {
     await tempDb?.cleanup();
@@ -107,8 +113,12 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
   // The agent's own comment wake carries no user actor, so
   // admitExplicitNativeContinuation cannot admit it past the hold; it parks as
   // `deferred_issue_execution` instead of being lost.
-  async function parkAgentComment(agentId: string, issueId: string) {
+  async function parkAgentComment(companyId: string, agentId: string, issueId: string) {
     const commentId = randomUUID();
+    // The deferred comment is a real, agent-authored comment, as in production.
+    await db.insert(issueComments).values({
+      id: commentId, companyId, issueId, authorAgentId: agentId, authorType: "agent", body: "note from agent-a",
+    });
     const result = await heartbeat.wakeup(agentId, {
       source: "automation",
       triggerDetail: "system",
@@ -145,7 +155,7 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
     });
   }
 
-  async function waitForRunToFinish(runId: string, timeoutMs = 10_000) {
+  async function waitForRunToFinish(runId: string, timeoutMs = RUN_WAIT_MS) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const run = await heartbeat.getRun(runId);
@@ -155,6 +165,43 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
     return heartbeat.getRun(runId);
   }
 
+  // Everything the company's runs do after the one under test has left
+  // queued/running (follow-up wakes, finalization) has to land before the test
+  // rewrites that run's state by hand.
+  async function waitForCompanyIdle(companyId: string, timeoutMs = RUN_WAIT_MS) {
+    const deadline = Date.now() + timeoutMs;
+    let idlePolls = 0;
+    while (Date.now() < deadline && idlePolls < 3) {
+      const runs = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns)
+        .where(eq(heartbeatRuns.companyId, companyId));
+      idlePolls = runs.some((run) => run.status === "queued" || run.status === "running") ? 0 : idlePolls + 1;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  // Attached to assertion messages so a CI failure names the cause (which run
+  // was cancelled, why, and which recovery actions were still open) instead of
+  // only the mismatched value.
+  async function describeState(companyId: string, issueId: string) {
+    const runs = await db.select({
+      id: heartbeatRuns.id, status: heartbeatRuns.status, source: heartbeatRuns.invocationSource,
+      errorCode: heartbeatRuns.errorCode, error: heartbeatRuns.error, retryOfRunId: heartbeatRuns.retryOfRunId,
+    }).from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId));
+    const actions = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.companyId, companyId));
+    const [issue] = await db.select({
+      status: issues.status, assigneeAgentId: issues.assigneeAgentId,
+      executionRunId: issues.executionRunId, checkoutRunId: issues.checkoutRunId,
+    }).from(issues).where(eq(issues.id, issueId));
+    return JSON.stringify({
+      issue,
+      runs,
+      recoveryActions: actions.map((action) => ({
+        id: action.id, kind: action.kind, status: action.status, cause: action.cause,
+        replay: ((action.evidence.automaticRecovery ?? {}) as Record<string, unknown>).replay ?? null,
+      })),
+    });
+  }
+
   async function holdOf(actionId: string) {
     const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId));
     return action!;
@@ -162,7 +209,7 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
 
   it("does not lose a deferred agent comment: the successor run starts with it and the hold is retired", async () => {
     const { companyId, agentId, issueId, actionId } = await seed();
-    const { commentId, deferredId } = await parkAgentComment(agentId, issueId);
+    const { commentId, deferredId } = await parkAgentComment(companyId, agentId, issueId);
 
     const run = await assignmentWake(agentId, issueId);
 
@@ -173,34 +220,37 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
     expect(coalesced!.status).toBe("coalesced");
     expect(coalesced!.runId).toBe(run!.id);
 
-    // The run's own claim must let it through (before the fix it re-derived
-    // "not explicit" from the adopted comment id and cancelled the run with
-    // the receipt still pointing at it). The adapter is really invoked.
-    await expect.poll(() => mockAdapterExecute.mock.calls.length, { timeout: 10_000, interval: 50 })
-      .toBeGreaterThan(0);
-    const finished = await waitForRunToFinish(run!.id);
-    expect(finished?.status).not.toBe("cancelled");
-    expect(finished?.errorCode).not.toBe("execution_reconciliation_required");
-    const [receipt] = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, deferredId));
-    expect(receipt!.status).toBe("coalesced");
-    expect(receipt!.runId).toBe(run!.id);
-    expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId)))
-      .not.toContainEqual(expect.objectContaining({ errorCode: "execution_reconciliation_required" }));
-
-    // The hold itself is retired, not merely bypassed once more.
+    // The hold is retired in the admission transaction itself, before the run
+    // is ever claimed.
     const superseded = await holdOf(actionId);
     expect(superseded.status).toBe("resolved");
     const recovery = superseded.evidence.automaticRecovery as Record<string, unknown>;
     expect(recovery.replay).toBe("explicit_wake_superseded");
     expect(recovery.successorRunId).toBe(run!.id);
-  });
+
+    // The run's own claim must let it through (before the fix it re-derived
+    // "not explicit" from the adopted comment id and cancelled the run with
+    // the receipt still pointing at it), and the adapter is really invoked.
+    const finished = await waitForRunToFinish(run!.id);
+    const state = await describeState(companyId, issueId);
+    expect(finished?.status, state).not.toBe("cancelled");
+    expect(finished?.errorCode, state).not.toBe("execution_reconciliation_required");
+    expect(mockAdapterExecute.mock.calls.length, state).toBeGreaterThan(0);
+    const [receipt] = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, deferredId));
+    expect(receipt!.status).toBe("coalesced");
+    expect(receipt!.runId).toBe(run!.id);
+    expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId)))
+      .not.toContainEqual(expect.objectContaining({ errorCode: "execution_reconciliation_required" }));
+  }, TEST_TIMEOUT_MS);
 
   it("does not cancel the scheduled retry of the successor run: the superseded hold no longer blocks it", async () => {
-    const { companyId, agentId, issueId } = await seed();
+    const { companyId, agentId, issueId, actionId } = await seed();
     const run = await assignmentWake(agentId, issueId);
     expect(run).not.toBeNull();
+    expect((await holdOf(actionId)).evidence.automaticRecovery).toMatchObject({ replay: "explicit_wake_superseded" });
     const finished = await waitForRunToFinish(run!.id);
-    expect(finished?.status).not.toBe("cancelled");
+    expect(finished?.status, await describeState(companyId, issueId)).not.toBe("cancelled");
+    await waitForCompanyIdle(companyId);
 
     // The successor then fails transiently before any provider work started.
     const now = new Date();
@@ -213,23 +263,26 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
     }).where(eq(heartbeatRuns.id, run!.id));
 
     const scheduled = await heartbeat.scheduleBoundedRetry(run!.id, { now, random: () => 0 });
-    expect(scheduled.outcome).toBe("scheduled");
+    expect(scheduled.outcome, await describeState(companyId, issueId)).toBe("scheduled");
     if (scheduled.outcome !== "scheduled") return;
     const promotion = await heartbeat.promoteDueScheduledRetries(scheduled.dueAt);
-    expect(promotion.runIds).toContain(scheduled.run.id);
+    expect(promotion.runIds, await describeState(companyId, issueId)).toContain(scheduled.run.id);
 
     // The retry inherits the successor's context but not its authorization
     // (the record is bound to the successor's id); without the superseded
     // hold, the old one would cancel it here as
-    // `execution_reconciliation_required`.
+    // `execution_reconciliation_required`. The promotion has already handed
+    // the run to the dispatcher, which may claim it before this explicit
+    // check does ("lost_race"); either way it must not end up cancelled.
     const outcome = await createPostgresRunDispatchAdapter(db).cancelStaleQueuedRun({
       companyId, runId: scheduled.run.id, expectedStatus: "queued", now: scheduled.dueAt,
     });
-    expect(["not_stale", "lost_race"]).toContain(outcome.outcome);
-    const retry = await heartbeat.getRun(scheduled.run.id);
-    expect(retry?.status).not.toBe("cancelled");
-    expect(retry?.errorCode).not.toBe("execution_reconciliation_required");
-  });
+    const state = `${JSON.stringify(outcome)} ${await describeState(companyId, issueId)}`;
+    expect(["not_stale", "lost_race"], state).toContain(outcome.outcome);
+    const retry = await waitForRunToFinish(scheduled.run.id);
+    expect(retry?.status, state).not.toBe("cancelled");
+    expect(retry?.errorCode, state).not.toBe("execution_reconciliation_required");
+  }, TEST_TIMEOUT_MS);
 
   it.each([
     ["system", { requestedByActorType: "system", requestedByActorId: "system-a" }],
@@ -239,7 +292,7 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
     "a wake requested by %s does not pass the hold, whatever its reason, and leaves the deferred comment parked",
     async (_label, requester) => {
       const { companyId, agentId, issueId, actionId } = await seed();
-      const { deferredId } = await parkAgentComment(agentId, issueId);
+      const { deferredId } = await parkAgentComment(companyId, agentId, issueId);
 
       // An unattended sweep reassigns and wakes with exactly this shape.
       expect(await assignmentWake(agentId, issueId, requester)).toBeNull();
