@@ -236,7 +236,7 @@ const support = await getEmbeddedPostgresTestSupport();
     expect(result).toEqual({
       kind: "reply",
       command: "model",
-      text: "Model for this chat: model-b. The next reply starts a fresh model session with this chat's recent history.",
+      text: "Модель для этого чата: model-b. Следующий ответ начнёт новую сессию модели с недавней историей этого чата.",
     });
 
     const overrides = await readOverrides(issue.id);
@@ -264,13 +264,13 @@ const support = await getEmbeddedPostgresTestSupport();
     const byIndexResult = await runBridgedDirectMessageCommand(
       baseInput({ conversationIssueId: byIndex.issue.id, boardUserId: byIndex.boardUserId, text: "/model 3" }),
     );
-    expect(byIndexResult).toMatchObject({ kind: "reply", text: expect.stringContaining("Model for this chat: model-c.") });
+    expect(byIndexResult).toMatchObject({ kind: "reply", text: expect.stringContaining("Модель для этого чата: model-c.") });
 
     const byName = await createTelegramConversation();
     const byNameResult = await runBridgedDirectMessageCommand(
       baseInput({ conversationIssueId: byName.issue.id, boardUserId: byName.boardUserId, text: "/model MODEL-B" }),
     );
-    expect(byNameResult).toMatchObject({ kind: "reply", text: expect.stringContaining("Model for this chat: model-b.") });
+    expect(byNameResult).toMatchObject({ kind: "reply", text: expect.stringContaining("Модель для этого чата: model-b.") });
   });
 
   it("4. /model nope is rejected and changes nothing", async () => {

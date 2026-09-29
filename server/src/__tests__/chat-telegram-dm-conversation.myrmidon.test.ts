@@ -1498,7 +1498,7 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
 
     await vi.waitFor(() =>
       expect(
-        firstPost.mock.calls.some(([text]) => text.includes("Ask an administrator")),
+        firstPost.mock.calls.some(([text]) => text.includes("Попросите администратора")),
       ).toBe(true),
     );
   });
