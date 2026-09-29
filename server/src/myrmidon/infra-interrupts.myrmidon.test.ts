@@ -22,6 +22,10 @@ function runnerProfileFor(adapterType: string): Record<string, unknown> {
 const dialogAdapterRun = { runnerProfileJson: runnerProfileFor("hermes_local") };
 const gatewayAdapterRun = { runnerProfileJson: runnerProfileFor("openclaw_gateway") };
 const processAdapterRun = { runnerProfileJson: runnerProfileFor("process") };
+// myrmidon(L1), release 1.1.2: not a conversation adapter, but its create
+// carries G4's Idempotency-Key (this attempt's own run id), which is what
+// IDEMPOTENT_INFRA_INTERRUPT_ADAPTER_TYPES exists to recognize.
+const hermesGatewayAdapterRun = { runnerProfileJson: runnerProfileFor("hermes_gateway") };
 
 describe("parseInfraInterruptCodes", () => {
   it("defaults to the four documented codes when unset", () => {
@@ -208,6 +212,34 @@ describe("shouldSkipReconciliationForInfraInterrupt", () => {
     },
   );
 
+  // myrmidon(L1), release 1.1.2 (L1-gateway-idempotent): hermes_gateway is
+  // not a conversation adapter, but its create is idempotency-keyed by the
+  // attempt's own run id (G4), so the infra-interrupt relief applies to it
+  // exactly as it does to a conversation adapter — within the shared retry
+  // budget, with the provider stop either absent or confirmed.
+  it.each(["agent_paused", "process_lost", "server_shutdown_interrupted", "issue_reassigned"])(
+    "skips the reconciliation hold for an idempotency-keyed adapter (hermes_gateway) within budget, for %s",
+    (errorCode) => {
+      expect(
+        shouldSkipReconciliationForInfraInterrupt({
+          errorCode,
+          scheduledRetryAttempt: 0,
+          ...hermesGatewayAdapterRun,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("keeps the vendor hold for an idempotency-keyed adapter (hermes_gateway) once the budget is exhausted", () => {
+    expect(
+      shouldSkipReconciliationForInfraInterrupt({
+        errorCode: "agent_paused",
+        scheduledRetryAttempt: 2,
+        ...hermesGatewayAdapterRun,
+      }),
+    ).toBe(false);
+  });
+
   it.each(["agent_paused", "process_lost", "server_shutdown_interrupted", "issue_reassigned"])(
     "keeps the vendor hold for a non-conversation adapter (process) even within budget, for %s",
     (errorCode) => {
@@ -310,6 +342,17 @@ describe("adapterQualifiesForInfraInterruptRelief", () => {
   it("does not qualify a process/webhook-style adapter", () => {
     expect(adapterQualifiesForInfraInterruptRelief(gatewayAdapterRun)).toBe(false);
     expect(adapterQualifiesForInfraInterruptRelief(processAdapterRun)).toBe(false);
+  });
+
+  // myrmidon(L1), release 1.1.2: hermes_gateway keys every create by this
+  // attempt's own run id (G4's Idempotency-Key) and attaches to the
+  // already-admitted run when Hermes answers replayed:true, so a blind
+  // retry cannot replay the external action — it joins the same guard rail
+  // the conversation adapters rely on.
+  it("qualifies hermes_gateway as an idempotency-keyed adapter (L1-gateway-idempotent)", () => {
+    expect(
+      adapterQualifiesForInfraInterruptRelief({ runnerProfileJson: runnerProfileFor("hermes_gateway") }),
+    ).toBe(true);
   });
 
   it("does not qualify when no adapter was claimed", () => {

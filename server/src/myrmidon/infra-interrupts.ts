@@ -148,12 +148,22 @@ export function infraInterruptRetryBudgetExhausted(
 /**
  * Adapters whose recovery is already keyed by an idempotency token, so a
  * blind retry of the run cannot replay its external action a second time.
- * Empty today -- track G4 (hermes_gateway's Idempotency-Key attach) is
- * expected to add hermes_gateway here once its wakeup carries one. Until
- * then, a non-conversation adapter keeps the vendor's hold for every
- * infra-interrupt code, not only the ones this PR happened to add tests for.
+ *
+ * hermes_gateway (myrmidon(L1), release 1.1.2): every create the adapter
+ * issues carries `Idempotency-Key: <this attempt's own Paperclip run id>`
+ * (track G4, gateway/server/execute.ts), and Hermes 0.21+ dedupes a repeated
+ * create under the same key by answering `replayed: true`, which the adapter
+ * turns into attaching to the already-admitted run instead of starting a
+ * second execution. A blind retry after an infra interruption therefore
+ * converges on the one execution the interrupted attempt started (or starts
+ * exactly one if it never got admitted) — the property the conversation
+ * adapter filter relies on for its own members, now verified for this
+ * adapter by the gateway contract suite (execute.test.ts: "keys the
+ * Idempotency-Key off ctx.runId", "attaches to the existing run ... when
+ * Hermes reports replayed:true"). Checked against the merged hermes
+ * adapter as of release 1.1.2, item L1-gateway-idempotent.
  */
-export const IDEMPOTENT_INFRA_INTERRUPT_ADAPTER_TYPES: readonly string[] = [];
+export const IDEMPOTENT_INFRA_INTERRUPT_ADAPTER_TYPES: readonly string[] = ["hermes_gateway"];
 
 type AdapterClaimingRun = { runnerProfileJson?: Record<string, unknown> | null };
 
