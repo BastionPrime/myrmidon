@@ -78,6 +78,8 @@ import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./is
 import { logActivity } from "./activity-log.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { runtimePublicOrigin } from "./cloud-runtime-identity.js";
+// myrmidon(ROUTINE-DUP-KEY): coalesce against the open execution the routine-execution index already locks
+import { findOpenRoutineExecutionIssue } from "../myrmidon/routine-execution-lock.js";
 // myrmidon(R3): maintenance mode skips scheduled routine ticks
 import { isRoutineUnderMaintenance } from "../myrmidon/maintenance/gate.js";
 
@@ -1852,10 +1854,21 @@ export function routineService(
 
       let createdIssue: Awaited<ReturnType<typeof issueSvc.create>> | null = null;
       try {
-        const activeIssue = await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
-          kind: issueOriginKind,
-          id: issueOriginId,
-        });
+        // myrmidon(ROUTINE-DUP-KEY): also coalesce against an open routine
+        // execution whose run already finished. The index still locks that
+        // issue, so inserting a second one would only surface later as a
+        // duplicate-key failure when its run starts.
+        const activeIssue =
+          (await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
+            kind: issueOriginKind,
+            id: issueOriginId,
+          })) ??
+          (await findOpenRoutineExecutionIssue(txDb, {
+            companyId: input.routine.companyId,
+            originKind: issueOriginKind,
+            originId: issueOriginId,
+            dispatchFingerprint,
+          }));
         if (activeIssue && input.routine.concurrencyPolicy !== "always_enqueue") {
           const status = input.routine.concurrencyPolicy === "skip_if_active" ? "skipped" : "coalesced";
           if (manualRunnerUserId) {
@@ -1919,10 +1932,21 @@ export function routineService(
             throw error;
           }
 
-          const existingIssue = await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
-            kind: issueOriginKind,
-            id: issueOriginId,
-          });
+          // myrmidon(ROUTINE-DUP-KEY): a duplicate key here means an open
+          // execution with this fingerprint already holds a run, so locate it
+          // by the index key, not by run liveness — the conflicting issue's run
+          // may already be finished.
+          const existingIssue =
+            (await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
+              kind: issueOriginKind,
+              id: issueOriginId,
+            })) ??
+            (await findOpenRoutineExecutionIssue(txDb, {
+              companyId: input.routine.companyId,
+              originKind: issueOriginKind,
+              originId: issueOriginId,
+              dispatchFingerprint,
+            }));
           if (!existingIssue) throw error;
           const status = input.routine.concurrencyPolicy === "skip_if_active" ? "skipped" : "coalesced";
           if (manualRunnerUserId) {
