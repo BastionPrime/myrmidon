@@ -66,25 +66,25 @@ const providerLifecycleGuidance: Record<
     reconnect:
       "Reconnect verifies or replaces credentials for this same Slack app. It does not reinstall the app or change its workspace or channel membership.",
     remove:
-      "Paperclip archives the endpoint, stops new ingress, and retires its saved Slack credentials. It does not uninstall the Slack app: the app remains installed, and its bot remains in channels, until you remove them in Slack.",
+      "Myrmidon archives the endpoint, stops new ingress, and retires its saved Slack credentials. It does not uninstall the Slack app: the app remains installed, and its bot remains in channels, until you remove them in Slack.",
   },
   github: {
     reconnect:
       "Reconnect verifies this same App and installation, then updates its webhook URL, secret, and secure delivery settings. It does not reinstall the App or change repository access.",
     remove:
-      "Paperclip archives the endpoint, stops new ingress, and retires its saved App key and webhook secret. It does not uninstall the GitHub App: the App, its installations, and its webhook settings remain until you remove or update them on GitHub.",
+      "Myrmidon archives the endpoint, stops new ingress, and retires its saved App key and webhook secret. It does not uninstall the GitHub App: the App, its installations, and its webhook settings remain until you remove or update them on GitHub.",
   },
   discord: {
     reconnect:
       "Reconnect verifies this same Discord application and server installation. It does not add or remove the bot from the server.",
     remove:
-      "Paperclip archives the endpoint, stops its Paperclip Gateway connection, and retires its saved bot token. It does not uninstall the bot: the bot remains in the Discord server, and the application remains in the Developer Portal, until you remove them there.",
+      "Myrmidon archives the endpoint, stops its Myrmidon Gateway connection, and retires its saved bot token. It does not uninstall the bot: the bot remains in the Discord server, and the application remains in the Developer Portal, until you remove them there.",
   },
   "microsoft-teams": {
     reconnect:
       "Reconnect verifies this same Microsoft app, tenant, and bot identity. It does not upload or reinstall the Teams app.",
     remove:
-      "Paperclip archives the endpoint, stops new ingress, and retires its saved client secret. It does not uninstall the Teams app: the Entra app registration, Azure Bot, custom Teams app, and Teams installations remain until you remove them in Microsoft.",
+      "Myrmidon archives the endpoint, stops new ingress, and retires its saved client secret. It does not uninstall the Teams app: the Entra app registration, Azure Bot, custom Teams app, and Teams installations remain until you remove them in Microsoft.",
   },
   "imessage-photon": {
     reconnect: "Reconnect verifies the same Photon project and line allocation, then recovers eligible missed messages.",
@@ -92,9 +92,9 @@ const providerLifecycleGuidance: Record<
   },
   telegram: {
     reconnect:
-      "Reconnect verifies this same BotFather bot and automatically refreshes its Paperclip webhook and command menu.",
+      "Reconnect verifies this same BotFather bot and automatically refreshes its Myrmidon webhook and command menu.",
     remove:
-      "Paperclip archives the endpoint and queues durable removal of its Telegram webhook and command menu. After Telegram confirms that cleanup, Paperclip retires the saved token. The BotFather bot and its chat memberships remain until you remove them in Telegram.",
+      "Myrmidon archives the endpoint and queues durable removal of its Telegram webhook and command menu. After Telegram confirms that cleanup, Myrmidon retires the saved token. The BotFather bot and its chat memberships remain until you remove them in Telegram.",
   },
 };
 
@@ -159,8 +159,8 @@ export function activityResolutionDescription(item: ChatActivityItem): string {
   if (phase === "consent_unknown")
     return "The consent card may have reached Teams. File delivery is not confirmed. Cancelling here does not remove any card already sent.";
   if (phase)
-    return "The file may already exist in OneDrive. Cancelling stops this Paperclip transfer; it does not delete remote bytes. Uploads cannot be marked delivered or retried from this uncertain state.";
-  return "Paperclip lost confirmation after sending. Check the provider conversation first. Retrying can create a duplicate message.";
+    return "The file may already exist in OneDrive. Cancelling stops this Myrmidon transfer; it does not delete remote bytes. Uploads cannot be marked delivered or retried from this uncertain state.";
+  return "Myrmidon lost confirmation after sending. Check the provider conversation first. Retrying can create a duplicate message.";
 }
 
 export function isResolutionEligible(item: ChatActivityItem): boolean {
@@ -195,7 +195,7 @@ export function connectionHealthPresentation(
     paused: "Connection is paused. Resume it to receive new messages.",
     attention: "Connection needs attention.",
     revoked: "Connection access is revoked. Reconnect to verify access.",
-    archived: "Connection has been removed from Paperclip.",
+    archived: "Connection has been removed from Myrmidon.",
   };
   const lifecycleMessage =
     endpoint.status === "active" ? null : lifecycleMessages[endpoint.status];
@@ -404,7 +404,7 @@ function Settings({
               direct message, use <code>{endpoint.setup.command} status</code>,{" "}
               <code>{endpoint.setup.command} new</code>, or{" "}
               <code>{endpoint.setup.command} close</code>. Slack&apos;s bare{" "}
-              <code>/status</code> command is not a Paperclip control.
+              <code>/status</code> command is not a Myrmidon control.
             </p>
           </div>
         </div>
@@ -429,7 +429,7 @@ function Settings({
       <div>
         <h2 className="text-lg font-semibold">Where this agent can work</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Provider membership makes a destination available. Paperclip responds
+          Provider membership makes a destination available. Myrmidon responds
           only where you enable it.
         </p>
       </div>
@@ -592,13 +592,13 @@ function Access({
       <div>
         <h2 className="text-lg font-semibold">External identity access</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Linked identities act as their current Paperclip user. Unlinked
+          Linked identities act as their current Myrmidon user. Unlinked
           people, when allowed, receive a fixed restricted profile.
         </p>
       </div>
       <SettingToggle
         label="Allow unlinked people"
-        detail="They are restricted guests. Their tasks run only with an isolated workspace and sandbox environment; otherwise Paperclip safely refuses the request. They cannot approve, hire, spend, manage access, or reassign agents."
+        detail="They are restricted guests. Their tasks run only with an isolated workspace and sandbox environment; otherwise Myrmidon safely refuses the request. They cannot approve, hire, spend, manage access, or reassign agents."
         checked={allowUnlinked}
         pending={updatePolicy.isPending}
         onChange={(value) => updatePolicy.mutate(value)}
@@ -919,7 +919,7 @@ function Activity({
           <p className="mt-1 text-xs text-muted-foreground">
             {endpoint.setup?.callbacksNeedUpdate
               ? "Slack callback URLs need an update. Save the current App Manifest, then exercise Events, Interactivity, and the registered command again."
-              : "Paperclip records each callback surface independently after Slack successfully calls it."}
+              : "Myrmidon records each callback surface independently after Slack successfully calls it."}
           </p>
           <div className="mt-3 grid gap-2 sm:grid-cols-3">
             {callbackSurfaceRows.map(([label, surface]) => (
@@ -1133,9 +1133,9 @@ function Activity({
             </AlertDialogTitle>
             <AlertDialogDescription>
               {resolutionItem?.actionType === "slash_task_start"
-                ? "Paperclip lost confirmation after asking Slack to start the task. Check Slack first. Retrying can create a duplicate starter message and task."
+                ? "Myrmidon lost confirmation after asking Slack to start the task. Check Slack first. Retrying can create a duplicate starter message and task."
                 : resolutionItem?.actionType === "provider_effect"
-                  ? "Paperclip lost confirmation after sending this provider reply. Check the provider first. Marking it delivered applies any pending Paperclip state change; retrying can create a duplicate message."
+                  ? "Myrmidon lost confirmation after sending this provider reply. Check the provider first. Marking it delivered applies any pending Myrmidon state change; retrying can create a duplicate message."
                   : resolutionItem
                     ? activityResolutionDescription(resolutionItem)
                     : ""}
@@ -1215,7 +1215,7 @@ function Activity({
             <AlertDialogTitle>Remove this connection?</AlertDialogTitle>
             <AlertDialogDescription>
               {endpoint.assignedAgentName} will stop receiving new work from
-              {` ${providerNames[endpoint.provider]}`}. Existing Paperclip tasks
+              {` ${providerNames[endpoint.provider]}`}. Existing Myrmidon tasks
               remain available.{" "}
               {providerLifecycleGuidance[endpoint.provider].remove}
             </AlertDialogDescription>

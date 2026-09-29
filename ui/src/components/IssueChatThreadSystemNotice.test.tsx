@@ -105,6 +105,10 @@ const baseTimestamps = {
   updatedAt: new Date("2026-05-04T16:32:00.000Z"),
 };
 
+// myrmidon(B1a): the recovery-notice bodies below stay in their original
+// "Paperclip ..." wording on purpose. IssueChatThread recognises these comments
+// by their exact text, and comments already stored in the database (and, until
+// the server-side rename lands, the ones the server posts) use that wording.
 describe("IssueChatThread system notice routing", () => {
   it("renders authorType=system comments as a SystemNotice rather than a user bubble", () => {
     const comment: IssueChatComment = {
@@ -363,7 +367,7 @@ describe("IssueChatThread system notice routing", () => {
     }
   });
 
-  it("labels system notice source as Paperclip when no run agent can be resolved", () => {
+  it("labels system notice source as Myrmidon when no run agent can be resolved", () => {
     const comment: IssueChatComment = {
       id: "comment-system-no-author",
       companyId: "company-1",
@@ -388,11 +392,11 @@ describe("IssueChatThread system notice routing", () => {
 
     const status = container.querySelector('[role="status"]');
     expect(status).not.toBeNull();
-    expect(status?.textContent).toContain("Paperclip");
+    expect(status?.textContent).toContain("Myrmidon");
     expect(status?.textContent).not.toContain("You");
   });
 
-  it("falls back to Paperclip in the system notice header when run agent is unknown to agentMap", () => {
+  it("falls back to Myrmidon in the system notice header when run agent is unknown to agentMap", () => {
     const comment: IssueChatComment = {
       id: "comment-system-unknown-agent",
       companyId: "company-1",
@@ -418,7 +422,7 @@ describe("IssueChatThread system notice routing", () => {
     const status = container.querySelector('[role="status"]');
     const sourceLink = status?.querySelector('a[href^="/agents/"]') as HTMLAnchorElement | null;
     expect(sourceLink?.getAttribute("href")).toBe("/agents/agent-unknown/runs/run-xyz");
-    expect(sourceLink?.textContent).toBe("Paperclip");
+    expect(sourceLink?.textContent).toBe("Myrmidon");
   });
 
   it("routes agent-authored comments to the notice renderer when presentation requests system_notice", () => {

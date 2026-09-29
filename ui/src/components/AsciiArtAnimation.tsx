@@ -4,6 +4,12 @@ const CHARS = [" ", ".", "·", "▪", "▫", "○"] as const;
 const TARGET_FPS = 24;
 const FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
 
+// myrmidon(B1a): these box-drawing sprites are geometry shaped like the
+// vendor's paperclip glyph, not text, so they are not renamed. The component
+// is no longer mounted anywhere (the sign-in screen used to render it) and is
+// kept only so a vendor sync stays conflict-free; the branding guard test
+// fails if a product module imports it again. See the B1a row in
+// docs/myrmidon/DIVERGENCE.md.
 const PAPERCLIP_SPRITES = [
   [
     "  ╭────╮ ",

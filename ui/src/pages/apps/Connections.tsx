@@ -592,7 +592,8 @@ function CloudConnectorEnrollmentBanner({
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
         <ShieldCheck className="h-5 w-5 text-primary" />
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-foreground">Paperclip-managed sign-in is ready</div>
+          {/* myrmidon(B1a): user-visible text, matches the "Myrmidon-managed" wording used elsewhere in this PR */}
+          <div className="text-sm font-semibold text-foreground">Myrmidon-managed sign-in is ready</div>
           <div className="truncate text-xs text-muted-foreground">
             Provider authorization uses {status.brokerBaseUrl}; credentials stay in this instance.
           </div>
@@ -613,7 +614,8 @@ function CloudConnectorEnrollmentBanner({
       <Cloud className="h-5 w-5 text-muted-foreground" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold text-foreground">
-          {status?.status === "pending" ? "Finish Paperclip Cloud enrollment" : "Enable Paperclip-managed sign-in"}
+          {/* myrmidon(B1a): user-visible text; "Paperclip Cloud" stays (real external product) */}
+          {status?.status === "pending" ? "Finish Paperclip Cloud enrollment" : "Enable Myrmidon-managed sign-in"}
         </div>
         <div className="text-xs text-muted-foreground">
           Confirm this server’s exact address before Cloud can return encrypted Google credentials to it.

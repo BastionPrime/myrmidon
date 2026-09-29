@@ -6,6 +6,6 @@
   <path fill="url(#background)" d="M0 0h704v272H0z"/><path fill="url(#grid)" d="M0 0h704v272H0z"/>
   <circle cx="610" cy="45" r="135" fill="none" stroke="#677d72" stroke-opacity=".18"/>
   <circle cx="610" cy="45" r="90" fill="none" stroke="#677d72" stroke-opacity=".18"/>
-  <text x="40" y="140" font-family="Arial,sans-serif" font-size="56" font-weight="700" letter-spacing="-2" fill="#273b32">paperclip</text>
+  <text x="40" y="140" font-family="Arial,sans-serif" font-size="56" font-weight="700" letter-spacing="-2" fill="#273b32">Myrmidon</text>
   <text x="43" y="181" font-family="Arial,sans-serif" font-size="18" fill="#50665b">Ideas become work.</text>
 </svg>
