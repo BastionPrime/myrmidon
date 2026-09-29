@@ -5,9 +5,11 @@
 //
 // The runtime (driver, profile compiler, maintenance port, network) is not built
 // here: compiling a profile needs the agent's resolved env, secrets and skills,
-// and that query belongs to the pilot wiring (see the note at the top of index.ts),
-// which calls setBotContainerRuntime once at startup. Until then the routes
-// answer "runtime not configured" instead of guessing.
+// and that belongs to the startup wiring (startup.ts, W2a), which calls
+// setBotContainerRuntime once at startup, with the same runtime the periodic
+// sweep uses. Until then (flag off, no scheduler in this process, or a runtime
+// that could not be built) the routes answer "runtime not configured" instead
+// of guessing.
 
 import { eq } from "drizzle-orm";
 import { agents, type Db } from "@paperclipai/db";
