@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import {
   agentWakeupRequests,
   issueThreadInteractions,
@@ -37,11 +37,20 @@ import { isUniqueViolation } from "../db-errors.js";
  *    `payload` under `interactionContinuationOutbox`.
  * 3. `tryDeliver` runs post-commit: it calls `heartbeat.wakeup` with the
  *    canonical `interaction:{id}:{status}` key and marks the intent terminal
- *    (coalesced, run-linked) once a durable wake row exists.
+ *    (coalesced, run-linked) once a durable wake row exists. A wake also
+ *    counts as delivered (O1-DIRECT-SETTLED) when `wakeup` returned a run,
+ *    or when the same agent already holds a delivery-status wake for the
+ *    same interaction (e.g. folded into a `deferred_issue_execution` row):
+ *    the vendor accepted the continuation, so only an admission refusal is
+ *    left to the sweep.
  * 4. `sweepPending` re-runs delivery for intents that still have no durable
  *    wake. It is driven from the heartbeat scheduler (~30 s), so a dead
  *    post-commit path cannot lose the wake. Intent rows are system-actor rows
- *    (`requestedByActorId` = `interaction-continuation-outbox`).
+ *    (`requestedByActorId` = `interaction-continuation-outbox`). The sweep
+ *    only picks up intents older than the sweep-age threshold
+ *    (`readOutboxSweepAgeMs`, default 45 s): a just-resolved card belongs to
+ *    the direct post-commit dispatch, and an early sweep could otherwise
+ *    deliver its trimmed envelope before the direct wake's richer one.
  *
  * Bounds that keep the outbox from becoming a second, noisier scheduler:
  * - an intent is only written when the card's continuation policy would wake
@@ -60,6 +69,39 @@ const OUTBOX_KEY_PREFIX = "interaction-continuation-outbox:";
 const OUTBOX_CONTRACT_KEY = "interactionContinuationOutbox";
 const STALE_CLAIM_MS = 60_000;
 const MAX_INTENT_AGE_MS = 15 * 60_000;
+
+/**
+ * Sweep-age threshold (O1-SWEEP-AGE). The post-commit direct dispatch
+ * (`tryDeliver`) runs within milliseconds of the resolution transaction, but
+ * the scheduler sweep can land in the same window and would otherwise take
+ * the just-written intent first: the sweep delivers the trimmed outbox
+ * envelope (only the interaction ids and `mutation: interaction`) while the
+ * direct path's richer envelope (plan review details, checkbox selection,
+ * tool action, fresh-session flags) is still in flight. The sweep therefore
+ * only backs off intents older than this threshold, giving the direct path
+ * the whole window to settle the intent on its own. 45 s sits inside the
+ * 30–60 s band from the plan and is several scheduler ticks (~30 s) wide.
+ * Only the sweep applies it; `tryDeliver` is not throttled because it is the
+ * direct post-commit path.
+ *
+ * Configurable via `MYRMIDON_OUTBOX_SWEEP_AGE_MS`; non-numeric, negative,
+ * or non-integer values fall back to the default. 0 is a valid override
+ * (restores the immediate sweep) but is not the default.
+ */
+export const OUTBOX_SWEEP_AGE_ENV = "MYRMIDON_OUTBOX_SWEEP_AGE_MS";
+export const OUTBOX_SWEEP_AGE_DEFAULT_MS = 45_000;
+
+/** Sweep-age threshold in ms from `MYRMIDON_OUTBOX_SWEEP_AGE_MS` (default 45 000). */
+export function readOutboxSweepAgeMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env[OUTBOX_SWEEP_AGE_ENV]?.trim();
+  if (!raw) return OUTBOX_SWEEP_AGE_DEFAULT_MS;
+  if (!/^\d+$/.test(raw)) return OUTBOX_SWEEP_AGE_DEFAULT_MS;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : OUTBOX_SWEEP_AGE_DEFAULT_MS;
+}
+
 const DURABLE_WAKE_STATUSES = [
   "queued",
   "claimed",
@@ -234,9 +276,17 @@ export function interactionContinuationOutboxMutationOptions(input: {
 
 async function findDurableWake(
   db: Db,
-  input: { companyId: string; idempotencyKey: string },
+  input: {
+    companyId: string;
+    idempotencyKey: string;
+    /** Fallback match: same agent, same interaction, delivery statuses. */
+    agentId?: string;
+    interactionId?: string;
+    /** Excluded from the fallback match (the outbox intent row itself). */
+    intentId?: string;
+  },
 ) {
-  return db
+  const canonical = await db
     .select({
       id: agentWakeupRequests.id,
       runId: agentWakeupRequests.runId,
@@ -251,6 +301,42 @@ async function findDurableWake(
       ),
     )
     .orderBy(asc(agentWakeupRequests.requestedAt))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  if (canonical) return canonical;
+
+  // O1-DIRECT-SETTLED (b2): the vendor accepted the wake without creating a
+  // canonical-keyed row — `admitWakeBehindIssueExecution` folds the incoming
+  // wake into the assignee's existing `deferred_issue_execution` row (whose
+  // idempotencyKey is NOT the canonical key), and `recordExecutionWait`
+  // writes delivery receipts under a digest key. A delivery-status wake of
+  // the same agent for the same interaction means the continuation is
+  // already in flight; re-dispatching would start a second one. `skipped`
+  // (an explicit refusal) is never a delivery and never matches. The
+  // outbox's own intent rows are excluded: they are the work item, not the
+  // delivered wake.
+  if (!input.agentId || !input.interactionId) return null;
+  return db
+    .select({
+      id: agentWakeupRequests.id,
+      runId: agentWakeupRequests.runId,
+      status: agentWakeupRequests.status,
+    })
+    .from(agentWakeupRequests)
+    .where(
+      and(
+        eq(agentWakeupRequests.companyId, input.companyId),
+        eq(agentWakeupRequests.agentId, input.agentId),
+        inArray(agentWakeupRequests.status, [...DURABLE_WAKE_STATUSES]),
+        sql`${agentWakeupRequests.payload}->>'interactionId' = ${input.interactionId}`,
+        ne(agentWakeupRequests.id, input.intentId ?? undefined),
+        or(
+          isNull(agentWakeupRequests.requestedByActorId),
+          ne(agentWakeupRequests.requestedByActorId, OUTBOX_ACTOR_ID),
+        ),
+      ),
+    )
+    .orderBy(desc(agentWakeupRequests.requestedAt))
     .limit(1)
     .then((rows) => rows[0] ?? null);
 }
@@ -436,10 +522,15 @@ export function interactionContinuationOutboxService(
     const allowRunCoalescing = contract.allowRunCoalescing !== false;
 
     // Check before dispatch: a previous worker may have crashed right after
-    // the canonical wake was enqueued (the canonical key is uq-protected).
+    // the canonical wake was enqueued (the canonical key is uq-protected), or
+    // the direct path's wake was already folded into one of the assignee's
+    // delivery rows for this interaction (O1-DIRECT-SETTLED).
     const durable = await findDurableWake(db, {
       companyId: claimed.companyId,
       idempotencyKey: wakeIdempotencyKey,
+      agentId: assigneeAgentId,
+      interactionId,
+      intentId: claimed.id,
     });
     if (durable) {
       await markIntentTerminal(db, {
@@ -485,12 +576,30 @@ export function interactionContinuationOutboxService(
       const settled = await findDurableWake(db, {
         companyId: claimed.companyId,
         idempotencyKey: wakeIdempotencyKey,
+        agentId: assigneeAgentId,
+        interactionId,
+        intentId: claimed.id,
       });
       if (settled) {
         await markIntentTerminal(db, {
           intentId: claimed.id,
           status: "coalesced",
           runId: settled.runId ?? wakeRun?.id ?? null,
+        });
+        return;
+      }
+      if (wakeRun?.id) {
+        // O1-DIRECT-SETTLED (b1): wakeup() returned a run — the vendor
+        // admitted the wake and dispatched it. No row with the canonical key
+        // may be visible yet (the wake can land in an unrelated receipt
+        // shape, e.g. merged into a deferred wake without a canonical-keyed
+        // row), but a returned run is the vendor's own admission result:
+        // the continuation is in flight, so the intent is settled now. The
+        // sweep must not re-dispatch it into a second continuation.
+        await markIntentTerminal(db, {
+          intentId: claimed.id,
+          status: "coalesced",
+          runId: wakeRun.id,
         });
         return;
       }
@@ -503,6 +612,9 @@ export function interactionContinuationOutboxService(
         const raced = await findDurableWake(db, {
           companyId: claimed.companyId,
           idempotencyKey: wakeIdempotencyKey,
+          agentId: assigneeAgentId,
+          interactionId,
+          intentId: claimed.id,
         });
         if (raced) {
           await markIntentTerminal(db, {
@@ -521,10 +633,21 @@ export function interactionContinuationOutboxService(
   }
 
   async function sweepPending(
-    input: { limit?: number; staleClaimMs?: number } = {},
+    input: {
+      limit?: number;
+      staleClaimMs?: number;
+      /** Test seam: overrides the sweep-age threshold (defaults to the env setting). */
+      sweepAgeMs?: number;
+    } = {},
   ): Promise<{ scanned: number; delivered: number; failed: number }> {
     const now = new Date();
     const staleClaimMs = Math.max(1_000, input.staleClaimMs ?? STALE_CLAIM_MS);
+    // O1-SWEEP-AGE: only back off intents the direct post-commit path has had
+    // a whole window to settle. A just-written intent belongs to tryDeliver;
+    // an early sweep would deliver the trimmed envelope before the direct
+    // wake's richer one (and can race a direct dispatch still in flight).
+    // The threshold never applies to the direct path itself.
+    const sweepAgeMs = input.sweepAgeMs ?? readOutboxSweepAgeMs();
     const candidates = await db
       .select({
         id: agentWakeupRequests.id,
@@ -537,6 +660,10 @@ export function interactionContinuationOutboxService(
           eq(agentWakeupRequests.requestedByActorId, OUTBOX_ACTOR_ID),
           inArray(agentWakeupRequests.status, ["queued", "claimed"]),
           isNull(agentWakeupRequests.runId),
+          lt(
+            agentWakeupRequests.requestedAt,
+            new Date(now.getTime() - sweepAgeMs),
+          ),
           or(
             isNull(agentWakeupRequests.claimedAt),
             lt(agentWakeupRequests.claimedAt, new Date(now.getTime() - staleClaimMs)),

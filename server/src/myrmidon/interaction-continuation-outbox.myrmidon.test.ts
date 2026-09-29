@@ -21,6 +21,7 @@ import {
   interactionContinuationOutboxKey,
   interactionContinuationOutboxMutationOptions,
   interactionContinuationOutboxService,
+  readOutboxSweepAgeMs,
   recordInteractionContinuationOutbox,
 } from "./interaction-continuation-outbox.js";
 
@@ -309,12 +310,14 @@ describeEmbeddedPostgres("interaction continuation outbox", () => {
     expect(afterFailure?.claimedAt).toBeNull();
 
     // 3. The sweep (a later scheduler pass with a healthy heartbeat)
-    //    materializes the durable wake with the canonical key.
+    //    materializes the durable wake with the canonical key. The sweep-age
+    //    threshold is zeroed here: this test pins the retry semantics, the
+    //    threshold itself has its own dedicated tests.
     const canonical = `interaction:${interaction.id}:accepted`;
     const emulatedRunId = "11111111-2222-4333-8444-555555555555";
     const heartbeat = healthyHeartbeat(seeded, emulatedRunId);
     const outbox = interactionContinuationOutboxService(db, heartbeat);
-    const result = await outbox.sweepPending();
+    const result = await outbox.sweepPending({ sweepAgeMs: 0 });
     expect(result.scanned).toBe(1);
     expect(heartbeat.wakeup).toHaveBeenCalledTimes(1);
     expect(heartbeat.wakeup.mock.calls[0]?.[0]).toBe(agent.id);
@@ -389,7 +392,7 @@ describeEmbeddedPostgres("interaction continuation outbox", () => {
     await recordIntent(seeded);
     const heartbeat = { wakeup: vi.fn(async () => null) };
     const outbox = interactionContinuationOutboxService(db, heartbeat);
-    const result = await outbox.sweepPending();
+    const result = await outbox.sweepPending({ sweepAgeMs: 0 });
     expect(result.scanned).toBe(1);
     expect(heartbeat.wakeup).not.toHaveBeenCalled();
     const intent = await readIntent(seeded);
@@ -436,7 +439,7 @@ describeEmbeddedPostgres("interaction continuation outbox", () => {
       .update(agentWakeupRequests)
       .set({ claimedAt: new Date(Date.now() - 5 * 60_000) })
       .where(eq(agentWakeupRequests.id, intent!.id));
-    expect((await outbox.sweepPending()).scanned).toBe(1);
+    expect((await outbox.sweepPending({ sweepAgeMs: 0 })).scanned).toBe(1);
     expect(heartbeat.wakeup).toHaveBeenCalledTimes(1);
     expect((await readIntent(seeded))?.status).toBe("coalesced");
   });
@@ -452,7 +455,7 @@ describeEmbeddedPostgres("interaction continuation outbox", () => {
     const released = await readIntent(seeded);
     expect(released?.status).toBe("queued");
     expect(released?.claimedAt).toBeNull();
-    await outbox.sweepPending();
+    await outbox.sweepPending({ sweepAgeMs: 0 });
     expect(heartbeat.wakeup).toHaveBeenCalledTimes(2);
 
     // Past the retry window the intent is retired instead of retried forever.
@@ -492,4 +495,222 @@ describeEmbeddedPostgres("interaction continuation outbox", () => {
     expect(intent?.status).toBe("coalesced");
     expect(intent?.runId).toBe(runId);
   });
+
+  // O1-SWEEP-AGE: the sweep must not race the direct post-commit dispatch.
+  // A just-written intent belongs to tryDeliver; the sweep only backs off
+  // intents older than the threshold, otherwise it delivers the trimmed
+  // outbox envelope before the direct wake's richer one.
+  it("does not sweep an intent younger than the sweep-age threshold, then delivers it once old enough", async () => {
+    const seeded = await seed();
+    await recordIntent(seeded);
+    const emulatedRunId = "44444444-5555-4666-8777-888888888888";
+    const heartbeat = healthyHeartbeat(seeded, emulatedRunId);
+    const outbox = interactionContinuationOutboxService(db, heartbeat);
+
+    // Fresh intent: the direct path's window. The sweep must not touch it.
+    const fresh = await outbox.sweepPending();
+    expect(fresh.scanned).toBe(0);
+    expect(heartbeat.wakeup).not.toHaveBeenCalled();
+    expect((await readIntent(seeded))?.status).toBe("queued");
+
+    // Age the intent past the default threshold (45 s): the sweep picks it
+    // up and materializes the canonical wake.
+    const intent = await readIntent(seeded);
+    await db
+      .update(agentWakeupRequests)
+      .set({ requestedAt: new Date(Date.now() - 46_000) })
+      .where(eq(agentWakeupRequests.id, intent!.id));
+    const aged = await outbox.sweepPending();
+    expect(aged.scanned).toBe(1);
+    expect(heartbeat.wakeup).toHaveBeenCalledTimes(1);
+    expect((await readIntent(seeded))?.status).toBe("coalesced");
+  });
+
+  it("applies the sweep-age threshold from the MYRMIDON_OUTBOX_SWEEP_AGE_MS setting", async () => {
+    const seeded = await seed();
+    await recordIntent(seeded);
+    const heartbeat = healthyHeartbeat(seeded, "55555555-6666-4777-8888-999999999999");
+    const outbox = interactionContinuationOutboxService(db, heartbeat);
+
+    // A 30 s-old intent is below the raised threshold: not swept.
+    const intent = await readIntent(seeded);
+    await db
+      .update(agentWakeupRequests)
+      .set({ requestedAt: new Date(Date.now() - 30_000) })
+      .where(eq(agentWakeupRequests.id, intent!.id));
+    expect((await outbox.sweepPending({ sweepAgeMs: 60_000 })).scanned).toBe(0);
+    expect(heartbeat.wakeup).not.toHaveBeenCalled();
+
+    // Zero threshold restores the immediate sweep (old behavior).
+    await recordIntent2(seeded);
+    expect((await outbox.sweepPending({ sweepAgeMs: 0 })).scanned).toBe(1);
+    expect(heartbeat.wakeup).toHaveBeenCalledTimes(1);
+  });
+
+  it("readOutboxSweepAgeMs defaults to 45 s and rejects non-numeric, negative and non-integer values", () => {
+    expect(readOutboxSweepAgeMs()).toBe(45_000);
+    expect(readOutboxSweepAgeMs({})).toBe(45_000);
+    expect(readOutboxSweepAgeMs({ MYRMIDON_OUTBOX_SWEEP_AGE_MS: "" })).toBe(45_000);
+    expect(readOutboxSweepAgeMs({ MYRMIDON_OUTBOX_SWEEP_AGE_MS: "  " })).toBe(45_000);
+    expect(readOutboxSweepAgeMs({ MYRMIDON_OUTBOX_SWEEP_AGE_MS: "not-a-number" })).toBe(45_000);
+    expect(readOutboxSweepAgeMs({ MYRMIDON_OUTBOX_SWEEP_AGE_MS: "-1" })).toBe(45_000);
+    expect(readOutboxSweepAgeMs({ MYRMIDON_OUTBOX_SWEEP_AGE_MS: "1.5" })).toBe(45_000);
+    expect(readOutboxSweepAgeMs({ MYRMIDON_OUTBOX_SWEEP_AGE_MS: "30000" })).toBe(30_000);
+    expect(readOutboxSweepAgeMs({ MYRMIDON_OUTBOX_SWEEP_AGE_MS: "0" })).toBe(0);
+  });
+
+  // O1-DIRECT-SETTLED (b1): wakeup() returning a run is the vendor's own
+  // admission result — the intent must settle at once, even when no
+  // canonical-keyed row is visible, so the sweep cannot re-dispatch it into
+  // a second continuation.
+  it("settles the intent immediately when wakeup returns a run without a canonical-keyed row", async () => {
+    const seeded = await seed();
+    await recordIntent(seeded);
+    const returnedRunId = "66666666-7777-4888-9999-aaaaaaaaaaaa";
+    // The vendor admitted the wake (returned a run) but wrote no durable row
+    // our findDurableWake can see — e.g. merged into a deferred wake.
+    const heartbeat = { wakeup: vi.fn(async () => ({ id: returnedRunId })) };
+    const outbox = interactionContinuationOutboxService(db, heartbeat);
+
+    await outbox.tryDeliver(seeded.interaction.id, "accepted");
+    expect(heartbeat.wakeup).toHaveBeenCalledTimes(1);
+    const intent = await readIntent(seeded);
+    expect(intent?.status).toBe("coalesced");
+    expect(intent?.runId).toBe(returnedRunId);
+
+    // The sweep finds nothing left: no second continuation.
+    expect((await outbox.sweepPending()).scanned).toBe(0);
+    expect(heartbeat.wakeup).toHaveBeenCalledTimes(1);
+  });
+
+  // O1-DIRECT-SETTLED (b2): the direct wake was folded into the assignee's
+  // existing deferred_issue_execution row (idempotencyKey is NOT the
+  // canonical key, wakeup returned null). That delivery row for the same
+  // interaction means the continuation is in flight: the intent settles
+  // instead of being retried for the whole MAX_INTENT_AGE_MS window.
+  it("settles the intent when the wake was folded into a deferred wake of the same agent and interaction", async () => {
+    const seeded = await seed();
+    await recordIntent(seeded);
+    const deferredRunId = "77777777-8888-4999-aaaa-bbbbbbbbbbbb";
+    // The vendor's deferred-wake merge outcome: the interaction's
+    // continuation content lives in an existing deferred row.
+    await db.insert(agentWakeupRequests).values({
+      companyId: seeded.company.id,
+      agentId: seeded.agent.id,
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_execution_deferred",
+      status: "deferred_issue_execution",
+      idempotencyKey: "execution-wait:digest",
+      payload: {
+        issueId: seeded.issue.id,
+        interactionId: seeded.interaction.id,
+        interactionKind: "request_confirmation",
+        interactionStatus: "accepted",
+        mutation: "interaction",
+      },
+      runId: deferredRunId,
+    });
+    // wakeup() returned null (the wake was merged, not dispatched anew).
+    const heartbeat = { wakeup: vi.fn(async () => null) };
+    const outbox = interactionContinuationOutboxService(db, heartbeat);
+
+    await outbox.tryDeliver(seeded.interaction.id, "accepted");
+    // The pre-dispatch check settles on the deferred row: no re-dispatch.
+    expect(heartbeat.wakeup).not.toHaveBeenCalled();
+    const intent = await readIntent(seeded);
+    expect(intent?.status).toBe("coalesced");
+    expect(intent?.runId).toBe(deferredRunId);
+
+    // Nothing is left for the sweep: no second continuation.
+    expect((await outbox.sweepPending()).scanned).toBe(0);
+  });
+
+  // A skipped wake of the same agent and interaction is a refusal, not a
+  // delivery: the intent must stay due so the sweep can retry.
+  it("does not settle the intent on a skipped wake of the same agent and interaction", async () => {
+    const seeded = await seed();
+    await recordIntent(seeded);
+    await db.insert(agentWakeupRequests).values({
+      companyId: seeded.company.id,
+      agentId: seeded.agent.id,
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_tree_hold_active",
+      status: "skipped",
+      idempotencyKey: "execution-wait:other-digest",
+      payload: {
+        issueId: seeded.issue.id,
+        interactionId: seeded.interaction.id,
+        interactionStatus: "accepted",
+      },
+    });
+    const wakeupCalls: Array<unknown> = [];
+    const heartbeat = {
+      wakeup: vi.fn(async (_agentId: string, opts: { idempotencyKey?: string | null }) => {
+        wakeupCalls.push(opts.idempotencyKey);
+        return null;
+      }),
+    };
+    const outbox = interactionContinuationOutboxService(db, heartbeat);
+
+    await outbox.tryDeliver(seeded.interaction.id, "accepted");
+    expect(heartbeat.wakeup).toHaveBeenCalledTimes(1);
+    const intent = await readIntent(seeded);
+    expect(intent?.status).toBe("queued");
+    expect(intent?.claimedAt).toBeNull();
+  });
+
+  // The fallback delivery row must match the interaction: a deferred wake of
+  // the same agent for a DIFFERENT interaction does not settle this intent.
+  it("does not settle the intent on a deferred wake of a different interaction", async () => {
+    const seeded = await seed();
+    await recordIntent(seeded);
+    const [otherInteraction] = await db
+      .insert(issueThreadInteractions)
+      .values({
+        companyId: seeded.company.id,
+        issueId: seeded.issue.id,
+        kind: "request_confirmation",
+        status: "accepted",
+        continuationPolicy: "wake_assignee",
+        payload: { version: 1, prompt: "Other?" },
+        createdByAgentId: seeded.agent.id,
+      })
+      .returning();
+    await db.insert(agentWakeupRequests).values({
+      companyId: seeded.company.id,
+      agentId: seeded.agent.id,
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_execution_deferred",
+      status: "deferred_issue_execution",
+      idempotencyKey: "execution-wait:unrelated",
+      payload: {
+        issueId: seeded.issue.id,
+        interactionId: otherInteraction!.id,
+        interactionStatus: "accepted",
+        mutation: "interaction",
+      },
+    });
+    const heartbeat = { wakeup: vi.fn(async () => null) };
+    const outbox = interactionContinuationOutboxService(db, heartbeat);
+
+    await outbox.tryDeliver(seeded.interaction.id, "accepted");
+    expect(heartbeat.wakeup).toHaveBeenCalledTimes(1);
+    expect((await readIntent(seeded))?.status).toBe("queued");
+  });
+
+  // A second intent for the same seeded card is impossible (the idempotency
+  // key is unique), so the test above that needs a fresh intent deletes the
+  // first row and re-records it through this helper.
+  async function recordIntent2(seeded: Seeded) {
+    await db.delete(agentWakeupRequests).where(
+      eq(
+        agentWakeupRequests.idempotencyKey,
+        interactionContinuationOutboxKey(seeded.interaction.id, "accepted"),
+      ),
+    );
+    await recordIntent(seeded);
+  }
 });
