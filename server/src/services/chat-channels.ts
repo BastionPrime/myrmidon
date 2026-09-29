@@ -234,6 +234,14 @@ import {
 } from "./issue-assignment-wakeup.js";
 import { issueService } from "./issues.js";
 import {
+  afterTelegramDmMessage,
+  decideTelegramDmBinding,
+  ensureTelegramDmBinding,
+  handleTelegramDmCommand,
+  refuseUnlinkedTelegramDm,
+  type TelegramDmBridgeDeps,
+} from "../myrmidon/agent-chat-bridge/bridge.js";
+import {
   authorizeNativeChatReviewPresentation,
   NativeChatReviewPresentationContentionError,
 } from "./native-runtime/native-chat-review-presentation.js";
@@ -1425,6 +1433,10 @@ export interface ChatChannelServiceOptions {
         errorCode?: string;
         eventMessage?: string;
         eventPayload?: Record<string, unknown>;
+        // myrmidon(X8b): merged into heartbeat_runs.result_json by the real
+        // heartbeatService.cancelRun (CancelRunOptions.resultJson); carries
+        // the bridged /stop attribution that recovery reads.
+        resultJson?: Record<string, unknown>;
       },
     ) => Promise<unknown>;
   };
@@ -3002,6 +3014,34 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     parseChatWebhookPublicBaseUrl(options.webhookPublicBaseUrl) ??
     publicBaseUrl;
   const issuesSvc = issueService(db);
+  // myrmidon(X8b): the Telegram-DM-as-Agent-Chat bridge (server/src/myrmidon/
+  // agent-chat-bridge/bridge.ts) needs a few of this closure's own helpers.
+  // The bridged-command contract (X8a) passes `resultJson`; forward it as
+  // `resultJson` so the cancelled run's result_json carries the operator
+  // attribution (`cancelledByActorType: "user"`) that stranded-work recovery
+  // reads to leave a /stop-ped conversation alone. It is also kept as the
+  // run event's payload, which is what this adapter sent before.
+  const x8CancelRun = options.heartbeat.cancelRun
+    ? async (
+        runId: string,
+        reason: string,
+        cancelOptions: { errorCode?: string; resultJson?: Record<string, unknown> },
+      ) =>
+        options.heartbeat.cancelRun!(runId, reason, {
+          errorCode: cancelOptions.errorCode,
+          resultJson: cancelOptions.resultJson,
+          eventPayload: cancelOptions.resultJson,
+        })
+    : undefined;
+  const x8TelegramDmBridgeDeps: TelegramDmBridgeDeps = {
+    issuesSvc,
+    stageTaskControlPublication: stageAuthorizedTaskControlPublication,
+    stageProviderEffect,
+    processProviderEffect,
+    logActivity,
+    publicBaseUrl,
+    cancelRun: x8CancelRun,
+  };
   const secrets = secretService(db);
   const questionResponses = questionResponseDeliveryService(db, {
     heartbeat:
@@ -15597,6 +15637,33 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               )
               .then((rows) => rows[0] ?? null)
           : null;
+      // myrmidon(X8b): decide whether this DM belongs to the standing
+      // Telegram Agent Chat conversation bridge, before the vendor's own
+      // completed/done/cancelled rollover below (which must not run against
+      // a binding this turn is about to release or replace).
+      const x8Dm = await decideTelegramDmBinding(db, {
+        endpoint: {
+          provider: endpoint.provider,
+          id: endpoint.id,
+          assignedAgentId: endpoint.assignedAgentId,
+        },
+        isDirectMessage: thread.isDM,
+        boardUserId: principalResolution.userId,
+        existingConversation: existingConversation
+          ? { id: existingConversation.id, state: existingConversation.state }
+          : null,
+        existingIssue: existingIssue
+          ? {
+              id: existingIssue.id,
+              conversationAgentId: existingIssue.conversationAgentId,
+              conversationUserId: existingIssue.conversationUserId,
+            }
+          : null,
+      });
+      if (x8Dm.detachExisting) {
+        existingConversation = null;
+        existingIssue = null;
+      }
       if (
         isLinear &&
         existingConversation &&
@@ -15622,12 +15689,17 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       // A forum topic is a native provider thread and therefore stays bound to
       // one immutable Paperclip task, but the command must still be consumed
       // as control-plane input instead of becoming a task comment/wakeup.
-      const controlCommand =
-        isLinear || endpoint.provider === "telegram"
+      // myrmidon(X8b): the bridged Telegram DM conversation has its own
+      // command vocabulary (handled below, CP4/handleTelegramDmCommand); the
+      // vendor's /new would otherwise close this conversation (F7).
+      const controlCommand = x8Dm.applies
+        ? null
+        : isLinear || endpoint.provider === "telegram"
           ? linearControlCommand(message.text)
           : null;
-      const guidanceCommand =
-        endpoint.provider === "telegram"
+      const guidanceCommand = x8Dm.applies
+        ? null
+        : endpoint.provider === "telegram"
           ? telegramGuidanceCommand(message.text)
           : null;
       const endpointAllowed =
@@ -15732,6 +15804,34 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             updatedAt: new Date(),
           })
           .where(eq(chatDeliveries.id, activeDelivery.id));
+        // myrmidon(X8b): a bridged bot's DM is meant for linked workspace
+        // members only; give an unlinked sender one polite notice per day
+        // instead of silence, without creating a task or comment (F21).
+        if (
+          thread.isDM &&
+          endpoint.provider === "telegram" &&
+          telegramDmConversationsEnabled(endpoint.id) &&
+          endpointAllowed &&
+          destinationAllowed &&
+          !principalAllowed
+        ) {
+          const effectContext =
+            runtimeContext ??
+            runtimeContextForRecord(
+              (await endpointRecord(endpoint.id)) ??
+                (() => {
+                  throw new Error("Chat endpoint is unavailable");
+                })(),
+            );
+          await refuseUnlinkedTelegramDm(db, x8TelegramDmBridgeDeps, {
+            endpoint,
+            thread,
+            principalId: principalResolution.principal.id,
+            deliveryId: activeDelivery.id,
+            resourceId: resource.id,
+            runtimeContext: effectContext,
+          });
+        }
         return;
       }
 
@@ -15771,6 +15871,39 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         return true;
       };
       if (await filterPreControlSource(db)) return;
+      // myrmidon(X8b): OpenClaw-style commands (/model, /think, /stop, /new,
+      // …) in a bridged Telegram DM conversation. A recognized `reply`
+      // command finishes the whole turn here; a `message` command overrides
+      // the comment body/notice below (CP6/CP7) but still runs the normal
+      // task-mutation flow.
+      let x8MessageBody: string | undefined;
+      let x8Notice: string | undefined;
+      if (x8Dm.applies) {
+        const dmCommand = await handleTelegramDmCommand({
+          db,
+          deps: x8TelegramDmBridgeDeps,
+          endpoint,
+          resource,
+          thread: { id: thread.id, channelId: thread.channelId },
+          providerUrl,
+          boardUserId: principalResolution.userId!,
+          deliveryId: activeDelivery.id,
+          principalId: principalResolution.principal.id,
+          text: message.text,
+          current: existingConversation,
+          latestConversation,
+          // myrmidon(X8b): a `reply`-kind command result finishes the whole
+          // turn inside handleTelegramDmCommand, before persistTaskMutation
+          // below ever runs — so the release/migration this transition needs
+          // must be passed through and applied there too (F: reply-first
+          // migration).
+          releaseConversationId: x8Dm.releaseConversationId,
+          migratedFromIssueId: x8Dm.migratedFromIssueId,
+        });
+        if (dmCommand.done) return;
+        x8MessageBody = dmCommand.body;
+        x8Notice = dmCommand.notice;
+      }
       const photonQuote =
         endpoint.provider === "imessage-photon"
           ? photonReplyReference(message.raw)
@@ -16067,6 +16200,40 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         taskUserId: string | null,
       ) => {
         let conversation = existingConversation;
+        // myrmidon(X8b): release the binding this thread had before becoming
+        // (or ceasing to be) a Telegram DM bridge target, then reuse or
+        // create the standing Telegram conversation. `taskUserId` is the
+        // identity re-verified under the endpoint lock above (16221), not
+        // the pre-transaction snapshot `x8Dm.applies` was computed from.
+        if (x8Dm.releaseConversationId) {
+          await taskTx
+            .update(chatConversations)
+            .set({ state: "completed", updatedAt: new Date() })
+            .where(
+              and(
+                eq(chatConversations.id, x8Dm.releaseConversationId),
+                inArray(chatConversations.state, ["active", "waiting"]),
+              ),
+            );
+        }
+        if (x8Dm.applies && taskUserId) {
+          conversation = (
+            await ensureTelegramDmBinding(
+              taskTx,
+              x8TelegramDmBridgeDeps,
+              {
+                endpoint: taskEndpoint,
+                resource,
+                thread: { id: thread.id, channelId: thread.channelId },
+                providerUrl,
+                boardUserId: taskUserId,
+                current: conversation,
+                latestConversation,
+              },
+              inboundActivityPublications,
+            )
+          ).conversation;
+        }
         if (!conversation) {
           const sessionGeneration = isLinear
             ? (latestConversation?.sessionGeneration ?? 0) + 1
@@ -16189,15 +16356,18 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             taskTx,
           );
         }
+        // myrmidon(X8b): a `message`-kind bridged command (e.g. /new) overrides
+        // the comment body instead of the raw provider text.
         const body =
-          message.text.trim() ||
+          x8MessageBody ??
+          (message.text.trim() ||
           (message.attachments.length > 0
             ? taskEndpoint.provider === "microsoft-teams" &&
               !thread.isDM &&
               nativeInboundAttachments.length === 0
               ? `Shared ${message.attachments.length} Microsoft Teams file reference${message.attachments.length === 1 ? "" : "s"}.${providerUrl ? ` Open in Microsoft Teams: ${providerUrl}` : ""}`
               : `Shared ${message.attachments.length} file${message.attachments.length === 1 ? "" : "s"}.`
-            : "Sent an empty message.");
+            : "Sent an empty message."));
         let comment!: Awaited<ReturnType<typeof issuesSvc.addComment>>;
         await taskTx
           .update(chatEndpoints)
@@ -16488,6 +16658,27 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         publishActivity(publication);
       }
       const { actorUserId, comment, conversation, issue } = taskMutation;
+      // myrmidon(X8b): resume a paused bridged conversation on a literal
+      // "/new" comment (the web /new route does the same), and deliver any
+      // queued bridged-command notice or one-time migration notice. Runs
+      // before processInboundWakeup below so a resumed pause does not race
+      // the wakeup it is meant to unblock.
+      if (x8Dm.applies) {
+        await afterTelegramDmMessage({
+          db,
+          deps: x8TelegramDmBridgeDeps,
+          comment,
+          agentId: endpoint.assignedAgentId,
+          companyId: endpoint.companyId,
+          endpointId: endpoint.id,
+          conversationId: conversation.id,
+          issueId: issue.id,
+          deliveryId: activeDelivery.id,
+          principalId: principalResolution.principal.id,
+          notice: x8Notice,
+          migratedFromIssueId: x8Dm.migratedFromIssueId,
+        });
+      }
       const attachmentResult = await ingestAttachments({
         endpoint,
         endpointRuntime,
