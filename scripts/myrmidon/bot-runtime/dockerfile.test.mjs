@@ -16,7 +16,12 @@ const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/myrmidon-bot
 // The Dockerfile documents, in a comment, that it deliberately does not
 // install media tools — so "no media tools" is checked against the
 // instructions only, not comment prose explaining that absence.
+// The Node.js variant is a separate final stage (`runtime-node`, checked below);
+// the default image, i.e. everything before it, must stay node-free.
+const variantStart = dockerfile.indexOf("FROM python:3.13-slim AS node_dist");
+assert.ok(variantStart > 0, "Dockerfile must define the node_dist stage of the Node.js variant");
 const dockerfileInstructions = dockerfile
+  .slice(0, variantStart)
   .split("\n")
   .filter((line) => !line.trim().startsWith("#"))
   .join("\n");
@@ -53,6 +58,10 @@ describe("docker/bot-runtime/Dockerfile", () => {
   it("uses tini as PID 1", () => {
     assert.match(dockerfile, /tini/);
     assert.match(dockerfile, /^ENTRYPOINT \["\/usr\/bin\/tini", "--",/m);
+  });
+
+  it("installs the ssh client without recommended packages", () => {
+    assert.match(dockerfileInstructions, /--no-install-recommends[\s\S]*?\bopenssh-client\b/);
   });
 
   it("declares a HEALTHCHECK against a real gateway endpoint", () => {
@@ -257,14 +266,59 @@ describe("docker/bot-runtime/patches/", () => {
   it("ships no browser, which is why the browser-tool socket patches are not carried", () => {
     // patches/README.md leaves tools/browser_tool*.py unported because the image has no
     // agent-browser CLI, Node or Chromium. If a browser is ever added, this fails: port
-    // those two files together with it.
+    // those two files together with it. The Node.js variant below is not a browser
+    // and does not change this: it must not carry one either.
     assert.doesNotMatch(dockerfileInstructions, /chromium|playwright|agent-browser|nodejs|\bnpm\b|\bnpx\b/i);
+    const variant = dockerfile.slice(variantStart).split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+    assert.doesNotMatch(variant, /chromium|playwright|agent-browser|puppeteer/i);
+  });
+
+  it("keeps the Node.js variant a final stage on top of runtime, with the same user, label and no media tools", () => {
+    assert.match(dockerfile, /^FROM runtime AS runtime-node$/m);
+    const variant = dockerfile.slice(dockerfile.indexOf("FROM runtime AS runtime-node"));
+    assert.match(variant, /^USER 10001:10001$/m);
+    assert.doesNotMatch(variant, /^USER (root|0)/m);
+    assert.doesNotMatch(variant, /ffmpeg|yt-dlp|imagemagick|libreoffice|tesseract/i);
+    // The contract label is inherited from `runtime`; the variant only adds a marker.
+    assert.match(variant, /io\.github\.itkadr-git\.myrmidon\.variant="node"/);
+    assert.doesNotMatch(variant, /myrmidon\.bot-runtime\.contract=/);
+    // Build-time check as the runtime user, and no ENTRYPOINT/HEALTHCHECK override.
+    assert.match(variant, /^RUN node \/opt\/node-tools\/smoke\.cjs/m);
+    assert.doesNotMatch(variant, /^(ENTRYPOINT|HEALTHCHECK|CMD) /m);
+  });
+
+  it("pins the Node.js tarball by exact version and sha256, and writable paths point at volumes", () => {
+    assert.match(dockerfile, /^ARG NODE_VERSION=22\.\d+\.\d+$/m);
+    assert.match(dockerfile, /^ARG NODE_SHA256=[0-9a-f]{64}$/m);
+    assert.match(dockerfile, /sha256sum -c -/);
+    assert.match(dockerfile, /NPM_CONFIG_CACHE=\/scratch\//);
+    assert.match(dockerfile, /NPM_CONFIG_PREFIX=\/scratch\//);
+  });
+
+  it("installs only exactly pinned packages, from a lockfile", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(IMAGE_DIR, "node-tools/package.json"), "utf8"));
+    for (const [name, version] of Object.entries(pkg.dependencies)) {
+      assert.match(version, /^\d+\.\d+\.\d+$/, `${name} must be pinned to an exact version`);
+    }
+    assert.ok(fs.existsSync(path.join(IMAGE_DIR, "node-tools/package-lock.json")));
+    assert.match(dockerfile, /npm ci --omit=dev/);
   });
 });
 
 describe("myrmidon-bot-image.yml", () => {
   it("publishes to the dedicated bot-image namespace", () => {
     assert.match(workflow, /IMAGE: ghcr\.io\/itkadr-git\/myrmidon-hermes\n/);
+  });
+
+  it("builds the default image with an explicit target and the Node.js variant as its own image with the same gating", () => {
+    assert.equal(workflow.match(/target: runtime\n/g)?.length, 2);
+    assert.equal(workflow.match(/target: runtime-node\n/g)?.length, 2);
+    assert.match(workflow, /IMAGE: ghcr\.io\/itkadr-git\/myrmidon-hermes-node\n/);
+    const nodeJob = workflow.slice(workflow.indexOf("  build-node:"));
+    assert.match(nodeJob, /if: \$\{\{ github\.repository == 'itkadr-git\/myrmidon' \}\}/);
+    assert.equal(nodeJob.match(/if: \$\{\{ github\.event_name != 'pull_request' \}\}/g)?.length >= 4, true);
+    assert.match(nodeJob, /--read-only --user 10001:10001/);
+    assert.match(nodeJob, /require\(m\)/);
   });
 
   it("only in this repository, and pushes only outside pull_request", () => {

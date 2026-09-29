@@ -205,7 +205,8 @@ LABEL org.opencontainers.image.title="myrmidon-hermes" \
       myrmidon.bot-runtime.contract="1"
 
 # ripgrep: hermes' file-search tool shells out to `rg`. git: workspace tools
-# (status/diff/commit) for coding-agent bots. curl: HEALTHCHECK only.
+# (status/diff/commit) for coding-agent bots. curl: HEALTHCHECK only. openssh-client:
+# key-based ssh from a bot (-i <tmp key>, -o UserKnownHostsFile=<writable dir>).
 # No media tools (ffmpeg, yt-dlp, ...): forbidden by docs/myrmidon/CONVENTIONS.md §8
 # and out of scope — media handling is a separate service outside this image.
 RUN apt-get update \
@@ -213,6 +214,7 @@ RUN apt-get update \
     ca-certificates \
     curl \
     git \
+    openssh-client \
     ripgrep \
     tini \
   && rm -rf /var/lib/apt/lists/*
@@ -300,3 +302,85 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${API_SERVER_PORT}/health" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/bot-runtime-entrypoint"]
+
+# ---------------------------------------------------------------------------
+# Variant `runtime-node`: the `runtime` image plus Node.js and a fixed set of
+# preinstalled packages, for the few bots whose work is node scripts
+# (presentations/documents, diagram and image rendering). INTERIM measure until
+# a per-task sandbox exists; the plain `runtime` target stays the default image
+# and this stage is only built explicitly (`--target runtime-node`, published as
+# ghcr.io/itkadr-git/myrmidon-hermes-node). Nothing else differs: same uid,
+# same read-only root, same contract label, same entrypoint. See README.md,
+# "Variant with Node.js".
+#
+# NODE_VERSION is an exact release of the pinned LTS major; NODE_SHA256 is the
+# digest of the linux-x64 .tar.xz from that release's SHASUMS256.txt. Bump both
+# together. The build fails on a digest mismatch.
+# ---------------------------------------------------------------------------
+FROM python:3.13-slim AS node_dist
+ARG NODE_VERSION=22.23.3
+ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
+
+# Fonts: @napi-rs/canvas draws text with system fonts only, and the slim base
+# has none, so Cyrillic labels in a rendered diagram would come out as boxes.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    fonts-dejavu-core \
+    fonts-liberation \
+    xz-utils \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN set -eu; \
+    curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"; \
+    echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c -; \
+    mkdir /opt/node; \
+    tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1; \
+    rm -rf /tmp/node.tar.xz /opt/node/include /opt/node/share /opt/node/CHANGELOG.md /opt/node/README.md; \
+    /opt/node/bin/node --version | grep -x "v${NODE_VERSION}"
+
+FROM node_dist AS node_tools
+ENV PATH=/opt/node/bin:$PATH
+WORKDIR /opt/node-tools
+# package.json pins exact versions; package-lock.json pins every transitive
+# package with an integrity hash, and `npm ci` refuses to run if they disagree.
+# --ignore-scripts: the native packages (sharp, @napi-rs/canvas) ship prebuilt
+# binaries as platform packages, no install script or compiler is involved.
+COPY node-tools/package.json node-tools/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+  && rm -rf /root/.npm
+
+FROM runtime AS runtime-node
+LABEL org.opencontainers.image.title="myrmidon-hermes-node" \
+      org.opencontainers.image.description="Bot runtime image, Node.js variant: hermes gateway plus Node.js and preinstalled document/image packages" \
+      io.github.itkadr-git.myrmidon.variant="node"
+
+COPY --from=node_dist --chown=root:root /opt/node /opt/node
+COPY --from=node_tools --chown=root:root /opt/node-tools /opt/node-tools
+COPY --from=node_dist --chown=root:root /usr/share/fonts/truetype /usr/share/fonts/truetype
+COPY --chown=root:root node-tools/smoke.cjs /opt/node-tools/smoke.cjs
+
+# The root filesystem is read-only at run time, so every place node or npm write
+# to must be a mounted volume: the npm cache and the global prefix live under
+# /scratch (wiped with the scratch volume, which is fine for a cache), $HOME is
+# already /data/hermes. /opt/node-tools is sealed (root-owned) and reached from
+# any working directory through NODE_PATH — this covers CommonJS `require()`
+# only; ES module `import` ignores NODE_PATH, so an .mjs script imports these
+# packages by absolute path or through `createRequire` (README.md).
+ENV PATH=/opt/node/bin:/scratch/npm-global/bin:$PATH \
+    NODE_TOOLS_DIR=/opt/node-tools \
+    NODE_PATH=/opt/node-tools/node_modules:/scratch/npm-global/lib/node_modules \
+    NPM_CONFIG_CACHE=/scratch/npm-cache \
+    NPM_CONFIG_PREFIX=/scratch/npm-global \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_AUDIT=false
+
+USER 10001:10001
+
+# Build-time check, run as the runtime user in the finished stage (not in the
+# builder where everything is readable): every preinstalled package loads and
+# does a small real job (pptx written to a temp file, a Cyrillic text rendered
+# and re-encoded, a PDF built, pdfjs imported). Only /tmp is written to.
+RUN node /opt/node-tools/smoke.cjs && npm --version

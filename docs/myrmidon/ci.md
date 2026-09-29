@@ -258,6 +258,46 @@ Workflow [`myrmidon-image.yml`](../../.github/workflows/myrmidon-image.yml), job
 Сопровождающему: после первой публикации проверить видимость пакета
 `ghcr.io/itkadr-git/myrmidon` (Package settings) — новый пакет может оказаться закрытым.
 
+### Образ бота и его вариант с Node.js
+
+Workflow [`myrmidon-bot-image.yml`](../../.github/workflows/myrmidon-bot-image.yml) собирает
+из одного `docker/bot-runtime/Dockerfile` два образа, каждый своим job и с одинаковым
+условием публикации (только `push` в `main` и тег `myr-v*`; на PR образ собирается и
+проверяется, но не публикуется):
+
+- `ghcr.io/itkadr-git/myrmidon-hermes` — основной образ бота (стадия `runtime`), без Node.js;
+- `ghcr.io/itkadr-git/myrmidon-hermes-node` — вариант со стадией `runtime-node`: то же самое
+  плюс Node.js 22 LTS и набор пакетов для ботов, которые работают node-скриптами.
+
+Вариант **временный**: пока нет песочницы на каждую задачу, ботам, у которых работа в
+node-скриптах (презентации и документы, отрисовка схем и картинок), проще дать образ с
+Node.js, чем переписывать их инструменты. Использовать его нужно только там, где это
+действительно так; остальным ботам он не нужен и в списке разрешённых образов
+(`MYRMIDON_BOT_IMAGE_ALLOWLIST`) не нужен.
+
+Кому нужен вариант с Node.js (по инспекции инструкций и прогонов ботов; список ролей, не имён):
+
+| Роль бота | Что делает на node |
+|---|---|
+| дизайнер (`work-designer`) | сборка презентаций `pptxgenjs`, отрисовка макетов `@napi-rs/canvas`, склейка PDF `pdf-lib` |
+| маркетолог (`work-marketolog`) | презентации `pptxgenjs`, отрисовка и сверка картинок `@napi-rs/canvas`, чтение PDF `pdfjs-dist` |
+| основной бот направления (`work`) | презентации `pptxgenjs`, обработка картинок `sharp` |
+| ГИП (`work-gip`) | чтение PDF `pdfjs-dist`, картинки `sharp` |
+| режиссёр видео (`bbq-video-director`) | подготовка кадров `sharp` |
+| оператор (`bbq-operator`) | подготовка кадров `sharp` |
+
+Что стоит в образе (точные версии — `docker/bot-runtime/node-tools/package.json`, транзитивные
+зависимости закреплены `package-lock.json`): Node.js по закреплённой версии и sha256, npm,
+`pptxgenjs`, `@napi-rs/canvas`, `sharp`, `image-size`, `pdf-lib`, `pdfjs-dist`, шрифты
+Liberation и DejaVu (иначе кириллица на отрисованной схеме превращается в квадраты).
+Chromium, `docx`, OCR, ffmpeg и офисные утилиты в образ не входят. Подробности, пути записи и
+ограничения — в `docker/bot-runtime/README.md`, раздел «Variant with Node.js».
+
+Проверки: на PR образ собирается и загружается локально в раннер; сборка сама запускает
+`smoke.cjs` от пользователя `10001` (пакеты загружаются и делают реальную работу), а job
+повторяет это на read-only корне с `tmpfs` вместо томов и проверяет, что npm пишет только
+в `/scratch`.
+
 ## Доказательство: проверки краснеют
 
 Черновой PR [#73](https://github.com/itkadr-git/myrmidon/pull/73) «[proof, do not merge]»

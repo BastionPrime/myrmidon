@@ -590,12 +590,88 @@ jobs:
           node scripts/myrmidon/plugin-compat/install.mjs --work "$RUNNER_TEMP/plugin-compat"
           pnpm --filter @paperclipai/server exec tsx ../scripts/myrmidon/plugin-compat/check.ts --work "$RUNNER_TEMP/plugin-compat"
 
+  dockergate:
+    # tools/dockergate (the allowlisting Docker proxy for the bot-container
+    # driver): gofmt, go vet, the unit tests, and the contract with the driver
+    # (spec: the fixtures are emitted afresh from the TypeScript of this commit
+    # and the Go tests run against them). Every tier: it takes about two
+    # minutes and a red dockergate must not merge. The image itself is built by
+    # myrmidon-dockergate.yml. See docs/myrmidon/dockergate.md.
+    name: dockergate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GO_IMAGE: golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: go.mod has no requirements (stdlib only)
+        run: |
+          set -euo pipefail
+          if grep -Eq '^\s*require\b' tools/dockergate/go.mod || [ -e tools/dockergate/go.sum ]; then
+            echo "::error::tools/dockergate must depend on the standard library only"
+            exit 1
+          fi
+
+      - name: gofmt, go vet, go test (checked-in fixtures)
+        run: |
+          set -euo pipefail
+          docker run --rm --network none -v "$PWD/tools/dockergate:/src" -w /src \
+            -e GOFLAGS=-mod=mod -e GOTOOLCHAIN=local -e GOCACHE=/tmp/gocache "$GO_IMAGE" sh -euc '
+              out="$(gofmt -l .)"
+              if [ -n "$out" ]; then echo "gofmt: $out"; exit 1; fi
+              go vet ./...
+              go test -count=1 ./...
+            '
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Locate pnpm store
+        id: pnpm_store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store (read only)
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm_store.outputs.path }}
+          key: myr-pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: myr-pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Contract with the driver (fixtures emitted from this commit)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/dockergate-contract"
+          rm -rf "$out" && mkdir -p "$out"
+          pnpm --filter @paperclipai/server exec tsx ../tools/dockergate/contract/emit-fixtures.ts "$out"
+          # The static fixtures must equal the checked-in ones; traffic.json
+          # carries wall-clock mtimes and is only replayed, not compared.
+          diff -r -x traffic.json tools/dockergate/contract/testdata "$out"
+          docker run --rm --network none -v "$PWD/tools/dockergate:/src" -v "$out:/contract:ro" -w /src \
+            -e GOFLAGS=-mod=mod -e GOTOOLCHAIN=local -e GOCACHE=/tmp/gocache \
+            -e DOCKERGATE_CONTRACT_DIR=/contract "$GO_IMAGE" go test -count=1 ./...
+
   ci-result:
     # Single stable name for the ruleset. Lanes the plan did not need are
     # skipped; any failure, or a skip without a successful plan, fails it.
     name: CI result
     if: ${{ !cancelled() }}
-    needs: [plan, typecheck, build, tests-affected, tests, tests-other, tests-runner, checks]
+    needs: [plan, typecheck, build, tests-affected, tests, tests-other, tests-runner, checks, dockergate]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

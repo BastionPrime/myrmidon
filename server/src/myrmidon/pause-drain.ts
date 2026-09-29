@@ -132,6 +132,53 @@ const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as 
 const WAKEABLE_ISSUE_STATUSES = ["todo", "in_progress"] as const;
 const RESUME_WAKE_IDEMPOTENCY_PREFIX = "pause_resume";
 
+/**
+ * Resume wakes are issued in batches instead of one burst.
+ *
+ * Lifting an operator pause used to wake every stranded issue of that agent
+ * in a single tight loop. A fleet-wide resume after a deploy or a long night
+ * therefore put the whole stranded backlog of every resumed agent into the
+ * wake queue at the same instant — a wake burst big enough to take the board
+ * down. Batching caps how many wakes one resume (and so one board moment)
+ * can create at once, and the pause between batches spreads the rest out.
+ *
+ * `MYRMIDON_PAUSE_RESUME_WAKE_BATCH` — how many stranded issues one batch
+ * wakes (default 5). `0` is the explicit escape hatch back to the previous
+ * behavior: one batch, no cap.
+ * `MYRMIDON_PAUSE_RESUME_WAKE_BATCH_PAUSE_MS` — how long to wait between
+ * batches (default 1000 ms). `0` keeps the batching but removes the wait.
+ *
+ * One batch is also what makes the resume HTTP response bounded: the route
+ * awaits this function, so a resume with N stranded issues now takes about
+ * (N / batch - 1) x pause milliseconds before it answers.
+ */
+export const PAUSE_RESUME_WAKE_BATCH_ENV = "MYRMIDON_PAUSE_RESUME_WAKE_BATCH";
+export const PAUSE_RESUME_WAKE_BATCH_PAUSE_MS_ENV = "MYRMIDON_PAUSE_RESUME_WAKE_BATCH_PAUSE_MS";
+export const PAUSE_RESUME_WAKE_BATCH_DEFAULT = 5;
+export const PAUSE_RESUME_WAKE_BATCH_PAUSE_MS_DEFAULT = 1000;
+
+function readNonNegativeInt(raw: string | undefined, fallback: number): number {
+  const text = raw?.trim();
+  if (!text) return fallback;
+  if (!/^\d+$/.test(text)) return fallback;
+  const parsed = Number(text);
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
+}
+
+/** Batch size for resume wakes; `0` means "no batching, previous behavior". */
+export function readResumeWakeBatchSize(env: NodeJS.ProcessEnv = process.env): number {
+  return readNonNegativeInt(env[PAUSE_RESUME_WAKE_BATCH_ENV], PAUSE_RESUME_WAKE_BATCH_DEFAULT);
+}
+
+/** Pause between resume-wake batches in milliseconds; `0` removes the wait. */
+export function readResumeWakeBatchPauseMs(env: NodeJS.ProcessEnv = process.env): number {
+  return readNonNegativeInt(env[PAUSE_RESUME_WAKE_BATCH_PAUSE_MS_ENV], PAUSE_RESUME_WAKE_BATCH_PAUSE_MS_DEFAULT);
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface ResumeAgentAfterPauseDeps {
   db: Db;
   /** Existing queued-run promotion for one agent (heartbeat.ts). */
@@ -149,6 +196,11 @@ export interface ResumeAgentAfterPauseDeps {
       contextSnapshot?: Record<string, unknown>;
     },
   ) => Promise<unknown>;
+  /**
+   * Wait between wake batches. Injected so a caller (or a test) can replace
+   * the real timer; absent, the real one is used.
+   */
+  sleepMs?: (ms: number) => Promise<void>;
 }
 
 export interface ResumeAgentAfterPauseResult {
@@ -175,6 +227,11 @@ export interface ResumeAgentAfterPauseResult {
  * no longer stranded and leaves it alone. The idempotency key handed to
  * `enqueueWakeup` is for tracing only; it is not a uniqueness constraint the
  * database enforces for this prefix.
+ *
+ * The stranded wakes are issued in batches (at most
+ * `MYRMIDON_PAUSE_RESUME_WAKE_BATCH` issues, with
+ * `MYRMIDON_PAUSE_RESUME_WAKE_BATCH_PAUSE_MS` between batches) instead of one
+ * burst: see the batch settings above for why.
  */
 export async function resumeAgentAfterPause(
   deps: ResumeAgentAfterPauseDeps,
@@ -219,66 +276,83 @@ export async function resumeAgentAfterPause(
       .filter((id): id is string => Boolean(id)),
   );
 
+  const batchSize = readResumeWakeBatchSize();
+  const batchPauseMs = readResumeWakeBatchPauseMs();
+  const waitBetweenBatches = deps.sleepMs ?? sleepMs;
+  const strandedIssues = assigned.filter((issue) => !liveIssueIds.has(issue.id));
+  const step = batchSize > 0 ? batchSize : Math.max(strandedIssues.length, 1);
+
   let strandedIssuesWoken = 0;
-  for (const issue of assigned) {
-    if (liveIssueIds.has(issue.id)) continue;
-    const idempotencyKey = `${RESUME_WAKE_IDEMPOTENCY_PREFIX}:${issue.id}`;
-    // myrmidon(L1): carries the shared infra-interrupt retry budget forward
-    // across this pause/resume cycle. This wake creates a brand-new
-    // heartbeat run rather than a scheduled retry of the run the pause
-    // cancelled, so heartbeat_runs.scheduledRetryAttempt (which defaults to
-    // 0 on the new row) cannot carry the budget on its own -- read it off
-    // the stranded run this issue is actually resuming from instead, and
-    // carry it into the new run's contextSnapshot (infra-interrupts.ts's
-    // infraInterruptAttemptCount reads it back from there). Once enough
-    // cycles have gone by, the carried count reaches the shared budget and
-    // shouldSkipReconciliationForInfraInterrupt stops suppressing the
-    // vendor's hold.
-    const priorRun = await deps.db
-      .select({
-        errorCode: heartbeatRuns.errorCode,
-        scheduledRetryAttempt: heartbeatRuns.scheduledRetryAttempt,
-        scheduledRetryReason: heartbeatRuns.scheduledRetryReason,
-        contextSnapshot: heartbeatRuns.contextSnapshot,
-      })
-      .from(heartbeatRuns)
-      .where(
-        and(
-          eq(heartbeatRuns.companyId, companyId),
-          eq(heartbeatRuns.agentId, agentId),
-          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
-        ),
-      )
-      .orderBy(desc(heartbeatRuns.createdAt))
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
-    const infraInterruptAttempt =
-      priorRun && isInfraInterruptErrorCode(priorRun.errorCode)
-        ? infraInterruptAttemptCount(priorRun) + 1
-        : null;
-    try {
-      await deps.enqueueWakeup(agentId, {
-        source: "automation",
-        triggerDetail: "system",
-        reason: "pause_resume",
-        idempotencyKey,
-        requestedByActorType: "system",
-        requestedByActorId: "pause_resume",
-        contextSnapshot: {
-          issueId: issue.id,
-          taskKey: issue.id,
-          resumeIntent: true,
-          ...(infraInterruptAttempt !== null
-            ? { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: infraInterruptAttempt }
-            : {}),
-        },
-      });
-      strandedIssuesWoken += 1;
-    } catch (err) {
-      // Best-effort: one issue that a concurrent resume, wakeup coalescing or
-      // an execution blocker rejects is not a reason to fail the others.
-      logger.warn({ err, agentId, issueId: issue.id }, "pause-resume wake failed for a stranded assigned issue");
+  let wakeBatches = 0;
+  for (let offset = 0; offset < strandedIssues.length; offset += step) {
+    if (offset > 0 && batchPauseMs > 0) await waitBetweenBatches(batchPauseMs);
+    wakeBatches += 1;
+    for (const issue of strandedIssues.slice(offset, offset + step)) {
+      const idempotencyKey = `${RESUME_WAKE_IDEMPOTENCY_PREFIX}:${issue.id}`;
+      // myrmidon(L1): carries the shared infra-interrupt retry budget forward
+      // across this pause/resume cycle. This wake creates a brand-new
+      // heartbeat run rather than a scheduled retry of the run the pause
+      // cancelled, so heartbeat_runs.scheduledRetryAttempt (which defaults to
+      // 0 on the new row) cannot carry the budget on its own -- read it off
+      // the stranded run this issue is actually resuming from instead, and
+      // carry it into the new run's contextSnapshot (infra-interrupts.ts's
+      // infraInterruptAttemptCount reads it back from there). Once enough
+      // cycles have gone by, the carried count reaches the shared budget and
+      // shouldSkipReconciliationForInfraInterrupt stops suppressing the
+      // vendor's hold.
+      const priorRun = await deps.db
+        .select({
+          errorCode: heartbeatRuns.errorCode,
+          scheduledRetryAttempt: heartbeatRuns.scheduledRetryAttempt,
+          scheduledRetryReason: heartbeatRuns.scheduledRetryReason,
+          contextSnapshot: heartbeatRuns.contextSnapshot,
+        })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.companyId, companyId),
+            eq(heartbeatRuns.agentId, agentId),
+            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+          ),
+        )
+        .orderBy(desc(heartbeatRuns.createdAt))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      const infraInterruptAttempt =
+        priorRun && isInfraInterruptErrorCode(priorRun.errorCode)
+          ? infraInterruptAttemptCount(priorRun) + 1
+          : null;
+      try {
+        await deps.enqueueWakeup(agentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "pause_resume",
+          idempotencyKey,
+          requestedByActorType: "system",
+          requestedByActorId: "pause_resume",
+          contextSnapshot: {
+            issueId: issue.id,
+            taskKey: issue.id,
+            resumeIntent: true,
+            ...(infraInterruptAttempt !== null
+              ? { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: infraInterruptAttempt }
+              : {}),
+          },
+        });
+        strandedIssuesWoken += 1;
+      } catch (err) {
+        // Best-effort: one issue that a concurrent resume, wakeup coalescing or
+        // an execution blocker rejects is not a reason to fail the others.
+        logger.warn({ err, agentId, issueId: issue.id }, "pause-resume wake failed for a stranded assigned issue");
+      }
     }
+  }
+
+  if (wakeBatches > 1) {
+    logger.info(
+      { agentId, strandedIssues: strandedIssues.length, batchSize: step, pauseMs: batchPauseMs, batches: wakeBatches },
+      "pause-resume woke stranded issues in batches",
+    );
   }
 
   return { queuedRunsPromoted: promoted.length, strandedIssuesWoken };

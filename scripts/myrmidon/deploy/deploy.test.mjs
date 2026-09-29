@@ -270,6 +270,69 @@ describe("deploy.sh", () => {
     assert.match(out, /still in progress/);
     assert.equal(read(sb.override), before);
   });
+
+  // myrmidon(DEPLOY-TIMEOUT-EXIT): a drain timeout must not strand the board in
+  // maintenance mode. deploy.sh enters maintenance before it waits for the runs
+  // to finish; when the wait fails, it must lift maintenance again before it
+  // aborts, and the image must not have changed.
+  it("leaves maintenance when the drain times out (DEPLOY-TIMEOUT-EXIT)", () => {
+    const sb = sandbox();
+    fs.appendFileSync(sb.config, "RUNNING_RUNS_COMMAND='echo 3'\nRUNS_WAIT_TIMEOUT_SEC=0\n");
+    const before = read(sb.override);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.notEqual(code, 0);
+    assert.match(out, /still in progress/);
+    assert.match(out, /lifting maintenance/);
+    // enter, then exit again on the failed drain — the board is not left in maintenance.
+    assert.equal(maintenance(sb), "enter\nexit\n");
+    assert.equal(read(sb.override), before);
+    assert.doesNotMatch(calls(sb), /up -d/);
+  });
+
+  // myrmidon(DEPLOY-TIMEOUT-EXIT): the same holds when the run counter itself
+  // fails — every wait_for_idle_runs failure path lifts maintenance before the
+  // abort.
+  it("leaves maintenance when running runs cannot be counted (DEPLOY-TIMEOUT-EXIT)", () => {
+    const sb = sandbox();
+    fs.appendFileSync(sb.config, "RUNS_WAIT_TIMEOUT_SEC=0\nRUNNING_RUNS_COMMAND='exit 3'\n");
+    const before = read(sb.override);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.notEqual(code, 0);
+    assert.match(out, /cannot count running runs/);
+    assert.match(out, /lifting maintenance/);
+    assert.equal(maintenance(sb), "enter\nexit\n");
+    assert.equal(read(sb.override), before);
+  });
+
+  // myrmidon(DEPLOY-TIMEOUT-EXIT): a maintenance exit that itself fails (the
+  // board may already be out of maintenance) is reported, not fatal — no double
+  // failure, the abort reason stays the deploy failure. The final message must
+  // not claim maintenance was lifted when the lift failed.
+  it("reports a failed maintenance exit but still aborts without changing the image", () => {
+    const sb = sandbox();
+    fs.appendFileSync(sb.config, "RUNS_WAIT_TIMEOUT_SEC=0\n");
+    fs.appendFileSync(sb.config, `RUNNING_RUNS_COMMAND='echo 3'\n`);
+    fs.appendFileSync(sb.config, `MAINTENANCE_EXIT_COMMAND='echo exit-failed; exit 7'\n`);
+    const before = read(sb.override);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.notEqual(code, 0);
+    assert.match(out, /still in progress/);
+    assert.match(out, /WARNING: could not lift maintenance/);
+    // The final line must not claim the lift worked when it failed.
+    assert.doesNotMatch(out, /maintenance was lifted/);
+    assert.match(out, /maintenance lift failed/);
+    assert.equal(read(sb.override), before);
+    assert.doesNotMatch(calls(sb), /up -d/);
+  });
+
+  // myrmidon(DEPLOY-TIMEOUT-EXIT): dry-run prints the new drain-timeout
+  // behaviour in the plan, so operators see the promise before they run it.
+  it("dry run says the drain timeout lifts maintenance", () => {
+    const sb = sandbox();
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW, "--dry-run"]);
+    assert.equal(code, 0, out);
+    assert.match(out, /on a drain timeout maintenance is lifted/);
+  });
 });
 
 describe("deploy.sh: only CI images from the registry", () => {
