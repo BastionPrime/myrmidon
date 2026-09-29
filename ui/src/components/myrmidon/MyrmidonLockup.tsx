@@ -1,4 +1,4 @@
-// myrmidon(B1a): brand lockup (ant mark + wordmark), replacing PaperclipLockup
+// myrmidon(B1a): brand lockup (ant mark + wordmark), replacing the vendor lockup
 // on the sign-in screen. Source SVGs are the owner-approved brand-v2 export,
 // copied as-is into ui/public/brand/myrmidon/ — see that directory's README.
 // Two fixed-color exports (navy on light, white on dark) are swapped with the

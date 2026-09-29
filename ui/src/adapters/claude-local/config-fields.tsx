@@ -94,7 +94,7 @@ export function ClaudeLocalAdvancedFields({
         The execution engine picks which binary runs on the execution host, and
         the ACP sub-fields below name host paths. The platform-managed
         environment owns both, so the managed-sandbox-only policy hides them,
-        the same way `runnerManaged` hides them for the Paperclip Runner.
+        the same way `runnerManaged` hides them for the Myrmidon Runner.
       */}
       {!managedSandboxOnly && <Field label="Execution engine" hint="Default uses ACP. If ACP is unavailable, the run fails with a setup error. Choose CLI explicitly to use it.">
         <select

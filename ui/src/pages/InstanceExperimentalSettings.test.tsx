@@ -65,7 +65,7 @@ const SUMMARIES_TOGGLE_SELECTOR =
 const STATUS_CARDS_TOGGLE_SELECTOR =
   'button[aria-label="Toggle status cards experimental setting"]';
 const PAPERCLIP_RUNNER_TOGGLE_SELECTOR =
-  'button[aria-label="Toggle Paperclip Runner experimental setting"]';
+  'button[aria-label="Toggle Myrmidon Runner experimental setting"]';
 
 function defaultExperimentalSettings(): InstanceExperimentalSettingsPayload {
   return {
@@ -297,7 +297,7 @@ describe("InstanceExperimentalSettings — Conference Room Chat card (PAP-11233)
   it("keeps Paperclip Runner default-off and exposes an explicit opt-in", async () => {
     await renderPage();
 
-    expect(container.textContent).toContain("Paperclip Runner");
+    expect(container.textContent).toContain("Myrmidon Runner");
     expect(container.textContent).toContain("Onboarding continues to use legacy adapters");
     const toggle = container.querySelector<HTMLButtonElement>(
       PAPERCLIP_RUNNER_TOGGLE_SELECTOR,

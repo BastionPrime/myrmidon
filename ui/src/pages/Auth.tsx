@@ -5,7 +5,6 @@ import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
 import { getRememberedInvitePath } from "../lib/invite-memory";
 import { Button } from "@/components/ui/button";
-import { AsciiArtAnimation } from "@/components/AsciiArtAnimation";
 import { PaperclipLoading } from "@/components/AnimatedPaperclipIcon";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { MyrmidonLockup } from "@/components/myrmidon/MyrmidonLockup"; // myrmidon(B1a)
@@ -85,8 +84,8 @@ export function AuthPage() {
       <div className="absolute top-4 right-4 z-10">
         <ThemeToggle />
       </div>
-      {/* Left half — form */}
-      <div className="w-full md:w-1/2 flex flex-col overflow-y-auto">
+      {/* myrmidon(B1a): the vendor's right-hand ASCII paperclip animation pane is gone; the form is centered on a plain background. */}
+      <div className="w-full flex flex-col overflow-y-auto">
         <div className="w-full max-w-md mx-auto my-auto px-8 py-12">
           <div className="mb-8">
             <MyrmidonLockup className="h-6 w-auto" />
@@ -199,11 +198,6 @@ export function AuthPage() {
             </button>
           </div>
         </div>
-      </div>
-
-      {/* Right half — ASCII art animation (hidden on mobile) */}
-      <div className="hidden md:block w-1/2 overflow-hidden">
-        <AsciiArtAnimation />
       </div>
     </div>
   );

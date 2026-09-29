@@ -260,7 +260,7 @@ for (const journey of [
         base + prefix + "/company/settings/instance/experimental",
       );
       const nativeRunnerToggle = page.getByRole("switch", {
-        name: "Toggle Paperclip Runner experimental setting",
+        name: "Toggle Myrmidon Runner experimental setting",
       });
       // Fresh instances may already enable the native runner. Configure the
       // desired state instead of blindly toggling the current default off.
@@ -276,7 +276,7 @@ for (const journey of [
         .toBe(true);
       await page.goto(base + prefix + `/agents/${agent.id}/configuration`);
       await page.getByRole("button", { name: "Codex", exact: true }).click();
-      await page.getByRole("button", { name: /Paperclip Runner/ }).click();
+      await page.getByRole("button", { name: /Myrmidon Runner/ }).click();
       await page
         .getByRole("button", { name: /^Save(?: changes)?$/ })
         .first()

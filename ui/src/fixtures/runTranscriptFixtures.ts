@@ -53,7 +53,7 @@ export const runTranscriptFixtureEntries: TranscriptEntry[] = [
     toolUseId: "item_1",
     input: {
       command: "sed -n '1,220p' doc/GOAL.md",
-      cwd: "/workspace/paperclip",
+      cwd: "/workspace/myrmidon",
     },
   },
   {
@@ -63,7 +63,7 @@ export const runTranscriptFixtureEntries: TranscriptEntry[] = [
     toolUseId: "item_2",
     input: {
       command: "sed -n '1,320p' doc/SPEC-implementation.md",
-      cwd: "/workspace/paperclip",
+      cwd: "/workspace/myrmidon",
     },
   },
   {
@@ -97,7 +97,7 @@ export const runTranscriptFixtureEntries: TranscriptEntry[] = [
     toolUseId: "item_3",
     input: {
       command: "rg -n \"LiveRunWidget|ActiveAgentsPanel|buildTranscript|TranscriptEntry|transcript\" ui/src server/src packages",
-      cwd: "/workspace/paperclip",
+      cwd: "/workspace/myrmidon",
     },
   },
   {
@@ -129,7 +129,7 @@ export const runTranscriptFixtureEntries: TranscriptEntry[] = [
     toolUseId: "item_4",
     input: {
       command: "pnpm -r typecheck",
-      cwd: "/workspace/paperclip",
+      cwd: "/workspace/myrmidon",
     },
   },
   {
@@ -151,7 +151,7 @@ export const runTranscriptFixtureEntries: TranscriptEntry[] = [
     toolUseId: "item_5",
     input: {
       command: "pnpm test:run",
-      cwd: "/workspace/paperclip",
+      cwd: "/workspace/myrmidon",
     },
   },
   {
@@ -178,7 +178,7 @@ export const runTranscriptFixtureEntries: TranscriptEntry[] = [
     toolUseId: "item_6",
     input: {
       command: "pnpm build",
-      cwd: "/workspace/paperclip",
+      cwd: "/workspace/myrmidon",
     },
   },
   {
@@ -195,7 +195,7 @@ export const runTranscriptFixtureEntries: TranscriptEntry[] = [
     toolUseId: "item_7",
     input: {
       command: "git commit -m \"Humanize run transcripts across run detail and live surfaces\"",
-      cwd: "/workspace/paperclip",
+      cwd: "/workspace/myrmidon",
     },
   },
   {

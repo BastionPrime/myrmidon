@@ -1998,7 +1998,7 @@ function OnboardingWizardInner({
     if (adapterType === "paperclip_runner") {
       setAdapterType("claude_local");
       setModel("");
-      setError("Paperclip Runner is not available during onboarding. Choose a legacy adapter.");
+      setError("Myrmidon Runner is not available during onboarding. Choose a legacy adapter.");
       return;
     }
     if (createdAgentId) {

@@ -1034,7 +1034,7 @@ export function ConnectionSetupFlow({
     onError: (error) => {
       closeEnrollmentPopup();
       setConnectorEnrollmentError(
-        error instanceof Error ? error.message : "Paperclip couldn’t reach Paperclip Cloud. Try again.",
+        error instanceof Error ? error.message : "Myrmidon couldn’t reach Paperclip Cloud. Try again.",
       );
     },
   });

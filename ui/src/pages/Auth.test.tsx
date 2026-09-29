@@ -20,12 +20,6 @@ vi.mock("../api/auth", () => ({
   },
 }));
 
-// The ASCII art animation drives a canvas/requestAnimationFrame loop that adds
-// nothing to these assertions, so stub it out.
-vi.mock("@/components/AsciiArtAnimation", () => ({
-  AsciiArtAnimation: () => null,
-}));
-
 // The auth page renders a ThemeToggle, which reads ThemeContext. The provider
 // lives in main.tsx (above the router), so mock the hook here the same way
 // SidebarAccountMenu.test.tsx does.

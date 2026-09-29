@@ -3,15 +3,17 @@
 // imports for user-facing copy (the app-connection catalog and the OAuth/MCP
 // rejection-message helpers), for "Paperclip" mentions that should read
 // "Myrmidon" instead, and checks that the shipped page/manifest advertise the
-// new name. Named references to the real upstream vendor and its actual
-// external products/services (Paperclip Cloud, Paperclip Labs, Paperclip EE
-// / Enterprise, the vendor's paperclip.ing domain, the untouched
-// `paperclip_runner` adapter, PAPERCLIP_* env vars, @paperclipai/* packages,
-// the lucide-react "Paperclip" attachment icon, and the MIT attribution line)
-// are not renamed — see docs/myrmidon/CONVENTIONS.md #8/#9 and this PR's
-// description for why each is excluded.
+// new name and that no paperclip artwork (loading glyph, login-screen ASCII
+// sprites, export-README links to the vendor site) is rendered any more.
+// The allowlist is deliberately narrow: only the vendor's real external
+// products/services (Paperclip Cloud, Paperclip Labs, Paperclip EE /
+// Enterprise), wire-protocol identifiers (X-Paperclip-* headers, PAPERCLIP_*
+// env vars, @paperclipai/* packages, the lucide-react "Paperclip" attachment
+// icon) and the MIT attribution line. Product parts we own and show to a
+// human ("Myrmidon Runner", "Myrmidon Computer", "Myrmidon-managed") are NOT
+// exempt. See docs/myrmidon/CONVENTIONS.md #8/#9.
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,23 +21,16 @@ const UI_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.resolve(UI_SRC, "..", "..");
 const APP_DEFINITIONS_DIR = path.join(REPO_ROOT, "packages", "shared", "src", "app-definitions");
 
-// "Paperclip-managed" is deliberately NOT exempted: every instance of that
-// exact phrase in ui/src is our own copy (an internal management relationship,
-// not the external "Paperclip Cloud"/"Paperclip EE" products below) and is
-// renamed to "Myrmidon-managed" throughout this PR — see Connections.tsx.
-const WORD_PATTERN = /\bPaperclip\b(?!\s+Cloud|-Cloud|\s+Labs|\s+EE\b|\s+Enterprise|\s+Computer|\s+Runner|\s+runner)/;
+// Match-level exemptions: the vendor's real external products. Everything else
+// that reads "Paperclip" as a word in a user-visible string is a violation,
+// including "Paperclip Runner", "Paperclip Computer" and "Paperclip-managed" —
+// those name parts of our own product and read "Myrmidon ..." instead.
+const WORD_PATTERN = /\bPaperclip\b(?!\s+Cloud|-Cloud|\s+Labs|\s+EE\b|\s+Enterprise)/;
 
+// Line-level exemptions are limited to text that cannot be renamed at all.
 const LINE_ALLOW_SUBSTR = [
   "Based on Paperclip", // required MIT attribution, see docs/myrmidon/CONVENTIONS.md #9
-  "X-Paperclip",
-  "Paperclip Cloud",
-  "Paperclip Labs",
-  "Paperclip EE",
-  "Paperclip Enterprise",
-  "Paperclip Computer",
-  "Paperclip Runner",
-  "Paperclip runner",
-  "@paperclipai/",
+  "X-Paperclip", // HTTP header names: a wire-protocol identifier, not visible copy
 ];
 
 // A raw source line can contain a JS string-escape sequence (\n, \t, \r, \"
@@ -54,31 +49,6 @@ const LUCIDE_IMPORT_LINE = /from\s*["']lucide-react["']/;
 const JSX_ICON_USE = /<Paperclip[\s/>]/;
 const IMPORT_LIST_BARE = /^\s*Paperclip,?\s*(\/\/.*)?$/;
 const BARE_ICON_REF = /(?:^|[^\w])icon:\s*$/i;
-
-// Files that intentionally still say "Paperclip": the unused legacy lockup
-// component kept for minimal vendor diff (no longer imported anywhere, see
-// Auth.tsx), the office-paperclip-themed loading-spinner whimsy word list /
-// animated icon and the login-page ASCII sprite animation (all three need
-// real redesign under the ant mark, not a text substitution — see the known
-// gap logged in docs/myrmidon/DIVERGENCE.md's "Известные пробелы" table), and
-// the `paperclip_runner` adapter's own event labels — that adapter's display
-// name ("Paperclip Runner") is a code identifier we don't rename (see the
-// `Paperclip Runner` allowlist entry below), so its internal per-event
-// fallback strings describing *that adapter's own* events stay consistent
-// with it.
-const ALLOWLISTED_FILES = new Set(
-  [
-    "components/PaperclipLockup.tsx",
-    "components/AnimatedPaperclipIcon.tsx",
-    "components/task-chat/status-whimsy.ts",
-    "adapters/paperclip-runner/index.ts",
-  ].map((p) => path.join(UI_SRC, p)),
-);
-
-// AsciiArtAnimation.tsx has no literal "Paperclip" text (its sprites are pure
-// box-drawing/geometry), so it can't be caught by this word-based scan at
-// all; it's covered by the same DIVERGENCE.md known-gap entry as the files
-// above instead of an allowlist entry here.
 
 function isCommentLine(stripped: string): boolean {
   return stripped.startsWith("//") || stripped.startsWith("*") || stripped.startsWith("/*");
@@ -103,7 +73,6 @@ type Violation = { file: string; line: number; text: string };
 function findViolationsIn(files: string[], relativeTo: string): Violation[] {
   const violations: Violation[] = [];
   for (const fp of files) {
-    if (ALLOWLISTED_FILES.has(fp)) continue;
     const lines = readFileSync(fp, "utf-8").split("\n");
     const fileText = lines.join("\n");
     const lucideIcon = /import\s*\{[^}]*\bPaperclip\b[^}]*\}\s*from\s*["']lucide-react["']/s.test(fileText);
@@ -187,5 +156,48 @@ describe("myrmidon(B1a): shipped page and manifest advertise Myrmidon", () => {
     const manifest = JSON.parse(readFileSync(path.join(REPO_ROOT, "ui", "public", "site.webmanifest"), "utf-8"));
     expect(manifest.name).toBe("Myrmidon");
     expect(manifest.short_name).toBe("Myrmidon");
+  });
+});
+
+describe("myrmidon(B1a): no paperclip artwork is rendered", () => {
+  const productFiles = () =>
+    walk(UI_SRC, /\.(ts|tsx)$/).filter((fp) => !path.basename(fp).includes(".test."));
+
+  it("no product module renders the login-screen ASCII paperclip animation", () => {
+    // The vendor's AsciiArtAnimation draws drifting paperclip sprites. It must
+    // not be mounted anywhere a person sees (the sign-in screen used to).
+    const importers = productFiles()
+      .filter((fp) => path.basename(fp) !== "AsciiArtAnimation.tsx")
+      .filter((fp) => /from\s*["'][^"']*AsciiArtAnimation["']/.test(readFileSync(fp, "utf-8")))
+      .map((fp) => path.relative(UI_SRC, fp));
+    expect(importers).toEqual([]);
+  });
+
+  it("the paperclip thinking glyph is gone (the ant mark is used instead)", () => {
+    expect(existsSync(path.join(REPO_ROOT, "ui", "public", "paperclip-thinking.svg"))).toBe(false);
+    for (const rel of ["pages/BoardChat.tsx", "components/AnimatedPaperclipIcon.tsx"]) {
+      const source = readFileSync(path.join(UI_SRC, rel), "utf-8");
+      expect(source, rel).not.toContain("paperclip-thinking");
+      expect(source, rel).toContain("MyrmidonLoadingMark");
+    }
+    const loading = readFileSync(path.join(UI_SRC, "components", "AnimatedPaperclipIcon.tsx"), "utf-8");
+    expect(loading).not.toMatch(/<svg|<path/);
+    for (const asset of ["myrmidon-mark.svg", "myrmidon-mark-white.svg"]) {
+      expect(existsSync(path.join(REPO_ROOT, "ui", "public", "brand", "myrmidon", asset)), asset).toBe(true);
+    }
+  });
+
+  it("the design-guide announcement preview image does not say paperclip", () => {
+    const svg = readFileSync(path.join(REPO_ROOT, "ui", "public", "announcement-preview.svg"), "utf-8");
+    expect(svg).not.toMatch(/paperclip/i);
+  });
+});
+
+describe("myrmidon(B1a): company export README names Myrmidon, not the upstream site", () => {
+  it("CompanyExport.tsx has no link to the upstream project site and signs as the exporting product", () => {
+    const source = readFileSync(path.join(UI_SRC, "pages", "CompanyExport.tsx"), "utf-8");
+    expect(source).not.toContain("paperclip.ing");
+    expect(source).toContain("Exported from ${PRODUCT_NAME}");
+    expect(source).toContain("UPSTREAM_ATTRIBUTION.text");
   });
 });

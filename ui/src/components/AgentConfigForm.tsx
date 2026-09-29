@@ -885,7 +885,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const inheritedEnvironmentLabel = instanceDefaultEnvironment
     ? environmentDisplayLabel(instanceDefaultEnvironment)
     : managedSandboxOnly
-      ? "Paperclip Computer"
+      ? "Myrmidon Computer"
       : "Local";
 
   const runnerProvider = adapterType === "paperclip_runner"

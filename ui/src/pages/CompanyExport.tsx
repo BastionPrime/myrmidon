@@ -444,7 +444,8 @@ function generateReadmeFromSelection(
 
   lines.push("## What's Inside");
   lines.push("");
-  lines.push("This is an [Agent Company](https://paperclip.ing) package.");
+  // myrmidon(B1a): plain text, no link to the upstream project site (see below).
+  lines.push("This is an Agent Company package.");
   lines.push("");
 
   const counts: Array<[string, number]> = [];
@@ -493,9 +494,7 @@ function generateReadmeFromSelection(
   lines.push("");
   // myrmidon(B1a): this file is exported for the recipient to read standalone,
   // so it names the exporting product (not the upstream project) and carries
-  // its own MIT attribution line rather than pointing to paperclip.ing as "us".
-  lines.push("See the [Agent Company format](https://paperclip.ing) for more information.");
-  lines.push("");
+  // the MIT attribution as its own line; no link to the upstream project site.
   lines.push("---");
   lines.push(`Exported from ${PRODUCT_NAME} on ${new Date().toISOString().split("T")[0]}`);
   lines.push(`[${UPSTREAM_ATTRIBUTION.text}](${UPSTREAM_ATTRIBUTION.href})`);

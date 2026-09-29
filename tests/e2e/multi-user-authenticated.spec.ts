@@ -90,9 +90,9 @@ function createBootstrapInvite() {
 
 async function signUp(page: Page, user: HumanUser) {
   await page.goto(`${BASE}/auth`);
-  await expect(page.getByRole("heading", { name: "Sign in to Paperclip" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to Myrmidon" })).toBeVisible();
   await page.getByRole("button", { name: "Create one" }).click();
-  await expect(page.getByRole("heading", { name: "Create your Paperclip account" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Create your Myrmidon account" })).toBeVisible();
   await page.getByLabel("Name").fill(user.name);
   await page.getByLabel("Email").fill(user.email);
   await page.getByLabel("Password").fill(user.password);
@@ -137,7 +137,7 @@ async function signUpFromInvite(page: Page, inviteUrl: string, user: HumanUser) 
   await expect(page.getByText("Sign in or create an account before submitting a human join request.")).toBeVisible();
   await page.getByRole("link", { name: "Sign in / Create account" }).click();
   await expect(page).toHaveURL(/\/auth\?next=/);
-  await expect(page.getByRole("heading", { name: "Sign in to Paperclip" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to Myrmidon" })).toBeVisible();
   await page.getByRole("button", { name: "Create one" }).click();
   await page.getByLabel("Name").fill(user.name);
   await page.getByLabel("Email").fill(user.email);

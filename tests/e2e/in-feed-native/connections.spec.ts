@@ -55,11 +55,11 @@ for (const journey of ['connect', 'decline', 'restart'] as const) test(`fresh na
     await page.goto(base + prefix + '/dashboard');
     await expect(page.getByText('No runs yet').first()).toBeVisible();
     await page.goto(base + prefix + '/company/settings/instance/experimental');
-    await page.getByRole('switch', { name: 'Toggle Paperclip Runner experimental setting' }).click();
+    await page.getByRole('switch', { name: 'Toggle Myrmidon Runner experimental setting' }).click();
     await expect.poll(async () => (await api('/instance/settings/experimental')).enableNativeRunner).toBe(true);
     await page.goto(base + prefix + `/agents/${agent.id}/configuration`);
     await page.getByRole('button', { name: 'Codex', exact: true }).click();
-    await page.getByRole('button', { name: /Paperclip Runner/ }).click();
+    await page.getByRole('button', { name: /Myrmidon Runner/ }).click();
     await page.getByRole('button', { name: 'Save', exact: true }).first().click();
     await expect.poll(async () => (await api(`/agents/${agent.id}`)).adapterType).toBe('paperclip_runner');
     const nativeAgent = await api(`/agents/${agent.id}`);
