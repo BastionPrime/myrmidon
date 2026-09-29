@@ -330,6 +330,11 @@ import {
   type IssueThreadInteractionResolverRestriction,
 } from "../services/issue-thread-interaction-resolution.js";
 import { resolveSelectedSuggestedTasks } from "../services/issue-thread-interactions.js";
+// myrmidon(O1): transactional outbox for accept-continuation wakes
+import {
+  interactionContinuationOutboxMutationOptions,
+  interactionContinuationOutboxService,
+} from "../myrmidon/interaction-continuation-outbox.js";
 // myrmidon(P5): checkout run-context gate
 import { assertRunHasTaskSourceContext } from "../myrmidon/issue-checkout-guard.js";
 // myrmidon(L5): issue write lock only blocks while the assignee's run is live
@@ -2772,6 +2777,15 @@ async function queueResolvedInteractionContinuationWakeup(input: {
           agentId: input.issue.assigneeAgentId,
         },
         "failed to wake assignee on issue interaction resolution",
+      ),
+    )
+    // myrmidon(O1): the accept transaction persisted a continuation intent.
+    // Retire it once the wake above is durable, or re-dispatch it (the sweep
+    // in index.ts keeps retrying) when that wake was lost. Never throws.
+    .then(() =>
+      interactionContinuationOutboxService(input.db, input.heartbeat).tryDeliver(
+        input.interaction.id,
+        input.interaction.status,
       ),
     );
 }
@@ -16063,7 +16077,20 @@ export function issueRoutes(
           resolverPolicyRestriction:
             resolutionAuthorization.resolverPolicyRestriction,
           suggestedTaskEffectsAuthorized,
-        });
+        },
+        // myrmidon(O1): persist the continuation wake intent in the accept
+        // transaction so a lost fire-and-forget wake can be re-sent
+        interactionContinuationOutboxMutationOptions({
+          issue,
+          interaction: {
+            id: interactionId,
+            kind: current.kind,
+            status: "accepted",
+            continuationPolicy: current.continuationPolicy,
+            sourceCommentId: current.sourceCommentId,
+            sourceRunId: current.sourceRunId,
+          },
+        }));
       const toolAction =
         interaction.payload && typeof interaction.payload === "object"
           ? (
