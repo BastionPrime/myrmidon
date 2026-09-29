@@ -16,7 +16,10 @@ Docker socket, no host mounts, and no media tools.
 
 ## What's in the image
 
-- Base: `python:3.13-slim`.
+- Base: `python:3.11-slim` (both Python stages — hermes resolves its
+  venv Python to 3.11 via `.python-version`, and the venv symlink must
+  stay valid in the runtime stage; see the builder-stage comment in the
+  Dockerfile for the full rationale).
 - `hermes-agent`, pinned to a git tag (`HERMES_VERSION`/`HERMES_GIT_REF`
   build args, default `0.21.2` / `v2026.9.11`), installed **editable** from
   a clean clone of `https://github.com/NousResearch/hermes-agent` — see

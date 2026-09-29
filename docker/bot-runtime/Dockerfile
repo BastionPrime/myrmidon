@@ -54,7 +54,19 @@ ARG HERMES_AIOHTTP_VERSION=3.14.3
 # this exact pyproject.toml/uv.lock pair, rather than picking one blind.
 FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df22866bd7857e5d304b67a564f4feab6ac22044dde719b AS uv_bin
 
-FROM python:3.13-slim AS builder
+# myrmidon(G1): both Python stages run python:3.11-slim, not python:3.13-slim.
+# hermes v2026.9.11 pins `requires-python = ">=3.11,<3.14"` AND ships a
+# `.python-version` file with `3.11` — so `uv sync` resolves the project
+# Python to 3.11 and, on a python:3.13-slim builder, downloads its own
+# cpython into /root/.local/share/uv/python (readable only by root). The
+# venv's `bin/python` then symlinks there, the COPY into the runtime stage
+# drops the target (it lives under /root, which is never copied), and uid
+# 10001 gets `bad interpreter: Permission denied` → the bot container
+# crash-loops (see the bot image startup defect). On python:3.11-slim uv finds 3.11 already on
+# PATH and links the venv against the image's own interpreter, which
+# exists in both stages. The uv_pin "python" image above is only the uv
+# binary and is unrelated to the interpreter choice.
+FROM python:3.11-slim AS builder
 ARG HERMES_VERSION
 ARG HERMES_GIT_REF
 ARG HERMES_GIT_SHA
@@ -172,7 +184,11 @@ RUN rm -rf /opt/hermes-src/.git \
     /opt/hermes-src/flake.lock \
     /opt/hermes-src/flake.nix
 
-FROM python:3.13-slim AS runtime
+# myrmidon(G1): runtime stage also moves to python:3.11-slim — see the
+# builder-stage comment: the venv's bin/python must symlink to an
+# interpreter that exists in THIS stage too, or uid 10001 gets a dead
+# symlink (same defect).
+FROM python:3.11-slim AS runtime
 ARG HERMES_VERSION
 
 # myrmidon.bot-runtime.contract: the G3 container driver
@@ -264,6 +280,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # comment above; ENV cannot reference another ENV set earlier in the same
 # instruction reliably across BuildKit versions, so the literal is repeated here.
 ENV HOME=/data/hermes
+
+# myrmidon(G1): build-time guard for the exact uid-10001 interpreter defect — the
+# venv interpreter must resolve, and must actually RUN, as the runtime
+# user (uid 10001), not just as root in the builder. The builder-stage
+# import checks (lines ~143/151) run as root and never caught the
+# venv symlink pointing at a /root-only uv-managed cpython that does
+# not exist in this stage: every bot container then crash-looped with
+# `bad interpreter`. USER before the RUN makes it fail at build time
+# under the same uid the entrypoint will exec with. Not a test suite
+# entry — a one-line build check, per the release mode.
+USER 10001:10001
+RUN /opt/hermes-src/.venv/bin/python -c 'import sys; print(sys.version)' \
+  && readlink -f /opt/hermes-src/.venv/bin/python >/dev/null
 
 USER 10001:10001
 WORKDIR /workspace
