@@ -66,6 +66,7 @@ import {
 } from "./login-command.js";
 import { logger } from "../middleware/logger.js";
 import { traceparentFromContextToken } from "../instrumentation.js";
+import { resolveUnechoedApiRouteInvocation } from "../myrmidon/plugin-api-route-scope.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -544,6 +545,8 @@ interface ActiveInvocation {
   // when no startup span is active. The span host handler reads it to mint the
   // parentage, so a worker never supplies the parent itself.
   traceparent?: string;
+  // myrmidon(PLS1): true only for an invocation registered for `handleApiRequest`.
+  apiRoute?: boolean;
 }
 
 /**
@@ -1139,7 +1142,11 @@ export function createPluginWorkerHandle(
     return null;
   }
 
-  function registerInvocation(scope: PluginInvocationScope, ttlMs?: number): PluginInvocationContext {
+  function registerInvocation(
+    scope: PluginInvocationScope,
+    ttlMs?: number,
+    apiRoute = false, // myrmidon(PLS1): mark plugin API route invocations
+  ): PluginInvocationContext {
     // Mint a W3C `traceparent` from the active startup span, so the worker's
     // provider span can parent to it. The host keeps the value on its own record
     // (below) and never trusts the worker to supply the parent. Outside a
@@ -1153,7 +1160,7 @@ export function createPluginWorkerHandle(
       scope,
       ...(traceparent ? { traceparent } : {}),
     };
-    const entry: ActiveInvocation = { scope, traceparent };
+    const entry: ActiveInvocation = { scope, traceparent, ...(apiRoute ? { apiRoute: true } : {}) };
     if (ttlMs !== undefined) {
       entry.timer = setTimeout(() => {
         activeInvocations.delete(invocation.id);
@@ -2682,6 +2689,17 @@ export function createPluginWorkerHandle(
       if (proactiveCompanyId && proactiveCompanyScopes.has(proactiveCompanyId)) {
         return { invocationScope: { companyId: proactiveCompanyId } };
       }
+      // myrmidon(PLS1): a worker whose bundle carries an SDK that predates
+      // invocation-id echo never sends an id. Attribute its call to the company of
+      // the in-flight plugin API route calls only when every in-flight invocation
+      // of any kind belongs to that company; never broader.
+      const apiRouteInvocation = resolveUnechoedApiRouteInvocation(activeInvocations.values());
+      if (apiRouteInvocation) {
+        return {
+          invocationScope: apiRouteInvocation.scope,
+          traceparent: apiRouteInvocation.traceparent,
+        };
+      }
       const hasActiveInvocation = activeInvocations.size > 0 ||
         Array.from(pendingRequests.values()).some((pending) => pending.invocationId);
       return hasActiveInvocation ? { invalidInvocationScope: true } : {};
@@ -3305,7 +3323,9 @@ export function createPluginWorkerHandle(
       const id = nextRequestId++;
       const timeout = resolveRpcCallTimeoutMs(timeoutMs, rpcTimeoutMs);
       const invocationScope = deriveInvocationScope(method, params);
-      const invocation = invocationScope ? registerInvocation(invocationScope) : null;
+      const invocation = invocationScope
+        ? registerInvocation(invocationScope, undefined, method === "handleApiRequest") // myrmidon(PLS1)
+        : null;
       // Register the host-owned execute route only for an execute call that
       // carries a log sink. The company id comes from the host-derived
       // invocation scope, never from the worker. This binds the sink to the
