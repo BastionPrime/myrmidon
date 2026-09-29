@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
-# Deploys a Myrmidon image by digest.
+# Deploys a Myrmidon image by digest. Only images built by CI are deployed.
 #
 #   deploy.sh --config deploy.env --digest sha256:<64 hex> [--dry-run]
 #             [--expect-version V] [--expect-commit SHA] [--force]
+#
+# --digest takes sha256:<64 hex> or ghcr.io/itkadr-git/myrmidon@sha256:<64 hex>.
+#
+# Before anything else (before the pull, the dump and maintenance) the script
+# refuses unless: the reference is exactly ghcr.io/itkadr-git/myrmidon@sha256:<64 hex>
+# (no tag, no other repository); the image is in the registry; its
+# org.opencontainers.image.revision label names a commit that is on origin/main
+# or carries a myr-v* tag (git fetch in the clone that holds these scripts).
+# There is no flag to skip this check, --force does not skip it either.
 #
 # Steps: pull the image by digest; remember the current digest as "previous";
 # dump the database (DUMP_COMMAND, refuses an empty dump); enter maintenance;
@@ -11,7 +20,8 @@
 # (status, version, commit); leave maintenance.
 #
 # On a failed health check the script stops with maintenance still on and
-# prints the rollback command. --dry-run changes nothing and prints the plan.
+# prints the rollback command. --dry-run changes nothing and prints the plan
+# (the image check is read-only, so it runs in a dry run too).
 set -euo pipefail
 # shellcheck source=lib.sh source-path=SCRIPTDIR
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -26,15 +36,25 @@ while (($#)); do
     --expect-commit) expect_commit="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --force) force=1; shift ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
-valid_digest "$digest" || die "--digest must look like sha256:<64 hex chars>"
+parse_digest_arg "$digest"
 load_config "$config"
 require_cmd docker curl jq
 
+# Only CI images reach production: this runs before any other action.
+[[ "$MYRMIDON_IMAGE" == "$MYR_CI_IMAGE" ]] \
+  || die "MYRMIDON_IMAGE is '$MYRMIDON_IMAGE': only $MYR_CI_IMAGE is deployed (images built by CI); nothing was changed"
 ref="$MYRMIDON_IMAGE@$digest"
+log "checking that $ref was built by CI"
+if ! check_ci_image "$ref"; then
+  log "Only images built by the CI workflow 'Myrmidon image' from main or a myr-v* tag are deployed. This check cannot be skipped."
+  die "image refused, nothing was changed: $CI_CHECK_REASON"
+fi
+log "image ok: built by CI from commit ${CI_IMAGE_REVISION:0:12}, version ${CI_IMAGE_VERSION:-<none>}"
+
 previous="$(current_digest)"
 previous_image="$(current_image)"
 
@@ -45,6 +65,7 @@ fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
   log "dry run: nothing will be changed. Plan:"
+  plan "0. image check passed (read-only): $ref is in the registry, commit ${CI_IMAGE_REVISION:0:12} is on origin/main or a myr-v* tag"
   plan "1. docker pull $ref"
   plan "2. remember previous image: ${previous_image:-<none>} -> $PREVIOUS_IMAGE_FILE"
   plan "3. dump database with DUMP_COMMAND into $DUMP_DIR (refuse if smaller than $DUMP_MIN_BYTES bytes)"
