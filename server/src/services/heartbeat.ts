@@ -8,6 +8,16 @@ import { completeTerminatedRemoteNativeSessionCleanup } from "../vendor/papercli
 import { hasRemoteTerminationReceipt, remoteExecutionHasStopped, remoteTerminationReceipt, stoppedRemoteCleanupScopes } from "./remote-execution-termination.js";
 import { applyConnectorSkills, prepareConnectorSkillDelivery, resolveConnectorAssignments } from "./connector-runtime.js";
 import { admitExplicitNativeContinuation, undeliveredLegacyUserCommentIds } from "./explicit-native-continuation.js";
+// myrmidon(L2): an explicitly authorized wake ignores a settled "do not
+// replay" hold; see docs/myrmidon/DIVERGENCE.md "L2".
+import { bypassesSettledHold } from "../myrmidon/settled-holds/explicit-wake-gate.js";
+// myrmidon(L2, round 1 fix): supersede the bypassed hold atomically with the
+// successor run, so the run's own claim and every later automatic
+// continuation see no hold. See docs/myrmidon/DIVERGENCE.md "L2".
+import { supersedeExplicitWakeSettledHold } from "../myrmidon/settled-holds/supersede-explicit-wake.js";
+// myrmidon(L2, round 3 fix): retire the woken agent's own waiting run that the
+// bypassed hold would cancel at its claim, so the wake is not lost with it.
+import { cancelWaitingRunDoomedByHold, carryRetryBudgetToSuccessor } from "../myrmidon/settled-holds/cancel-waiting-run.js";
 import { connectionIntentService } from "./connection-intents.js";
 import { prepareManagedAiRuntime, assertManagedAiProjectAuth, stripAiAuthBindings, isAiConnectionBusy, AI_AUTH_ENV_KEYS } from "./ai-connection-runtime.js";
 import { aiConnectionBindingSchema } from "@paperclipai/shared";
@@ -26375,6 +26385,10 @@ export function heartbeatService(
       const agentNameKey = normalizeAgentNameKey(agent.name);
 
       const cancelledRunsToEmit: (typeof heartbeatRuns.$inferSelect)[] = [];
+      // myrmidon(L2, round 3 fix): status effects of a waiting run this
+      // admission cancelled under a bypassed hold. Applied only once the
+      // transaction has committed; emptied if it is rolled back.
+      const doomedWaitingRunEffects: PostCommitEffect[] = [];
 
       const outcome = await db
         .transaction(async (tx) => {
@@ -26794,9 +26808,23 @@ export function heartbeatService(
             return { kind: "deferred" as const };
           };
           const explicitContinuationRunId = randomUUID();
+          // myrmidon(L2, round 1 fix): decide once, here, whether this wake
+          // may pass a settled hold. The decision needs an identifiable
+          // person (the same actor the vendor's own continuation admission
+          // requires), because the hold is superseded under that person
+          // below. The decision is not carried to the run's claim: the claim
+          // is the vendor's plain check, and it finds no hold because this
+          // admission superseded every one it let the wake pass.
+          const wakeBypassesSettledHold = bypassesSettledHold({
+            source, triggerDetail, reason, commentId: wakeCommentId ?? null,
+            requestedByActorType: opts.requestedByActorType ?? null,
+          }) && Boolean(opts.requestedByActorId);
           const executionBlocker = await getExecutionBlocker(
             tx as unknown as Db, issue.companyId, issue.id,
-            { conversationResetCommentId: opts.requestedByActorType === "user" ? wakeCommentId : null },
+            { conversationResetCommentId: opts.requestedByActorType === "user" ? wakeCommentId : null,
+              // myrmidon(L2): an explicitly authorized wake ignores a settled
+              // "do not replay" hold.
+              explicitWake: wakeBypassesSettledHold },
           );
           // Prove eligibility without retiring the hold. Later gates can still
           // decline this wake; hold retirement and successor creation stay atomic.
@@ -27117,6 +27145,53 @@ export function heartbeatService(
                     updatedAt: new Date(),
                   })
                   .where(eq(issues.id, issue.id));
+              }
+            }
+          }
+
+          // myrmidon(L2, round 3 fix): a wake that got this far only because
+          // of the settled-hold bypass must not meet a run of the same agent
+          // that is still waiting in the queue. That run's own claim is the
+          // vendor's plain check: it meets the hold and cancels the run as
+          // `execution_reconciliation_required`, and a wake merged into it or
+          // parked behind it goes with it. So retire that run here, exactly as
+          // its claim would, and let the wake continue as if the lock were
+          // free: the successor created below supersedes the hold in this
+          // same transaction. Placed before the dependency and workspace
+          // preflight gates, which apply only when no run is active, so the
+          // successor still meets them. Only the woken agent's own queued or
+          // scheduled_retry run is touched (a running one never meets the
+          // hold again), and only while `getExecutionBlocker`'s bypass check
+          // passed above, i.e. every hold left is closed and verified.
+          if (
+            wakeBypassesSettledHold &&
+            !executionBlocker &&
+            !reconciledSourceRunId &&
+            activeExecutionRun &&
+            activeExecutionRun.agentId === agentId &&
+            (activeExecutionRun.status === "queued" || activeExecutionRun.status === "scheduled_retry")
+          ) {
+            const doomed = await cancelWaitingRunDoomedByHold(tx as unknown as Db, {
+              run: activeExecutionRun, issueId: issue.id,
+            });
+            if (doomed.outcome === "cancelled") {
+              doomedWaitingRunEffects.push(...doomed.postCommitEffects);
+              carryRetryBudgetToSuccessor(enrichedContextSnapshot, doomed.run);
+              activeExecutionRun = null;
+            } else if (doomed.outcome === "lost_race") {
+              // Another writer moved it first: continue with what is there now.
+              activeExecutionRun = await tx
+                .select()
+                .from(heartbeatRuns)
+                .where(eq(heartbeatRuns.id, activeExecutionRun.id))
+                .then((rows) => rows[0] ?? null);
+              if (
+                activeExecutionRun &&
+                !EXECUTION_PATH_HEARTBEAT_RUN_STATUSES.includes(
+                  activeExecutionRun.status as (typeof EXECUTION_PATH_HEARTBEAT_RUN_STATUSES)[number],
+                )
+              ) {
+                activeExecutionRun = null;
               }
             }
           }
@@ -27576,6 +27651,21 @@ export function heartbeatService(
             enrichedContextSnapshot.forceFreshSession = true;
             enrichedContextSnapshot.previousRunId = explicitContinuation.previousRunId;
             enrichedContextSnapshot.explicitUserContinuation = explicitContinuation;
+          } else if (wakeBypassesSettledHold && opts.requestedByActorId) {
+            // myrmidon(L2, round 1 fix): an explicit wake with no message of
+            // its own (assignment, manual wakeup, approval decision, subtree
+            // resume) bypassed a settled hold above without retiring it —
+            // admitExplicitNativeContinuation only resolves the hold for its
+            // own real-message continuation, which this is not. Supersede it
+            // now, atomically with this successor run, so the hold does not
+            // keep blocking every later automatic continuation of this run
+            // (retry, resource-wait continuation, pause-resume wake) as if
+            // it were still open. See supersede-explicit-wake.ts.
+            await supersedeExplicitWakeSettledHold({
+              db: tx as unknown as Db, companyId: issue.companyId, issueId: issue.id,
+              successorRunId: explicitContinuationRunId,
+              requestedByActorType: "user", requestedByActorId: opts.requestedByActorId,
+            });
           }
 
           const wakeupRequest = await tx
@@ -27612,6 +27702,14 @@ export function heartbeatService(
               : null;
           const pendingComments =
             !isConversation(issue) && opts.allowRunCoalescing !== false &&
+            // myrmidon(L2, round 1 fix): never bypass here. A hold this
+            // wake was allowed to bypass has already been superseded above
+            // (or never existed), so the vendor call already reads null in
+            // that case; a hold that is genuinely still open — this wake
+            // did not bypass it, or the actor-type gate says it must not —
+            // must keep parking these comments as
+            // `deferred_issue_execution`, not adopt them into a successor
+            // run whose own claim would then cancel it and lose them.
             !(await getExecutionBlocker(tx as unknown as Db, issue.companyId, issue.id))
               ? await tx
                   .select()
@@ -27659,7 +27757,10 @@ export function heartbeatService(
           const newRun = await tx
             .insert(heartbeatRuns)
             .values({
-              ...(explicitContinuation ? { id: explicitContinuationRunId } : {}),
+              // myrmidon(L2, round 1 fix): the reserved id always lands on the
+              // successor, so the hold superseded above names a run that
+              // really exists.
+              id: explicitContinuationRunId,
               companyId: agent.companyId,
               agentId,
               invocationSource: source,
@@ -27723,8 +27824,12 @@ export function heartbeatService(
           return { kind: "queued" as const, run: newRun };
         })
         .catch((error) => {
-          if (isExternalChatWaitAuthorizationContention(error))
+          if (isExternalChatWaitAuthorizationContention(error)) {
+            // The transaction rolled back, and so did any waiting run it
+            // cancelled: there is nothing to publish for it.
+            doomedWaitingRunEffects.length = 0;
             return { kind: "deferred" as const };
+          }
           throw error;
         });
 
@@ -27734,6 +27839,12 @@ export function heartbeatService(
       // lookup must not delay them.
       for (const cancelledRun of cancelledRunsToEmit) {
         void emitAgentTaskRun(db, cancelledRun);
+      }
+      // myrmidon(L2, round 3 fix): the waiting run a bypassed hold cancelled
+      // is published like any other run-dispatch cancellation (live status,
+      // plugin event, telemetry), now that the write is durable.
+      if (doomedWaitingRunEffects.length > 0) {
+        applyRunDispatchPostCommitEffects(doomedWaitingRunEffects);
       }
 
       if (outcome.kind === "durable") {
