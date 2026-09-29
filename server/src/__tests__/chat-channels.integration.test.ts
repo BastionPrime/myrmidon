@@ -11467,6 +11467,152 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     ).resolves.toEqual([{ refs: [] }]);
   });
 
+  // myrmidon(B1b): bots connected before a menu copy change must pick up the new
+  // "/" menu without an operator pressing Reconnect on every endpoint.
+  it("re-registers the Telegram command menu once for bots connected before a menu copy change", async () => {
+    const fixture = await seedCompany();
+    const botId = Number.parseInt(
+      randomUUID().replaceAll("-", "").slice(0, 12),
+      16,
+    );
+    const botToken = `${botId}:telegram-menu-copy-${randomUUID().replaceAll("-", "")}`;
+    const menuRequests: Array<Record<string, unknown>> = [];
+    const providerFetch = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/getMe")) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              result: {
+                id: botId,
+                username: "paperclip_menu_copy_bot",
+                first_name: "Menu Copy",
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/getWebhookInfo")) {
+          return new Response(
+            JSON.stringify({ ok: true, result: { url: "" } }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/setWebhook")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/setMyCommands")) {
+          if (url.includes(encodeURIComponent(botToken)))
+            menuRequests.push(
+              JSON.parse(String(init?.body)) as Record<string, unknown>,
+            );
+          return new Response(JSON.stringify({ ok: true, result: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected provider request: ${url}`);
+      },
+    ) as unknown as typeof globalThis.fetch;
+    const { service } = createService(new FakeChatSdkRuntime(), providerFetch);
+    const endpoint = await service.create(
+      fixture.companyId,
+      { provider: "telegram", assignedAgentId: fixture.assignedAgentId },
+      "owner-user",
+    );
+    const configured = await service.configure(
+      endpoint.id,
+      { action: "configure", credentials: { botToken } },
+      "owner-user",
+    );
+    await db
+      .update(chatEndpoints)
+      .set({
+        status: "active",
+        setup: { ...configured.setup, step: "complete" },
+      })
+      .where(eq(chatEndpoints.id, endpoint.id));
+    const expectedMenu = {
+      commands: [
+        { command: "task", description: "Start or continue a Myrmidon task" },
+        { command: "status", description: "Show the active Myrmidon task" },
+        {
+          command: "new",
+          description: "Start a new task after the current one",
+        },
+        {
+          command: "close",
+          description: "Close the active chat conversation",
+        },
+      ],
+    };
+    const registrations = () =>
+      db
+        .select()
+        .from(chatActions)
+        .where(
+          and(
+            eq(chatActions.endpointId, endpoint.id),
+            eq(chatActions.kind, "telegram_maintenance"),
+            sql`${chatActions.payload}->>'operation' = 'register_commands'`,
+          ),
+        );
+    // The sweep scans finite pages of active Telegram endpoints; run enough
+    // passes to cover every fixture that earlier tests left active.
+    const sweepAllPages = async () => {
+      const active = await db
+        .select({ id: chatEndpoints.id })
+        .from(chatEndpoints)
+        .where(
+          and(
+            eq(chatEndpoints.provider, "telegram"),
+            eq(chatEndpoints.status, "active"),
+          ),
+        );
+      for (let pass = 0; pass < Math.ceil(active.length / 25) + 2; pass++)
+        await service.processPendingDeliveries();
+    };
+
+    // Connecting registered the menu once and stamped the action with the menu
+    // copy version, so recovery sweeps leave a current bot alone.
+    expect(menuRequests).toEqual([expectedMenu]);
+    const [connectAction] = await registrations();
+    expect(connectAction).toMatchObject({ status: "processed" });
+    expect(connectAction.payload.commandsCopyVersion).toMatch(/^[a-f0-9]{12}$/);
+    await sweepAllPages();
+    expect(menuRequests).toHaveLength(1);
+    expect(await registrations()).toHaveLength(1);
+
+    // A bot connected before the copy change has a register action without the
+    // current version. One sweep stages and delivers a single refresh.
+    await db
+      .update(chatActions)
+      .set({ payload: sql`${chatActions.payload} - 'commandsCopyVersion'` })
+      .where(eq(chatActions.id, connectAction.id));
+    await sweepAllPages();
+    expect(menuRequests).toEqual([expectedMenu, expectedMenu]);
+    const afterRefresh = await registrations();
+    expect(afterRefresh).toHaveLength(2);
+    expect(afterRefresh.filter((row) => row.status === "processed")).toHaveLength(
+      2,
+    );
+    expect(
+      afterRefresh.filter(
+        (row) => row.payload.commandsCopyVersion === connectAction.payload.commandsCopyVersion,
+      ),
+    ).toHaveLength(1);
+
+    // The refresh is exactly once: later sweeps do not register again.
+    await sweepAllPages();
+    await sweepAllPages();
+    expect(menuRequests).toHaveLength(2);
+    expect(await registrations()).toHaveLength(2);
+  });
+
   it("serializes recovered Telegram maintenance behind credential rotation", async () => {
     const fixture = await seedCompany();
     const oldBotToken = "123456:telegram-old-maintenance-token";
@@ -24652,6 +24798,99 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         expect(
           context.runtime.endpoints.get(context.endpoint.id)!.posts,
         ).toHaveLength(0);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // myrmidon(B1b): a row quarantined by an earlier build keeps the pre-rename
+    // notice text in its stored payload; an operator resolves it after deploy.
+    it.each(["mark_delivered", "cancel"] as const)(
+      "resolves a quarantined private notice stored with the pre-rename text: %s",
+      async (resolution) => {
+        const context = await nativePrivateFixture();
+        try {
+          context.setResponseMode("missing_receipt");
+          expect((await context.deliver()).status).toBe(200);
+          await context.service.processPendingProviderEffects();
+          const [quarantined] = await context.actions();
+          expect(quarantined).toMatchObject({ status: "delivery_unknown" });
+          expect(quarantined.payload.text).toBe(
+            "This Myrmidon action is no longer available. Open the linked task or ask an operator to link this account.",
+          );
+          await db
+            .update(chatActions)
+            .set({
+              payload: {
+                ...quarantined.payload,
+                text: "This Paperclip action is no longer available. Open the linked task or ask an operator to link this account.",
+              },
+            })
+            .where(eq(chatActions.id, quarantined.id));
+
+          await context.service.resolveAction(
+            context.endpoint.id,
+            quarantined.id,
+            resolution,
+            "owner-user",
+          );
+
+          expect((await context.actions())[0]).toMatchObject({
+            status: resolution === "mark_delivered" ? "processed" : "cancelled",
+            result: {
+              code:
+                resolution === "mark_delivered"
+                  ? "provider_effect_marked_delivered_by_operator"
+                  : "provider_effect_cancelled_by_operator",
+            },
+          });
+          await expect(
+            db
+              .select({ action: activityLog.action })
+              .from(activityLog)
+              .where(eq(activityLog.entityId, quarantined.id)),
+          ).resolves.toContainEqual({
+            action: `chat.provider_effect_${resolution}`,
+          });
+          // Resolving never sends anything, under either text.
+          expect(
+            context.providerRequests.filter(
+              (entry) => entry.method === "sendMessage",
+            ),
+          ).toHaveLength(1);
+        } finally {
+          await context.close();
+        }
+      },
+    );
+
+    it("still refuses to resolve a quarantined private notice whose stored text is neither current nor pre-rename", async () => {
+      const context = await nativePrivateFixture();
+      try {
+        context.setResponseMode("missing_receipt");
+        expect((await context.deliver()).status).toBe(200);
+        await context.service.processPendingProviderEffects();
+        const [quarantined] = await context.actions();
+        await db
+          .update(chatActions)
+          .set({
+            payload: { ...quarantined.payload, text: "Some other notice" },
+          })
+          .where(eq(chatActions.id, quarantined.id));
+        await expect(
+          context.service.resolveAction(
+            context.endpoint.id,
+            quarantined.id,
+            "mark_delivered",
+            "owner-user",
+          ),
+        ).rejects.toMatchObject({
+          status: 409,
+          details: { code: "chat_action_resolution_context_missing" },
+        });
+        expect((await context.actions())[0]).toMatchObject({
+          status: "delivery_unknown",
+        });
       } finally {
         await context.close();
       }

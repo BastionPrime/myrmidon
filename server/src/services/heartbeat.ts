@@ -23986,15 +23986,19 @@ export function heartbeatService(
             const runtimeToolDelivery =
               adapter.runtimeToolDelivery ?? "invocation_context";
             if (runtimeTools && runtimeToolDelivery === "native_mcp") {
+              // myrmidon(B1): identifier, not display text. Adapters use it as the MCP
+              // config key, the tool-name prefix and part of the session identity, so
+              // it keeps the vendor literal; see DIVERGENCE B1.
               runtimeMcpServers.unshift({
-                name: `${PRODUCT_NAME} connections`,
+                name: "Paperclip connections",
                 url: runtimeTools.mcpEndpoint,
                 token: runtimeTools.bearerToken,
                 connectionId: "paperclip-runtime-tools",
               });
             }
             if (authToken && configuredPaperclipApiBaseUrl() && issueRef) {
-              runtimeMcpServers.unshift({ name: `${PRODUCT_NAME} projects`, url: `${paperclipApiBaseUrl()}/api/mcp/project-tools`,
+              // myrmidon(B1): identifier, see the note on the "connections" server above.
+              runtimeMcpServers.unshift({ name: "Paperclip projects", url: `${paperclipApiBaseUrl()}/api/mcp/project-tools`,
                 token: authToken, connectionId: "paperclip-project-tools" });
             }
             const runtimeMcp = createAdapterRuntimeMcpAccess(runtimeMcpServers);

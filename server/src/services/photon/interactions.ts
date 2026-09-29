@@ -1,4 +1,6 @@
 import { nativeSha256 } from "../native-runtime/canonical.js";
+// myrmidon(B1): product name in the task link line below; see product.ts.
+import { PRODUCT_NAME } from "../../myrmidon/product.js";
 import { createHash } from "node:crypto";
 import type {
   AskUserQuestionsInteraction,
@@ -249,7 +251,7 @@ export async function publishPhotonPrompt(input: {
     interaction.payload.questions.length > 1
       ? `Answers are saved for you. Finish with /submit ${binding.reference}.`
       : "",
-    input.taskUrl ? `Open this Paperclip task: ${input.taskUrl}` : "",
+    input.taskUrl ? `Open this ${PRODUCT_NAME} task: ${input.taskUrl}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");

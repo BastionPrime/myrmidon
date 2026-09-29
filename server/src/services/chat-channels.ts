@@ -150,6 +150,8 @@ import {
   readTelegramCallbackProvenance,
   telegramCallbackThreadId,
   TELEGRAM_PRIVATE_ACTION_UNAVAILABLE,
+  // myrmidon(B1b): stored rows may still carry the pre-rename notice text.
+  isStoredTelegramPrivateActionUnavailableText,
   type TelegramCallbackReceipt,
 } from "./chat-telegram-ephemeral.js";
 import {
@@ -737,6 +739,14 @@ const TELEGRAM_COMMANDS = [
   { command: "close", description: "Close the active chat conversation" },
 ] as const;
 
+// myrmidon(B1b): version of the Telegram "/" menu copy. It is derived from the
+// menu itself, so any future wording change re-registers the menu once per
+// connected bot without a hand-maintained counter; see DIVERGENCE B1.
+const TELEGRAM_COMMANDS_COPY_VERSION = createHash("sha256")
+  .update(JSON.stringify(TELEGRAM_COMMANDS))
+  .digest("hex")
+  .slice(0, 12);
+
 const UNAVOIDABLE_GITHUB_EVENTS = [
   "github_app_authorization",
   "installation",
@@ -1166,6 +1176,8 @@ type TelegramMaintenancePayload = {
   credentialFingerprint: string;
   webhookUrlSha256?: string;
   botUserId?: string;
+  // myrmidon(B1b): menu copy version the register_commands action belongs to.
+  commandsCopyVersion?: string;
 };
 
 function telegramMaintenancePayload(
@@ -1341,7 +1353,9 @@ function providerEffectPayload(
     if (
       !receipt ||
       payload.authorizationMode !== "safe_notice" ||
-      payload.text !== TELEGRAM_PRIVATE_ACTION_UNAVAILABLE ||
+      // myrmidon(B1b): a row stored before the product rename carries the old
+      // text; it must stay readable so an operator can still resolve it.
+      !isStoredTelegramPrivateActionUnavailableText(payload.text) ||
       payload.threadId !== telegramCallbackThreadId(receipt) ||
       payload.userId !== receipt.receiverUserId ||
       payload.settleDelivery !== false ||
@@ -3982,6 +3996,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   async function stageTelegramMaintenance(
     endpoint: EndpointRow,
     operation: TelegramMaintenancePayload["operation"],
+    // myrmidon(B1b): a menu refresh is keyed by the menu copy version, not by
+    // the endpoint timestamp, so a recovery sweep stages it exactly once per
+    // copy version instead of once per endpoint update.
+    options: { commandsCopyRefresh?: boolean } = {},
   ) {
     const record = await endpointRecord(endpoint.id);
     if (!record) throw notFound("Chat endpoint not found");
@@ -3994,7 +4012,9 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     const operationGeneration = subscriptionScope
       ? `${context.generation}:${context.credentialFingerprint}:${subscriptionScope.botUserId}:${subscriptionScope.webhookUrlSha256}`
       : operation === "register_commands"
-        ? `${context.generation}:${record.endpoint.setup.testStartedAt ?? record.endpoint.updatedAt.toISOString()}`
+        ? options.commandsCopyRefresh
+          ? `${context.generation}:commands-${TELEGRAM_COMMANDS_COPY_VERSION}`
+          : `${context.generation}:${record.endpoint.setup.testStartedAt ?? record.endpoint.updatedAt.toISOString()}`
         : String(context.generation);
     const providerActionId = `telegram_maintenance:${operation}:${operationGeneration}`;
     const [inserted] = await db
@@ -4014,6 +4034,9 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                 webhookUrlSha256: subscriptionScope.webhookUrlSha256,
                 botUserId: subscriptionScope.botUserId,
               }
+            : {}),
+          ...(operation === "register_commands"
+            ? { commandsCopyVersion: TELEGRAM_COMMANDS_COPY_VERSION }
             : {}),
         } satisfies TelegramMaintenancePayload,
         status: "received",
@@ -4429,6 +4452,28 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     }
   }
 
+  // myrmidon(B1b): true when a register_commands action of any status carries
+  // the current menu copy version. A hard failure is not restaged by the sweep;
+  // reconnecting the endpoint registers the menu again.
+  async function hasTelegramCommandsCopy(
+    endpoint: EndpointRow,
+  ): Promise<boolean> {
+    const [existing] = await db
+      .select({ id: chatActions.id })
+      .from(chatActions)
+      .where(
+        and(
+          eq(chatActions.companyId, endpoint.companyId),
+          eq(chatActions.endpointId, endpoint.id),
+          eq(chatActions.kind, "telegram_maintenance"),
+          sql`${chatActions.payload}->>'operation' = 'register_commands'`,
+          sql`${chatActions.payload}->>'commandsCopyVersion' = ${TELEGRAM_COMMANDS_COPY_VERSION}`,
+        ),
+      )
+      .limit(1);
+    return !!existing;
+  }
+
   async function processPendingTelegramMaintenance(limit = 25) {
     // Keyset scanning bounds each sweep without starving endpoints behind a
     // page whose subscriptions were already confirmed. No provider I/O here.
@@ -4474,6 +4519,26 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         logger.warn(
           { endpointId: endpoint.id },
           "Telegram subscription maintenance could not be staged",
+        );
+      }
+      // myrmidon(B1b): bots connected before a menu copy change keep the old
+      // "/" menu until it is registered again. Stage that once per copy
+      // version; the action is processed by the same sweep below.
+      try {
+        const record = await endpointRecord(endpoint.id);
+        if (
+          record &&
+          record.credentialSecretRefs.length > 0 &&
+          record.endpoint.botExternalId &&
+          !(await hasTelegramCommandsCopy(record.endpoint))
+        )
+          await stageTelegramMaintenance(record.endpoint, "register_commands", {
+            commandsCopyRefresh: true,
+          });
+      } catch {
+        logger.warn(
+          { endpointId: endpoint.id },
+          "Telegram command menu refresh could not be staged",
         );
       }
     }

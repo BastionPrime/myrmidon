@@ -375,6 +375,18 @@ describe("Discord owned native-command registration", () => {
           "Show the current Paperclip task",
         ),
       });
+      // myrmidon(B1b): pin the byte shape (key order included), not only the
+      // structure. These digests were computed from the upstream definitions on
+      // origin/main; they are what already-registered owners have stored, so a
+      // reordered key or an edited word in a snapshot must fail here.
+      const digestOfJson = (d: unknown) =>
+        createHash("sha256").update(JSON.stringify(d)).digest("hex");
+      expect(digestOfJson(preBrandingDefinition(id))).toBe(
+        "6e40ff453aaba190a9b0332eeb700012328f8af8e4e791267b4618988bbea15f",
+      );
+      expect(digestOfJson(priorCloseCopyDefinition(id))).toBe(
+        "316eab69a28d91b0ac91d11fef9dc92b964f7acfe6bd8062e3006b266d9baf14",
+      );
       expect(() => preBrandingDefinition("not-an-owner-id")).toThrow(
         "Invalid Discord command owner identifier",
       );
