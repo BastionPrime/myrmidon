@@ -13,7 +13,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { and, desc, eq, inArray } from "drizzle-orm";
 import {
   agents,
-  agentTaskSessions,
   agentWakeupRequests,
   authUsers,
   chatActions,
@@ -29,7 +28,6 @@ import {
   heartbeatRuns,
   issueComments,
   issueRecoveryActions,
-  issueThreadInteractions,
   issueTreeHolds,
   issues,
   principalPermissionGrants,
@@ -1855,6 +1853,7 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
       callbacks: CreateChatSdkEndpointRuntimeOptions["callbacks"];
       endpointId: string;
       userId: string;
+      runStatus?: "queued" | "running";
     }) {
       vi.mocked(runBridgedDirectMessageCommand).mockResolvedValueOnce({
         kind: "reply",
@@ -1886,8 +1885,8 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
         agentId: input.fixture.assignedAgentId,
         invocationSource: "on_demand",
         triggerDetail: "manual",
-        status: "running",
-        startedAt: new Date(),
+        status: input.runStatus ?? "running",
+        startedAt: input.runStatus === "queued" ? null : new Date(),
         contextSnapshot: { issueId: issue.id },
       });
       return { issue, runId };
@@ -1947,6 +1946,11 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
         callbacks,
         endpointId: endpoint.id,
         userId: "700021",
+        // A reply that is still queued: it never started provider work, so
+        // cancelling it needs no board reconciliation of a stopped process
+        // (a running run without a process handle would, and that hold is
+        // unrelated to who asked for the stop).
+        runStatus: "queued",
       });
       // The real X8c /stop command (not the stub of the test above): the whole
       // chain from the Telegram message to the heartbeat cancel is exercised.
@@ -1984,54 +1988,16 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
         issueCreatedAtGte: new Date(issue.createdAt.getTime() - 1),
       });
 
-      const debug = {
+      // Name what held the issue back if recovery did not stand down.
+      const heldBy = {
         result,
-        runs: await db
-          .select({
-            id: heartbeatRuns.id,
-            status: heartbeatRuns.status,
-            errorCode: heartbeatRuns.errorCode,
-            resultJson: heartbeatRuns.resultJson,
-            createdAt: heartbeatRuns.createdAt,
-          })
-          .from(heartbeatRuns)
-          .where(eq(heartbeatRuns.companyId, fixture.companyId)),
-        issue: await db.select().from(issues).where(eq(issues.id, issue.id)),
-        agent: await db
-          .select({ status: agents.status, adapterType: agents.adapterType })
-          .from(agents)
-          .where(eq(agents.id, fixture.assignedAgentId)),
-        wakeups: await db
-          .select({ id: agentWakeupRequests.id, status: agentWakeupRequests.status })
-          .from(agentWakeupRequests)
-          .where(eq(agentWakeupRequests.companyId, fixture.companyId)),
-        holds: await db
-          .select({ id: issueTreeHolds.id, status: issueTreeHolds.status })
-          .from(issueTreeHolds)
-          .where(eq(issueTreeHolds.companyId, fixture.companyId)),
-        enqueueCalls: enqueueWakeup.mock.calls.length,
-        allIssues: await db
-          .select({
-            id: issues.id,
-            status: issues.status,
-            state: issues.conversationState,
-            createdAt: issues.createdAt,
-            hiddenAt: issues.hiddenAt,
-          })
-          .from(issues),
-        recoveryActions: await db.select().from(issueRecoveryActions),
-        taskSessions: await db
-          .select({ taskKey: agentTaskSessions.taskKey, goalStatus: agentTaskSessions.goalStatus })
-          .from(agentTaskSessions),
-        interactions: await db
-          .select({ id: issueThreadInteractions.id, status: issueThreadInteractions.status })
-          .from(issueThreadInteractions),
-        chatActionRows: await db
-          .select({ id: chatActions.id, kind: chatActions.kind, status: chatActions.status })
-          .from(chatActions),
-        experimental: await instanceSettingsService(db).getExperimental(),
+        recoveryActions: (await db.select().from(issueRecoveryActions)).map((action) => ({
+          cause: action.cause,
+          ownerType: action.ownerType,
+          status: action.status,
+        })),
       };
-      expect(result.operatorCancelExempted, JSON.stringify(debug, null, 1)).toBe(1);
+      expect(result.operatorCancelExempted, JSON.stringify(heldBy)).toBe(1);
       expect(result.escalated).toBe(0);
       expect(enqueueWakeup).not.toHaveBeenCalled();
       const runsAfter = await db
