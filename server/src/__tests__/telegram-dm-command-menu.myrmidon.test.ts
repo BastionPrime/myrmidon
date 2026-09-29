@@ -22,14 +22,20 @@ import type {
   CreateChatSdkEndpointRuntimeOptions,
 } from "../services/chat-sdk-runtime.js";
 import { TELEGRAM_DM_COMMANDS } from "../myrmidon/agent-chat-bridge/commands/index.js";
-import { telegramDmConversationsEnabled } from "../myrmidon/agent-chat-bridge/settings.js";
+import {
+  telegramDmConversationsConfigured,
+  telegramDmConversationsEnabled,
+} from "../myrmidon/agent-chat-bridge/settings.js";
 
 // myrmidon(X8e): the vendor registers one "no scope" Telegram command menu on
 // connect, reconnect, and remove (see "configures Telegram and preserves
 // queued updates…" in chat-channels.integration.test.ts, grep setMyCommands).
 // This drives that same flow through a minimal Telegram-only double of that
 // harness and checks the extra all_private_chats scoped calls the bridge adds
-// for endpoints with MYRMIDON_TELEGRAM_DM_CONVERSATIONS enabled.
+// when MYRMIDON_TELEGRAM_DM_CONVERSATIONS is set: a scoped setMyCommands for
+// an enabled endpoint, a scoped deleteMyCommands for an endpoint the (set)
+// list leaves out. With the variable unset, blank or only separators the
+// service must make exactly the vendor's provider calls and nothing more.
 
 const externalTestDatabaseUrl = process.env.PAPERCLIP_TEST_DATABASE_URL;
 const embeddedPostgresSupport = externalTestDatabaseUrl
@@ -92,7 +98,7 @@ class FakeChatSdkRuntime {
 }
 
 interface CapturedCommandsCall {
-  method: "setMyCommands" | "deleteMyCommands";
+  method: string;
   body: Record<string, unknown>;
 }
 
@@ -102,6 +108,18 @@ function fakeTelegramFetch(
 ) {
   return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
+    // Record every provider call in order, so a test can prove the exact
+    // sequence (not only the menu calls).
+    let body: Record<string, unknown> = {};
+    try {
+      body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    } catch {
+      // Not every Bot API call carries a JSON body; only the method matters.
+    }
+    captured.push({
+      method: url.slice(url.lastIndexOf("/") + 1).split("?")[0],
+      body,
+    });
     if (url.endsWith("/getMe")) {
       return new Response(
         JSON.stringify({
@@ -128,14 +146,6 @@ function fakeTelegramFetch(
       });
     }
     if (url.endsWith("/setMyCommands") || url.endsWith("/deleteMyCommands")) {
-      const method = url.endsWith("/setMyCommands")
-        ? "setMyCommands"
-        : "deleteMyCommands";
-      const body = JSON.parse(String(init?.body ?? "{}")) as Record<
-        string,
-        unknown
-      >;
-      captured.push({ method, body });
       return new Response(JSON.stringify({ ok: true, result: true }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -289,7 +299,13 @@ describeEmbeddedPostgres("Telegram bridged DM command menu (X8e)", () => {
     ).toHaveLength(0);
   });
 
-  it("clears the all_private_chats bridged menu when the endpoint is not enabled", async () => {
+  it("clears the all_private_chats bridged menu when the set list leaves the endpoint out", async () => {
+    // The variable names only another endpoint: it is set, so the bridge owns
+    // the private-chat menu and must not leave a stale one behind.
+    vi.stubEnv(
+      "MYRMIDON_TELEGRAM_DM_CONVERSATIONS",
+      "33333333-3333-3333-3333-333333333333",
+    );
     const captured: CapturedCommandsCall[] = [];
 
     await connectTelegramEndpoint(fakeTelegramFetch(captured));
@@ -307,8 +323,96 @@ describeEmbeddedPostgres("Telegram bridged DM command menu (X8e)", () => {
     ]);
   });
 
+  // The review's defect: with the variable unset the bridge used to send an
+  // extra scoped deleteMyCommands (and an extra lease check) on every
+  // Telegram endpoint, shifting the vendor's credential-lease accounting.
+  // Unset, blank and separators-only are all "not configured": the vendor's
+  // provider calls, byte for byte.
+  it.each([
+    ["unset", undefined],
+    ["blank", "   "],
+    ["only separators", " , ,"],
+  ])(
+    "makes exactly the vendor's provider calls on connect when the variable is %s",
+    async (_label, value) => {
+      vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", value);
+      const captured: CapturedCommandsCall[] = [];
+
+      await connectTelegramEndpoint(fakeTelegramFetch(captured));
+
+      expect(
+        captured.filter((call) => call.method === "deleteMyCommands"),
+      ).toEqual([]);
+      const setCalls = captured.filter(
+        (call) => call.method === "setMyCommands",
+      );
+      expect(setCalls).toHaveLength(1);
+      expect(setCalls[0].body).not.toHaveProperty("scope");
+      expect(setCalls[0].body).not.toEqual(
+        expect.objectContaining({ commands: TELEGRAM_DM_COMMANDS }),
+      );
+      // The vendor's unscoped setMyCommands is the last provider call.
+      expect(captured.at(-1)?.method).toBe("setMyCommands");
+      for (const call of captured) {
+        expect(call.body).not.toHaveProperty("scope");
+      }
+    },
+  );
+
+  it.each([
+    ["unset", undefined],
+    ["blank", "   "],
+    ["only separators", " , ,"],
+  ])(
+    "makes exactly the vendor's provider calls on remove when the variable is %s",
+    async (_label, value) => {
+      vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", value);
+      const captured: CapturedCommandsCall[] = [];
+      const { endpoint, service } = await connectTelegramEndpoint(
+        fakeTelegramFetch(captured),
+      );
+      captured.length = 0;
+
+      await service.configure(endpoint.id, { action: "remove" }, "owner-user");
+
+      // Vendor's own order: deleteWebhook, then the unscoped deleteMyCommands
+      // as the very last provider call; nothing scoped, nothing after it.
+      expect(
+        captured.filter((call) => call.method === "deleteMyCommands"),
+      ).toEqual([{ method: "deleteMyCommands", body: {} }]);
+      expect(captured.at(-2)?.method).toBe("deleteWebhook");
+      expect(captured.at(-1)?.method).toBe("deleteMyCommands");
+    },
+  );
+
   it("clears the all_private_chats bridged menu when the endpoint is removed", async () => {
     vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", "*");
+    const captured: CapturedCommandsCall[] = [];
+    const { endpoint, service } = await connectTelegramEndpoint(
+      fakeTelegramFetch(captured),
+    );
+    captured.length = 0;
+
+    await service.configure(endpoint.id, { action: "remove" }, "owner-user");
+
+    expect(
+      captured.filter((call) => call.method === "deleteMyCommands"),
+    ).toEqual([
+      { method: "deleteMyCommands", body: {} },
+      {
+        method: "deleteMyCommands",
+        body: { scope: { type: "all_private_chats" } },
+      },
+    ]);
+  });
+
+  it("still clears the bridged menu on removal when the set list leaves the endpoint out", async () => {
+    // The endpoint may have been listed when its menu was registered; the
+    // variable was edited afterwards. Removal must not leave the menu behind.
+    vi.stubEnv(
+      "MYRMIDON_TELEGRAM_DM_CONVERSATIONS",
+      "33333333-3333-3333-3333-333333333333",
+    );
     const captured: CapturedCommandsCall[] = [];
     const { endpoint, service } = await connectTelegramEndpoint(
       fakeTelegramFetch(captured),
@@ -372,5 +476,30 @@ describe("telegramDmConversationsEnabled (X8e)", () => {
     expect(telegramDmConversationsEnabled(ownId)).toBe(true);
     expect(telegramDmConversationsEnabled(otherId)).toBe(true);
     expect(telegramDmConversationsEnabled("any-other-id")).toBe(true);
+  });
+});
+
+// myrmidon(X8e): "configured" decides whether the bridge touches the vendor's
+// Telegram service path at all; unset, blank and separators-only must all be
+// "not configured" so that path stays the vendor's.
+describe("telegramDmConversationsConfigured (X8e)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is false when unset, blank, or only separators", () => {
+    vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", undefined);
+    expect(telegramDmConversationsConfigured()).toBe(false);
+    for (const value of ["", "   ", ",", " , ,, "]) {
+      vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", value);
+      expect(telegramDmConversationsConfigured()).toBe(false);
+    }
+  });
+
+  it("is true for '*' and for any list with an id, even one that is not this endpoint's", () => {
+    for (const value of ["*", "endpoint-a", " , endpoint-a ,"]) {
+      vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", value);
+      expect(telegramDmConversationsConfigured()).toBe(true);
+    }
   });
 });

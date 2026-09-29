@@ -20,13 +20,30 @@ export function telegramDmConversationsEnabled(
   endpointId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
+  const entries = telegramDmConversationsEntries(env);
+  return entries.includes("*") || entries.includes(endpointId);
+}
+
+/**
+ * Whether `MYRMIDON_TELEGRAM_DM_CONVERSATIONS` is configured at all: at least
+ * one non-empty list entry. Unset, blank, or a list of only separators
+ * (`",, ,"`) is "not configured", and every bridge-owned side effect that
+ * would otherwise touch the vendor's Telegram service path (X8e's command
+ * menu calls) must stay off, so the vendor path is unchanged byte for byte.
+ */
+export function telegramDmConversationsConfigured(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return telegramDmConversationsEntries(env).length > 0;
+}
+
+function telegramDmConversationsEntries(env: NodeJS.ProcessEnv): string[] {
   const raw = env[TELEGRAM_DM_CONVERSATIONS_ENV]?.trim();
-  if (!raw) return false;
-  const entries = raw
+  if (!raw) return [];
+  return raw
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
-  return entries.includes("*") || entries.includes(endpointId);
 }
 
 export const CROSS_CHANNEL_MESSAGES_ENV = "MYRMIDON_CHAT_CROSS_CHANNEL_MESSAGES";

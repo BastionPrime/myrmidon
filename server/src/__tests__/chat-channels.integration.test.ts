@@ -11030,12 +11030,6 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       let observedCommands: Record<string, unknown> | null = null;
       let observedWebhookDelete: Record<string, unknown> | null = null;
       let observedCommandsDelete: Record<string, unknown> | null = null;
-      // myrmidon(X8e): the bridge issues its own, separately scoped
-      // deleteMyCommands/setMyCommands call after the vendor's own unscoped
-      // one on every register_commands/remove_endpoint pass. Track every
-      // deleteMyCommands call (not just the latest) to tell the vendor's
-      // unscoped cleanup apart from the bridge's all_private_chats one.
-      const observedCommandsDeletes: Array<Record<string, unknown>> = [];
       const providerFetch = vi.fn(
         async (input: string | URL | Request, init?: RequestInit) => {
           const url = String(input);
@@ -11104,7 +11098,6 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
               string,
               unknown
             >;
-            observedCommandsDeletes.push(observedCommandsDelete);
             return new Response(JSON.stringify({ ok: true, result: true }), {
               status: 200,
               headers: { "content-type": "application/json" },
@@ -11145,9 +11138,6 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         `https://api.telegram.org/bot${encodeURIComponent(botToken)}/getWebhookInfo`,
         `https://api.telegram.org/bot${encodeURIComponent(botToken)}/setWebhook`,
         `https://api.telegram.org/bot${encodeURIComponent(botToken)}/setMyCommands`,
-        // myrmidon(X8e): the bridge is disabled for this endpoint, so it
-        // idempotently clears its own all_private_chats menu right after.
-        `https://api.telegram.org/bot${encodeURIComponent(botToken)}/deleteMyCommands`,
       ]);
       expect(configured).toMatchObject({
         status: "verifying",
@@ -11233,8 +11223,6 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         `https://api.telegram.org/bot${encodeURIComponent(botToken)}/getWebhookInfo`,
         `https://api.telegram.org/bot${encodeURIComponent(botToken)}/setWebhook`,
         `https://api.telegram.org/bot${encodeURIComponent(botToken)}/setMyCommands`,
-        // myrmidon(X8e): same idempotent bridge cleanup as above.
-        `https://api.telegram.org/bot${encodeURIComponent(botToken)}/deleteMyCommands`,
       ]);
       expect(observedWebhook).toMatchObject({
         url: `${webhookPublicBaseUrl ?? "https://paperclip.example"}/api/chat-webhooks/${endpoint.publicId}/telegram`,
@@ -11245,17 +11233,9 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
 
       await service.configure(endpoint.id, { action: "remove" }, "owner-user");
       expect(observedWebhookDelete).toEqual({ drop_pending_updates: false });
-      // myrmidon(X8e): the vendor's own unscoped deleteMyCommands is
-      // immediately followed by the bridge's all_private_chats cleanup.
-      expect(observedCommandsDeletes.slice(-2)).toEqual([
-        {},
-        { scope: { type: "all_private_chats" } },
-      ]);
-      expect(observedUrls.at(-3)).toBe(
-        `https://api.telegram.org/bot${encodeURIComponent(botToken)}/deleteWebhook`,
-      );
+      expect(observedCommandsDelete).toEqual({});
       expect(observedUrls.at(-2)).toBe(
-        `https://api.telegram.org/bot${encodeURIComponent(botToken)}/deleteMyCommands`,
+        `https://api.telegram.org/bot${encodeURIComponent(botToken)}/deleteWebhook`,
       );
       expect(observedUrls.at(-1)).toBe(
         `https://api.telegram.org/bot${encodeURIComponent(botToken)}/deleteMyCommands`,
@@ -11273,10 +11253,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     let commandRateLimits = 0;
     let deleteWebhookRateLimits = 0;
     let deleteMyCommandsCalls = 0;
-    const providerFetch = vi.fn(async (
-      input: string | URL | Request,
-      init?: RequestInit,
-    ) => {
+    const providerFetch = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.endsWith("/getMe")) {
         return new Response(
@@ -11344,15 +11321,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         });
       }
       if (url.endsWith("/deleteMyCommands")) {
-        // myrmidon(X8e): the bridge always issues its own, separately scoped
-        // (all_private_chats) deleteMyCommands right after this action's
-        // vendor-shaped one, unrelated to the rate-limit retry behavior this
-        // test exercises. Count only the vendor's own unscoped call.
-        const body = JSON.parse(String(init?.body ?? "{}")) as Record<
-          string,
-          unknown
-        >;
-        if (!("scope" in body)) deleteMyCommandsCalls += 1;
+        deleteMyCommandsCalls += 1;
         return new Response(JSON.stringify({ ok: true, result: true }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -28947,15 +28916,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         status: "failed",
         result: expect.objectContaining({
           code: "telegram_maintenance_delivery_unknown",
-          // myrmidon(X8e): the bridge's own credentialLease.assertOwned()
-          // check, right after the vendor's unscoped setMyCommands, now
-          // observes the reclaimed lease before providerConfirmed is set —
-          // one assertOwned() call earlier than the vendor's original,
-          // single post-call check. The provider mutation still went
-          // through (acceptedCommandMutations below), just no longer
-          // reflected as confirmed on this attempt; the retry safely
-          // resends the idempotent setMyCommands call.
-          providerConfirmed: false,
+          providerConfirmed: true,
           retryable: true,
         }),
       },
@@ -29132,23 +29093,10 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       status: "failed",
       result: expect.objectContaining({
         code: "telegram_maintenance_delivery_unknown",
-        // myrmidon(X8e): unlike the register_commands path (see the
-        // matching note in "quarantines Telegram maintenance success…"
-        // above, where the bridge's own assertOwned() call observes the
-        // reclaim before the bridge's own follow-up provider call), here
-        // that same assertOwned() call races the interval-driven
-        // lease-loss detection and loses: the bridge's own
-        // all_private_chats deleteMyCommands call still goes out
-        // (acceptedRemovalMutations below counts all three — deleteWebhook,
-        // the vendor's unscoped deleteMyCommands, and the bridge's own
-        // scoped one). The loss is only observed at the final
-        // post-mutation assertOwned() check, after providerConfirmed was
-        // set locally but before that gets persisted, so the whole
-        // operation is still retried along with the rest.
-        providerConfirmed: false,
+        providerConfirmed: true,
       }),
     });
-    expect(acceptedRemovalMutations).toBe(3);
+    expect(acceptedRemovalMutations).toBe(2);
     // The simulated successor has no live worker. Retire only its synthetic
     // lease and removal retry after proving stale settlement could not clear
     // the successor refs, keeping later global recovery tests independent.
