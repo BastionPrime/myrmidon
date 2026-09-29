@@ -25,6 +25,7 @@ import {
   companies,
   companyMemberships,
   createDb,
+  heartbeatRuns,
   issueComments,
   issueTreeHolds,
   issues,
@@ -48,7 +49,9 @@ import {
   githubAttachmentLocator,
   rehydrateGitHubPublicAttachment,
 } from "../services/chat-github-attachments.js";
+import { heartbeatService } from "../services/heartbeat.js";
 import { issueService } from "../services/issues.js";
+import { recoveryService } from "../services/recovery/service.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { telegramConversationUserId } from "../myrmidon/agent-chat-bridge/identity.js";
 import { TELEGRAM_DM_CONVERSATIONS_ENV } from "../myrmidon/agent-chat-bridge/settings.js";
@@ -1815,6 +1818,176 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
       expect(
         publications.filter((row) => row.idempotencyKey.startsWith("control:x8-migrated:")),
       ).toHaveLength(1);
+    });
+  });
+
+  // Senior review round 1 (PR #104): the bridged /stop passes its operator
+  // attribution as `resultJson` (X8a contract). The service's cancelRun
+  // adapter used to forward it only as the run event's payload, so the
+  // cancelled run's result_json never carried `cancelledByActorType` and
+  // stranded-work recovery treated the stop as a failure to repair.
+  describe("bridged /stop attribution", () => {
+    const STOP_REASON = "Stopped from chat by the conversation owner";
+
+    // Mirrors what the X8c /stop command does with its cancelRun dependency
+    // (same reason, error code and stamp as the board's own cancel route).
+    function stubStopCommand(runId: string) {
+      vi.mocked(runBridgedDirectMessageCommand).mockImplementationOnce(async (input) => {
+        await input.cancelRun(runId, STOP_REASON, {
+          errorCode: "chat_session_stopped",
+          resultJson: {
+            cancelledByActorType: "user",
+            cancelledByUserId: input.boardUserId,
+          },
+        });
+        return { kind: "reply", command: "stop", text: "Stopped." };
+      });
+    }
+
+    // A reply-kind command binds the DM to its standing conversation issue
+    // without writing a comment or waking anyone; the in-flight turn is then
+    // a running heartbeat run for that issue.
+    async function bindDmWithRunningTurn(input: {
+      fixture: Awaited<ReturnType<typeof seedCompany>>;
+      callbacks: CreateChatSdkEndpointRuntimeOptions["callbacks"];
+      endpointId: string;
+      userId: string;
+    }) {
+      vi.mocked(runBridgedDirectMessageCommand).mockResolvedValueOnce({
+        kind: "reply",
+        command: "status",
+        text: "Agent: Maya. Model: default.",
+      });
+      await sendTelegramDm({
+        callbacks: input.callbacks,
+        endpointId: input.endpointId,
+        channelId: input.userId,
+        text: "/status",
+        userId: input.userId,
+        messageId: 1,
+      });
+      const [issue] = await db
+        .select()
+        .from(issues)
+        .where(
+          and(
+            eq(issues.companyId, input.fixture.companyId),
+            eq(issues.conversationUserId, telegramConversationUserId("owner-user")),
+          ),
+        );
+      expect(issue).toBeDefined();
+      const runId = randomUUID();
+      await db.insert(heartbeatRuns).values({
+        id: runId,
+        companyId: input.fixture.companyId,
+        agentId: input.fixture.assignedAgentId,
+        invocationSource: "on_demand",
+        triggerDetail: "manual",
+        status: "running",
+        startedAt: new Date(),
+        contextSnapshot: { issueId: issue.id },
+      });
+      return { issue, runId };
+    }
+
+    it("hands the command's resultJson to the service-level cancelRun, not only the event payload", async () => {
+      const fixture = await seedCompany();
+      const { callbacks, endpoint, cancelRun } = await configuredTelegramEndpoint(fixture);
+      await linkTelegramPrincipal({
+        companyId: fixture.companyId,
+        endpointId: endpoint.id,
+        userId: "700020",
+        boardUserId: "owner-user",
+      });
+      const { runId } = await bindDmWithRunningTurn({
+        fixture,
+        callbacks,
+        endpointId: endpoint.id,
+        userId: "700020",
+      });
+      stubStopCommand(runId);
+
+      await sendTelegramDm({
+        callbacks,
+        endpointId: endpoint.id,
+        channelId: "700020",
+        text: "/stop",
+        userId: "700020",
+        messageId: 2,
+      });
+
+      expect(cancelRun).toHaveBeenCalledTimes(1);
+      expect(cancelRun).toHaveBeenCalledWith(
+        runId,
+        STOP_REASON,
+        expect.objectContaining({
+          errorCode: "chat_session_stopped",
+          resultJson: { cancelledByActorType: "user", cancelledByUserId: "owner-user" },
+        }),
+      );
+    });
+
+    it("marks the cancelled run as stopped by the operator so recovery leaves the agent alone", async () => {
+      const fixture = await seedCompany();
+      const heartbeat = heartbeatService(db);
+      const { callbacks, endpoint, cancelRun } = await configuredTelegramEndpoint(fixture, {
+        cancelRun: (runId, reason, options) => heartbeat.cancelRun(runId, reason, options),
+      });
+      await linkTelegramPrincipal({
+        companyId: fixture.companyId,
+        endpointId: endpoint.id,
+        userId: "700021",
+        boardUserId: "owner-user",
+      });
+      const { issue, runId } = await bindDmWithRunningTurn({
+        fixture,
+        callbacks,
+        endpointId: endpoint.id,
+        userId: "700021",
+      });
+      stubStopCommand(runId);
+
+      await sendTelegramDm({
+        callbacks,
+        endpointId: endpoint.id,
+        channelId: "700021",
+        text: "/stop",
+        userId: "700021",
+        messageId: 2,
+      });
+      await heartbeat.drainActiveRunExecutions();
+
+      expect(cancelRun).toHaveBeenCalledTimes(1);
+      const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+      expect(run.status).toBe("cancelled");
+      expect(run.errorCode).toBe("chat_session_stopped");
+      expect(run.resultJson).toMatchObject({
+        cancelledByActorType: "user",
+        cancelledByUserId: "owner-user",
+      });
+
+      // Recovery reads the assignee's latest run for a todo / in_progress
+      // issue (an in_review conversation has no execution participant to
+      // read one from), so look at the conversation in that status.
+      await db
+        .update(issues)
+        .set({ status: "in_progress", conversationState: "active" })
+        .where(eq(issues.id, issue.id));
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const result = await recovery.reconcileStrandedAssignedIssues({
+        issueCreatedAtGte: issue.createdAt,
+      });
+
+      expect(result.operatorCancelExempted).toBe(1);
+      expect(result.escalated).toBe(0);
+      expect(enqueueWakeup).not.toHaveBeenCalled();
+      const runsAfter = await db
+        .select({ id: heartbeatRuns.id })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.agentId, fixture.assignedAgentId));
+      expect(runsAfter).toEqual([{ id: runId }]);
     });
   });
 });

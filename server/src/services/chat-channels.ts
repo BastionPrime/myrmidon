@@ -1400,6 +1400,10 @@ export interface ChatChannelServiceOptions {
         errorCode?: string;
         eventMessage?: string;
         eventPayload?: Record<string, unknown>;
+        // myrmidon(X8b): merged into heartbeat_runs.result_json by the real
+        // heartbeatService.cancelRun (CancelRunOptions.resultJson); carries
+        // the bridged /stop attribution that recovery reads.
+        resultJson?: Record<string, unknown>;
       },
     ) => Promise<unknown>;
   };
@@ -2979,8 +2983,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   const issuesSvc = issueService(db);
   // myrmidon(X8b): the Telegram-DM-as-Agent-Chat bridge (server/src/myrmidon/
   // agent-chat-bridge/bridge.ts) needs a few of this closure's own helpers.
-  // `options.heartbeat.cancelRun`'s shape predates the bridged-command
-  // contract (X8a); adapt it rather than widen the vendor shape.
+  // The bridged-command contract (X8a) passes `resultJson`; forward it as
+  // `resultJson` so the cancelled run's result_json carries the operator
+  // attribution (`cancelledByActorType: "user"`) that stranded-work recovery
+  // reads to leave a /stop-ped conversation alone. It is also kept as the
+  // run event's payload, which is what this adapter sent before.
   const x8CancelRun = options.heartbeat.cancelRun
     ? async (
         runId: string,
@@ -2989,6 +2996,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       ) =>
         options.heartbeat.cancelRun!(runId, reason, {
           errorCode: cancelOptions.errorCode,
+          resultJson: cancelOptions.resultJson,
           eventPayload: cancelOptions.resultJson,
         })
     : undefined;
