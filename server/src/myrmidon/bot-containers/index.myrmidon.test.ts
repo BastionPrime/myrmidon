@@ -291,3 +291,130 @@ describe("startBotContainerReconciliation", () => {
     }
   });
 });
+
+describe("applyBotContainerNow: syncCard hook (W2a)", () => {
+  function activitySink() {
+    const entries: Array<{ level: string; message: string; details?: Record<string, unknown> }> = [];
+    return { entries, record: (entry: { level: string; message: string; details?: Record<string, unknown> }) => void entries.push(entry) };
+  }
+
+  it("does not call syncCard while the flag is off", async () => {
+    const syncCard = vi.fn(async () => ({ changedKeys: ["apiBaseUrl"] }));
+    const outcome = await applyBotContainerNow(agent(), deps(minimalDriver(), { syncCard }), { env: {} });
+    expect(outcome.kind).toBe("not_applicable");
+    expect(syncCard).not.toHaveBeenCalled();
+  });
+
+  it("does not call syncCard for a card that is not in container mode", async () => {
+    const syncCard = vi.fn(async () => ({ changedKeys: [] as string[] }));
+    const outcome = await applyBotContainerNow(agent({ adapterConfig: {} }), deps(minimalDriver(), { syncCard }), { env: ENABLED });
+    expect(outcome.kind).toBe("not_applicable");
+    expect(syncCard).not.toHaveBeenCalled();
+  });
+
+  it("calls syncCard with the agent id and bot key after a pass that left the container applied, and logs a change", async () => {
+    const cases: Array<[string, BotContainerDriver, string]> = [
+      ["unchanged", minimalDriver(), "unchanged"],
+      [
+        "created",
+        minimalDriver({ status: async (botKey) => ({ botKey, state: "missing" }) }),
+        "created",
+      ],
+      [
+        "applied_files",
+        minimalDriver({ status: async (botKey) => ({ botKey, state: "running", restartHash: "r", filesHash: "old" }) }),
+        "applied_files",
+      ],
+    ];
+    for (const [label, driver, kind] of cases) {
+      const syncCard = vi.fn(async () => ({ changedKeys: ["apiBaseUrl", "apiKey"] }));
+      const sink = activitySink();
+      const outcome = await applyBotContainerNow(agent(), deps(driver, { syncCard, activity: sink }), { env: ENABLED });
+      expect(outcome.kind, label).toBe(kind);
+      expect(syncCard, label).toHaveBeenCalledTimes(1);
+      expect(syncCard, label).toHaveBeenCalledWith("agent-a", "agent-a");
+      const synced = sink.entries.filter((entry) => entry.message === "agent card pointed at the bot container");
+      expect(synced, label).toHaveLength(1);
+      expect(synced[0]?.details).toEqual({ changedKeys: ["apiBaseUrl", "apiKey"] });
+    }
+  });
+
+  it("stays quiet when the card already matches", async () => {
+    const sink = activitySink();
+    const syncCard = vi.fn(async () => ({ changedKeys: [] as string[] }));
+    await applyBotContainerNow(agent(), deps(minimalDriver(), { syncCard, activity: sink }), { env: ENABLED });
+    expect(syncCard).toHaveBeenCalledTimes(1);
+    expect(sink.entries).toEqual([]);
+  });
+
+  it("skips syncCard when the reconcile failed", async () => {
+    const syncCard = vi.fn(async () => ({ changedKeys: ["apiBaseUrl"] }));
+    const outcome = await applyBotContainerNow(
+      agent(),
+      deps(minimalDriver(), {
+        syncCard,
+        compile: async () => {
+          throw new Error("no hindsight bank");
+        },
+      }),
+      { env: ENABLED },
+    );
+    expect(outcome).toEqual({ kind: "error", message: "no hindsight bank" });
+    expect(syncCard).not.toHaveBeenCalled();
+  });
+
+  it("skips syncCard when the update is deferred to a later pass", async () => {
+    const syncCard = vi.fn(async () => ({ changedKeys: ["apiBaseUrl"] }));
+    const driver = minimalDriver({
+      status: async (botKey) => ({ botKey, state: "running", restartHash: "old", filesHash: "f" }),
+    });
+    const foreignWindow = { ...fakeMaintenance(), enter: async () => ({ state: "on" as const, runningRuns: 0, owned: false }) };
+    const outcome = await applyBotContainerNow(agent(), deps(driver, { syncCard, maintenance: foreignWindow }), { env: ENABLED });
+    expect(outcome.kind).toBe("deferred");
+    expect(syncCard).not.toHaveBeenCalled();
+  });
+
+  it("records a failing syncCard as an error but keeps the reconcile outcome", async () => {
+    const sink = activitySink();
+    const syncCard = vi.fn(async () => {
+      throw new Error("database is down");
+    });
+    const outcome = await applyBotContainerNow(agent(), deps(minimalDriver(), { syncCard, activity: sink }), { env: ENABLED });
+    expect(outcome).toEqual({ kind: "unchanged" });
+    expect(sink.entries).toEqual([
+      {
+        level: "error",
+        agentId: "agent-a",
+        botKey: "agent-a",
+        message: "failed to point the agent card at the bot container",
+        details: { error: "database is down" },
+      },
+    ]);
+  });
+
+  it("runs inside the per-bot lock: a second apply for the same bot waits for the sync", async () => {
+    const gate = deferred();
+    const events: string[] = [];
+    const syncCard = vi.fn(async () => {
+      events.push("sync:start");
+      await gate.promise;
+      events.push("sync:end");
+      return { changedKeys: [] as string[] };
+    });
+    const driver = minimalDriver({
+      status: async (botKey) => {
+        events.push("status");
+        return { botKey, state: "running", restartHash: "r", filesHash: "f" };
+      },
+    });
+    const shared = deps(driver, { syncCard });
+    const first = applyBotContainerNow(agent(), shared, { env: ENABLED });
+    await flush();
+    const second = applyBotContainerNow(agent(), shared, { env: ENABLED });
+    await flush();
+    expect(events).toEqual(["status", "sync:start"]);
+    gate.resolve();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["status", "sync:start", "sync:end", "status", "sync:start", "sync:end"]);
+  });
+});
