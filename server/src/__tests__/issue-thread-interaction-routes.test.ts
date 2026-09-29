@@ -49,6 +49,15 @@ const mockHeartbeatService = vi.hoisted(() => ({
   wakeup: vi.fn(async () => undefined),
   cancelRun: vi.fn(async () => null),
 }));
+
+// myrmidon(O1): continuation outbox. The intent write runs through the real
+// builder against a fake transaction that records the inserted row;
+// interactionContinuationOutboxService mirrors the post-commit delivery.
+const mockOutboxIntents = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+const mockInteractionContinuationOutbox = vi.hoisted(() => ({
+  tryDeliver: vi.fn(async (_interactionId: string, _status: string) => undefined),
+  sweepPending: vi.fn(async () => ({ scanned: 0, delivered: 0, failed: 0 })),
+}));
 const mockRequestNativeQuestionRunCancellation = vi.hoisted(() =>
   vi.fn(async () => null as string | null)
 );
@@ -161,6 +170,14 @@ vi.mock("../services/trust-preset-resolver.js", () => ({
 function registerModuleMocks() {
   vi.doMock("../services/question-response-delivery.js", () => ({
     questionResponseDeliveryService: () => mockQuestionResponseDeliveries,
+  }));
+  // myrmidon(O1): only the post-commit delivery is mocked; the intent builder
+  // is the real one.
+  vi.doMock("../myrmidon/interaction-continuation-outbox.js", async () => ({
+    ...(await vi.importActual<typeof import("../myrmidon/interaction-continuation-outbox.js")>(
+      "../myrmidon/interaction-continuation-outbox.js",
+    )),
+    interactionContinuationOutboxService: () => mockInteractionContinuationOutbox,
   }));
   vi.doMock("../services/index.js", () => ({
     companyService: () => ({
@@ -326,6 +343,8 @@ describe.sequential("issue thread interaction routes", () => {
     // queue. That gap once let a leftover queued value deny an unrelated
     // later test.
     vi.resetAllMocks();
+    // Recorded intents are plain-array state, not vi.fn() call history.
+    mockOutboxIntents.length = 0;
     // mockRunAttribution.value is a plain object, not a vi.fn().
     // resetAllMocks() does not reset it. createApp() overwrites it for an
     // agent actor. A board actor leaves whatever value a prior test set here.
@@ -770,6 +789,8 @@ describe.sequential("issue thread interaction routes", () => {
       "interaction-1",
       { selectedClientKeys: ["task-1"] },
       expect.objectContaining({ userId: "local-board" }),
+      // myrmidon(O1): the accept route now passes the outbox mutation hook.
+      { afterResolveInTransaction: expect.any(Function) },
     );
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(2);
     expect(mockHeartbeatService.wakeup).toHaveBeenNthCalledWith(
@@ -1176,6 +1197,143 @@ describe.sequential("issue thread interaction routes", () => {
     );
     expect(mockHeartbeatService.wakeup.mock.calls[0]?.[1]?.payload).not.toHaveProperty("toolAction");
     expect(mockHeartbeatService.wakeup.mock.calls[0]?.[1]?.contextSnapshot).not.toHaveProperty("toolAction");
+  });
+
+  // myrmidon(O1): the continuation wake must survive a fire-and-forget failure.
+  function acceptedOutboxInteraction(id: string, continuationPolicy: string) {
+    return {
+      id,
+      companyId: "company-1",
+      issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      kind: "request_confirmation",
+      status: "accepted",
+      continuationPolicy,
+      idempotencyKey: null,
+      sourceCommentId: null,
+      sourceRunId: RUN_3,
+      payload: { version: 1, prompt: "Proceed?" },
+      result: { version: 1, outcome: "accepted" },
+      createdAt: "2026-04-20T12:00:00.000Z",
+      updatedAt: "2026-04-20T12:05:00.000Z",
+      resolvedAt: "2026-04-20T12:05:00.000Z",
+    };
+  }
+
+  // Mirrors the real service: afterResolveInTransaction (the outbox intent
+  // write) runs INSIDE the resolution transaction, before the route sees the
+  // committed result. The fake transaction records the inserted row.
+  function mockAcceptWithResolutionHook(interaction: ReturnType<typeof acceptedOutboxInteraction>) {
+    const tx = {
+      insert: () => ({
+        values: (values: Record<string, unknown>) => {
+          mockOutboxIntents.push(values);
+          return { onConflictDoNothing: async () => undefined };
+        },
+      }),
+    };
+    mockInteractionService.getForIssue.mockResolvedValue({
+      id: interaction.id,
+      kind: "request_confirmation",
+      status: "pending",
+      continuationPolicy: interaction.continuationPolicy,
+      sourceCommentId: null,
+      sourceRunId: RUN_1,
+      createdByAgentId: CREATED_AGENT_ID,
+      requestedResolverPolicy: "board_or_agents",
+      effectiveResolverPolicy: "board_or_agents",
+      payload: { version: 1, prompt: "Proceed?" },
+    });
+    mockInteractionService.acceptInteraction.mockImplementationOnce(
+      async (...args: unknown[]) => {
+        const mutationOptions = args[4] as {
+          afterResolveInTransaction?: (
+            tx: unknown,
+            resolved: Record<string, unknown>,
+          ) => Promise<void>;
+        } | undefined;
+        await mutationOptions?.afterResolveInTransaction?.(tx, interaction);
+        return { interaction, createdIssues: [], continuationIssue: null };
+      },
+    );
+  }
+
+  it("persists the continuation outbox intent in the accept transaction and retries delivery when the direct wake fails", async () => {
+    mockAcceptWithResolutionHook(acceptedOutboxInteraction("interaction-outbox", "wake_assignee"));
+    // Simulate the defect: the direct wake admission dies (lock contention /
+    // restart) and leaves no durable row behind.
+    mockHeartbeatService.wakeup.mockRejectedValueOnce(new Error("admission failed"));
+    const app = await createApp();
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-outbox/accept")
+      .send({});
+
+    expect(res.status).toBe(200);
+    // The intent was written by the hook the route handed to the service.
+    expect(mockOutboxIntents).toHaveLength(1);
+    const intent = mockOutboxIntents[0] as {
+      agentId: string;
+      status: string;
+      idempotencyKey: string;
+      payload: {
+        interactionId: string;
+        interactionContinuationOutbox: {
+          wakeIdempotencyKey: string;
+          payload: Record<string, unknown>;
+        };
+      };
+    };
+    expect(intent.agentId).toBe(ASSIGNEE_AGENT_ID);
+    expect(intent.status).toBe("queued");
+    expect(intent.idempotencyKey).toBe(
+      "interaction-continuation-outbox:interaction-outbox:accepted",
+    );
+    expect(intent.payload.interactionId).toBe("interaction-outbox");
+    expect(intent.payload.interactionContinuationOutbox.wakeIdempotencyKey).toBe(
+      "interaction:interaction-outbox:accepted",
+    );
+    expect(intent.payload.interactionContinuationOutbox.payload.mutation).toBe("interaction");
+    // The failed direct wake falls back to the durable outbox delivery.
+    await vi.waitFor(() => {
+      expect(mockInteractionContinuationOutbox.tryDeliver).toHaveBeenCalledWith(
+        "interaction-outbox",
+        "accepted",
+      );
+    });
+  });
+
+  it("reconciles the continuation outbox intent after a successful direct wake", async () => {
+    mockAcceptWithResolutionHook(acceptedOutboxInteraction("interaction-outbox-ok", "wake_assignee"));
+    const app = await createApp();
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-outbox-ok/accept")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockOutboxIntents).toHaveLength(1);
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(1);
+    // A settled direct wake still reconciles the intent (marks it terminal
+    // once the durable row exists) instead of leaving it for the sweep.
+    await vi.waitFor(() => {
+      expect(mockInteractionContinuationOutbox.tryDeliver).toHaveBeenCalledWith(
+        "interaction-outbox-ok",
+        "accepted",
+      );
+    });
+  });
+
+  it("writes no continuation outbox intent for a card that asked for no continuation", async () => {
+    mockAcceptWithResolutionHook(acceptedOutboxInteraction("interaction-outbox-none", "none"));
+    const app = await createApp();
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-outbox-none/accept")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockOutboxIntents).toHaveLength(0);
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
   });
 
   it("executes an accepted tool-action confirmation through the gateway callback", async () => {
@@ -1587,6 +1745,8 @@ describe.sequential("issue thread interaction routes", () => {
       "interaction-checkbox",
       { selectedOptionIds: ["file-b"] },
       expect.objectContaining({ userId: "local-board" }),
+      // myrmidon(O1): the accept route now passes the outbox mutation hook.
+      { afterResolveInTransaction: expect.any(Function) },
     );
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(1);
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
@@ -2409,6 +2569,8 @@ describe.sequential("issue thread interaction routes", () => {
         resolverPolicyRestriction: "anyone",
         suggestedTaskEffectsAuthorized: true,
       },
+      // myrmidon(O1): no outbox hook for a card whose policy does not wake the assignee.
+      {},
     );
     expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       actorType: "agent",

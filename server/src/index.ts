@@ -125,6 +125,7 @@ import { systemdNotify } from "./services/systemd-notify.js";
 import { flushInFlightRunLogMirrors } from "./services/run-log-store.js";
 import { startMaintenanceMode } from "./myrmidon/maintenance/index.js"; // myrmidon(R3)
 import { startBotContainers, stopBotContainers } from "./myrmidon/bot-containers/startup.js"; // myrmidon(W2a)
+import { interactionContinuationOutboxService } from "./myrmidon/interaction-continuation-outbox.js"; // myrmidon(O1)
 // myrmidon(P11): database backup catch-up
 import { BACKUP_CATCHUP_WINDOW_ENV, readBackupCatchUpSettings, startBackupCatchUp } from "./myrmidon/backup-catch-up.js";
 import {
@@ -1233,6 +1234,9 @@ async function startServerWithDatabaseTeardown(
     heartbeat: environmentLeaseCleanupHeartbeat,
     resolveNativeQuestion: (interaction) => deliverNativeQuestionResponse(db as any, interaction),
   });
+  // myrmidon(O1): re-sends accept-continuation wakes whose post-commit dispatch was lost
+  const interactionContinuationOutboxDeliveries =
+    interactionContinuationOutboxService(db as any, environmentLeaseCleanupHeartbeat);
   const runEnvironmentLeaseCleanupSweep = (backoffMs: number) =>
     environmentLeaseCleanupHeartbeat
       .sweepPendingCleanupLeases({ backoffMs })
@@ -1762,6 +1766,17 @@ async function startServerWithDatabaseTeardown(
 
         if (heartbeatSchedulerStopped) return;
         if (!(await heartbeat.resolveSchedulingSuppression()).suppressed) {
+          // myrmidon(O1): outside a suppression window only, so a refused wake is not
+          // retried into a skipped row on every tick
+          trackHeartbeatSchedulerWork(interactionContinuationOutboxDeliveries.sweepPending()
+            .then((result) => {
+              if (result.scanned > 0) {
+                logger.info(result, "periodic interaction continuation outbox sweep completed");
+              }
+            })
+            .catch((err) => {
+              logger.error({ err }, "periodic interaction continuation outbox sweep failed");
+            }));
           // Periodically reap orphaned runs (5-min staleness threshold) and make sure
           // persisted queued work is still being driven forward.
           trackHeartbeatSchedulerWork(heartbeat
