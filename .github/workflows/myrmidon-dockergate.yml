@@ -1,0 +1,177 @@
+name: Myrmidon dockergate image
+
+# Builds tools/dockergate (the allowlisting Docker proxy for the bot-container
+# driver, docs/myrmidon/dockergate.md) into docker/dockergate/Dockerfile and
+# publishes it to ghcr.io/itkadr-git/myrmidon-dockergate. On a pull request it
+# runs the Go checks and builds the image without publishing (no registry
+# credentials involved); on push to main or a myr-v* tag it publishes by
+# digest, by the pattern of myrmidon-bot-image.yml. The Go checks and the
+# contract with the driver also run in myrmidon-ci.yml (job `dockergate`),
+# which feeds the required `CI result`.
+
+on:
+  push:
+    branches: [main]
+    tags: ["myr-v*"]
+    paths:
+      - "tools/dockergate/**"
+      - "docker/dockergate/**"
+      - ".github/workflows/myrmidon-dockergate.yml"
+  pull_request:
+    paths:
+      - "tools/dockergate/**"
+      - "docker/dockergate/**"
+      - ".github/workflows/myrmidon-dockergate.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: myrmidon-dockergate-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/itkadr-git/myrmidon-dockergate
+  GO_IMAGE: golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437
+
+jobs:
+  build:
+    name: build
+    if: ${{ github.repository == 'itkadr-git/myrmidon' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: go vet and go test
+        run: |
+          set -euo pipefail
+          docker run --rm --network none -v "$PWD/tools/dockergate:/src" -w /src \
+            -e GOFLAGS=-mod=mod -e GOTOOLCHAIN=local -e GOCACHE=/tmp/gocache "$GO_IMAGE" \
+            sh -euc 'go vet ./... && go test -count=1 ./...'
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/myr-v* ]]; then
+            tag="${GITHUB_REF#refs/tags/myr-}"
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::release tag must look like myr-vX.Y.Z, got ${GITHUB_REF#refs/tags/}"
+              exit 1
+            fi
+            echo "image_tag=${tag#v}" >> "$GITHUB_OUTPUT"
+            echo "binary_version=${tag#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=" >> "$GITHUB_OUTPUT"
+            echo "binary_version=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Login to GitHub Container Registry
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # metadata-action adds org.opencontainers.image.{revision,source,version,created};
+      # the deploy script checks the revision label against origin/main or a myr-v* tag.
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.version.outputs.image_tag }},enable=${{ startsWith(github.ref, 'refs/tags/myr-v') }}
+          labels: |
+            org.opencontainers.image.title=Myrmidon dockergate
+            org.opencontainers.image.description=Allowlisting Docker socket proxy for the Myrmidon bot-container driver
+            org.opencontainers.image.source=https://github.com/itkadr-git/myrmidon
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build (pull request, no push)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: tools/dockergate
+          file: docker/dockergate/Dockerfile
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=pr
+            REVISION=${{ github.sha }}
+          tags: myrmidon-dockergate:pr-check
+          push: false
+          load: true
+
+      # Check the finished image, not the Dockerfile: non-root user, the binary
+      # answers, and check-config refuses an empty configuration.
+      - name: Check the built image
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          user="$(docker image inspect --format '{{ .Config.User }}' myrmidon-dockergate:pr-check)"
+          if [ "$user" != "65532:65532" ]; then
+            echo "::error::image user is '$user', expected 65532:65532"
+            exit 1
+          fi
+          docker run --rm --network none myrmidon-dockergate:pr-check version
+          echo '{}' > "$RUNNER_TEMP/empty.json"
+          if docker run --rm --network none -v "$RUNNER_TEMP/empty.json:/c.json:ro" \
+              myrmidon-dockergate:pr-check check-config --config /c.json; then
+            echo "::error::check-config accepted an empty configuration"
+            exit 1
+          fi
+
+      - name: Build and push by digest
+        id: build
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: tools/dockergate
+          file: docker/dockergate/Dockerfile
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.binary_version }}
+            REVISION=${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Tag the built digest
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=(-t "$tag")
+          done < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools create "${args[@]}" "$IMAGE@$DIGEST"
+          docker buildx imagetools inspect "$IMAGE@$DIGEST"
+
+      - name: Summary
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### Myrmidon dockergate image"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Digest | \`$IMAGE@$DIGEST\` |"
+            echo "| Tags | $(jq -r '.tags | map("`" + . + "`") | join(", ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") |"
+          } >> "$GITHUB_STEP_SUMMARY"

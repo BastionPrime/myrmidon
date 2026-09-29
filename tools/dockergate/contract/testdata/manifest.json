@@ -1,0 +1,172 @@
+{
+ "botKey": "3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e",
+ "image": "ghcr.io/itkadr-git/myrmidon-hermes@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+ "imageId": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+ "volumeRoot": "/srv/myrmidon-bots",
+ "network": "myrmidon-bots",
+ "nonces": [
+  "0123456789abcdef",
+  "fedcba9876543210",
+  "00000000ffffffff",
+  "a1b2c3d4e5f60718",
+  "9999999999999999"
+ ],
+ "bodies": [
+  {
+   "id": "bot-plain",
+   "form": "bot",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e",
+   "file": "bodies/bot-plain.json",
+   "memoryMb": 1024,
+   "cpus": 1,
+   "pidsLimit": 512
+  },
+  {
+   "id": "bot-plain",
+   "form": "bot",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.next",
+   "file": "bodies/bot-plain-next.json",
+   "memoryMb": 1024,
+   "cpus": 1,
+   "pidsLimit": 512
+  },
+  {
+   "id": "bot-fractional-cpus",
+   "form": "bot",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e",
+   "file": "bodies/bot-fractional-cpus.json",
+   "memoryMb": 768,
+   "cpus": 0.25,
+   "pidsLimit": 256
+  },
+  {
+   "id": "bot-fractional-cpus",
+   "form": "bot",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.next",
+   "file": "bodies/bot-fractional-cpus-next.json",
+   "memoryMb": 768,
+   "cpus": 0.25,
+   "pidsLimit": 256
+  },
+  {
+   "id": "bot-fractional-both",
+   "form": "bot",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e",
+   "file": "bodies/bot-fractional-both.json",
+   "memoryMb": 1536.5,
+   "cpus": 2.3,
+   "pidsLimit": 1024
+  },
+  {
+   "id": "bot-fractional-both",
+   "form": "bot",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.next",
+   "file": "bodies/bot-fractional-both-next.json",
+   "memoryMb": 1536.5,
+   "cpus": 2.3,
+   "pidsLimit": 1024
+  },
+  {
+   "id": "bot-tenth",
+   "form": "bot",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e",
+   "file": "bodies/bot-tenth.json",
+   "memoryMb": 512,
+   "cpus": 0.1,
+   "pidsLimit": 64
+  },
+  {
+   "id": "bot-tenth",
+   "form": "bot",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.next",
+   "file": "bodies/bot-tenth-next.json",
+   "memoryMb": 512,
+   "cpus": 0.1,
+   "pidsLimit": 64
+  },
+  {
+   "id": "helper-prepare",
+   "form": "helper-prepare",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+   "file": "bodies/helper-prepare.json",
+   "image": "ghcr.io/itkadr-git/myrmidon-hermes@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  {
+   "id": "helper-prepare-by-id",
+   "form": "helper-prepare",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+   "file": "bodies/helper-prepare-by-id.json",
+   "image": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+  },
+  {
+   "id": "helper-apply-0123456789abcdef",
+   "form": "helper-apply",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+   "file": "bodies/helper-apply-0123456789abcdef.json",
+   "image": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "nonce": "0123456789abcdef"
+  },
+  {
+   "id": "helper-apply-fedcba9876543210",
+   "form": "helper-apply",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+   "file": "bodies/helper-apply-fedcba9876543210.json",
+   "image": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "nonce": "fedcba9876543210"
+  },
+  {
+   "id": "helper-apply-00000000ffffffff",
+   "form": "helper-apply",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+   "file": "bodies/helper-apply-00000000ffffffff.json",
+   "image": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "nonce": "00000000ffffffff"
+  },
+  {
+   "id": "helper-apply-a1b2c3d4e5f60718",
+   "form": "helper-apply",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+   "file": "bodies/helper-apply-a1b2c3d4e5f60718.json",
+   "image": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "nonce": "a1b2c3d4e5f60718"
+  },
+  {
+   "id": "helper-apply-9999999999999999",
+   "form": "helper-apply",
+   "name": "myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+   "file": "bodies/helper-apply-9999999999999999.json",
+   "image": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "nonce": "9999999999999999"
+  }
+ ],
+ "archives": [
+  {
+   "id": "full",
+   "mountPath": "/data/hermes",
+   "nonce": "0123456789abcdef",
+   "mtime": 1780000000,
+   "file": "archives/full-data_hermes.tar"
+  },
+  {
+   "id": "full",
+   "mountPath": "/workspace",
+   "nonce": "0123456789abcdef",
+   "mtime": 1780000000,
+   "file": "archives/full-workspace.tar"
+  },
+  {
+   "id": "full",
+   "mountPath": "/scratch",
+   "nonce": "0123456789abcdef",
+   "mtime": 1780000000,
+   "file": "archives/full-scratch.tar"
+  },
+  {
+   "id": "minimal",
+   "mountPath": "/data/hermes",
+   "nonce": "fedcba9876543210",
+   "mtime": 1780000000,
+   "file": "archives/minimal-data_hermes.tar"
+  }
+ ]
+}
