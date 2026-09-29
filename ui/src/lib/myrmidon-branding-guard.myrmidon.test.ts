@@ -9,9 +9,10 @@
 // products/services (Paperclip Cloud, Paperclip Labs, Paperclip EE /
 // Enterprise), wire-protocol identifiers (X-Paperclip-* headers, PAPERCLIP_*
 // env vars, @paperclipai/* packages, the lucide-react "Paperclip" attachment
-// icon) and the MIT attribution line. Product parts we own and show to a
-// human ("Myrmidon Runner", "Myrmidon Computer", "Myrmidon-managed") are NOT
-// exempt. See docs/myrmidon/CONVENTIONS.md #8/#9.
+// icon), the MIT attribution line and the legacy "Paperclip ..." recovery-notice
+// sentences that old stored comments still carry (matchers and variants only).
+// Product parts we own and show to a human ("Myrmidon Runner", "Myrmidon
+// Computer", "Myrmidon-managed") are NOT exempt. See docs/myrmidon/CONVENTIONS.md #8/#9.
 import { describe, expect, it } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -31,6 +32,20 @@ const WORD_PATTERN = /\bPaperclip\b(?!\s+Cloud|-Cloud|\s+Labs|\s+EE\b|\s+Enterpr
 const LINE_ALLOW_SUBSTR = [
   "Based on Paperclip", // required MIT attribution, see docs/myrmidon/CONVENTIONS.md #9
   "X-Paperclip", // HTTP header names: a wire-protocol identifier, not visible copy
+];
+
+// Line-level exemptions for legacy-text matchers and their pre-rename variants.
+// Comments stored in the database before the rename still read "Paperclip ...",
+// and the UI recognises recovery notices by that exact text, so a line that
+// spells the old sentence out (a regexp literal, or the legacy variant next to
+// the current one) must keep saying "Paperclip". The entries are whole legacy
+// sentences, not the bare word, so a "Paperclip" on any line that does not
+// carry one of them is still a violation.
+const LEGACY_TEXT_ALLOW_SUBSTR = [
+  "/^Paperclip exhausted the bounded successful-run handoff correction",
+  "Paperclip exhausted the bounded successful-run handoff correction for this issue",
+  "Paperclip needs a disposition before this issue can continue.",
+  "Paperclip could not resolve this issue's missing disposition automatically.",
 ];
 
 // A raw source line can contain a JS string-escape sequence (\n, \t, \r, \"
@@ -83,6 +98,7 @@ function findViolationsIn(files: string[], relativeTo: string): Violation[] {
       const stripped = rawLine.trim();
       if (isCommentLine(stripped)) continue;
       if (LINE_ALLOW_SUBSTR.some((s) => rawLine.includes(s))) continue;
+      if (LEGACY_TEXT_ALLOW_SUBSTR.some((s) => rawLine.includes(s))) continue;
       if (LUCIDE_IMPORT_LINE.test(rawLine) && /\bPaperclip\b/.test(rawLine)) continue;
       if (lucideIcon && IMPORT_LIST_BARE.test(rawLine)) continue;
 
