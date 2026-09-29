@@ -4,6 +4,8 @@ import type {
   ChatSdkStatePersistence,
   ChatSdkStateScope,
 } from "./chat-sdk-state.js";
+// myrmidon(B1): product name in the user-facing form-denial text below; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 
 const CORRECTION_TTL_MS = 10 * 60 * 1000;
 const MAX_CAS_ATTEMPTS = 8;
@@ -332,6 +334,6 @@ export function discordQuestionFormCorrectionModal(
 export const discordQuestionFormDenialResponse = (): ModalResponse => ({
   action: "errors",
   errors: {
-    form: "This form is no longer authorized. Open the linked Paperclip task.",
+    form: `This form is no longer authorized. Open the linked ${PRODUCT_NAME} task.`,
   },
 });

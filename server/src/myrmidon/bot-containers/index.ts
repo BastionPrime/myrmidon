@@ -7,15 +7,19 @@
 // serialized per bot through the same lock (bot-key-lock.ts), so a sweep and an
 // "apply now" for one bot never run at the same time.
 //
+// W2a fills the two connection points this module leaves open for the board's own
+// data: `BotContainerRuntimeDeps.compile` (profile-compile.ts builds the input of
+// the G2 compiler from the card) and `syncCard` (card-sync.ts points the card's
+// apiBaseUrl/apiKey at the container once it is up). Both are still injected here,
+// bound to the database in profile-ports.ts — this module stays free of queries.
+//
 // What is deliberately NOT here:
-//  - compileHermesProfile (G2, a neighboring PR): `BotContainerRuntimeDeps.compile`
-//    is the one explicit connection point a caller fills in once G2 lands.
 //  - the actual agents-table query behind `startBotContainerReconciliation`: that
 //    is passed in as `listAgents` rather than written here, so this module does
-//    not guess at query shapes for a table it does not otherwise touch. The pilot
-//    PR (P1, containers-plan-senior-2026-09-28.md's release table) is expected to
-//    supply it and call startBotContainerReconciliation from server/src/index.ts,
-//    the same way that file already calls startMaintenanceMode.
+//    not guess at query shapes for a table it does not otherwise touch. It is
+//    agents-query.ts, and startup.ts (called from server/src/index.ts next to
+//    startMaintenanceMode) builds the runtime, starts the sweep with it and
+//    registers the runtime for the card's "Apply now" (routes-wiring.ts).
 //  - the container image builder and docker-compose network (G1).
 
 import type { Db } from "@paperclipai/db";
@@ -110,8 +114,15 @@ export interface BotContainerAgent {
 
 export interface BotContainerRuntimeDeps {
   driver: BotContainerDriver;
-  /** The connection point for G2's compileHermesProfile. */
+  /** Builds the bot's compiled profile: createBotProfileCompile (profile-compile.ts), which
+   *  feeds G2's compileHermesProfile from the card. */
   compile: (agentId: string, botKey: string) => Promise<CompiledProfile>;
+  /** Optional. Runs after a reconcile pass that left the container in place with its
+   *  profile applied (created / applied_* / unchanged), inside the same per-bot lock:
+   *  createBotCardSync (card-sync.ts) sets the card's apiBaseUrl/apiKey to the
+   *  container. A failure is recorded in the activity log; it does not change the
+   *  reconcile outcome, since the container itself is fine. */
+  syncCard?: (agentId: string, botKey: string) => Promise<{ changedKeys: string[] }>;
   maintenance: BotMaintenancePort;
   activity?: BotContainerActivitySink;
   network: string;
@@ -141,8 +152,8 @@ export async function applyBotContainerNow(
   if (!botKey) return { kind: "not_applicable", reason: `agent id "${agent.agentId}" cannot be used as a bot key` };
   const spec = botContainerSpec(botKey, parsed.config, deps.network);
   const lock = deps.lock ?? botKeyLock;
-  return lock.run(botKey, () =>
-    reconcileBot({
+  return lock.run(botKey, async () => {
+    const outcome = await reconcileBot({
       agentId: agent.agentId,
       botKey,
       spec,
@@ -150,8 +161,56 @@ export async function applyBotContainerNow(
       driver: deps.driver,
       maintenance: deps.maintenance,
       activity: deps.activity,
-    }),
+    });
+    if (deps.syncCard && leavesContainerApplied(outcome)) {
+      await syncCardAfterReconcile(agent.agentId, botKey, deps.syncCard, deps.activity);
+    }
+    return outcome;
+  });
+}
+
+/** `deferred` (a change waiting for a maintenance window) and `error` say nothing
+ *  about the container being ready for the card to point at, so they skip the sync. */
+function leavesContainerApplied(outcome: ReconcileOutcome): boolean {
+  return (
+    outcome.kind === "created" ||
+    outcome.kind === "applied_files" ||
+    outcome.kind === "applied_restart" ||
+    outcome.kind === "unchanged"
   );
+}
+
+async function syncCardAfterReconcile(
+  agentId: string,
+  botKey: string,
+  syncCard: NonNullable<BotContainerRuntimeDeps["syncCard"]>,
+  activity: BotContainerActivitySink | undefined,
+): Promise<void> {
+  // Never throws: neither a failing sync nor a failing activity sink may fail the pass.
+  try {
+    const { changedKeys } = await syncCard(agentId, botKey);
+    if (changedKeys.length > 0) {
+      await activity?.record({
+        level: "info",
+        agentId,
+        botKey,
+        message: "agent card pointed at the bot container",
+        details: { changedKeys },
+      });
+    }
+  } catch (err) {
+    try {
+      await activity?.record({
+        level: "error",
+        agentId,
+        botKey,
+        message: "failed to point the agent card at the bot container",
+        details: { error: err instanceof Error ? err.message : String(err) },
+      });
+    } catch {
+      // nothing left to report to
+    }
+  }
 }
 
 export const DEFAULT_RECONCILE_INTERVAL_MS = 60_000;
@@ -265,3 +324,10 @@ export { reconcileBot } from "./reconciler.js";
 export { classifyProfileChange } from "./types.js";
 export type { AppliedProfileState, CompiledProfile, CompiledProfileFile, ProfileChangeClass } from "./types.js";
 export { dockerBotContainerDriver, readDockerDriverConfig } from "./docker-driver.js";
+export { botProfileWiring } from "./profile-ports.js";
+export { createActivityWarningSink, createBotProfileCompile } from "./profile-compile.js";
+export type { BotProfileAgentRecord, BotProfilePorts, BotProfileCompileOptions } from "./profile-compile.js";
+export { BOT_GATEWAY_PORT, createBotCardSync, gatewayApiBaseUrl, planGatewayCardSync } from "./card-sync.js";
+export type { BotCardSyncPorts, BotCardSyncResult, GatewayCardPlan } from "./card-sync.js";
+export { BOT_MCP_SERVERS_ENV, buildHermesProfileInput, readBotProfileSettings } from "./profile-input.js";
+export type { BotMcpSource, BotProfileSettings, BotProfileSource, BotStaticMcpServer } from "./profile-input.js";

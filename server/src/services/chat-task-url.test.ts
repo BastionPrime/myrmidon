@@ -13,7 +13,7 @@ afterEach(() => {
   vi.mocked(readConfigFile).mockReturnValue(null);
 });
 
-describe("external Paperclip task links", () => {
+describe("external Myrmidon task links", () => {
   it("uses only the safe board origin and canonical issue path", () => {
     expect(
       safeChatTaskUrl(
@@ -49,7 +49,7 @@ describe("external Paperclip task links", () => {
           publicBaseUrl: baseUrl,
         }),
       ).toBe(
-        "Maya stopped before completing this turn. Open the task in Paperclip for details.",
+        "Maya stopped before completing this turn. Open the task in Myrmidon for details.",
       );
     },
   );

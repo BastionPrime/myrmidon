@@ -487,7 +487,8 @@ function buildCodexTransientHandoffNote(input: {
   continuationSummaryBody: string | null;
 }): string {
   return [
-    "Paperclip session handoff:",
+    // myrmidon(B1): product name in the agent-facing handoff note; see server/src/myrmidon/product.ts.
+    "Myrmidon session handoff:",
     input.previousSessionId ? `- Previous session: ${input.previousSessionId}` : "",
     "- Rotation reason: repeated Codex transient remote-compaction failures",
     `- Fallback mode: ${input.fallbackMode}`,
@@ -1105,8 +1106,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         );
       }
     }
+    // myrmidon(B1): product name in the agent-facing prompt note below; see server/src/myrmidon/product.ts.
     const repoAgentsNote =
-      "Codex exec automatically applies repo-scoped AGENTS.md instructions from the current workspace; Paperclip does not currently suppress that discovery.";
+      "Codex exec automatically applies repo-scoped AGENTS.md instructions from the current workspace; Myrmidon does not currently suppress that discovery.";
     const bootstrapPromptTemplate = asString(config.bootstrapPromptTemplate, "");
     const templateData = {
       agentId: agent.id,

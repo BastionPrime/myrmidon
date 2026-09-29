@@ -1,4 +1,6 @@
 import { z } from "zod";
+// myrmidon(B1): product name in the AgentMail-visible key label; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 import { Webhook } from "svix";
 import type { EmailEnvelope } from "@paperclipai/shared";
 
@@ -225,7 +227,7 @@ export function agentmailApi(apiKey: string, fetchImpl: typeof fetch = fetch) {
       request<{ api_key: string; api_key_id: string }>(
         `${inboxPath(id)}/api-keys`,
         "POST",
-        { name: "Paperclip email runtime" },
+        { name: `${PRODUCT_NAME} email runtime` },
       ),
     deleteInboxKey: (id: string, keyId: string) =>
       request<void>(

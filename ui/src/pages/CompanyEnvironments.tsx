@@ -107,7 +107,7 @@ function environmentDeleteBlockMessage(impact: EnvironmentDeleteBlastRadius): st
     return "Cannot delete this environment while a sandbox cleanup is pending. Wait for the cleanup sweep to destroy the orphan sandbox, then retry.";
   }
   if (impact.reusableSandboxLeaseCount > 0) {
-    return "Cannot delete this environment while it has a reusable sandbox lease. Remove the associated execution workspace or issue so Paperclip can destroy the sandbox, then retry.";
+    return "Cannot delete this environment while it has a reusable sandbox lease. Remove the associated execution workspace or issue so Myrmidon can destroy the sandbox, then retry.";
   }
   return null;
 }
@@ -1200,7 +1200,7 @@ function EnvironmentImageTemplatePanel({
               <span
                 className="break-all font-mono text-foreground"
                 title={templateRef
-                  ? `Provider ${activeTemplate.templateKind} ref ${templateRef} (Paperclip template ${activeTemplate.id})`
+                  ? `Provider ${activeTemplate.templateKind} ref ${templateRef} (Myrmidon template ${activeTemplate.id})`
                   : activeTemplate.id}
               >
                 {templateRef ?? `id ${formatShortId(activeTemplate.id)}`}
@@ -2022,7 +2022,7 @@ export function CompanyEnvironments({ mode = "list" }: CompanyEnvironmentsProps)
                       {isPlatformManagedEnvironment(environment) ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
                           <Lock className="h-3 w-3" aria-hidden />
-                          Managed by Paperclip
+                          Managed by Myrmidon
                         </span>
                       ) : null}
                     </div>
@@ -2049,7 +2049,7 @@ export function CompanyEnvironments({ mode = "list" }: CompanyEnvironmentsProps)
                         })()}
                       </div>
                     ) : (
-                      <div className="text-xs text-muted-foreground">Runs on this Paperclip host.</div>
+                      <div className="text-xs text-muted-foreground">Runs on this Myrmidon host.</div>
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -2125,15 +2125,15 @@ export function CompanyEnvironments({ mode = "list" }: CompanyEnvironmentsProps)
               <h1 className="text-lg font-semibold">{editingEnvironment.name}</h1>
               <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                 <Lock className="h-3 w-3" aria-hidden />
-                Managed by Paperclip
+                Managed by Myrmidon
               </span>
             </div>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              {editingEnvironment.description ?? "Your agent runs on a computer managed by Paperclip."}
+              {editingEnvironment.description ?? "Your agent runs on a computer managed by Myrmidon."}
             </p>
             <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
               This environment is provisioned and maintained for you. You can add environment
-              variables for your agents; its name and configuration are managed by Paperclip.
+              variables for your agents; its name and configuration are managed by Myrmidon.
             </p>
           </div>
           <div className="py-4">
@@ -2209,7 +2209,7 @@ export function CompanyEnvironments({ mode = "list" }: CompanyEnvironmentsProps)
             </div>
             <h1 className="text-lg font-semibold">{editingEnvironmentId ? "Edit environment" : "Add environment"}</h1>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              Configure a reusable execution target for your agents. Saved changes affect future runs; Paperclip may start fresh sessions or sandbox leases after environment config changes.
+              Configure a reusable execution target for your agents. Saved changes affect future runs; Myrmidon may start fresh sessions or sandbox leases after environment config changes.
             </p>
           </div>
 
@@ -2295,12 +2295,12 @@ export function CompanyEnvironments({ mode = "list" }: CompanyEnvironmentsProps)
                   </Field>
                   {/*
                     This path lives on the user's own remote SSH host, not on a
-                    Paperclip execution host, so it stays visible under the
+                    Myrmidon execution host, so it stays visible under the
                     managed-sandbox-only policy. The policy hides host paths that
                     the platform-managed environment owns; an SSH environment the
                     user configured is outside that contract.
                   */}
-                  <Field label="Remote workspace path" hint="Absolute path that Paperclip will verify during SSH connection tests.">
+                  <Field label="Remote workspace path" hint="Absolute path that Myrmidon will verify during SSH connection tests.">
                     <input
                       className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
                       type="text"
@@ -2550,7 +2550,7 @@ export function CompanyEnvironments({ mode = "list" }: CompanyEnvironmentsProps)
                     <div className="text-xs text-muted-foreground">
                       {reusableLeaseOnlyBlock
                         ? "Deleting destroys these sandboxes; the workspaces stay open."
-                        : "Close these workspaces to let Paperclip destroy their sandboxes, then retry the delete."}
+                        : "Close these workspaces to let Myrmidon destroy their sandboxes, then retry the delete."}
                     </div>
                   </div>
                 ) : null}

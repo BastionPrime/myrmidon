@@ -18,12 +18,14 @@ import {
   isPaperclipExternalChatQuestionResponseTurn,
   renderPaperclipWakePrompt,
 } from "@paperclipai/adapter-utils/server-utils";
+// myrmidon(B1): product name in the agent-facing guidance below; see product.ts.
+import { PRODUCT_NAME } from "../../myrmidon/product.js";
 
 const NATIVE_QUESTION_GUIDANCE = [
   "## Questions that need a user response",
   "A request for clickable choices, buttons, or a decision needed before continuing is not a self-contained text answer. The zero-API-call shortcut does not prohibit the structured question tool.",
   'Use the available request_human_input tool with interactionKind="questions", continuationPolicy="wake_assignee", a title, prompt, and a stable idempotencyKey. Put the actual requested choices in payload.questions: each question needs an id, prompt, selectionMode="single", and options with stable id and label fields. Reuse the same key if that creation call must be retried.',
-  "Paperclip renders the supported question controls and authenticates the answer. Never fabricate answer URLs, query-string choice links, callback tokens, or fake Markdown buttons. Do not manually post a duplicate question card or use call_api as a substitute.",
+  `${PRODUCT_NAME} renders the supported question controls and authenticates the answer. Never fabricate answer URLs, query-string choice links, callback tokens, or fake Markdown buttons. Do not manually post a duplicate question card or use call_api as a substitute.`,
   "For one question at a time, read the current request and authoritative prior answers, then create only the next unanswered question. Wait for its real answer before asking another; do not infer a selection or answer your own interaction. Keep completion and disposition truthful while waiting, and preserve existing review or approval gates.",
   "If the tool is unavailable or creation fails, report that actual limitation plainly; do not pretend interactive controls were created.",
   "A completion summary saying that you asked a question does not create a question. Create the actual question before yielding; never claim to be waiting for a response to an interaction you have not created.",
@@ -31,8 +33,8 @@ const NATIVE_QUESTION_GUIDANCE = [
 
 const NATIVE_GITHUB_ATTACHMENT_RECOVERY_GUIDANCE = [
   "## GitHub attachment recovery navigation",
-  "Paperclip owns recovery navigation for unavailable GitHub attachments. It may append an authenticated task link after an accepted response, only when the current source remains authorized and a safe configured Board URL is available. The model does not select or authorize that link.",
-  "A task URL missing from your prompt or tool results is not evidence that no task link can be provided; do not claim that a link is unavailable merely because you cannot see its URL. Do not invent a URL or promise that a link will appear. Briefly explain the unavailable input and ask the user to attach it directly to this Paperclip task or paste the needed text. Never infer the file's contents or substitute an older file.",
+  `${PRODUCT_NAME} owns recovery navigation for unavailable GitHub attachments. It may append an authenticated task link after an accepted response, only when the current source remains authorized and a safe configured Board URL is available. The model does not select or authorize that link.`,
+  `A task URL missing from your prompt or tool results is not evidence that no task link can be provided; do not claim that a link is unavailable merely because you cannot see its URL. Do not invent a URL or promise that a link will appear. Briefly explain the unavailable input and ask the user to attach it directly to this ${PRODUCT_NAME} task or paste the needed text. Never infer the file's contents or substitute an older file.`,
 ].join("\n");
 
 /** Closed constructor: callers cannot spread legacy context or environment data. */

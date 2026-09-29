@@ -6,6 +6,9 @@ import {
 } from "@paperclipai/db";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { getExecutionBlocker } from "../services/execution-blocker.js";
+// myrmidon(L2): resuming a paused subtree with wake is an explicitly
+// authorized wake; see docs/myrmidon/DIVERGENCE.md "L2".
+import { bypassesSettledHold } from "../myrmidon/settled-holds/explicit-wake-gate.js";
 import { conflict } from "../errors.js";
 import {
   createIssueTreeHoldSchema,
@@ -404,7 +407,15 @@ export function issueTreeControlRoutes(db: Db) {
               inArray(issueRows.status, RESUME_EXECUTABLE_STATUSES), isNotNull(issueRows.assigneeAgentId),
             ));
           for (const task of candidates) {
-            const blocked = await getExecutionBlocker(db, root.companyId, task.id);
+            const blocked = await getExecutionBlocker(db, root.companyId, task.id, {
+              // myrmidon(L2): mirrors the `reason: "issue_tree_resumed"`
+              // wake sent below once the hold releases, including its
+              // `requestedByActorType: actor.actorType` (round 1 fix).
+              explicitWake: bypassesSettledHold({
+                source: "assignment", reason: "issue_tree_resumed",
+                requestedByActorType: getActorInfo(req).actorType,
+              }),
+            });
             if (blocked) throw conflict(`Cannot wake ${task.identifier ?? "this task"}: ${blocked.nextAction}`);
           }
         }

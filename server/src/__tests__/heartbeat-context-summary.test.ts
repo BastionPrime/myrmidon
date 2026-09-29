@@ -267,7 +267,7 @@ describe("buildPaperclipTaskMarkdown", () => {
       "do not ask for another chat connection",
     );
     expect(markdown).toContain(
-      "attach the file directly to this Paperclip task or paste the needed text",
+      "attach the file directly to this Myrmidon task or paste the needed text",
     );
     expect(markdown).toContain(
       "Never borrow browser cookies or forward credentials to an attachment URL",

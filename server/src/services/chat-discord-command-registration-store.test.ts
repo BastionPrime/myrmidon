@@ -21,7 +21,10 @@ import {
   toolApplications,
   toolConnections,
 } from "@paperclipai/db";
-import { discordPaperclipCommandDefinition } from "./chat-discord-command-registration.js";
+import {
+  discordPaperclipCommandDefinition,
+  priorCloseCopyDefinition,
+} from "./chat-discord-command-registration.js";
 import {
   readRegisteredDiscordCommandRegistration,
   reconcileStoredDiscordCommandRegistration,
@@ -246,8 +249,8 @@ suite("Discord command ownership store (real PostgreSQL, no network)", () => {
       ownerId: string;
       receipt: Record<string, unknown>;
     };
-    const prior = discordPaperclipCommandDefinition(registration.ownerId);
-    prior.options[2]!.description = "Close the current Paperclip task";
+    // myrmidon(B1): the known prior definition, not the current (renamed) one.
+    const prior = priorCloseCopyDefinition(registration.ownerId);
     const remote = f.remote[0]!;
     f.remote[0] = {
       ...prior,

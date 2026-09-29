@@ -82,9 +82,9 @@ describe("chat connector UI contract", () => {
     expect(detail).toContain("Allow direct messages");
     expect(detail).toContain("Allow group chats");
     expect(detail).toContain("Their tasks run only with an isolated workspace");
-    expect(detail).toContain("otherwise Paperclip safely refuses the request");
+    expect(detail).toContain("otherwise Myrmidon safely refuses the request");
     expect(setup).toContain("Link the account you’re testing");
-    expect(setup).toContain("Paperclip does not replay the refused request");
+    expect(setup).toContain("Myrmidon does not replay the refused request");
     expect(setup).toContain("Review identity access");
     expect(setup).toContain("instanceSettingsApi.getExperimental()");
     expect(setup).toContain("chatEndpointsApi.listPrincipals(endpointId)");
@@ -132,7 +132,7 @@ describe("chat connector UI contract", () => {
       "does not reinstall the App or change repository access",
       "does not add or remove the bot from the server",
       "does not upload or reinstall the Teams app",
-      "automatically refreshes its Paperclip webhook and command menu",
+      "automatically refreshes its Myrmidon webhook and command menu",
     ]) {
       expect(detail).toContain(reconnectCopy);
       expect(setup).toContain(reconnectCopy);
@@ -143,7 +143,7 @@ describe("chat connector UI contract", () => {
       "It does not uninstall the bot",
       "It does not uninstall the Teams app",
       "queues durable removal of its Telegram webhook and command menu",
-      "After Telegram confirms that cleanup, Paperclip retires the saved token",
+      "After Telegram confirms that cleanup, Myrmidon retires the saved token",
       "BotFather bot and its chat memberships remain",
     ]) {
       expect(detail).toContain(removalCopy);
@@ -255,7 +255,7 @@ describe("chat connector UI contract", () => {
     expect(setup).toContain("group_unarchive");
     expect(setup).toContain("group_rename");
     expect(setup).toContain("app_uninstalled");
-    expect(setup).toContain("Paperclip records Interactivity");
+    expect(setup).toContain("Myrmidon records Interactivity");
     expect(setup).toContain("command health only after each signed callback");
     expect(setup).toContain("slackBotNameForAgent");
     expect(setup).not.toContain("- im:write");

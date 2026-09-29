@@ -124,6 +124,7 @@ import { initializeCloudRuntimeIdentity } from "./services/cloud-runtime-identit
 import { systemdNotify } from "./services/systemd-notify.js";
 import { flushInFlightRunLogMirrors } from "./services/run-log-store.js";
 import { startMaintenanceMode } from "./myrmidon/maintenance/index.js"; // myrmidon(R3)
+import { startBotContainers, stopBotContainers } from "./myrmidon/bot-containers/startup.js"; // myrmidon(W2a)
 // myrmidon(P11): database backup catch-up
 import { BACKUP_CATCHUP_WINDOW_ENV, readBackupCatchUpSettings, startBackupCatchUp } from "./myrmidon/backup-catch-up.js";
 import {
@@ -1433,6 +1434,7 @@ async function startServerWithDatabaseTeardown(
       "worktree run-execution cutoff state",
     );
     await startMaintenanceMode(db as any); // myrmidon(R3): load open maintenance windows before startup recovery starts runs
+    startBotContainers(db as any); // myrmidon(W2a): bot container sweep and the card's "Apply now" runtime; a no-op unless MYRMIDON_BOT_CONTAINERS is on
     const heartbeatSchedulingSuppression = await heartbeat.resolveSchedulingSuppression();
 
     // Reap orphaned runs before timer ticks start so wakeups cannot coalesce
@@ -1942,6 +1944,7 @@ async function startServerWithDatabaseTeardown(
     await systemdNotify(["--stopping", `--status=Stopping after ${signal}`]);
     heartbeatSchedulerStopped = true;
     clearInterval(executionControlInterval);
+    stopBotContainers(); // myrmidon(W2a)
     if (heartbeatSchedulerInterval) {
       clearInterval(heartbeatSchedulerInterval);
       heartbeatSchedulerInterval = null;

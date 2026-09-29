@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { PRODUCT_NAME } from "./product.js";
 import {
   STRANDED_AUTO_POLICY_DEFAULT_RETRIES_PER_DAY,
   STRANDED_AUTO_POLICY_RETRY_SOURCE,
@@ -225,6 +226,25 @@ describe("buildStrandedAutoPolicyRetryInstruction / buildStrandedAutoPolicyManag
     });
     expect(text).toContain("stranded_assigned_issue");
     expect(text).toContain("2 automatic continuation attempts");
+  });
+
+  // myrmidon(B1): both texts are read by people (the issue comment) or agents
+  // (the retry instruction); they name the product, not the vendor.
+  it("names the product in the retry instruction and in the manager review comment", () => {
+    const instruction = buildStrandedAutoPolicyRetryInstruction({
+      cause: "successful_run_missing_state",
+      attempt: 1,
+      maxAttemptsPerDay: 2,
+    });
+    const comment = buildStrandedAutoPolicyManagerReviewComment({
+      cause: "stranded_assigned_issue",
+      attemptsInWindow: 1,
+      maxAttemptsPerDay: 2,
+    });
+    expect(instruction).toContain(`${PRODUCT_NAME}'s automatic policy noticed that`);
+    expect(comment.startsWith(`${PRODUCT_NAME}'s automatic policy moved this issue to review:`)).toBe(true);
+    expect(instruction).not.toContain("Paperclip");
+    expect(comment).not.toContain("Paperclip");
   });
 
   // Review finding: this comment used to claim the source assignment was

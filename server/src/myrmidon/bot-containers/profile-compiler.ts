@@ -70,6 +70,17 @@ export interface HermesProfileAdapterConfig {
   toolsets?: string;
 }
 
+/** A text file placed under /workspace (the sibling files of an instructions bundle). */
+export interface HermesProfileWorkspaceFile {
+  /**
+   * Path relative to /workspace, e.g. "HEARTBEAT.md", "docs/style.md". Never a
+   * name the vendor gateway loads as project context (AGENTS.md, CLAUDE.md,
+   * .cursorrules, .hermes.md, ...): such a file is dropped, see {@link CONTEXT_FILE_NAMES}.
+   */
+  path: string;
+  content: string;
+}
+
 export interface HermesProfileEnvEntry {
   /** Already resolved: plain value or a resolved secret_ref/user_secret_ref value. */
   value: string;
@@ -197,8 +208,26 @@ export interface HermesProfileInput {
   env: Record<string, HermesProfileEnvEntry>;
   /** Skill name -> its files, already read from the board's skill catalog. */
   skills: Record<string, readonly HermesProfileSkillFile[]>;
-  /** The AGENTS.md instruction bundle text, already assembled by the caller. */
+  /**
+   * The text of workspace/AGENTS.md, already assembled by the caller; blank
+   * means no AGENTS.md is written at all.
+   *
+   * The vendor gateway injection-scans the project context files it loads and
+   * replaces a file that matches a pattern with a "[BLOCKED ...]" stub, so an
+   * agent's whole instruction set would vanish because of one `curl ...
+   * $KEY` example in its text. The bot wiring therefore leaves this blank and
+   * sends the instructions in the run request instead (that field is not
+   * scanned). Keep it for a caller whose text is known to pass the scanner.
+   */
   instructions: string;
+  /**
+   * The instructions bundle's other files, placed under /workspace with their
+   * relative paths: the instructions refer to their siblings (`./HEARTBEAT.md`,
+   * `./SOUL.md`), and the agent resolves those against its working directory.
+   * Files-class: read on demand, no restart needed. Optional; omitted means
+   * the bundle is the entry file alone.
+   */
+  workspaceFiles?: readonly HermesProfileWorkspaceFile[];
   hindsight: HermesProfileHindsightSettings;
   /** Instance-wide LLM gateway settings — see {@link HermesProfileLlmSettings}. */
   llm: HermesProfileLlmSettings;
@@ -645,6 +674,63 @@ function buildSkillFiles(
 }
 
 // ---------------------------------------------------------------------------
+// Workspace files (the instructions bundle's files beside the entry file)
+// ---------------------------------------------------------------------------
+
+/**
+ * File names the vendor gateway loads as project context (agent/prompt_builder.py,
+ * agent/subdirectory_hints.py): the first found wins per kind, is injection-
+ * scanned, and is put into the system prompt. A bundle's sibling under one of
+ * these names would either shadow the instructions or, when it trips the
+ * scanner, be replaced by a stub, and Hermes also reads them from any
+ * subdirectory the agent browses into. Compared by base name, case-insensitively.
+ */
+const CONTEXT_FILE_NAMES = new Set([
+  "agents.md",
+  "agents.override.md",
+  "claude.md",
+  ".cursorrules",
+  ".hermes.md",
+  "hermes.md",
+]);
+/** `.cursor/rules/*.mdc` is loaded as context too (cwd only). */
+const CURSOR_RULES_DIR = ".cursor/rules/";
+
+function isContextFilePath(path: string): boolean {
+  const lower = path.toLowerCase();
+  const base = lower.slice(lower.lastIndexOf("/") + 1);
+  return CONTEXT_FILE_NAMES.has(base) || (lower.startsWith(CURSOR_RULES_DIR) && lower.endsWith(".mdc"));
+}
+
+function buildWorkspaceFiles(
+  workspaceFiles: readonly HermesProfileWorkspaceFile[] | undefined,
+  warnings: string[],
+): CompiledProfileFile[] {
+  const out: CompiledProfileFile[] = [];
+  const seen = new Set<string>();
+  const sorted = [...(workspaceFiles ?? [])].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  for (const workspaceFile of sorted) {
+    if (!isSafeSkillPath(workspaceFile.path) || workspaceFile.path.includes("\\") || workspaceFile.path.includes("\u0000")) {
+      warnings.push(`workspaceFiles: path "${workspaceFile.path}" is not a safe relative path, dropped`);
+      continue;
+    }
+    if (isContextFilePath(workspaceFile.path)) {
+      warnings.push(
+        `workspaceFiles: "${workspaceFile.path}" is a name the gateway loads as project context (AGENTS.md, CLAUDE.md, .cursorrules, .hermes.md and the like), dropped`,
+      );
+      continue;
+    }
+    if (seen.has(workspaceFile.path)) {
+      warnings.push(`workspaceFiles: duplicate path "${workspaceFile.path}", keeping the first one`);
+      continue;
+    }
+    seen.add(workspaceFile.path);
+    out.push(file(`workspace/${workspaceFile.path}`, workspaceFile.content, { secret: false }));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Compile
 // ---------------------------------------------------------------------------
 
@@ -684,16 +770,20 @@ export function compileHermesProfileDetailed(input: HermesProfileInput): Compile
     ...skillFiles,
   ];
 
-  if (input.instructions.length > AGENTS_MD_WARN_CHARS) {
+  const hasAgentsMd = input.instructions.trim().length > 0;
+  if (hasAgentsMd && input.instructions.length > AGENTS_MD_WARN_CHARS) {
     warnings.push(
       `workspace/AGENTS.md: ${input.instructions.length} characters, over Hermes's ${AGENTS_MD_WARN_CHARS}-character context-file floor; Hermes may truncate it at runtime, depending on the bot's model context window (the floor, not necessarily the effective limit for this bot)`,
     );
   }
   // Files-class: AGENTS.md is re-read by the gateway on each run (it isn't
   // cached the way the skills index is), so a running gateway picks up an
-  // edit without a restart.
-  const agentsMdFile = file("workspace/AGENTS.md", input.instructions, { secret: false });
-  const filesTrackedFiles = [agentsMdFile];
+  // edit without a restart. Blank instructions write no AGENTS.md at all (an
+  // empty file would still be a context file the gateway loads and reports).
+  const agentsMdFiles = hasAgentsMd ? [file("workspace/AGENTS.md", input.instructions, { secret: false })] : [];
+  // The bundle's sibling files ride the same class: the instructions name them
+  // relatively, and the agent reads them on demand, never through a cache.
+  const filesTrackedFiles = [...agentsMdFiles, ...buildWorkspaceFiles(input.workspaceFiles, warnings)];
 
   const restartHash = hashEntries(restartFiles);
   const filesHash = hashEntries(filesTrackedFiles);

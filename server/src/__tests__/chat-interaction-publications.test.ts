@@ -670,7 +670,7 @@ describeEmbeddedPostgres(
       expect(skippedSettlements).toHaveLength(2);
       expect(
         skippedSettlements.every(
-          (row) => row.payload.card?.body === "Skipped in Paperclip.",
+          (row) => row.payload.card?.body === "Skipped in Myrmidon.",
         ),
       ).toBe(true);
       expect(
@@ -716,7 +716,7 @@ describeEmbeddedPostgres(
           originals.find((row) => row.endpointId === fixture.endpointIds.slack)
             ?.payload.card?.actions,
         ).toEqual([
-          expect.objectContaining({ type: "link", label: "Open in Paperclip" }),
+          expect.objectContaining({ type: "link", label: "Open in Myrmidon" }),
         ]);
         expect(
           originals.find(

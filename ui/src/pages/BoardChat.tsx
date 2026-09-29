@@ -33,6 +33,7 @@ import { AgentIcon } from "../components/AgentIconPicker";
 import { cn, formatDateTime } from "../lib/utils";
 import type { FeedbackVoteValue } from "@paperclipai/shared";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { MyrmidonLoadingMark } from "@/components/myrmidon/MyrmidonLoadingMark"; // myrmidon(B1a)
 
 /**
  * Board Concierge Chat — a chat interface powered by the board-member skill.
@@ -905,7 +906,8 @@ export function BoardChat() {
               {/* Status bar — always visible while sending, independent from the chat bubble */}
               {sending && (
                 <div className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
-                  <img src="/paperclip-thinking.svg" alt="" className="inline-block shrink-0" style={{ width: 14, height: 14 }} />
+                  {/* myrmidon(B1a): ant mark in place of the vendor's animated paperclip */}
+                  <MyrmidonLoadingMark className="h-3.5 w-3.5 shrink-0" />
                   <span>{statusText || "Thinking..."}</span>
                   {elapsedSec > 0 && (
                     <span className="opacity-50">{elapsedSec.toFixed(1)}s</span>

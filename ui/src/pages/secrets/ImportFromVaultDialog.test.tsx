@@ -347,7 +347,7 @@ describe("ImportFromVaultDialog", () => {
     await flush();
 
     // Review step: error message visible, Import button disabled.
-    expect(document.body.textContent?.toLowerCase()).toContain("a paperclip secret already uses this");
+    expect(document.body.textContent?.toLowerCase()).toContain("a myrmidon secret already uses this");
 
     const importBtn = Array.from(document.querySelectorAll("button")).find(
       (btn) => btn.textContent?.startsWith("Import "),

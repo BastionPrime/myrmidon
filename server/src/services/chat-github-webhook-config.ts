@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+// myrmidon(B1): product name in the webhook confirmation error; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 
 const GITHUB_APP_WEBHOOK_CONFIG_URL = "https://api.github.com/app/hook/config";
 const MAX_CONFIG_RESPONSE_BYTES = 32_768;
@@ -774,7 +776,7 @@ export async function resyncGitHubAppWebhook(input: {
     (config.insecure_ssl !== "0" && config.insecure_ssl !== 0)
   ) {
     throw new Error(
-      "GitHub did not confirm the expected secure Paperclip webhook. Reconnect to retry.",
+      `GitHub did not confirm the expected secure ${PRODUCT_NAME} webhook. Reconnect to retry.`,
     );
   }
 }

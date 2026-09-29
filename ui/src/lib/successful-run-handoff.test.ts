@@ -29,6 +29,54 @@ describe("successful run handoff UI helpers", () => {
     expect(isSuccessfulRunHandoffComment("Ordinary issue comment")).toBe(false);
   });
 
+  // myrmidon(B1): these two bodies are fixed pre-rename literals (comments the
+  // server posted before the Paperclip -> Myrmidon rename), not the live
+  // constants above, so this test keeps giving a real signal if the legacy
+  // match is ever accidentally dropped, unlike asserting a constant against
+  // itself.
+  it("still recognizes pre-rename comments so old issues keep their alert-card treatment", () => {
+    expect(
+      isSuccessfulRunHandoffComment(
+        "Paperclip needs a disposition before this issue can continue.",
+      ),
+    ).toBe(true);
+    expect(
+      isSuccessfulRunHandoffComment(
+        "Paperclip could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.",
+      ),
+    ).toBe(true);
+    expect(
+      isSuccessfulRunHandoffEscalationComment(
+        "Paperclip could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.",
+      ),
+    ).toBe(true);
+  });
+
+  // myrmidon(B1): the text the server posts today, written out literally. The UI
+  // takes its constants from @paperclipai/shared, so this also fails if the shared
+  // constants and the server-posted text ever diverge from what the board renders.
+  it("recognizes the comments the server posts under the current product name", () => {
+    expect(SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY).toBe(
+      "Myrmidon needs a disposition before this issue can continue.",
+    );
+    expect(
+      isSuccessfulRunHandoffComment("Myrmidon needs a disposition before this issue can continue."),
+    ).toBe(true);
+    expect(
+      isSuccessfulRunHandoffComment(
+        "Myrmidon could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.",
+      ),
+    ).toBe(true);
+    expect(
+      isSuccessfulRunHandoffEscalationComment(
+        "Myrmidon could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.",
+      ),
+    ).toBe(true);
+    expect(
+      isSuccessfulRunHandoffEscalationComment("Myrmidon needs a disposition before this issue can continue."),
+    ).toBe(false);
+  });
+
   it("returns shared tones for required, escalated, and neutral activity", () => {
     expect(successfulRunHandoffActivityTone(SUCCESSFUL_RUN_HANDOFF_REQUIRED_ACTION).className).toContain("amber");
     expect(successfulRunHandoffActivityTone(SUCCESSFUL_RUN_HANDOFF_ESCALATED_ACTION).className).toContain("red");

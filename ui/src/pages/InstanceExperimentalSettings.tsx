@@ -282,7 +282,7 @@ export function InstanceExperimentalSettings() {
 
         <ExperimentalToggleCard
           title="Beta skills"
-          description="Allow agents to pin beta releases of the Paperclip core skill. Disabling this returns every agent to the default live skill without removing saved pins."
+          description="Allow agents to pin beta releases of the Myrmidon core skill. Disabling this returns every agent to the default live skill without removing saved pins."
           checked={enableBetaSkills}
           onCheckedChange={(checked) => toggleMutation.mutate({ enableBetaSkills: checked })}
           disabled={toggleMutation.isPending}
@@ -293,7 +293,7 @@ export function InstanceExperimentalSettings() {
 
         <ExperimentalToggleCard
           title="Built-in Agents"
-          description="Show Paperclip-managed built-in agent surfaces, including built-in roster badges, the Built-in agents tab, and built-in agent setup controls."
+          description="Show Myrmidon-managed built-in agent surfaces, including built-in roster badges, the Built-in agents tab, and built-in agent setup controls."
           checked={enableBuiltInAgents}
           onCheckedChange={(checked) => toggleMutation.mutate({ enableBuiltInAgents: checked })}
           disabled={toggleMutation.isPending}
@@ -421,8 +421,8 @@ export function InstanceExperimentalSettings() {
         />
 
         <ExperimentalToggleCard
-          title="Paperclip Runner"
-          description="Allow new Codex agents to select the experimental Rust Paperclip Runner, including authenticated runner ingress when a sandbox requires it. Onboarding continues to use legacy adapters. Turning this off hides the choice without affecting existing native runs."
+          title="Myrmidon Runner"
+          description="Allow new Codex agents to select the experimental Rust Myrmidon Runner, including authenticated runner ingress when a sandbox requires it. Onboarding continues to use legacy adapters. Turning this off hides the choice without affecting existing native runs."
           checked={enableNativeRunner}
           onCheckedChange={(checked) =>
             toggleMutation.mutate({ enableNativeRunner: checked })
@@ -430,7 +430,7 @@ export function InstanceExperimentalSettings() {
           disabled={toggleMutation.isPending}
           settingKey="enableNativeRunner"
           managed={managedKeys.enableNativeRunner}
-          ariaLabel="Toggle Paperclip Runner experimental setting"
+          ariaLabel="Toggle Myrmidon Runner experimental setting"
         />
 
         <ExperimentalToggleCard
@@ -512,16 +512,16 @@ export function InstanceExperimentalSettings() {
       <section className="space-y-3" aria-labelledby="developer-mode-heading">
         <div className="space-y-1">
           <h2 id="developer-mode-heading" className="text-sm font-semibold">
-            Paperclip Developer Mode
+            Myrmidon Developer Mode
           </h2>
           <p className="text-sm text-muted-foreground">
-            Internal tools for developing, testing, and debugging Paperclip.
+            Internal tools for developing, testing, and debugging Myrmidon.
           </p>
         </div>
 
         <ExperimentalToggleCard
-          title="Paperclip Developer Mode"
-          description="Show internal Paperclip maintainer tools and observability links, including Honeycomb trace queries on run pages."
+          title="Myrmidon Developer Mode"
+          description="Show internal Myrmidon maintainer tools and observability links, including Honeycomb trace queries on run pages."
           checked={enablePaperclipDeveloperMode}
           onCheckedChange={(checked) =>
             toggleMutation.mutate({ enablePaperclipDeveloperMode: checked })
@@ -529,7 +529,7 @@ export function InstanceExperimentalSettings() {
           disabled={toggleMutation.isPending}
           settingKey="enablePaperclipDeveloperMode"
           managed={managedKeys.enablePaperclipDeveloperMode}
-          ariaLabel="Toggle Paperclip developer mode experimental setting"
+          ariaLabel="Toggle Myrmidon developer mode experimental setting"
         />
 
         <ExperimentalToggleCard

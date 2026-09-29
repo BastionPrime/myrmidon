@@ -142,19 +142,21 @@ export function oauthEndpointUrlRejectionMessage(
   reason: OAuthEndpointUrlRejection,
 ): string {
   const label = KIND_LABELS[kind];
+  // myrmidon(B1a): user-visible rejection text (see mcpRemoteHeaderRejectionMessage
+  // in mcp-remote-headers.ts for the same kind of vendor-owned rejection copy).
   switch (reason) {
     case "missing":
       return `This server did not provide a ${label} address.`;
     case "malformed":
-      return `This server's ${label} address is not a valid URL, so Paperclip stopped.`;
+      return `This server's ${label} address is not a valid URL, so Myrmidon stopped.`;
     case "unsupported_scheme":
-      return `This server's ${label} address does not use https, so Paperclip stopped.`;
+      return `This server's ${label} address does not use https, so Myrmidon stopped.`;
     case "insecure_transport":
-      return `This server's ${label} address is not secure (https), so Paperclip stopped.`;
+      return `This server's ${label} address is not secure (https), so Myrmidon stopped.`;
     case "embedded_credentials":
-      return `This server's ${label} address hides a different site behind a username, so Paperclip stopped.`;
+      return `This server's ${label} address hides a different site behind a username, so Myrmidon stopped.`;
     case "fragment":
-      return `This server's ${label} address is malformed for sign-in, so Paperclip stopped.`;
+      return `This server's ${label} address is malformed for sign-in, so Myrmidon stopped.`;
   }
 }
 
