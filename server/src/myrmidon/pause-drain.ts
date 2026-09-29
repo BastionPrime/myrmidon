@@ -31,6 +31,12 @@ import {
  * route; they keep calling their own cancellation paths directly
  * (`services/budgets.ts` cancelBudgetScopeWork, `services/companies.ts`
  * archive cascade) and are unaffected by this setting.
+ *
+ * This module also holds `isSkippableStartupRecoveryConflict` (part c): the
+ * predicate `recoverActiveSessionGoals`/`recoverPendingSessionGoalActions`
+ * use to skip a session goal whose `enqueueWakeup` call 409s — for an
+ * unavailable agent or a budget hard-stop — instead of crashing server
+ * startup for every other agent on the instance.
  */
 export const PAUSE_DRAINS_ENV = "MYRMIDON_PAUSE_DRAINS";
 
@@ -79,6 +85,47 @@ export function isAgentNotInvokableConflict(err: unknown): boolean {
   if (!(err instanceof HttpError) || err.status !== 409) return false;
   const details = err.details as { reason?: unknown; status?: unknown } | undefined;
   return typeof details?.reason === "string" && typeof details?.status === "string";
+}
+
+const BUDGET_BLOCK_SCOPE_TYPES = new Set(["company", "agent", "project"]);
+
+/**
+ * True for the other 409 `enqueueWakeup` throws before it even checks
+ * invokability: a company/agent/project budget hard-stop
+ * (`budgets.getInvocationBlock`). Its details shape (`{scopeType, scopeId}`)
+ * has no `reason`/`status` string pair — the block's human-readable reason is
+ * the HttpError *message*, not a details field — so
+ * `isAgentNotInvokableConflict` never matches it. A company-wide budget pause
+ * is independent of any individual agent's own status, so this fires even for
+ * agents that are not themselves paused.
+ */
+export function isBudgetBlockConflict(err: unknown): boolean {
+  if (!(err instanceof HttpError) || err.status !== 409) return false;
+  const details = err.details as
+    | { scopeType?: unknown; scopeId?: unknown; reason?: unknown; status?: unknown }
+    | undefined;
+  const scopeType = details?.scopeType;
+  return (
+    typeof scopeType === "string" &&
+    BUDGET_BLOCK_SCOPE_TYPES.has(scopeType) &&
+    typeof details?.scopeId === "string" &&
+    typeof details?.reason !== "string" &&
+    typeof details?.status !== "string"
+  );
+}
+
+/**
+ * True for any 409 that startup session-goal recovery should skip-and-log
+ * instead of letting it crash the process: the agent cannot be invoked right
+ * now, or a budget hard-stop blocks it. Both are transient, per-agent/
+ * per-scope conditions un-fixable by a restart — not a reason to take the
+ * whole server down. Covers the exact failure mode point (c) of this PR
+ * closed for the invokability 409 ("server restarted 4 times on the 1.0.0
+ * rollout"), reproduced with a budget-paused company instead of a paused
+ * agent.
+ */
+export function isSkippableStartupRecoveryConflict(err: unknown): boolean {
+  return isAgentNotInvokableConflict(err) || isBudgetBlockConflict(err);
 }
 
 const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
