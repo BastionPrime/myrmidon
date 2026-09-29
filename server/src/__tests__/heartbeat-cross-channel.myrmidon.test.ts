@@ -19,6 +19,7 @@ import express from "express";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   agents,
+  authUsers,
   companies,
   createDb,
   heartbeatRuns,
@@ -56,6 +57,19 @@ describeEmbeddedPostgres("heartbeat run context (X8d cross-channel)", () => {
     database = await startEmbeddedPostgresTestDatabase("paperclip-myrmidon-heartbeat-x8d-");
     db = createDb(database.connectionString);
     await instanceSettingsService(db).updateExperimental({ enableAgentChat: true });
+    // The agent's reply comment is written on behalf of the run's responsible
+    // user (the conversation's board user), and issue_comments.on_behalf_of_user_id
+    // is a foreign key to "user": the board user must exist as a real row.
+    await db
+      .insert(authUsers)
+      .values({
+        id: "user-a",
+        name: "User A",
+        email: "user-a@paperclip.test",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .onConflictDoNothing();
   }, 90_000);
 
   afterAll(async () => {
