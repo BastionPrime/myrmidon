@@ -105,6 +105,10 @@ const baseTimestamps = {
   updatedAt: new Date("2026-05-04T16:32:00.000Z"),
 };
 
+// myrmidon(B1a): the recovery-notice bodies below stay in their original
+// "Paperclip ..." wording on purpose. IssueChatThread recognises these comments
+// by their exact text, and comments already stored in the database (and, until
+// the server-side rename lands, the ones the server posts) use that wording.
 describe("IssueChatThread system notice routing", () => {
   it("renders authorType=system comments as a SystemNotice rather than a user bubble", () => {
     const comment: IssueChatComment = {
@@ -114,7 +118,7 @@ describe("IssueChatThread system notice routing", () => {
       authorType: "system",
       authorAgentId: null,
       authorUserId: null,
-      body: "Myrmidon needs a disposition before this issue can continue.",
+      body: "Paperclip needs a disposition before this issue can continue.",
       presentation: {
         kind: "system_notice",
         tone: "warning",
@@ -142,7 +146,7 @@ describe("IssueChatThread system notice routing", () => {
     expect(row).not.toBeNull();
     const status = row?.querySelector('[role="status"]');
     expect(status?.getAttribute("aria-label")).toBe("Missing issue disposition");
-    expect(container.textContent).toContain("Myrmidon needs a disposition");
+    expect(container.textContent).toContain("Paperclip needs a disposition");
     // collapsed by default — metadata identifier should not be visible
     expect(container.textContent).not.toContain("PAP-3440");
     const toggle = row?.querySelector("button[aria-expanded]") as HTMLButtonElement | null;
@@ -293,7 +297,7 @@ describe("IssueChatThread system notice routing", () => {
       authorUserId: null,
       runId: "run-issue-chat-01",
       runAgentId: "agent-codex",
-      body: "Myrmidon needs a disposition before this issue can continue.",
+      body: "Paperclip needs a disposition before this issue can continue.",
       presentation: {
         kind: "system_notice",
         tone: "warning",
@@ -616,7 +620,7 @@ describe("IssueChatThread system notice routing", () => {
       authorUserId: null,
       runId: "run-stale",
       runAgentId: "agent-codex",
-      body: "Myrmidon needs a disposition before this issue can continue.",
+      body: "Paperclip needs a disposition before this issue can continue.",
       presentation: {
         kind: "system_notice",
         tone: "warning",
@@ -665,7 +669,7 @@ describe("IssueChatThread system notice routing", () => {
     expect(row?.querySelector('[data-testid="stale-disposition-warning-time"]')?.parentElement?.className).toContain("ml-auto");
     expect(row?.textContent).toContain("Stale disposition warning");
     expect(row?.textContent).not.toContain("This disposition warning is stale because the issue now has a newer disposition.");
-    expect(row?.textContent).not.toContain("Myrmidon needs a disposition before this issue can continue.");
+    expect(row?.textContent).not.toContain("Paperclip needs a disposition before this issue can continue.");
 
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     const detailsId = toggle.getAttribute("aria-controls");
@@ -693,7 +697,7 @@ describe("IssueChatThread system notice routing", () => {
       authorUserId: null,
       runId: "run-source",
       runAgentId: "agent-codex",
-      body: "Myrmidon needs a disposition before this issue can continue.",
+      body: "Paperclip needs a disposition before this issue can continue.",
       presentation: {
         kind: "system_notice",
         tone: "warning",
@@ -725,7 +729,7 @@ describe("IssueChatThread system notice routing", () => {
 
     const row = container.querySelector('[data-testid="stale-disposition-warning"]');
     expect(row).not.toBeNull();
-    expect(row?.textContent).not.toContain("Myrmidon needs a disposition before this issue can continue.");
+    expect(row?.textContent).not.toContain("Paperclip needs a disposition before this issue can continue.");
   });
 
   it("keeps the required disposition warning loud when no live continuation exists", () => {
@@ -738,7 +742,7 @@ describe("IssueChatThread system notice routing", () => {
       authorUserId: null,
       runId: "run-source",
       runAgentId: "agent-codex",
-      body: "Myrmidon needs a disposition before this issue can continue.",
+      body: "Paperclip needs a disposition before this issue can continue.",
       presentation: {
         kind: "system_notice",
         tone: "warning",
@@ -768,7 +772,7 @@ describe("IssueChatThread system notice routing", () => {
     });
 
     expect(container.querySelector('[data-testid="stale-disposition-warning"]')).toBeNull();
-    expect(container.textContent).toContain("Myrmidon needs a disposition before this issue can continue.");
+    expect(container.textContent).toContain("Paperclip needs a disposition before this issue can continue.");
   });
 
   it("folds a required disposition warning when a live run starts after the issue payload was fetched", () => {
@@ -781,7 +785,7 @@ describe("IssueChatThread system notice routing", () => {
       authorUserId: null,
       runId: "run-source",
       runAgentId: "agent-codex",
-      body: "Myrmidon needs a disposition before this issue can continue.",
+      body: "Paperclip needs a disposition before this issue can continue.",
       presentation: {
         kind: "system_notice",
         tone: "warning",
@@ -828,6 +832,6 @@ describe("IssueChatThread system notice routing", () => {
 
     const row = container.querySelector('[data-testid="stale-disposition-warning"]');
     expect(row).not.toBeNull();
-    expect(row?.textContent).not.toContain("Myrmidon needs a disposition before this issue can continue.");
+    expect(row?.textContent).not.toContain("Paperclip needs a disposition before this issue can continue.");
   });
 });
