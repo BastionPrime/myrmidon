@@ -47,6 +47,7 @@
 | `MYRMIDON_TOOL_TIMEOUT_MAX_MS` | P9 | `180000` | Потолок бюджета одного вызова инструмента (у вендора 60 с) | — |
 | `MYRMIDON_TOOL_TIMEOUT_SLOW_MS` | P9 | `45000` | Бюджет по умолчанию для навигационных инструментов (`navigate`, `goto`, `click`, `type`, `fill`, `press`, `reload`, `wait` в имени); остальные — 10 с, как у вендора | На подключении: `config.toolTimeouts` — бюджет по имени инструмента |
 | `MYRMIDON_HERMES_LIVE_PROGRESS` | G5 | не задана — выключено | При `1`/`true`/`yes`/`on` игнорирует `adapterConfig.quiet: true` карточки `hermes_local` и запускает `hermes chat` без `-Q`, чтобы в ходе прогона были видны построчный прогресс по инструментам и финальный ответ (последняя рамка вывода; сбойный ход помечается ошибкой, а не успехом — в том числе ход без ответа и ранний выход до хода, чей текст hermes цитируется в сообщении об ошибке). Если hermes сообщил, что сессия, переданная в `--resume`, не найдена или не может быть возобновлена, сохранённый id сессии сбрасывается (`clearSession`). Эхо промпта режется точно по отправленному промпту; если оно не сходится, прогон с кодом 0 помечается сбойным, а не разбирается вслепую. Карточка без ключа `quiet` и так идёт без `-Q` — эта же разборка применяется и к ней, независимо от флага | Не задавать. Любое другое значение (`0`, `false`, опечатка) — выключено, при неизвестном значении в лог один раз пишется предупреждение. Включать по умолчанию — только после проверки сбойных ходов на стенде |
+| `MYRMIDON_WRITE_LOCK_REQUIRES_LIVE_RUN` | L5 | `1` | 409 `issue_write_assignee_run_lock` требует, чтобы `checkoutRunId`/`executionRunId` задачи указывал на прогон в статусе `running`, `queued` или `scheduled_retry` (вендорская тройка «не terminal», см. `EXECUTION_PATH_HEARTBEAT_RUN_STATUSES`/`CANCELLABLE_HEARTBEAT_RUN_STATUSES`), а не только на статус задачи `in_progress` | `0`/`false` — прежняя блокировка по одному статусу `in_progress`, живость прогона не проверяется. Как выдать `tasks:manage_active_checkouts` (обход блокировки) конфигом — `docs/myrmidon/design/issue-write-lock.md` |
 
 ## Трек 4 — чаты и навыки
 
@@ -58,6 +59,7 @@
 | `MYRMIDON_CHAT_CROSS_CHANNEL_MESSAGE_CHARS` | X8 | `600` | Потолок символов одного сообщения соседней переписки в промпте | Читает X8d; до слияния не действует |
 | `MYRMIDON_CHAT_CROSS_CHANNEL_TOTAL_CHARS` | X8 | `4000` | Потолок суммарного размера блока осведомлённости в промпте | Читает X8d; до слияния не действует |
 | `MYRMIDON_CHAT_CROSS_CHANNEL_LOOKBACK_HOURS` | X8 | `168` | Окно давности сообщений соседней переписки, которые ещё берутся в промпт | Читает X8d; до слияния не действует |
+| `MYRMIDON_CHAT_RECONCILE_INTERVAL_MS` | D1 | не задана | Доп. минимальный интервал между прогонами сводки вех прогона (run-milestone sweep, `enqueueChatRunMilestones`) поверх собственного интервала коалессирующего триггера. Публикационную сводку (доставка сообщений провайдеру) не трогает — у неё остаётся обычный темп | Не задана, `0`, отрицательное или не число — темп сегодняшний (исправление самих запросов D1 включено всегда, это не переключатель дефекта). Задать (например, `15000`), если после D1 сводка вех всё ещё заметна в нагрузке при простое чатов |
 
 ## Трек 5 — эксплуатация
 
@@ -77,6 +79,12 @@
 |---|---|---|---|---|
 | `MYRMIDON_RUN_ENV_ALLOW` | S2 | пусто | Дополнительные имена переменных окружения сервера (через запятую, без значений), которые передаются в процесс прогона сверх базового списка | Базовый список: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TERM`, `TMPDIR`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTP(S)_PROXY`, `NO_PROXY` (и строчные), Windows: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`. Несекретные указатели сервера: `PAPERCLIP_RUNTIME_API_URL`, `PAPERCLIP_LISTEN_HOST`, `PAPERCLIP_LISTEN_PORT`, `PAPERCLIP_RUNTIME_API_CANDIDATES_JSON`. Указатели каталогов CLI: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CURSOR_HOME`, `GROK_HOME`, `HERMES_HOME`, `KIMI_CODE_HOME`, `PI_CODING_AGENT_DIR`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`. Плюс учётные переменные провайдера самого адаптера (`MYRMIDON_RUN_ENV_PROVIDER_ALLOW` в `myrmidon-run-env.ts`): `claude_local` — `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`; `codex_local` — `OPENAI_API_KEY`, `OPENROUTER_API_KEY`; `cursor` — `CURSOR_API_KEY`; `gemini_local` — `GEMINI_API_KEY`, `GOOGLE_API_KEY`; `grok_local` — `XAI_API_KEY`; `kimi_local` — `KIMI_API_KEY`, `KIMI_MODEL_API_KEY`; `opencode_local` — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`; `pi_local` — `ANTHROPIC_API_KEY`, `XAI_API_KEY`; `hermes_local` — `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `KIMI_API_KEY`, `MINIMAX_API_KEY`, `ZAI_API_KEY`. Полное наследование — только флагом агента `adapterConfig.inheritProcessEnv: true` |
 
+## G1 — образ контейнера бота (bot runtime image)
+
+| Переменная | Функция | По умолчанию | Что делает | Как выключить / особое |
+|---|---|---|---|---|
+| `MYRMIDON_BOT_YOLO` | G1 | `1` (включено) | Образ `docker/bot-runtime`: `1` переводится в `HERMES_YOLO_MODE=1` для процесса `hermes gateway run` — approvals на опасные команды пропускаются, потому что у этого шлюза нет подключённого человека, который мог бы ответить на запрос | `0`/`false`/`no`/`off` — approvals идут по `approvals.mode` в `config.yaml` профиля (по умолчанию у hermes `smart`); на неуправляемых платформах (`api_server` — этот случай) approvals без ответа по умолчанию `deny`. Полезно только для стенда, где ответить есть кому |
+
 ## Настройки вендора, которые важны для Myrmidon
 
 Здесь — вендорские переключатели, которые нужно знать при развёртывании Myrmidon: например, как
@@ -94,3 +102,16 @@
 | `PAPERCLIP_ANNOUNCEMENTS_ENABLED`, `PAPERCLIP_ANNOUNCEMENTS_FEED_URL` | Лента объявлений. У вендора включена по умолчанию с адресом вендора; у нас включается только `PAPERCLIP_ANNOUNCEMENTS_ENABLED=true` плюс свой адрес ленты | Не задавать | TEL |
 | `PAPERCLIP_FEEDBACK_EXPORT_BACKEND_URL` (или `PAPERCLIP_TELEMETRY_BACKEND_URL`) | Куда уходят отзывы, которыми пользователь решил поделиться. У нас адреса по умолчанию нет: без него отзывы остаются локально, выгрузка помечается «не настроено» | Не задавать | TEL |
 | `PAPERCLIP_UPDATE_CHECK_URL` | Адрес, где CLI проверяет новую версию (формат ответа npm registry). У вендора — `registry.npmjs.org/paperclipai` всегда; у нас без переменной проверки нет | Не задавать | TEL |
+
+## Контейнеры ботов (G-серия, план 28.09 «вариант Б»)
+
+Настройки пилотного локального драйвера контейнеров (`server/src/myrmidon/bot-containers/`).
+Реестр решений — `containers-plan-senior-2026-09-28.md`.
+
+| Переменная | Функция | По умолчанию | Что делает | Как выключить / особое |
+|---|---|---|---|---|
+| `MYRMIDON_BOT_CONTAINERS` | G3 | выкл | Включает реконсиляцию контейнеров ботов: и периодический проход (`startBotContainerReconciliation`), и «применить сейчас» для одного агента (`applyBotContainerNow`) | `1`/`true`/`yes`/`on` — включить. Выключен — оба входа ничего не делают (`applyBotContainerNow` возвращает `not_applicable`). Включать только после прогона полного цикла на стенде с настоящим Docker и образом бота, объявившим контракт (см. `MYRMIDON_BOT_IMAGE_ALLOWLIST`) |
+| `MYRMIDON_BOT_DOCKER_SOCKET` | G3 | `/var/run/docker.sock` | Unix-сокет Docker Engine, по которому локальный драйвер (`docker-driver.ts`) говорит с демоном | Только для пилота: у fleetd (после переноса флота, §1.4 плана) сокет будет свой, не боевого хоста |
+| `MYRMIDON_BOT_IMAGE_ALLOWLIST` | G3 | пусто (ничего не разрешено) | Список образов через запятую, которые можно запускать как контейнер бота; `*` не пересекает `/` | Без значения `create()`/`recreate()` откажут в создании любого контейнера — это осознанный fail-closed, не дефект. Образ должен уже лежать на хосте: драйвер его не скачивает. Кроме того, образ должен объявить контракт среды бота меткой `myrmidon.bot-runtime.contract=1` (в том числе: `API_SERVER_KEY` и прочие секреты берёт из `$HERMES_HOME/.env`, из окружения контейнера их не требует); образ без метки или с другой версией отклоняется до создания чего-либо |
+| `MYRMIDON_BOT_VOLUME_ROOT` | G3 | не задано (обязательно) | Каталог на хосте, под которым живут тома ботов: `<root>/<botKey>/{hermes,workspace,scratch}` | Без значения `dockerBotContainerDriver()` (без явного конфига) бросает исключение при попытке использовать драйвер |
+| `MYRMIDON_BOT_NETWORK` | G3 | `myrmidon-bots` | Единственная docker-сеть, в которую попадает контейнер бота; карточка не может указать другую | — |
