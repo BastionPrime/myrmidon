@@ -9,6 +9,7 @@ import { testEnvironment } from "./test.js";
 import {
   CREATE_CANCEL_GRACE_MS,
   CREATE_REQUEST_TIMEOUT_MS,
+  resolveCreateRequestTimeoutMs,
   DEFAULT_TIMEOUT_SEC,
   STOP_GRACE_MS,
   STOP_REQUEST_TIMEOUT_MS,
@@ -1186,7 +1187,7 @@ describe("execute — operator cancellation (G4)", () => {
     expect((createTimeouts.signals[0]?.reason as DOMException | undefined)?.name).toBe("TimeoutError");
     // myrmidon(G4): not timedOut — the platform turns timedOut into outcome
     // "timed_out" and overwrites errorCode with a bare "timeout", which would
-    // lose this code and present a 15s create failure as a timeout of the
+    // lose this code and present a create failure as a timeout of the
     // whole run. As a plain failure (non-zero exit, error message, no
     // signal) the adapter's own errorCode is what gets recorded.
     expect(result.timedOut).toBe(false);
@@ -2187,5 +2188,19 @@ describe("execute — idempotency key (G4)", () => {
     const result = await execute(makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key" }));
     expect(result.exitCode).toBe(1);
     expect(result.errorCode).toBe("hermes_gateway_idempotency_conflict");
+  });
+});
+
+describe("resolveCreateRequestTimeoutMs", () => {
+  // myrmidon(G5): agent config, then instance env, then the 60s default.
+  it("prefers agent config, then env, then default; ignores out-of-range values", () => {
+    const env = { MYRMIDON_HERMES_CREATE_TIMEOUT_SEC: "90" };
+    expect(resolveCreateRequestTimeoutMs(undefined, {})).toBe(60_000);
+    expect(resolveCreateRequestTimeoutMs(undefined, env)).toBe(90_000);
+    expect(resolveCreateRequestTimeoutMs(120, env)).toBe(120_000);
+    expect(resolveCreateRequestTimeoutMs("30", env)).toBe(30_000);
+    expect(resolveCreateRequestTimeoutMs(4, env)).toBe(90_000);
+    expect(resolveCreateRequestTimeoutMs(301, {})).toBe(60_000);
+    expect(resolveCreateRequestTimeoutMs("abc", { MYRMIDON_HERMES_CREATE_TIMEOUT_SEC: "1" })).toBe(60_000);
   });
 });
