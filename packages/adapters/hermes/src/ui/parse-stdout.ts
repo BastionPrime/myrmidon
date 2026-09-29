@@ -71,7 +71,7 @@ function isAssistantToolLine(stripped: string): boolean {
  *
  * (`_configure_quiet_agent`, cli.py, nulls `tool_gen_callback` for `-Q`
  * quiet-mode runs, so this line never appears there — only in the
- * live-progress mode this PR turns on by default.)
+ * live-progress mode, which runs without `-Q`.)
  */
 const PREPARING_TOOL_LINE_RE = /^┊\s*\S+\s+preparing\s+\S/;
 

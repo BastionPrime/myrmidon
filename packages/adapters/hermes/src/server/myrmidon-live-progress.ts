@@ -45,21 +45,43 @@
  * starts real turn output (tool progress, the answer frame, or the exit
  * summary) rather than trying to reconstruct the wrapped text.
  *
+ * Two consequences of running without `-Q` decide what this module does with
+ * the stdout it is handed (see `analyzeLiveTurn`):
+ *
+ *  - the answer is the LAST frame only. Everything else the CLI prints
+ *    around it — the turn divider, earlier streamed boxes, tool lines, diffs,
+ *    the prompt echo — is not part of the answer, so it is never taken from
+ *    "everything that is not the exit summary";
+ *  - the CLI exits 0 whatever happened, so a failed turn is recognized from
+ *    the text and reported as an error with an EMPTY answer (the server
+ *    builds the run summary and the auto-comment from the answer whatever the
+ *    outcome). What real failures print was taken from captured output of the
+ *    installed CLI, see myrmidon-live-progress.real-output.fixtures.ts.
+ *
  * Both formats verified by reading the installed Hermes Agent CLI sources
- * (not guessed from the analysis report that first flagged this — see
- * CONVENTIONS.md §"утверждения отчётов — гипотезы").
+ * and by capturing its real output (not guessed from the analysis report
+ * that first flagged this — see CONVENTIONS.md §"утверждения отчётов —
+ * гипотезы").
  */
 
-import { findRichFrames, stripRichPanelFrames } from "../shared/myrmidon-panel-frame.js";
-import type { RichFrame } from "../shared/myrmidon-panel-frame.js";
+import {
+  findRichFrameSpans,
+  isPanelRuleLine,
+  stripRichPanelFrames,
+} from "../shared/myrmidon-panel-frame.js";
+import type { RichFrame, RichFrameSpan } from "../shared/myrmidon-panel-frame.js";
 import { redactSecretsForLog } from "../shared/myrmidon-secret-redaction.js";
 import { isTurnOutputBoundaryLine } from "../shared/myrmidon-turn-output-boundary.js";
 
 /**
- * Env flag: ignore `adapterConfig.quiet: true` and always run without `-Q`.
- * Defaults to on so the ~51 existing agent cards do not need editing one by
- * one; set to a falsy value to restore the previous quiet-follows-the-card
- * behavior.
+ * Env flag: ignore `adapterConfig.quiet: true` and run without `-Q`, so the
+ * run view shows tool-by-tool progress.
+ *
+ * Defaults to OFF: a card's own `quiet` setting decides, exactly as before.
+ * Without `-Q` the CLI exits 0 even when the turn failed, so the outcome has
+ * to be inferred from the text (see `analyzeLiveTurn`); until that inference
+ * is confirmed against a real provider on a stand, this is opt-in. Set it to
+ * `1`, `true`, `yes` or `on` to enable it.
  */
 export const LIVE_PROGRESS_ENV_VAR = "MYRMIDON_HERMES_LIVE_PROGRESS";
 
@@ -68,25 +90,24 @@ const ON_VALUES = ["1", "true", "yes", "on"];
 let warnedAboutUnrecognizedValue = false;
 
 /**
- * True for any value except an explicit off-list one — matches
- * `resolveHermesQuietMode`'s "default on" contract (see `LIVE_PROGRESS_ENV_VAR`'s doc comment).
- * A value that is neither a recognized off- nor on-spelling (a typo, e.g. `fasle`) still counts
- * as "on" here, but is logged once so an operator trying to emergency-disable this feature via
- * the env var does not have a silently-ignored typo leave live progress running.
+ * True only for an explicit on-list value — matches `resolveHermesQuietMode`'s
+ * "default off" contract (see `LIVE_PROGRESS_ENV_VAR`'s doc comment). A value
+ * that is neither a recognized on- nor off-spelling (a typo, e.g. `ture`)
+ * counts as "off" here, but is logged once so an operator trying to enable
+ * this feature with a typo does not have it silently ignored.
  */
-function envFlagDefaultOn(value: string | undefined): boolean {
-  if (value === undefined) return true;
+function envFlagOptIn(value: string | undefined): boolean {
+  if (value === undefined) return false;
   const normalized = value.trim().toLowerCase();
-  if (normalized === "") return true;
-  const isOff = OFF_VALUES.includes(normalized);
-  if (isOff) return false;
-  if (!ON_VALUES.includes(normalized) && !warnedAboutUnrecognizedValue) {
+  if (normalized === "") return false;
+  if (ON_VALUES.includes(normalized)) return true;
+  if (!OFF_VALUES.includes(normalized) && !warnedAboutUnrecognizedValue) {
     warnedAboutUnrecognizedValue = true;
     console.warn(
-      `[myrmidon] ${LIVE_PROGRESS_ENV_VAR}=${JSON.stringify(value)} is not one of ${JSON.stringify([...ON_VALUES, ...OFF_VALUES])} — treating it as "on" (live progress stays enabled). If you meant to disable it, check for a typo.`,
+      `[myrmidon] ${LIVE_PROGRESS_ENV_VAR}=${JSON.stringify(value)} is not one of ${JSON.stringify([...ON_VALUES, ...OFF_VALUES])} — treating it as "off" (live progress stays disabled). If you meant to enable it, check for a typo.`,
     );
   }
-  return true;
+  return false;
 }
 
 /**
@@ -97,7 +118,7 @@ export function resolveHermesQuietMode(
   configQuiet: boolean,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  if (envFlagDefaultOn(env[LIVE_PROGRESS_ENV_VAR])) return false;
+  if (envFlagOptIn(env[LIVE_PROGRESS_ENV_VAR])) return false;
   return configQuiet;
 }
 
@@ -230,57 +251,125 @@ export function stripQueryEcho(stdout: string): string {
   return [...lines.slice(0, start), ...lines.slice(end)].join("\n");
 }
 
+/** Title of the vendor's billing call-to-action Panel (`_chat_print_response_panel`'s "Out of credits"). */
+const OUT_OF_CREDITS_TITLE_RE = /\bOut of credits\b/i;
+
+/** The vendor's `Error:` prefix on an empty-`final_response` fallback message. */
+const ERROR_PREFIX_RE = /^Error:/;
+
 /**
- * The turn's real final answer, taken from a non-quiet run's stdout: the
- * LAST Panel or streaming-box frame present, ignoring everything before it —
- * the turn divider, earlier/superseded streamed commentary, inline tool
- * diffs, and the vendor's whole-prompt `Query: <prompt>` echo are never
- * themselves inside a frame's own border (see `findRichFrames`'s doc
- * comment), so scoping to the last frame drops all of them for free.
- *
- * This deliberately does NOT lean on `stripQueryEcho`'s line-based "the
- * `Query:` line must be the very first non-blank line of stdout" boundary at
- * all: with `-w` (worktree mode), a `✓ Worktree created…` status line prints
- * before the echo, which made that heuristic bail out entirely and leave the
- * whole echoed prompt sitting in front of (what should have been) the
- * answer. Scanning for the last frame instead of a leading boundary sidesteps
- * that shape difference — and any other stray text `_run_single_query_mode`
- * might print first — without needing to special-case it.
- *
- * Pass the stdout with the interactive exit summary already cut off
- * (`stripExitSummary`) — the exit summary is plain text, not a frame, so its
- * own `Session:`/`Duration:`/`Messages:` lines never form a frame of their
- * own, but keeping it out is one less thing for `findRichFrames` to scan.
- * Returns undefined when no terminated frame is found at all — e.g. an early
- * exit before any turn ever ran (see `execute.ts`'s `parseHermesOutput`,
- * which treats that as a failure worth an `errorMessage` rather than a quiet
- * empty response).
+ * A turn-loop narration line that says the turn gave up: `❌ Non-retryable
+ * client error (HTTP 400). Aborting.`, `❌ API failed after 3 retries — …`,
+ * `❌ Billing or credits exhausted — …`, `❌ Max retries … Giving up.` and the
+ * like (agent/turn_recovery.py, turn_response_check.py, turn_overflow.py, …).
+ * Printed at column 0, outside any frame. Matched on the raw line, not the
+ * trimmed one: an indented `❌` belongs to tool output or a diff context row,
+ * not to the turn loop.
  */
-export function extractLiveAnswerFrame(stdoutBeforeExitSummary: string): RichFrame | undefined {
-  const frames = findRichFrames(stdoutBeforeExitSummary);
-  return frames.at(-1);
+const TURN_FAILURE_NARRATION_RE = /^❌/;
+
+/** Upper bound for an error message taken from a frame body. */
+const MAX_FAILURE_MESSAGE_CHARS = 1000;
+
+/**
+ * What `analyzeLiveTurn` concluded about a non-quiet run's stdout (already
+ * cut at the exit summary).
+ *
+ * `answer` is the last frame that is not the billing call to action, and is
+ * present only when the turn did NOT fail — a failed turn has no answer, so
+ * nothing from its error text can leak into the stored response, the run
+ * summary or the auto-comment built from it. `failureMessage` is present iff
+ * the turn is judged to have failed.
+ */
+export interface LiveTurnAnalysis {
+  answer: RichFrame | undefined;
+  failureMessage: string | undefined;
+}
+
+/** True when the last-non-CTA answer panel sits after a turn-loop `❌` narration line. */
+function hasFailureNarrationBefore(lines: string[], spans: RichFrameSpan[], answerIdx: number): boolean {
+  // The region to look at starts after the previous frame (if any) or, for
+  // the first frame, after the turn's own divider — the run of `─` the CLI
+  // prints once when a turn starts (cli_chat_turn_mixin.py). Anything before
+  // the divider is the vendor's echo of the whole prompt, which can contain
+  // any text, so without one of those two anchors nothing is claimed.
+  const floor = answerIdx > 0 ? spans[answerIdx - 1].endLine : -1;
+  let found = false;
+  for (let k = spans[answerIdx].startLine - 1; k > floor; k--) {
+    if (isPanelRuleLine(lines[k].trim())) return found; // the turn's divider
+    if (TURN_FAILURE_NARRATION_RE.test(lines[k].replace(/\r$/, ""))) found = true;
+  }
+  return answerIdx > 0 ? found : false;
 }
 
 /**
- * The vendor CLI's own "this turn failed" shape: `_chat_print_response_panel`
- * falls back to the `box.HORIZONTALS` Panel (instead of the already-streamed
- * box) for an error/partial turn, and prints the message body starting with
- * `Error:` (`cli_chat_turn_mixin.py`, ~L477-479/616-632) — a provider error or
- * rate limit, a billing/out-of-credits refusal, etc. Without `-Q`,
- * `_run_single_query_mode` still exits 0 in this case (only quiet mode's
- * `_run_quiet_single_query` calls `sys.exit(1)` on `result.failed`), so this
- * is the one shape `parseHermesOutput` cannot tell apart from a genuine
- * successful answer just by looking at the exit code — it has to look at
- * which kind of frame the answer came from and what its own text says.
+ * The verdict on a non-quiet run's turn: which frame (if any) is the real
+ * answer, and whether the turn failed.
  *
- * A streaming-box frame is never this: `already_streamed` (and therefore the
- * streaming box, not the Panel) is only true when the turn was NOT an
- * error/partial one, per the same vendor source.
+ * Without `-Q` the CLI exits 0 whatever happened (`_run_single_query_mode`
+ * never calls `sys.exit`; only quiet mode's `_run_quiet_single_query` does),
+ * so the only evidence of a failed turn is in the text. Verified against real
+ * output of the installed CLI for a multi-tool success and for provider
+ * 400/402/429/500 responses: a failed turn never prints the streaming box; it
+ * prints its error as a `box.HORIZONTALS` Panel, preceded by `❌` narration
+ * lines from the turn loop, and — for exhausted credits — followed by a
+ * second Panel titled "Out of credits". The Panel body itself usually does NOT
+ * start with `Error:` (that prefix is only the empty-response fallback), so
+ * that prefix alone misses nearly every real failure. A turn is judged failed
+ * when the answer frame is a Panel and any of these holds:
+ *
+ *  - the "Out of credits" call-to-action Panel is present (checked even when
+ *    the answer is a streaming box: it is only ever printed on failure);
+ *  - the Panel body starts with `Error:`;
+ *  - a turn-loop `❌` narration line sits between the previous frame (or the
+ *    turn's divider) and the Panel.
+ *
+ * A streaming-box answer is never a failure by itself, whatever it says: it
+ * is model prose (`already_streamed` requires "not an error response"). A
+ * Panel answer with none of the three markers is accepted as an answer — this
+ * is what a successful turn looks like when `display.streaming` is off. The
+ * residual risk is a failed turn whose Panel carries no marker at all; that
+ * is stored as a normal answer.
+ *
+ * `answer` is the LAST non-call-to-action frame — everything earlier is the
+ * turn divider, superseded streamed commentary and inline tool diffs, none of
+ * which sit inside the last frame's own border. No frame means no answer.
+ * Pass the stdout with the exit summary already cut off (`stripExitSummary`).
  */
-export function liveModeErrorFromFrame(frame: RichFrame | undefined): string | undefined {
-  if (!frame || frame.kind !== "panel") return undefined;
-  const firstContentLine = frame.bodyLines.map((l) => l.trim()).find((l) => l.length > 0);
-  return firstContentLine && /^Error:/.test(firstContentLine) ? frame.bodyLines.join("\n").trim() : undefined;
+export function analyzeLiveTurn(stdoutBeforeExitSummary: string): LiveTurnAnalysis {
+  const lines = stdoutBeforeExitSummary.split("\n");
+  const spans = findRichFrameSpans(stdoutBeforeExitSummary);
+  const isCallToAction = (f: RichFrameSpan) => f.kind === "panel" && OUT_OF_CREDITS_TITLE_RE.test(f.title);
+  const callToAction = spans.filter(isCallToAction);
+  let answerIdx = -1;
+  for (let i = spans.length - 1; i >= 0; i--) {
+    if (!isCallToAction(spans[i])) {
+      answerIdx = i;
+      break;
+    }
+  }
+  const answerSpan = answerIdx >= 0 ? spans[answerIdx] : undefined;
+
+  let failed = callToAction.length > 0;
+  if (!failed && answerSpan && answerSpan.kind === "panel") {
+    const firstContentLine = answerSpan.bodyLines.map((l) => l.trim()).find((l) => l.length > 0);
+    failed =
+      (firstContentLine !== undefined && ERROR_PREFIX_RE.test(firstContentLine)) ||
+      hasFailureNarrationBefore(lines, spans, answerIdx);
+  }
+
+  if (!failed) {
+    return { answer: answerSpan && { kind: answerSpan.kind, bodyLines: answerSpan.bodyLines }, failureMessage: undefined };
+  }
+  // Word the failure from the error Panel; a streaming-box answer is model
+  // prose, not an error message, so a call to action beats it as the source.
+  const source = answerSpan?.kind === "panel" ? answerSpan : (callToAction.at(-1) ?? answerSpan);
+  const body = source ? source.bodyLines.join("\n").trim() : "";
+  const failureMessage =
+    body.length > 0
+      ? body.slice(0, MAX_FAILURE_MESSAGE_CHARS)
+      : "hermes reported a failed turn in live-progress mode without a message";
+  return { answer: undefined, failureMessage };
 }
 
 // Re-exported so execute.ts's response cleaning needs a single G5 import.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  findRichFrameSpans,
   findRichFrames,
   isPanelRuleLine,
   isPanelTitleLine,
@@ -8,6 +9,10 @@ import {
   isStreamBoxHeaderLine,
   stripRichPanelFrames,
 } from "./myrmidon-panel-frame.js";
+import {
+  REAL_FAILED_402_WITH_CALL_TO_ACTION,
+  REAL_MULTI_TOOL_SUCCESS,
+} from "../server/myrmidon-live-progress.real-output.fixtures.js";
 
 /**
  * Builds the exact bytes `rich.panel.Panel(..., box=box.HORIZONTALS,
@@ -287,5 +292,57 @@ describe("findRichFrames", () => {
     const truncated = buildStreamBox("⚕ Hermes", ["Still working"]).split("\n").slice(0, 3).join("\n");
     const frames = findRichFrames([complete, truncated].join("\n"));
     expect(frames).toEqual([{ kind: "stream", bodyLines: ["Done."] }]);
+  });
+});
+
+describe("findRichFrameSpans", () => {
+  it("returns the title and the 0-based border line span of each frame", () => {
+    const streamed = buildStreamBox("⚕ Hermes", ["Partial progress before the error."]);
+    const panelBlock = buildPanelBlock("⚡ Out of credits", ["Add credits."]);
+    const text = ["prefix line", streamed, panelBlock].join("\n");
+    const lines = text.split("\n");
+    const spans = findRichFrameSpans(text);
+
+    expect(spans.map((s) => [s.kind, s.title])).toEqual([
+      ["stream", "⚕ Hermes"],
+      ["panel", "⚡ Out of credits"],
+    ]);
+    for (const span of spans) {
+      const top = lines[span.startLine].trim();
+      const bottom = lines[span.endLine].trim();
+      if (span.kind === "stream") {
+        expect(isStreamBoxHeaderLine(top)).toBe(true);
+        expect(isStreamBoxFooterLine(bottom)).toBe(true);
+      } else {
+        expect(isPanelTitleLine(top)).toBe(true);
+        expect(isPanelRuleLine(bottom)).toBe(true);
+      }
+    }
+    expect(spans[0].endLine).toBeLessThan(spans[1].startLine);
+  });
+
+  it("is what findRichFrames projects: same frames, kind and body only", () => {
+    const text = [buildStreamBox("⚕ Hermes", ["One."]), buildPanelBlock("⚕ Hermes", ["Two."])].join("\n");
+    expect(findRichFrames(text)).toEqual(findRichFrameSpans(text).map(({ kind, bodyLines }) => ({ kind, bodyLines })));
+  });
+
+  it("reads the titles off real CLI output: one box per streamed burst, then the answer box", () => {
+    const spans = findRichFrameSpans(REAL_MULTI_TOOL_SUCCESS);
+    expect(spans.map((s) => [s.kind, s.title])).toEqual([
+      ["stream", "⚕ Hermes"],
+      ["stream", "⚕ Hermes"],
+      ["stream", "⚕ Hermes"],
+      ["stream", "⚕ Hermes"],
+    ]);
+    expect(spans[0].bodyLines.join("\n")).toContain("Let me look at the session lookup code first.");
+    expect(spans.at(-1)!.bodyLines.join("\n")).toContain("Fixed the missing null check");
+  });
+
+  it("finds both Panels of a real exhausted-credits failure, titled as printed", () => {
+    const spans = findRichFrameSpans(REAL_FAILED_402_WITH_CALL_TO_ACTION);
+    expect(spans.map((s) => [s.kind, s.title])).toEqual([
+      ["panel", "⚕ Hermes"],
+      ["panel", "⚡ Out of credits"],
+    ]);
   });
 });

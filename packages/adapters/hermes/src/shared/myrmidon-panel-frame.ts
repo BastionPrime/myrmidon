@@ -99,11 +99,35 @@ export interface RichFrame {
 }
 
 /**
+ * A `RichFrame` plus where it sits in the scanned text: `title` is the label
+ * drawn on the frame's top border (e.g. `⚕ Hermes`, `⚡ Out of credits`), and
+ * `startLine`/`endLine` are the 0-based indexes, in `text.split("\n")`, of
+ * its top and bottom border lines (both inclusive). Callers that need to look
+ * at the text BETWEEN frames (e.g. the `❌` narration lines a failed turn
+ * prints right before its error Panel) use these to bound the region.
+ */
+export interface RichFrameSpan extends RichFrame {
+  title: string;
+  startLine: number;
+  endLine: number;
+}
+
+/** The label on a Panel's top border: `─  ⚕ Hermes  ───…` -> `⚕ Hermes`. */
+function panelTitleText(trimmedTitleLine: string): string {
+  return trimmedTitleLine.replace(/^─+\s+/, "").replace(/\s+─{2,}$/, "").trim();
+}
+
+/** The label on a streaming box's header: `╭─ ⚕ Hermes ───…╮` -> `⚕ Hermes`. */
+function streamBoxTitleText(trimmedHeaderLine: string): string {
+  return trimmedHeaderLine.replace(/^╭─+\s*/, "").replace(/\s*─*╮$/, "").trim();
+}
+
+/**
  * myrmidon(G5): find every TERMINATED Panel or streaming-box frame in a
- * block of Hermes stdout, in the order they appear. An unterminated frame
- * (no matching close marker before the end of text — e.g. stdout truncated
- * by a killed run) is not returned, same as `stripRichPanelFrames`'s "don't
- * guess" rule.
+ * block of Hermes stdout, in the order they appear, with each frame's title
+ * and line span. An unterminated frame (no matching close marker before the
+ * end of text — e.g. stdout truncated by a killed run) is not returned, same
+ * as `stripRichPanelFrames`'s "don't guess" rule.
  *
  * A single turn can print more than one frame before the real final answer
  * — each burst of streamed text between tool calls reopens a new streaming
@@ -112,13 +136,15 @@ export interface RichFrame {
  * is a `box.HORIZONTALS` Panel that can follow an earlier, already-streamed
  * partial-progress box in the very same run (see this file's own
  * `myrmidon.test.ts`, "still strips a box.HORIZONTALS Panel … when both
- * formats appear in the same run"). Callers that only want the turn's real,
- * final answer take `frames.at(-1)` — the LAST one is always the one that
- * matters; everything before it is superseded commentary or progress.
+ * formats appear in the same run"), optionally followed by a second Panel
+ * with the "Out of credits" call to action. Callers that only want the
+ * turn's real answer pick the last frame that is not such a call to action
+ * (see myrmidon-live-progress.ts `analyzeLiveTurn`) — everything before it is
+ * superseded commentary or progress.
  */
-export function findRichFrames(text: string): RichFrame[] {
+export function findRichFrameSpans(text: string): RichFrameSpan[] {
   const lines = text.split("\n");
-  const frames: RichFrame[] = [];
+  const frames: RichFrameSpan[] = [];
   let i = 0;
   while (i < lines.length) {
     const trimmed = lines[i].trim();
@@ -133,7 +159,7 @@ export function findRichFrames(text: string): RichFrame[] {
       if (close !== -1) {
         const bodyLines: string[] = [];
         for (let k = i + 1; k < close; k++) bodyLines.push(unwrapPanelRow(lines[k]));
-        frames.push({ kind: "panel", bodyLines });
+        frames.push({ kind: "panel", title: panelTitleText(trimmed), bodyLines, startLine: i, endLine: close });
         i = close + 1;
         continue;
       }
@@ -146,7 +172,13 @@ export function findRichFrames(text: string): RichFrame[] {
         }
       }
       if (close !== -1) {
-        frames.push({ kind: "stream", bodyLines: lines.slice(i + 1, close) });
+        frames.push({
+          kind: "stream",
+          title: streamBoxTitleText(trimmed),
+          bodyLines: lines.slice(i + 1, close),
+          startLine: i,
+          endLine: close,
+        });
         i = close + 1;
         continue;
       }
@@ -154,6 +186,14 @@ export function findRichFrames(text: string): RichFrame[] {
     i++;
   }
   return frames;
+}
+
+/**
+ * Same scan as `findRichFrameSpans`, projected down to the frame kind and
+ * body only, for callers that do not care where a frame sits.
+ */
+export function findRichFrames(text: string): RichFrame[] {
+  return findRichFrameSpans(text).map(({ kind, bodyLines }) => ({ kind, bodyLines }));
 }
 
 /**

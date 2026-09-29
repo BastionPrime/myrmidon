@@ -1,35 +1,51 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  analyzeLiveTurn,
   createLiveLogSanitizer,
-  extractLiveAnswerFrame,
   extractLiveSessionId,
   LIVE_PROGRESS_ENV_VAR,
   LIVE_SESSION_ID_REGEX,
-  liveModeErrorFromFrame,
   QUIET_SESSION_ID_REGEX,
   resolveHermesQuietMode,
   stripExitSummary,
   stripQueryEcho,
 } from "./myrmidon-live-progress.js";
+import {
+  REAL_EARLY_EXIT_NO_CREDENTIALS,
+  REAL_EARLY_EXIT_SESSION_NOT_FOUND,
+  REAL_FAILED_400,
+  REAL_FAILED_402_WITH_CALL_TO_ACTION,
+  REAL_FAILED_429_AFTER_RETRIES,
+  REAL_FAILED_500_AFTER_RETRIES,
+  REAL_MULTI_TOOL_SUCCESS,
+  REAL_SIMPLE_SUCCESS,
+} from "./myrmidon-live-progress.real-output.fixtures.js";
 
 describe("resolveHermesQuietMode", () => {
-  it("ignores adapterConfig.quiet=true when the env flag is unset (default on)", () => {
-    expect(resolveHermesQuietMode(true, {})).toBe(false);
+  it("follows the card's own quiet setting when the env flag is unset (default off)", () => {
+    expect(resolveHermesQuietMode(true, {})).toBe(true);
+    expect(resolveHermesQuietMode(false, {})).toBe(false);
   });
 
-  it("ignores adapterConfig.quiet=true when the env flag is any truthy-ish value", () => {
-    for (const v of ["1", "true", "yes", "on", "banana", "  "]) {
+  it("follows the card's own quiet setting for an empty or whitespace-only value", () => {
+    for (const v of ["", "  "]) {
+      expect(resolveHermesQuietMode(true, { [LIVE_PROGRESS_ENV_VAR]: v })).toBe(true);
+    }
+  });
+
+  it("ignores adapterConfig.quiet=true only for an explicit opt-in value", () => {
+    for (const v of ["1", "true", "yes", "on", " TRUE ", "On"]) {
       expect(resolveHermesQuietMode(true, { [LIVE_PROGRESS_ENV_VAR]: v })).toBe(false);
     }
   });
 
-  it("also forces non-quiet when the card left quiet unset (unaffected either way)", () => {
-    expect(resolveHermesQuietMode(false, {})).toBe(false);
+  it("also leaves a card that left quiet unset non-quiet when opted in (unaffected either way)", () => {
+    expect(resolveHermesQuietMode(false, { [LIVE_PROGRESS_ENV_VAR]: "1" })).toBe(false);
   });
 
-  it("falls back to the card's own quiet setting when explicitly disabled", () => {
-    for (const v of ["0", "false", "No", "OFF"]) {
+  it("keeps the card's quiet setting for an explicit off value or an unrecognized one (a typo must not enable it)", () => {
+    for (const v of ["0", "false", "No", "OFF", "banana", "ture"]) {
       expect(resolveHermesQuietMode(true, { [LIVE_PROGRESS_ENV_VAR]: v })).toBe(true);
       expect(resolveHermesQuietMode(false, { [LIVE_PROGRESS_ENV_VAR]: v })).toBe(false);
     }
@@ -227,14 +243,13 @@ describe("stripQueryEcho", () => {
     // answer. `stripQueryEcho` staying conservative here is still correct on
     // its own terms — this is genuinely a case where it cannot tell where
     // the echo ends without guessing — but the caller no longer trusts it
-    // for that: `extractLiveAnswerFrame` (see below) finds no frame in this
-    // same stdout and returns undefined, and `execute()`'s live-mode parsing
-    // takes the response ONLY from a found frame, never from this raw
-    // fallback text. See execute.myrmidon-live-progress.myrmidon.test.ts's
-    // "flags an early-exit failure … and never leaks the raw prompt echo".
+    // for that: `analyzeLiveTurn` (see below) finds no frame in this same
+    // stdout and returns no answer, and `execute()`'s live-mode parsing takes
+    // the response ONLY from a found frame, never from this raw fallback
+    // text. See execute.myrmidon-live-progress.myrmidon.test.ts.
     const stdout = "Query: Fix the missing null check.\nstill just wrapped prompt text, nothing else ever printed";
     expect(stripQueryEcho(stdout)).toBe(stdout);
-    expect(extractLiveAnswerFrame(stdout)).toBeUndefined();
+    expect(analyzeLiveTurn(stdout)).toEqual({ answer: undefined, failureMessage: undefined });
   });
 
   it("leaves leading blank lines before the Query: line untouched", () => {
@@ -313,79 +328,169 @@ function buildStreamBox(label: string, bodyLines: string[], width = 80): string 
   return ["", header, ...bodyLines, footer].join("\n");
 }
 
-describe("extractLiveAnswerFrame", () => {
-  it("returns undefined for stdout with no frame at all (early exit before any turn ran)", () => {
-    expect(extractLiveAnswerFrame("Goodbye! ⚕\n")).toBeUndefined();
-    expect(extractLiveAnswerFrame("Session not found.\n")).toBeUndefined();
-    expect(extractLiveAnswerFrame("")).toBeUndefined();
+const DIVIDER = "─".repeat(40);
+
+/** The stdout `execute()` hands to `analyzeLiveTurn`: exit summary already cut off. */
+function turnOf(capture: string) {
+  return analyzeLiveTurn(stripExitSummary(capture));
+}
+
+describe("analyzeLiveTurn — real CLI output", () => {
+  it("takes only the last box of a multi-tool success as the answer (divider, intermediate boxes, tool lines and the write_file diff are all outside it)", () => {
+    const turn = turnOf(REAL_MULTI_TOOL_SUCCESS);
+    expect(turn.failureMessage).toBeUndefined();
+    expect(turn.answer?.kind).toBe("stream");
+    expect(turn.answer?.bodyLines.join("\n").replace(/\r/g, "")).toBe(
+      "Fixed the missing null check in the session lookup.\n\n- Verified with a targeted run\n- Updated the changelog entry",
+    );
   });
 
-  it("returns the single frame when there is exactly one", () => {
-    const stdout = buildStreamBox("⚕ Hermes", ["All fixed. See the PR."]);
-    const frame = extractLiveAnswerFrame(stdout);
-    expect(frame?.kind).toBe("stream");
-    expect(frame?.bodyLines).toEqual(["All fixed. See the PR."]);
+  it("takes the single box of a tool-less success", () => {
+    const turn = turnOf(REAL_SIMPLE_SUCCESS);
+    expect(turn.failureMessage).toBeUndefined();
+    expect(turn.answer?.bodyLines.join("\n")).toContain("Fixed the missing null check");
   });
 
-  it("takes the LAST frame, dropping the turn divider, earlier streamed commentary, and inline tool diffs between them", () => {
-    // A realistic multi-tool-call turn: the divider cli_chat_turn_mixin.py
-    // prints at the start of every turn, an intermediate streamed comment
-    // before a tool call, the tool's own diff output (top-level, no frame
-    // border), then the box that reopens for the real final answer.
-    const stdout = [
-      "─".repeat(40),
-      buildStreamBox("⚕ Hermes", ["Let me check the session lookup first."]),
-      '[tool] terminal: git diff',
-      "  ┊ review diff",
-      "  ┊ - if (session) {",
-      "  ┊ + if (session && session.isValid) {",
-      buildStreamBox("⚕ Hermes", ["Fixed. All tests pass."]),
-    ].join("\n");
-    const frame = extractLiveAnswerFrame(stdout);
-    expect(frame?.bodyLines).toEqual(["Fixed. All tests pass."]);
+  it("flags an HTTP 400 turn as failed although the Panel body does not start with 'Error:'", () => {
+    const turn = turnOf(REAL_FAILED_400);
+    expect(turn.answer).toBeUndefined();
+    expect(turn.failureMessage).toBe("HTTP 400: Invalid request: unsupported parameter");
+    // The reviewer's original criterion (Panel body starts with "Error:")
+    // does not describe what the CLI really prints for a provider error.
+    expect(turn.failureMessage).not.toMatch(/^Error:/);
   });
 
-  it("takes the last Panel when a failed/partial turn follows an already-streamed box (mixed shapes in one run)", () => {
-    const stdout = [
-      buildStreamBox("⚕ Hermes", ["Partial progress before the error."]),
-      buildPanelBlock("⚕ Hermes", ["Error: the provider returned a rate-limit response."]),
-    ].join("\n");
-    const frame = extractLiveAnswerFrame(stdout);
-    expect(frame?.kind).toBe("panel");
-    expect(frame?.bodyLines.join("\n")).toContain("Error: the provider returned a rate-limit response.");
+  it("flags exhausted credits as failed and reports the refusal, not the call-to-action Panel", () => {
+    const turn = turnOf(REAL_FAILED_402_WITH_CALL_TO_ACTION);
+    expect(turn.answer).toBeUndefined();
+    expect(turn.failureMessage).toMatch(/^Billing or credits exhausted: HTTP 402/);
+    expect(turn.failureMessage).not.toContain("Add credits with Custom.");
   });
 
-  it("ignores an unterminated trailing frame (killed mid-answer) the same way stripRichPanelFrames does", () => {
-    const complete = buildStreamBox("⚕ Hermes", ["Fixed the missing null check."]);
-    const truncated = buildStreamBox("⚕ Hermes", ["Still working"]).split("\n").slice(0, 3).join("\n");
-    const stdout = [complete, truncated].join("\n");
-    // The complete, earlier frame is still found — an unterminated later one
-    // just isn't counted, it doesn't hide the last COMPLETE frame silently
-    // returning the wrong (earlier) one would be worse than finding none.
-    const frame = extractLiveAnswerFrame(stdout);
-    expect(frame?.bodyLines).toEqual(["Fixed the missing null check."]);
+  it("flags a rate limit that survived all retries", () => {
+    const turn = turnOf(REAL_FAILED_429_AFTER_RETRIES);
+    expect(turn.answer).toBeUndefined();
+    expect(turn.failureMessage).toBe("API call failed after 3 retries: HTTP 429: Rate limit reached for requests");
+  });
+
+  it("flags a server error that survived all retries", () => {
+    const turn = turnOf(REAL_FAILED_500_AFTER_RETRIES);
+    expect(turn.answer).toBeUndefined();
+    expect(turn.failureMessage).toContain("API call failed after 3 retries: HTTP 500");
+  });
+
+  it("finds no answer and no verdict when the CLI exited before any turn (no frame at all)", () => {
+    for (const capture of [REAL_EARLY_EXIT_NO_CREDENTIALS, REAL_EARLY_EXIT_SESSION_NOT_FOUND, "Goodbye! ⚕\n", ""]) {
+      expect(turnOf(capture)).toEqual({ answer: undefined, failureMessage: undefined });
+    }
   });
 });
 
-describe("liveModeErrorFromFrame", () => {
-  it("is undefined for a streaming-box frame regardless of content (never the error shape)", () => {
-    const frame = extractLiveAnswerFrame(buildStreamBox("⚕ Hermes", ["Error: this is just prose in a real answer."]));
-    expect(liveModeErrorFromFrame(frame)).toBeUndefined();
+describe("analyzeLiveTurn — failure signals in isolation", () => {
+  const panel = (title: string, body: string[]) => buildPanelBlock(title, body);
+
+  it("Panel body starting with 'Error:' (the empty-response fallback) is a failure", () => {
+    const turn = analyzeLiveTurn(panel("⚕ Hermes", ["Error: the model returned an empty response."]));
+    expect(turn.answer).toBeUndefined();
+    expect(turn.failureMessage).toBe("Error: the model returned an empty response.");
   });
 
-  it("is undefined for a Panel frame whose body does not start with 'Error:'", () => {
-    const frame = extractLiveAnswerFrame(buildPanelBlock("⚕ Hermes", ["All fixed. See the PR."]));
-    expect(liveModeErrorFromFrame(frame)).toBeUndefined();
+  it("a streaming-box answer is never a failure by its text, even when it starts with 'Error:'", () => {
+    const turn = analyzeLiveTurn(buildStreamBox("⚕ Hermes", ["Error: this is just prose in a real answer."]));
+    expect(turn.failureMessage).toBeUndefined();
+    expect(turn.answer?.bodyLines).toEqual(["Error: this is just prose in a real answer."]);
   });
 
-  it("returns the message for a Panel frame whose body starts with 'Error:' (provider/billing failure mid-turn)", () => {
-    const frame = extractLiveAnswerFrame(
-      buildPanelBlock("⚕ Hermes", ["Error: insufficient credits. Add credits with your provider."]),
+  it("a Panel answer with no failure marker is accepted (what a success looks like with display.streaming off)", () => {
+    const turn = analyzeLiveTurn([DIVIDER, "  ┊ 💻 $ ls  0.1s", panel("⚕ Hermes", ["All fixed."])].join("\n"));
+    expect(turn.failureMessage).toBeUndefined();
+    expect(turn.answer?.bodyLines.map((l) => l.trim()).filter(Boolean)).toEqual(["All fixed."]);
+  });
+
+  it("the 'Out of credits' Panel alone is a failure, worded from its own body", () => {
+    const turn = analyzeLiveTurn(panel("⚡ Out of credits", ["Add credits with the provider."]));
+    expect(turn.answer).toBeUndefined();
+    expect(turn.failureMessage).toBe("Add credits with the provider.");
+  });
+
+  it("the 'Out of credits' Panel is a failure even after a streaming-box answer, and is never picked as the answer", () => {
+    const turn = analyzeLiveTurn(
+      [buildStreamBox("⚕ Hermes", ["Partial progress."]), panel("⚡ Out of credits", ["Add credits."])].join("\n"),
     );
-    expect(liveModeErrorFromFrame(frame)).toBe("Error: insufficient credits. Add credits with your provider.");
+    expect(turn.answer).toBeUndefined();
+    expect(turn.failureMessage).toBe("Add credits.");
   });
 
-  it("is undefined when there is no frame at all", () => {
-    expect(liveModeErrorFromFrame(undefined)).toBeUndefined();
+  it("a turn-loop cross-mark line right before the Panel, after the turn divider, is a failure", () => {
+    const turn = analyzeLiveTurn(
+      [DIVIDER, "", "❌ Non-retryable client error (HTTP 400). Aborting.\r", panel("⚕ Hermes", ["HTTP 400: bad request"])].join("\n"),
+    );
+    expect(turn.answer).toBeUndefined();
+    expect(turn.failureMessage).toBe("HTTP 400: bad request");
+  });
+
+  it("a cross-mark line after an earlier streamed box (no divider in between) is a failure", () => {
+    const turn = analyzeLiveTurn(
+      [
+        buildStreamBox("⚕ Hermes", ["Partial progress."]),
+        "❌ Max retries (3) for invalid tool calls exceeded. Stopping as partial.",
+        panel("⚕ Hermes", ["Stopped after repeated invalid tool calls."]),
+      ].join("\n"),
+    );
+    expect(turn.answer).toBeUndefined();
+    expect(turn.failureMessage).toBe("Stopped after repeated invalid tool calls.");
+  });
+
+  it("a cross-mark line inside the echoed prompt (before the divider) is not evidence", () => {
+    const turn = analyzeLiveTurn(
+      [
+        "Query: Review this checklist:",
+        "❌ item one is not done",
+        "Initializing agent...",
+        DIVIDER,
+        panel("⚕ Hermes", ["All fixed."]),
+      ].join("\n"),
+    );
+    expect(turn.failureMessage).toBeUndefined();
+    expect(turn.answer).toBeDefined();
+  });
+
+  it("claims nothing from a cross-mark line when there is neither a divider nor an earlier frame to bound the turn", () => {
+    const turn = analyzeLiveTurn(["❌ looks like narration", panel("⚕ Hermes", ["All fixed."])].join("\n"));
+    expect(turn.failureMessage).toBeUndefined();
+  });
+
+  it("an indented cross mark (tool output, a diff context row) is not turn-loop narration", () => {
+    const turn = analyzeLiveTurn(
+      [DIVIDER, "  ┊ review diff", " ❌ still failing in the old docs", panel("⚕ Hermes", ["All fixed."])].join("\n"),
+    );
+    expect(turn.failureMessage).toBeUndefined();
+  });
+
+  it("a recovered provider error (retry narration, then a normal streaming-box answer) stays a success", () => {
+    const turn = analyzeLiveTurn(
+      [
+        DIVIDER,
+        "⚠️  API call failed (attempt 1/3): APIStatusError [HTTP 500]",
+        "⏳ Retrying in 2.6s (attempt 1/3)...",
+        buildStreamBox("⚕ Hermes", ["Done after one retry."]),
+      ].join("\n"),
+    );
+    expect(turn.failureMessage).toBeUndefined();
+    expect(turn.answer?.bodyLines).toEqual(["Done after one retry."]);
+  });
+
+  it("bounds the failure message and falls back to a generic one for an empty body", () => {
+    const long = analyzeLiveTurn(panel("⚕ Hermes", ["Error: " + "x".repeat(5000)]));
+    expect(long.failureMessage!.length).toBeLessThanOrEqual(1000);
+    const empty = analyzeLiveTurn(panel("⚡ Out of credits", []));
+    expect(empty.failureMessage).toMatch(/failed turn/);
+  });
+
+  it("ignores an unterminated trailing frame (killed mid-answer): the last COMPLETE frame is still the answer", () => {
+    const complete = buildStreamBox("⚕ Hermes", ["Fixed the missing null check."]);
+    const truncated = buildStreamBox("⚕ Hermes", ["Still working"]).split("\n").slice(0, 3).join("\n");
+    const turn = analyzeLiveTurn([complete, truncated].join("\n"));
+    expect(turn.answer?.bodyLines).toEqual(["Fixed the missing null check."]);
   });
 });
