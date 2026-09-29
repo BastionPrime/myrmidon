@@ -1,0 +1,197 @@
+name: Myrmidon media tools
+
+# 1.2: the shared media/office tools service for container bots
+# (tools/media-mcp, docs/myrmidon/media-tools.md). Three images:
+#   ghcr.io/itkadr-git/myrmidon-media-mcp     MCP facade
+#   ghcr.io/itkadr-git/myrmidon-media-worker  ffmpeg + poppler worker
+#   ghcr.io/itkadr-git/myrmidon-media-tika    Tika full + Tesseract with the Russian model
+# Gotenberg is used as published, pinned by digest in the compose file.
+# On a pull request this only runs the unit tests and checks that the images build
+# (no registry credentials involved); push happens on main and on myr-v* tags, by
+# the pattern in myrmidon-bot-image.yml.
+
+on:
+  push:
+    branches: [main]
+    tags: ["myr-v*"]
+    paths:
+      - "tools/media-mcp/**"
+      - ".github/workflows/myrmidon-media-tools.yml"
+  pull_request:
+    paths:
+      - "tools/media-mcp/**"
+      - ".github/workflows/myrmidon-media-tools.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: myrmidon-media-tools-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    if: ${{ github.repository == 'itkadr-git/myrmidon' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: facade
+            image: ghcr.io/itkadr-git/myrmidon-media-mcp
+            dockerfile: tools/media-mcp/Dockerfile
+            context: tools/media-mcp
+            target: facade
+            title: Myrmidon media MCP facade
+            description: One MCP endpoint for container bots (files, ffmpeg jobs, office to PDF, OCR) over internal backends
+          - name: worker
+            image: ghcr.io/itkadr-git/myrmidon-media-worker
+            dockerfile: tools/media-mcp/Dockerfile
+            context: tools/media-mcp
+            target: worker
+            title: Myrmidon media worker
+            description: ffmpeg, ffprobe and poppler jobs for the media MCP facade
+          - name: tika
+            image: ghcr.io/itkadr-git/myrmidon-media-tika
+            dockerfile: tools/media-mcp/tika/Dockerfile
+            context: tools/media-mcp/tika
+            target: ""
+            title: Myrmidon media Tika
+            description: Apache Tika Server full with Tesseract and the Russian OCR model
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/myr-v* ]]; then
+            tag="${GITHUB_REF#refs/tags/myr-}"
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::release tag must look like myr-vX.Y.Z, got ${GITHUB_REF#refs/tags/}"
+              exit 1
+            fi
+            echo "image_tag=${tag#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      # Unit tests of the spec validators and of the per-bot isolation, inside the build.
+      - name: Unit tests
+        if: ${{ matrix.name == 'facade' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          target: test
+          push: false
+
+      - name: Login to GitHub Container Registry
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ matrix.image }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.version.outputs.image_tag }},enable=${{ startsWith(github.ref, 'refs/tags/myr-v') }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.source=https://github.com/itkadr-git/myrmidon
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build (pull request, no push)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: media-tools-${{ matrix.name }}:pr-check
+          push: false
+          load: true
+          cache-from: type=registry,ref=${{ matrix.image }}:buildcache
+
+      # Check the finished images, not the sources.
+      - name: Check the built image
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          img="media-tools-${{ matrix.name }}:pr-check"
+          case "${{ matrix.name }}" in
+            facade)
+              docker run --rm --entrypoint python "$img" -c "import media_mcp.facade, media_mcp.worker; print('import ok')"
+              ;;
+            worker)
+              docker run --rm --entrypoint ffmpeg "$img" -version | head -1
+              docker run --rm --entrypoint sh "$img" -c 'ffmpeg -hide_banner -filters | grep -q " subtitles " && ffmpeg -hide_banner -filters | grep -q " loudnorm " && pdftoppm -v'
+              ;;
+            tika)
+              docker run --rm --user root --entrypoint tesseract "$img" --list-langs | grep -x -e rus -e eng
+              ;;
+          esac
+
+      - name: Build and push by digest
+        id: build
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=registry,ref=${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=${{ matrix.image }}:buildcache,mode=max
+
+      - name: Tag the built digest
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=(-t "$tag")
+          done < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools create "${args[@]}" "$IMAGE@$DIGEST"
+          docker buildx imagetools inspect "$IMAGE@$DIGEST"
+
+      - name: Summary
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          {
+            echo "### ${{ matrix.title }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Digest | \`$IMAGE@$DIGEST\` |"
+            echo "| Tags | $(jq -r '.tags | map("`" + . + "`") | join(", ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") |"
+          } >> "$GITHUB_STEP_SUMMARY"
