@@ -322,10 +322,37 @@ describe("issueHasExistingExecutionWorkflow", () => {
     }
   });
 
-  it("is false for an idle execution state (e.g. a monitor with no review stage)", () => {
+  it("is false for an idle execution state that holds no monitor", () => {
+    expect(issueHasExistingExecutionWorkflow({ executionPolicy: null, executionState: { status: "idle" } })).toBe(false);
+    expect(
+      issueHasExistingExecutionWorkflow({ executionPolicy: null, executionState: { status: "idle", monitor: null } }),
+    ).toBe(false);
+  });
+
+  it("is true for an idle execution state that still holds a monitor, cleared or not", () => {
+    // Senior review, round 3: after a monitor fires or is cleared the vendor
+    // drops it from a stage-less policy (the policy column becomes null) but
+    // the state keeps `{ status: "idle", monitor: {...} }` with its history.
+    // The handoff would rebuild that history from the issue's monitor columns
+    // and lose the recorded `clearReason` / `clearedAt`, so it must stand down.
+    for (const monitorStatus of ["scheduled", "triggered", "cleared"]) {
+      expect(
+        issueHasExistingExecutionWorkflow({
+          executionPolicy: null,
+          executionState: {
+            status: "idle",
+            monitor: {
+              status: monitorStatus,
+              clearedAt: monitorStatus === "cleared" ? "2026-09-20T10:00:00.000Z" : null,
+              clearReason: monitorStatus === "cleared" ? "done" : null,
+            },
+          },
+        }),
+      ).toBe(true);
+    }
     expect(
       issueHasExistingExecutionWorkflow({ executionPolicy: null, executionState: { status: "idle", monitor: {} } }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("is true for the exact shape this module's own manager-review handoff persists — a repeat handoff must see its own earlier one", () => {

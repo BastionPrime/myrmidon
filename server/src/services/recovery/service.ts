@@ -158,6 +158,8 @@ import {
   readStrandedAutoRetriesPerDay,
   STRANDED_AUTO_POLICY_RETRY_SOURCE,
 } from "../../myrmidon/stranded-autopolicy.js";
+// myrmidon(L3b): an operator-paused agent's issues are not stranded
+import { operatorPauseExemptsStrandedIssue } from "../../myrmidon/paused-stranded.js";
 
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = [
   "queued",
@@ -3834,20 +3836,19 @@ export function recoveryService(
         getAgent(assigneeAgentId),
       ]);
 
-      // myrmidon(L4): a paused assignee is not stranded — L3's pause-drain
-      // (`../../myrmidon/pause-drain.ts`) leaves this exact in-progress work
-      // where it is and wakes it itself once the agent resumes
-      // (`resumeAgentAfterPause`). Neither L4 branch is appropriate for it:
-      // an auto-retry wake would just throw (paused is not invokable), and a
-      // manager handoff would move someone else's actively-paused work under
-      // review over something that isn't actually stuck. `assigneePaused`
-      // makes the decision `vendor_default`, so L4 does nothing of its own
-      // here — no wake, no handoff, no activity row — and the vendor's own
-      // handling of a non-invokable assignee (which its own suite pins,
-      // including the paused-with-a-non-current-wait cases) applies exactly
-      // as it did before L4. A terminated or pending_approval assignee is a
-      // genuinely different case (the work really is abandoned) and is
-      // unaffected by this flag.
+      // myrmidon(L4): a paused assignee is not stranded. Neither L4 branch is
+      // appropriate for it: an auto-retry wake would just throw (paused is
+      // not invokable), and a manager handoff would move a paused agent's
+      // work under review over something that isn't actually stuck.
+      // `assigneePaused` makes the decision `vendor_default`, so L4 does
+      // nothing of its own here — no wake, no handoff, no activity row — and
+      // the vendor's own handling of a non-invokable assignee (which its own
+      // suite pins, including the paused-with-a-non-current-wait cases)
+      // applies exactly as it did before L4. That handling is not changed
+      // here, and this code makes no promise about what wakes the issue
+      // afterwards; see DIVERGENCE.md (rows L3b and L4). A terminated or
+      // pending_approval assignee is a genuinely different case (the work
+      // really is abandoned) and is unaffected by this flag.
       const assigneePaused =
         assigneeAgent?.companyId === input.issue.companyId && assigneeAgent.status === "paused";
       const autoPolicyDecision = decideStrandedAutoPolicy({
@@ -4026,8 +4027,11 @@ export function recoveryService(
                 // that still carries the trust boundary / review preset /
                 // monitor, or — on a repeat stranding of an issue this same
                 // policy already handed off once — our own earlier
-                // manager-review policy and its round counter. Stand down to
-                // the vendor's own board escalation instead of building the
+                // manager-review policy and its round counter — or an idle
+                // execution state that still holds a monitor (fired or
+                // cleared), whose recorded history the patch would rebuild
+                // from the issue columns and lose. Stand down to the
+                // vendor's own board escalation instead of building the
                 // patch.
                 if (issueHasExistingExecutionWorkflow(current)) {
                   return { outcome: "blocked" as const };
@@ -4709,6 +4713,19 @@ export function recoveryService(
         agent && agent.companyId === issue.companyId
           ? await isAgentInvokable(agent)
           : false;
+      // myrmidon(L3b): a pause by the operator means "no new work", not
+      // "abandoned": the issue either drains on a live run or waits for
+      // resume, which wakes it. Skip before the non-invokable escalation.
+      if (
+        operatorPauseExemptsStrandedIssue({
+          issueStatus: issue.status,
+          issueCompanyId: issue.companyId,
+          agent,
+        })
+      ) {
+        result.skipped += 1;
+        continue;
+      }
       if (
         agent?.status === "paused" &&
         agent.companyId === issue.companyId &&

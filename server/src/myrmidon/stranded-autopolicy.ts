@@ -15,27 +15,31 @@
 //  2. Once that window's retries are used up, hand the issue to the
 //     assignee's direct manager (`agents.reportsTo`) as the `in_review`
 //     reviewer, if that manager exists, belongs to the same company and is
-//     invokable, *and* the issue carries no execution policy of any kind and
-//     no execution state in flight (see `issueHasExistingExecutionWorkflow`
-//     below — a policy with no stages still holds the trust boundary, the
-//     review preset or a monitor, and a non-idle state covers a repeat
-//     handoff attempt on an issue this policy already handed off once). A
-//     system comment explains why. Approving the review closes the issue as
-//     done; requesting changes sends it back to the original assignee.
+//     invokable, *and* the issue carries no execution policy of any kind, no
+//     monitor state and no execution state in flight (see
+//     `issueHasExistingExecutionWorkflow` below — a policy with no stages
+//     still holds the trust boundary, the review preset or a monitor, a
+//     monitor state keeps its own history, and a non-idle state covers a
+//     repeat handoff attempt on an issue this policy already handed off
+//     once). A system comment explains why. Approving the review closes the
+//     issue as done; requesting changes sends it back to the original
+//     assignee.
 //  3. No eligible manager, or an execution workflow is already in effect —
 //     fall back to the vendor's own board escalation unchanged
 //     (`vendor_default`).
 //
 // A `paused` assignee is exempt from all of the above: pausing is not
-// stranding. L3's pause-drain (`../../myrmidon/pause-drain.ts`) leaves
-// in-progress work exactly where it is and wakes it itself
-// (`resumeAgentAfterPause`) once the agent resumes, so this policy adds
-// nothing of its own while the assignee is paused — no retry wake (which
-// would just throw: paused is not invokable) and no manager handoff — and
-// the vendor's own handling of a non-invokable assignee applies unchanged,
-// as it did before this policy existed (`vendor_default`). That handling
-// still includes the vendor's board card and the `blocked` status: L4 does
-// not suppress them (that belongs to L3, see `DIVERGENCE.md`).
+// stranding. An auto-retry wake to a paused agent can only throw (paused is
+// not invokable), and a manager handoff would take the paused agent's work
+// under review over something that is not stuck. So this policy adds nothing
+// of its own while the assignee is paused — no retry wake, no manager
+// handoff — and the vendor's own handling of a non-invokable assignee
+// applies unchanged, as it did before this policy existed
+// (`vendor_default`). That handling still includes the vendor's board card
+// and the `blocked` status: L4 neither suppresses them nor promises that
+// anything wakes the issue after a resume. Which paths keep the vendor
+// behavior for a paused assignee is recorded in `DIVERGENCE.md` (rows L3b
+// and L4).
 //
 // The attempt count is derived from persisted heartbeat runs tagged with
 // `STRANDED_AUTO_POLICY_RETRY_SOURCE`, not a separate mutable counter, so
@@ -136,12 +140,13 @@ export function decideStrandedAutoPolicy(input: {
   maxAttemptsPerDay: number;
   managerAgentId: string | null;
   /**
-   * The assignee is operator-paused. Pausing is not stranding: an auto-retry
-   * wake to a paused agent can only throw (paused is not invokable), and a
-   * manager handoff would move the paused agent's active work under review
-   * over something that is not stuck (L3's pause-drain resumes that work
-   * itself). L4 therefore adds nothing here — the decision is the vendor's
-   * own, unchanged handling of a non-invokable assignee.
+   * The assignee is paused. Pausing is not stranding: an auto-retry wake to
+   * a paused agent can only throw (paused is not invokable), and a manager
+   * handoff would move the paused agent's work under review over something
+   * that is not stuck. L4 therefore adds nothing here — the decision is the
+   * vendor's own, unchanged handling of a non-invokable assignee. What that
+   * handling leaves behind (a board card, `blocked`) is not decided here;
+   * see `DIVERGENCE.md`.
    */
   assigneePaused?: boolean;
 }): StrandedAutoPolicyDecision {
@@ -308,9 +313,10 @@ export function buildStrandedAutoPolicyManagerReviewComment(input: {
 }
 
 /**
- * True when the issue already carries an execution policy of any kind, or an
- * execution state that is not idle. Either way the manager handoff must stand
- * down to the vendor's own board escalation.
+ * True when the issue already carries an execution policy of any kind, a
+ * monitor in its execution state, or an execution state that is not idle. In
+ * every case the manager handoff must stand down to the vendor's own board
+ * escalation.
  *
  * An execution policy is more than its review stages. `stages` may be empty
  * while the same policy still holds `authorizationPolicy` (the trust preset,
@@ -328,6 +334,15 @@ export function buildStrandedAutoPolicyManagerReviewComment(input: {
  * is what bounds agent/manager ping-pong before the vendor's own human
  * escalation), or a review/approval that was already started.
  *
+ * An idle execution state may still hold a monitor. That happens after the
+ * monitor fired or was cleared: the vendor drops the monitor from a policy
+ * that has no stages, but the state keeps `{ status: "idle", monitor: {...} }`
+ * with its history (`status`, `clearReason`, `clearedAt`). The handoff builds
+ * its transition from an empty state, so the vendor would rebuild that
+ * history from the issue's monitor columns and lose the recorded outcome (a
+ * cleared monitor would read as triggered, or vanish). Any monitor in the
+ * state therefore stands the handoff down as well.
+ *
  * Nothing is "merged" on purpose: keeping the existing policy and only adding a
  * manager stage would still change who reviews and how the assignment moves
  * under a policy the owner set up; standing down is the conservative option.
@@ -340,8 +355,9 @@ export function issueHasExistingExecutionWorkflow(issue: {
 
   const state = issue.executionState;
   if (state && typeof state === "object") {
-    const status = (state as { status?: unknown }).status;
+    const { status, monitor } = state as { status?: unknown; monitor?: unknown };
     if (typeof status === "string" && status !== "idle") return true;
+    if (monitor != null) return true;
   }
   return false;
 }

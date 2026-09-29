@@ -32,6 +32,7 @@ import { hasChatRunOwnedProviderInteraction } from "./chat-interaction-arbitrati
 import { CHAT_RUN_PRESENTATION_AUTHORIZATION_REASON } from "./heartbeat-run-summary.js";
 import { resolveChatOriginPublicationBindings } from "./issues.js";
 import { authorizeNativeChatReviewPresentation } from "./native-runtime/native-chat-review-presentation.js";
+import { inboundCommentCandidateIds } from "../myrmidon/chat-reconciliation/inbound-comment-candidates.js";
 import {
   SAFE_NATIVE_CHAT_PROGRESS_EVENT_TYPES,
   safeNativeChatProgressForEvent,
@@ -152,7 +153,8 @@ export function safeMilestoneText(input: {
   if (input.milestone === "working") return `${input.agentName} is working…`;
   if (input.milestone === "completed")
     return `${input.agentName} completed this turn.`;
-  if (input.errorCode === "slack_session_stopped")
+  // myrmidon(X8c): a chat owner's /stop reads as stopped on request
+  if (input.errorCode === "slack_session_stopped" || input.errorCode === "chat_session_stopped")
     return `${input.agentName} stopped at your request.`;
   const taskUrl = safeChatTaskUrl(input.publicBaseUrl, input.issueId);
   const recovery =
@@ -760,17 +762,21 @@ export async function enqueueChatRunMilestones(
             ),
           ),
           or(
+            // myrmidon(D1): the three lookups (wakeCommentId, commentId,
+            // wakeCommentIds[]) used to live directly in this EXISTS's
+            // filter, each re-reading heartbeatRuns.contextSnapshot — a
+            // jsonb column seen up to several hundred KB on production data
+            // — once per chat_message_links row the (previously missing)
+            // index let through. inboundCommentCandidateIds hoists that
+            // into a single per-outer-row computation. See its doc comment
+            // and docs/myrmidon/DIVERGENCE.md.
             sql`exists (
               select 1
               from ${chatMessageLinks}
               where ${chatMessageLinks.companyId} = ${heartbeatRuns.companyId}
                 and ${chatMessageLinks.conversationId} = ${chatConversations.id}
                 and ${chatMessageLinks.direction} = 'inbound'
-                and (
-                  ${chatMessageLinks.commentId}::text = (${heartbeatRuns.contextSnapshot} ->> 'wakeCommentId')
-                  or ${chatMessageLinks.commentId}::text = (${heartbeatRuns.contextSnapshot} ->> 'commentId')
-                  or (${heartbeatRuns.contextSnapshot} -> 'wakeCommentIds') ? ${chatMessageLinks.commentId}::text
-                )
+                and ${chatMessageLinks.commentId}::text = any(${inboundCommentCandidateIds(heartbeatRuns.contextSnapshot)})
             )`,
             sql`exists (
               select 1

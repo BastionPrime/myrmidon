@@ -1375,6 +1375,76 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       expect(activity).toHaveLength(0);
     });
 
+    it("does not hand off to the manager an issue whose idle execution state still holds a cleared monitor, and keeps the monitor's history", async () => {
+      // Senior review, round 3: after a monitor is cleared the vendor drops it
+      // from a stage-less policy (the policy column is null) but the state
+      // keeps `{ status: "idle", monitor: {...} }`. The handoff builds its
+      // transition from an empty state, so it would rebuild the monitor from
+      // the issue's columns and lose the recorded clear reason and time.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      const idleStateWithClearedMonitor = {
+        status: "idle",
+        currentStageId: null,
+        currentStageIndex: null,
+        currentStageType: null,
+        currentParticipant: null,
+        returnAssignee: null,
+        reviewRequest: null,
+        completedStageIds: [],
+        lastDecisionId: null,
+        lastDecisionOutcome: null,
+        monitor: {
+          status: "cleared",
+          nextCheckAt: null,
+          lastTriggeredAt: null,
+          attemptCount: 1,
+          notes: "waiting for the external build",
+          scheduledBy: "assignee",
+          clearedAt: "2026-09-20T10:00:00.000Z",
+          clearReason: "manual",
+        },
+      };
+      await db
+        .update(issues)
+        .set({ executionPolicy: null, executionState: idleStateWithClearedMonitor })
+        .where(eq(issues.id, sourceIssue.id));
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const [issueWithState] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      const updated = await recovery.escalateStrandedAssignedIssue({
+        issue: issueWithState!,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      // Vendor's own board escalation, no handoff: the state (and with it the
+      // monitor's status and clear reason) is exactly what was stored.
+      expect(updated?.status).toBe("blocked");
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      expect(persisted?.executionPolicy).toBeNull();
+      expect(persisted?.executionState).toEqual(idleStateWithClearedMonitor);
+      const persistedMonitor = (persisted?.executionState as { monitor?: { status?: string; clearReason?: string } } | null)?.monitor;
+      expect(persistedMonitor?.status).toBe("cleared");
+      expect(persistedMonitor?.clearReason).toBe("manual");
+      expect(enqueueWakeup).not.toHaveBeenCalled();
+      const activity = await db
+        .select()
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.entityId, sourceIssue.id),
+            eq(activityLog.action, "issue.stranded_autopolicy_reassigned_to_manager"),
+          ),
+        );
+      expect(activity).toHaveLength(0);
+    });
+
     it("does not hand off to the manager a second time after an earlier handoff sent the issue back with changes requested", async () => {
       // Review finding #2: without this guard, every later stranding on the
       // same issue re-triggers a manager handoff (the retry-attempt window
@@ -1450,15 +1520,14 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     });
 
     it("does not hand a paused assignee's work to the manager or spend a retry, and keeps the vendor's own handling", async () => {
-      // Review finding #4: pausing is not stranding. L3's pause-drain
-      // (`../myrmidon/pause-drain.ts`) leaves this exact in-progress work
-      // where it is and wakes it itself once the agent resumes — an
-      // auto-retry wake here would just throw (paused is not invokable),
-      // and (worse, once the retry cap is exhausted and the manager is
-      // active) a manager handoff would move the paused agent's active work
-      // under review over something that is not actually stuck. L4 does
-      // nothing of its own for a paused assignee; the vendor's handling of
-      // a non-invokable assignee (which its own suite pins) is unchanged.
+      // Review finding #4: pausing is not stranding. An auto-retry wake here
+      // would just throw (paused is not invokable), and (worse, once the
+      // retry cap is exhausted and the manager is active) a manager handoff
+      // would move the paused agent's work under review over something that
+      // is not actually stuck. L4 does nothing of its own for a paused
+      // assignee; the vendor's handling of a non-invokable assignee (which
+      // its own suite pins, and which still parks the issue behind a board
+      // card) is unchanged.
       const { companyId, coderId, sourceIssue } = await seedCompany();
       await db.update(agents).set({ status: "paused" }).where(eq(agents.id, coderId));
       await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
