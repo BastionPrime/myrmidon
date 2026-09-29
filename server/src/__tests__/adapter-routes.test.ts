@@ -273,7 +273,7 @@ describe("adapter routes", () => {
     expect(hermesGateway).toBeDefined();
     expect(hermesGateway.source).toBe("builtin");
     expect(hermesGateway.capabilities).toMatchObject({
-      supportsInstructionsBundle: false,
+      supportsInstructionsBundle: true,
       supportsSkills: false,
       supportsLocalAgentJwt: false,
       requiresMaterializedRuntimeSkills: false,
