@@ -9,6 +9,12 @@ import { admitExplicitNativeContinuation, undeliveredLegacyUserCommentIds } from
 // myrmidon(L2): an explicitly authorized wake ignores a settled "do not
 // replay" hold; see docs/myrmidon/DIVERGENCE.md "L2".
 import { bypassesSettledHold } from "../myrmidon/settled-holds/explicit-wake-gate.js";
+// myrmidon(L2, round 1 fix): supersede the bypassed hold atomically with the
+// successor run, and record the wake decision on that run's own context so
+// its first claim reads it back instead of re-deriving it. See
+// docs/myrmidon/DIVERGENCE.md "L2".
+import { supersedeExplicitWakeSettledHold } from "../myrmidon/settled-holds/supersede-explicit-wake.js";
+import { recordSettledHoldWakeContext } from "../myrmidon/settled-holds/wake-admission-context.js";
 import { connectionIntentService } from "./connection-intents.js";
 import { prepareManagedAiRuntime, assertManagedAiProjectAuth, stripAiAuthBindings, isAiConnectionBusy, AI_AUTH_ENV_KEYS } from "./ai-connection-runtime.js";
 import { aiConnectionBindingSchema } from "@paperclipai/shared";
@@ -26757,12 +26763,26 @@ export function heartbeatService(
             return { kind: "deferred" as const };
           };
           const explicitContinuationRunId = randomUUID();
+          // myrmidon(L2, round 1 fix): decide once, here, whether this wake
+          // may pass a settled hold. The decision needs an identifiable
+          // person (the same actor the vendor's own continuation admission
+          // requires), because the hold is superseded under that person
+          // below. It is recorded on the successor run (just before it is
+          // inserted) so its own claim reads this decision back instead of
+          // re-deriving it from a context this transaction still mutates.
+          const wakeRequestedByActorType = opts.requestedByActorType ?? null;
+          const wakeClassification = {
+            source, triggerDetail, reason, commentId: wakeCommentId ?? null,
+            requestedByActorType: wakeRequestedByActorType,
+          };
+          const wakeBypassesSettledHold = bypassesSettledHold(wakeClassification) &&
+            Boolean(opts.requestedByActorId);
           const executionBlocker = await getExecutionBlocker(
             tx as unknown as Db, issue.companyId, issue.id,
             { conversationResetCommentId: opts.requestedByActorType === "user" ? wakeCommentId : null,
               // myrmidon(L2): an explicitly authorized wake ignores a settled
               // "do not replay" hold.
-              explicitWake: bypassesSettledHold({ source, triggerDetail, reason, commentId: wakeCommentId }) },
+              explicitWake: wakeBypassesSettledHold },
           );
           // Prove eligibility without retiring the hold. Later gates can still
           // decline this wake; hold retirement and successor creation stay atomic.
@@ -27542,6 +27562,21 @@ export function heartbeatService(
             enrichedContextSnapshot.forceFreshSession = true;
             enrichedContextSnapshot.previousRunId = explicitContinuation.previousRunId;
             enrichedContextSnapshot.explicitUserContinuation = explicitContinuation;
+          } else if (wakeBypassesSettledHold && opts.requestedByActorId) {
+            // myrmidon(L2, round 1 fix): an explicit wake with no message of
+            // its own (assignment, manual wakeup, approval decision, subtree
+            // resume) bypassed a settled hold above without retiring it —
+            // admitExplicitNativeContinuation only resolves the hold for its
+            // own real-message continuation, which this is not. Supersede it
+            // now, atomically with this successor run, so the hold does not
+            // keep blocking every later automatic continuation of this run
+            // (retry, resource-wait continuation, pause-resume wake) as if
+            // it were still open. See supersede-explicit-wake.ts.
+            await supersedeExplicitWakeSettledHold({
+              db: tx as unknown as Db, companyId: issue.companyId, issueId: issue.id,
+              successorRunId: explicitContinuationRunId,
+              requestedByActorType: "user", requestedByActorId: opts.requestedByActorId,
+            });
           }
 
           const wakeupRequest = await tx
@@ -27578,9 +27613,17 @@ export function heartbeatService(
               : null;
           const pendingComments =
             !isConversation(issue) && opts.allowRunCoalescing !== false &&
-            // myrmidon(L2): keep this consistent with the admission check above.
-            !(await getExecutionBlocker(tx as unknown as Db, issue.companyId, issue.id,
-              { explicitWake: bypassesSettledHold({ source, triggerDetail, reason, commentId: wakeCommentId }) }))
+            // myrmidon(L2, round 1 fix): never bypass here. A hold this
+            // wake was allowed to bypass has already been superseded above
+            // (or never existed), so the vendor call already reads null in
+            // that case; a hold that is genuinely still open — this wake
+            // did not bypass it, or the actor-type gate says it must not —
+            // must keep parking these comments as
+            // `deferred_issue_execution`, not adopt them into a successor
+            // run whose own claim would then find them and no longer be
+            // able to tell "explicit" apart from "not" (see
+            // decideCurrentRunStaleness, run-dispatch/adapters/postgres.ts).
+            !(await getExecutionBlocker(tx as unknown as Db, issue.companyId, issue.id))
               ? await tx
                   .select()
                   .from(agentWakeupRequests)
@@ -27624,10 +27667,15 @@ export function heartbeatService(
             adoptedCommentIds = await undeliveredLegacyUserCommentIds(tx as unknown as Db,
               agent.companyId, issueId, agentId, adoptedCommentIds);
           }
+          // myrmidon(L2, round 1 fix): the reserved id always lands on the
+          // successor, so the hold superseded above names a run that really
+          // exists, and the decision recorded here belongs to exactly that
+          // run (a run that only inherits this context never reads it).
+          recordSettledHoldWakeContext(enrichedContextSnapshot, wakeClassification, explicitContinuationRunId);
           const newRun = await tx
             .insert(heartbeatRuns)
             .values({
-              ...(explicitContinuation ? { id: explicitContinuationRunId } : {}),
+              id: explicitContinuationRunId,
               companyId: agent.companyId,
               agentId,
               invocationSource: source,

@@ -409,8 +409,12 @@ export function issueTreeControlRoutes(db: Db) {
           for (const task of candidates) {
             const blocked = await getExecutionBlocker(db, root.companyId, task.id, {
               // myrmidon(L2): mirrors the `reason: "issue_tree_resumed"`
-              // wake sent below once the hold releases.
-              explicitWake: bypassesSettledHold({ source: "assignment", reason: "issue_tree_resumed" }),
+              // wake sent below once the hold releases, including its
+              // `requestedByActorType: actor.actorType` (round 1 fix).
+              explicitWake: bypassesSettledHold({
+                source: "assignment", reason: "issue_tree_resumed",
+                requestedByActorType: getActorInfo(req).actorType,
+              }),
             });
             if (blocked) throw conflict(`Cannot wake ${task.identifier ?? "this task"}: ${blocked.nextAction}`);
           }

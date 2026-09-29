@@ -51,13 +51,29 @@ export interface WakeClassificationInput {
    * alone.
    */
   commentId?: string | null;
+  /**
+   * Who actually asked for this wake (`opts.requestedByActorType` in
+   * `enqueueWakeup`). Round-1 fix: a reason/source shape alone is not proof
+   * a person authorized anything — an unattended automatic sweep can set
+   * the very same `reason` a genuine explicit wake uses (for example
+   * `recovery/service.ts`'s `reconcileUnassignedBlockingIssues` and
+   * `assigned_todo_liveness_dispatch` reassign and wake a task with
+   * `reason: "issue_assigned"`, `requestedByActorType: "system"`, and
+   * `issue-thread-interactions.ts`'s merged-PR sweep wakes with
+   * `reason: "issue_commented"`, `requestedByActorType: "system"`, neither
+   * with a person ever approving it). Only `"user"` bypasses; `"agent"` and
+   * `"system"` never do, regardless of reason/source — see
+   * docs/myrmidon/DIVERGENCE.md "L2".
+   */
+  requestedByActorType?: "user" | "agent" | "system" | null;
 }
 
 /**
- * True when `input` describes a wake that a person, an agent, or an
- * explicit board/API action authorized, as opposed to the heartbeat
- * scheduler's own timer, an unattended automatic recovery/monitor sweep, or
- * a retry of the exact stopped run. An unrecognized reason stays
+ * True when `input` describes a wake a *person* authorized — as opposed to
+ * the heartbeat scheduler's own timer, an unattended automatic recovery/
+ * monitor sweep (even one that reuses an explicit wake's `reason`/`source`
+ * shape), an agent acting on its own, or a retry of the exact stopped run.
+ * An unrecognized reason, or a wake with no known requester, stays
  * not-explicit: the safe default keeps a settled hold blocking, the same as
  * before this module existed.
  */
@@ -65,6 +81,9 @@ export function isExplicitWake(input: WakeClassificationInput): boolean {
   if (input.commentId) return false;
   const reason = input.reason ?? "";
   if (NEVER_EXPLICIT_REASONS.has(reason)) return false;
+  // Round-1 fix: gate on who asked, not just the reason/source shape. See
+  // `requestedByActorType`'s own doc comment above.
+  if (input.requestedByActorType !== "user") return false;
   if (EXPLICIT_WAKE_REASONS.has(reason) || reason.startsWith(APPROVAL_REASON_PREFIX)) return true;
   if (input.source === "assignment") return true;
   // "on_demand" alone is too broad: it is also this schema's default

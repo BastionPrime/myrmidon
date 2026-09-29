@@ -5912,6 +5912,9 @@ export function agentRoutes(
         triggerDetail: wakeTriggerDetail,
         reason: wakeReason,
         commentId: deriveCommentId(wakeContextSnapshot, effectiveWakePayload),
+        // myrmidon(L2, round 1 fix): mirror the exact `requestedByActorType`
+        // the real `heartbeat.wakeup` call above this one was given.
+        requestedByActorType: req.actor.type === "agent" ? "agent" : "user",
       });
       res.status(202).json(await opts.skippedResponse(agent, wakePayload, explicitWake));
       return;
