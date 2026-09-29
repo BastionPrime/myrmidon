@@ -21,6 +21,7 @@ import {
   chatEndpoints,
   chatExternalPrincipals,
   chatIdentityLinks,
+  chatMessageLinks,
   chatPublications,
   companies,
   companyMemberships,
@@ -51,6 +52,7 @@ import {
   rehydrateGitHubPublicAttachment,
 } from "../services/chat-github-attachments.js";
 import { heartbeatService } from "../services/heartbeat.js";
+import { CHAT_RUN_PRESENTATION_AUTHORIZATION_REASON } from "../services/heartbeat-run-summary.js";
 import { issueService } from "../services/issues.js";
 import { recoveryService } from "../services/recovery/service.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
@@ -1637,6 +1639,113 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
     const conversationAfter = await conversationRow(endpoint.id, "700011");
     expect(conversationAfter!.id).toBe(conversationBefore!.id);
     expect(conversationAfter!.state).toBe("active");
+  });
+
+  it("publishes an agent reply's board links as absolute URLs in the bridged DM, leaving the board comment as written (X8g)", async () => {
+    const fixture = await seedCompany();
+    const { callbacks, endpoint } = await configuredTelegramEndpoint(fixture);
+    await linkTelegramPrincipal({
+      companyId: fixture.companyId,
+      endpointId: endpoint.id,
+      userId: "700020",
+      boardUserId: "owner-user",
+    });
+    await sendTelegramDm({
+      callbacks,
+      endpointId: endpoint.id,
+      channelId: "700020",
+      text: "Create a task and send me the link",
+      userId: "700020",
+      messageId: 1,
+    });
+
+    const [conversationIssue] = await db
+      .select()
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, fixture.companyId),
+          eq(issues.conversationUserId, telegramConversationUserId("owner-user")),
+        ),
+      );
+    const [inboundComment] = await db
+      .select()
+      .from(issueComments)
+      .where(eq(issueComments.issueId, conversationIssue.id));
+    const conversation = await conversationRow(endpoint.id, "700020");
+    const [inboundLink] = await db
+      .select()
+      .from(chatMessageLinks)
+      .where(eq(chatMessageLinks.commentId, inboundComment.id));
+    expect(inboundLink).toMatchObject({
+      conversationId: conversation!.id,
+      direction: "inbound",
+    });
+
+    // The task the agent created from the chat; its link is what the reply carries.
+    const createdTaskId = randomUUID();
+    await db.insert(issues).values({
+      id: createdTaskId,
+      companyId: fixture.companyId,
+      title: "Task created from the Telegram conversation",
+      status: "backlog",
+      priority: "medium",
+      assigneeAgentId: fixture.assignedAgentId,
+    });
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId: fixture.companyId,
+      agentId: fixture.assignedAgentId,
+      status: "succeeded",
+      contextSnapshot: {
+        issueId: conversationIssue.id,
+        source: "chat:telegram",
+        commentId: inboundComment.id,
+        // A standing conversation only accepts a reply from a run that belongs
+        // to the conversation's current session.
+        conversationSessionGeneration: conversationIssue.conversationSessionGeneration,
+      },
+    });
+
+    const boardBaseUrl = "https://board.example.com";
+    const previousPublicUrl = process.env.PAPERCLIP_PUBLIC_URL;
+    process.env.PAPERCLIP_PUBLIC_URL = boardBaseUrl;
+    try {
+      const relativeLink = `/issues/${createdTaskId}`;
+      const replyBody = `Done: [the new task](${relativeLink})`;
+      const reply = await issueService(db).addComment(
+        conversationIssue.id,
+        replyBody,
+        { agentId: fixture.assignedAgentId, runId },
+        {
+          authorType: "agent",
+          authorizationReason: CHAT_RUN_PRESENTATION_AUTHORIZATION_REASON,
+        },
+      );
+
+      const [storedReply] = await db
+        .select({ body: issueComments.body })
+        .from(issueComments)
+        .where(eq(issueComments.id, reply.id));
+      expect(storedReply?.body).toBe(replyBody);
+
+      const [publication] = await db
+        .select({ payload: chatPublications.payload })
+        .from(chatPublications)
+        .where(
+          and(
+            eq(chatPublications.commentId, reply.id),
+            eq(chatPublications.endpointId, endpoint.id),
+            eq(chatPublications.conversationId, conversation!.id),
+          ),
+        );
+      expect(publication?.payload.text).toContain(`${boardBaseUrl}${relativeLink}`);
+      expect(publication?.payload.text).not.toContain(`](${relativeLink})`);
+    } finally {
+      if (previousPublicUrl === undefined) delete process.env.PAPERCLIP_PUBLIC_URL;
+      else process.env.PAPERCLIP_PUBLIC_URL = previousPublicUrl;
+    }
   });
 
   describe("with a mocked command module", () => {
