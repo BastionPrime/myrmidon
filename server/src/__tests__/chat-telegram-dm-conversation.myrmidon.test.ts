@@ -1977,10 +1977,37 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
       const recovery = recoveryService(db, { enqueueWakeup });
 
       const result = await recovery.reconcileStrandedAssignedIssues({
-        issueCreatedAtGte: issue.createdAt,
+        issueCreatedAtGte: new Date(issue.createdAt.getTime() - 1),
       });
 
-      expect(result.operatorCancelExempted).toBe(1);
+      const debug = {
+        result,
+        runs: await db
+          .select({
+            id: heartbeatRuns.id,
+            status: heartbeatRuns.status,
+            errorCode: heartbeatRuns.errorCode,
+            resultJson: heartbeatRuns.resultJson,
+            createdAt: heartbeatRuns.createdAt,
+          })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.companyId, fixture.companyId)),
+        issue: await db.select().from(issues).where(eq(issues.id, issue.id)),
+        agent: await db
+          .select({ status: agents.status, adapterType: agents.adapterType })
+          .from(agents)
+          .where(eq(agents.id, fixture.assignedAgentId)),
+        wakeups: await db
+          .select({ id: agentWakeupRequests.id, status: agentWakeupRequests.status })
+          .from(agentWakeupRequests)
+          .where(eq(agentWakeupRequests.companyId, fixture.companyId)),
+        holds: await db
+          .select({ id: issueTreeHolds.id, status: issueTreeHolds.status })
+          .from(issueTreeHolds)
+          .where(eq(issueTreeHolds.companyId, fixture.companyId)),
+        enqueueCalls: enqueueWakeup.mock.calls.length,
+      };
+      expect(result.operatorCancelExempted, JSON.stringify(debug, null, 1)).toBe(1);
       expect(result.escalated).toBe(0);
       expect(enqueueWakeup).not.toHaveBeenCalled();
       const runsAfter = await db
