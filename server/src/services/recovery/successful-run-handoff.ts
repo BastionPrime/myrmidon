@@ -15,23 +15,26 @@ import {
   runLinkRow,
   systemNoticePresentation,
 } from "./notice-format.js";
-// myrmidon(B1): product name in the notice bodies below; see product.ts.
-import { PRODUCT_NAME, productSaid } from "../../myrmidon/product.js";
+// myrmidon(B1): product name in the instruction text below; see product.ts.
+import { PRODUCT_NAME } from "../../myrmidon/product.js";
+// myrmidon(B1): the notice bodies live in @paperclipai/shared so the board UI
+// (which matches these comments by exact text) imports the very same constants.
+import {
+  LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_BODY_PAPERCLIP,
+  SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY,
+  SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY,
+  matchesSuccessfulRunHandoffRequiredNoticeBody,
+} from "@paperclipai/shared/myrmidon-successful-run-handoff-notices";
 
 export const FINISH_SUCCESSFUL_RUN_HANDOFF_REASON = "finish_successful_run_handoff";
 export const SUCCESSFUL_RUN_MISSING_STATE_REASON = "successful_run_missing_state";
 export const DEFAULT_MAX_SUCCESSFUL_RUN_HANDOFF_ATTEMPTS = 1;
-export const SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY = productSaid(
-  "needs a disposition before this issue can continue.",
-);
-export const SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY = productSaid(
-  "could not resolve this issue's missing disposition automatically. The source assignment is unchanged and a board decision is required.",
-);
-// myrmidon(B1): exact body posted by this notice before the product rename.
-// Issues that already carry this comment (posted pre-rename) must still be
-// recognized so recovery does not re-post the notice under the new name.
-export const LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_BODY_PAPERCLIP =
-  "Paperclip needs a disposition before this issue can continue.";
+// myrmidon(B1): re-exported so existing importers of this module keep working.
+export {
+  LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_BODY_PAPERCLIP,
+  SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY,
+  SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY,
+};
 export const LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_PREFIXES = [
   "## This issue still needs a next step",
   "## Successful run missing issue disposition",
@@ -158,9 +161,8 @@ export function isSuccessfulRunHandoffValidPathSkip(
 
 export function isSuccessfulRunHandoffRequiredNoticeBody(body: string) {
   const trimmed = body.trim();
-  return trimmed === SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY ||
-    // myrmidon(B1): recognize the pre-rename body too (see the constant above).
-    trimmed === LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_BODY_PAPERCLIP ||
+  // myrmidon(B1): current and pre-rename exact bodies, matched by the shared helper.
+  return matchesSuccessfulRunHandoffRequiredNoticeBody(trimmed) ||
     LEGACY_SUCCESSFUL_RUN_HANDOFF_NOTICE_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
 }
 

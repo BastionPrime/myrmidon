@@ -172,16 +172,65 @@ export function priorCloseCopyDefinition(id: string) {
   };
 }
 
-function definitionDigest(id: string, priorCloseCopy = false): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify(
-        priorCloseCopy
-          ? priorCloseCopyDefinition(id)
-          : discordPaperclipCommandDefinition(id),
-      ),
-    )
-    .digest("hex");
+// myrmidon(B1b): the shape this build registered on Discord before the product
+// rename, i.e. the upstream definition as it stood when B1b branched. Its digest
+// is what an already-registered owner has stored, so without this snapshot every
+// existing registration would be rejected as an unknown digest the moment the
+// description text changed, and could never be migrated. Frozen for the same
+// reason as priorCloseCopyDefinition: never derive it from the current
+// definition and never edit it for a later rename; add a new snapshot instead.
+export function preBrandingDefinition(id: string) {
+  if (!ownerId.safeParse(id).success)
+    throw new Error("Invalid Discord command owner identifier");
+  return {
+    type: 1,
+    name: "paperclip",
+    description: `Paperclip session controls [pc:${id}]`,
+    options: [
+      {
+        type: 1,
+        name: "status",
+        description: "Show the current Paperclip task",
+      },
+      {
+        type: 1,
+        name: "new",
+        description: "Start a new task in a DM or show new-thread guidance",
+      },
+      {
+        type: 1,
+        name: "close",
+        description: "Close the current chat conversation",
+      },
+    ],
+    default_member_permissions: null,
+    integration_types: [0],
+    contexts: [0, 1],
+    nsfw: false,
+  };
+}
+
+type Definition = ReturnType<typeof discordPaperclipCommandDefinition>;
+const knownPriorDefinitions: ReadonlyArray<(id: string) => Definition> = [
+  priorCloseCopyDefinition,
+  preBrandingDefinition,
+];
+
+function digestOf(definition: Definition): string {
+  return createHash("sha256").update(JSON.stringify(definition)).digest("hex");
+}
+
+function definitionDigest(id: string): string {
+  return digestOf(discordPaperclipCommandDefinition(id));
+}
+
+/** The known prior definition whose digest is `digest`, or null. */
+function priorDefinitionFor(id: string, digest: string): Definition | null {
+  for (const build of knownPriorDefinitions) {
+    const definition = build(id);
+    if (digestOf(definition) === digest) return definition;
+  }
+  return null;
 }
 
 /** Persist this prepared descriptor before calling reconcile; its CAS must
@@ -225,7 +274,7 @@ export function parseDiscordCommandRegistration(
     storedDigest === definitionDigest(state.ownerId) ||
     (allowKnownPriorDefinition &&
       state.phase === "registered" &&
-      storedDigest === definitionDigest(state.ownerId, true))
+      priorDefinitionFor(state.ownerId, storedDigest) !== null)
     ? freezeState(state)
     : null;
 }
@@ -280,8 +329,7 @@ const optionSchema = z
 
 function exactDefinition(
   command: RemoteCommand,
-  id: string,
-  priorCloseCopy = false,
+  expectedDefinition: Definition,
 ): boolean {
   const options = z.array(optionSchema).length(3).safeParse(command.options);
   if (
@@ -305,14 +353,7 @@ function exactDefinition(
     contexts: command.contexts,
     nsfw: command.nsfw ?? false,
   };
-  return (
-    JSON.stringify(normalized) ===
-    JSON.stringify(
-      priorCloseCopy
-        ? priorCloseCopyDefinition(id)
-        : discordPaperclipCommandDefinition(id),
-    )
-  );
+  return JSON.stringify(normalized) === JSON.stringify(expectedDefinition);
 }
 
 function markedOwner(
@@ -560,7 +601,10 @@ export async function reconcileDiscordCommandRegistration(
     ) {
       return { kind: "conflict", reason: "unowned_namespace" };
     }
-    return exactDefinition(existing, state.ownerId)
+    return exactDefinition(
+      existing,
+      discordPaperclipCommandDefinition(state.ownerId),
+    )
       ? settle(existing)
       : { kind: "unknown", state };
   }
@@ -574,15 +618,27 @@ export async function reconcileDiscordCommandRegistration(
     ) {
       return { kind: "conflict", reason: "owned_command_changed" };
     }
-    if (exactDefinition(existing, state.ownerId)) return settle(existing);
     if (
-      state.receipt.definitionDigest !== definitionDigest(state.ownerId) &&
-      (existing.version !== state.receipt.version ||
-        !exactDefinition(existing, state.ownerId, true))
-    ) {
+      exactDefinition(existing, discordPaperclipCommandDefinition(state.ownerId))
+    )
+      return settle(existing);
+    if (state.receipt.definitionDigest !== definitionDigest(state.ownerId)) {
       // A software copy migration must not overwrite an operator's intervening
-      // remote edit. Require the exact prior receipt and complete prior shape.
-      return { kind: "conflict", reason: "owned_command_changed" };
+      // remote edit. Require the exact prior receipt and the complete shape of
+      // the known prior definition that receipt's digest names.
+      // myrmidon(B1b): more than one prior definition is known now, so the
+      // shape checked is the one the stored digest identifies, not any of them.
+      const prior = priorDefinitionFor(
+        state.ownerId,
+        state.receipt.definitionDigest,
+      );
+      if (
+        prior === null ||
+        existing.version !== state.receipt.version ||
+        !exactDefinition(existing, prior)
+      ) {
+        return { kind: "conflict", reason: "owned_command_changed" };
+      }
     }
   } else if (commands.filter((command) => command.type === 1).length >= 100) {
     return { kind: "conflict", reason: "command_limit" };
@@ -615,7 +671,10 @@ export async function reconcileDiscordCommandRegistration(
     if (
       !parsed.success ||
       !markedOwner(parsed.data, attempted) ||
-      !exactDefinition(parsed.data, attempted.ownerId) ||
+      !exactDefinition(
+        parsed.data,
+        discordPaperclipCommandDefinition(attempted.ownerId),
+      ) ||
       (attempted.attempt.commandId !== null &&
         parsed.data.id !== attempted.attempt.commandId)
     )

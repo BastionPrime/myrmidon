@@ -4,6 +4,7 @@ import {
   createDiscordCommandRegistration,
   discordPaperclipCommandDefinition,
   parseDiscordCommandRegistration,
+  preBrandingDefinition,
   priorCloseCopyDefinition,
   reconcileDiscordCommandRegistration,
   type DiscordCommandRegistration,
@@ -111,11 +112,11 @@ function fixture() {
 }
 
 describe("Discord owned native-command registration", () => {
-  async function priorCopyFixture() {
+  async function priorCopyFixture(build = priorCloseCopyDefinition) {
     const f = fixture();
     await reconcileDiscordCommandRegistration(f.options());
-    // myrmidon(B1): the known prior definition, not the current (renamed) one.
-    const prior = priorCloseCopyDefinition(f.stored.ownerId);
+    // myrmidon(B1): a known prior definition, not the current (renamed) one.
+    const prior = build(f.stored.ownerId);
     if (f.stored.phase !== "registered") throw new Error("Missing receipt");
     f.stored = {
       ...f.stored,
@@ -239,6 +240,151 @@ describe("Discord owned native-command registration", () => {
     }
     expect(f.order).toEqual([]);
     expect(f.commit).not.toHaveBeenCalled();
+  });
+
+  // myrmidon(B1b): a registration written by the build before the product rename
+  // stores the digest of the then-current definition ("Paperclip session
+  // controls", close "Close the current chat conversation"). That must still be
+  // recognized and migrated, exactly like the older close-copy prior.
+  describe("registration stored before the product rename", () => {
+    it("upgrades the exact pre-rename definition using its retained owner, command and version", async () => {
+      const f = await priorCopyFixture(preBrandingDefinition);
+      expect(parseDiscordCommandRegistration(f.stored, scope)).toBeNull();
+      expect(parseDiscordCommandRegistration(f.stored, scope, true)).toEqual(
+        f.stored,
+      );
+      await expect(
+        reconcileDiscordCommandRegistration(f.options()),
+      ).resolves.toMatchObject({ kind: "registered" });
+      expect(f.order).toEqual([
+        "GET",
+        "persist:attempted",
+        "PATCH",
+        "persist:registered",
+      ]);
+      expect(f.commands[0]).toEqual(f.unrelated);
+      expect(f.commands[1]).toMatchObject({
+        id: commandId,
+        ...discordPaperclipCommandDefinition(f.stored.ownerId),
+      });
+      // The command name is the stable identifier and is not renamed.
+      expect(f.commands[1]).toMatchObject({ name: "paperclip" });
+    });
+
+    it.each(["version", "custom", "foreign"])(
+      "does not migrate the pre-rename definition over a %s remote change",
+      async (change) => {
+        const f = await priorCopyFixture(preBrandingDefinition);
+        if (change === "version") f.commands[1]!.version = "456789012345678902";
+        if (change === "custom")
+          (
+            f.commands[1]!.options as Array<{ description: string }>
+          )[0]!.description = "Custom operator behavior";
+        if (change === "foreign") f.commands[1]!.description = "Foreign owner";
+        await expect(
+          reconcileDiscordCommandRegistration(f.options()),
+        ).resolves.toMatchObject({ kind: "conflict" });
+        expect(f.order).toEqual(["GET"]);
+        expect(f.commit).not.toHaveBeenCalled();
+      },
+    );
+
+    it("checks the remote against the prior shape the stored digest names, not any known prior", async () => {
+      // Receipt says pre-rename, remote shows the older close-copy shape.
+      const a = await priorCopyFixture(preBrandingDefinition);
+      a.commands[1] = {
+        ...priorCloseCopyDefinition(a.stored.ownerId),
+        id: commandId,
+        application_id: scope.applicationId,
+        version,
+      };
+      await expect(
+        reconcileDiscordCommandRegistration(a.options()),
+      ).resolves.toMatchObject({ kind: "conflict" });
+      expect(a.order).toEqual(["GET"]);
+      // And the other way round.
+      const b = await priorCopyFixture(priorCloseCopyDefinition);
+      b.commands[1] = {
+        ...preBrandingDefinition(b.stored.ownerId),
+        id: commandId,
+        application_id: scope.applicationId,
+        version,
+      };
+      await expect(
+        reconcileDiscordCommandRegistration(b.options()),
+      ).resolves.toMatchObject({ kind: "conflict" });
+      expect(b.order).toEqual(["GET"]);
+    });
+
+    it("does not recognize an unconfirmed pre-rename write attempt", async () => {
+      const f = await priorCopyFixture(preBrandingDefinition);
+      if (f.stored.phase !== "registered") throw new Error("Missing receipt");
+      const { receipt, ...base } = f.stored;
+      const attempted = {
+        ...base,
+        phase: "attempted",
+        attempt: {
+          operation: "update",
+          commandId,
+          definitionDigest: receipt.definitionDigest,
+          runtimeFence,
+        },
+      };
+      expect(parseDiscordCommandRegistration(attempted, scope, true)).toBeNull();
+      await expect(
+        reconcileDiscordCommandRegistration({
+          ...f.options(),
+          state: attempted,
+        }),
+      ).rejects.toThrow("Invalid Discord command registration authority");
+      expect(f.order).toEqual([]);
+    });
+
+    it("keeps every shipped prior definition frozen to its literal shape", () => {
+      const id = "b".repeat(32);
+      const options = (close: string, status: string) => [
+        { type: 1, name: "status", description: status },
+        {
+          type: 1,
+          name: "new",
+          description: "Start a new task in a DM or show new-thread guidance",
+        },
+        { type: 1, name: "close", description: close },
+      ];
+      const shell = {
+        type: 1,
+        name: "paperclip",
+        default_member_permissions: null,
+        integration_types: [0],
+        contexts: [0, 1],
+        nsfw: false,
+      };
+      expect(preBrandingDefinition(id)).toEqual({
+        ...shell,
+        description: `Paperclip session controls [pc:${id}]`,
+        options: options(
+          "Close the current chat conversation",
+          "Show the current Paperclip task",
+        ),
+      });
+      expect(priorCloseCopyDefinition(id)).toEqual({
+        ...shell,
+        description: `Paperclip session controls [pc:${id}]`,
+        options: options(
+          "Close the current Paperclip task",
+          "Show the current Paperclip task",
+        ),
+      });
+      expect(() => preBrandingDefinition("not-an-owner-id")).toThrow(
+        "Invalid Discord command owner identifier",
+      );
+      const digests = [
+        discordPaperclipCommandDefinition(id),
+        preBrandingDefinition(id),
+        priorCloseCopyDefinition(id),
+      ].map((d) => createHash("sha256").update(JSON.stringify(d)).digest("hex"));
+      expect(new Set(digests).size).toBe(3);
+    });
   });
 
   it("describes closing a conversation without claiming to close the Paperclip task", () => {
