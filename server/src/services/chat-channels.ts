@@ -746,12 +746,24 @@ const TELEGRAM_COMMANDS = [
 ] as const;
 
 // myrmidon(B1b): version of the Telegram "/" menu copy. It is derived from the
-// menu itself, so any future wording change re-registers the menu once per
-// connected bot without a hand-maintained counter; see DIVERGENCE B1.
-const TELEGRAM_COMMANDS_COPY_VERSION = createHash("sha256")
-  .update(JSON.stringify(TELEGRAM_COMMANDS))
-  .digest("hex")
-  .slice(0, 12);
+// menus themselves, so any future wording change re-registers them once per
+// connected bot without a hand-maintained counter; see DIVERGENCE B1. Both
+// menus that one register_commands action writes are part of it: the vendor
+// menu and the bridged direct-message menu (X8e). The bridged menu's text is
+// versioned, whether or not an endpoint is enabled for the bridge; which
+// state an endpoint is in (enabled, left out of the list, list unset) is not,
+// because a state can flip back and forth and a once-per-version key cannot
+// express that; the action itself applies the state that holds when it runs,
+// and Reconnect applies a changed list as before. Read lazily: the bridge
+// module must not be needed while this module is still being evaluated.
+let telegramCommandsCopyVersionMemo: string | null = null;
+export function telegramCommandsCopyVersion(): string {
+  telegramCommandsCopyVersionMemo ??= createHash("sha256")
+    .update(JSON.stringify([TELEGRAM_COMMANDS, TELEGRAM_DM_COMMANDS]))
+    .digest("hex")
+    .slice(0, 12);
+  return telegramCommandsCopyVersionMemo;
+}
 
 const UNAVOIDABLE_GITHUB_EVENTS = [
   "github_app_authorization",
@@ -4019,7 +4031,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       ? `${context.generation}:${context.credentialFingerprint}:${subscriptionScope.botUserId}:${subscriptionScope.webhookUrlSha256}`
       : operation === "register_commands"
         ? options.commandsCopyRefresh
-          ? `${context.generation}:commands-${TELEGRAM_COMMANDS_COPY_VERSION}`
+          ? `${context.generation}:commands-${telegramCommandsCopyVersion()}`
           : `${context.generation}:${record.endpoint.setup.testStartedAt ?? record.endpoint.updatedAt.toISOString()}`
         : String(context.generation);
     const providerActionId = `telegram_maintenance:${operation}:${operationGeneration}`;
@@ -4042,7 +4054,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               }
             : {}),
           ...(operation === "register_commands"
-            ? { commandsCopyVersion: TELEGRAM_COMMANDS_COPY_VERSION }
+            ? { commandsCopyVersion: telegramCommandsCopyVersion() }
             : {}),
         } satisfies TelegramMaintenancePayload,
         status: "received",
@@ -4512,7 +4524,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           eq(chatActions.endpointId, endpoint.id),
           eq(chatActions.kind, "telegram_maintenance"),
           sql`${chatActions.payload}->>'operation' = 'register_commands'`,
-          sql`${chatActions.payload}->>'commandsCopyVersion' = ${TELEGRAM_COMMANDS_COPY_VERSION}`,
+          sql`${chatActions.payload}->>'commandsCopyVersion' = ${telegramCommandsCopyVersion()}`,
         ),
       )
       .limit(1);

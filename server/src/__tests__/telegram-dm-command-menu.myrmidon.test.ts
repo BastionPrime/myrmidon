@@ -1,11 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   agents,
   authUsers,
+  chatActions,
+  chatEndpoints,
   companies,
   companyMemberships,
   createDb,
@@ -15,6 +18,7 @@ import {
 } from "@paperclipai/db";
 import {
   chatChannelService,
+  telegramCommandsCopyVersion,
   type ChatChannelService,
 } from "../services/chat-channels.js";
 import type {
@@ -191,10 +195,19 @@ describeEmbeddedPostgres("Telegram bridged DM command menu (X8e)", () => {
   });
 
   const fixtureServices: ChatChannelService[] = [];
+  // Endpoints a test marked active for the recovery sweep; paused afterwards so
+  // a later test's sweep does not pick them up.
+  const activatedEndpointIds: string[] = [];
   afterEach(async () => {
     await Promise.all(
       fixtureServices.splice(0).map((service) => service.shutdown()),
     );
+    if (activatedEndpointIds.length > 0) {
+      await db
+        .update(chatEndpoints)
+        .set({ status: "paused" })
+        .where(inArray(chatEndpoints.id, activatedEndpointIds.splice(0)));
+    }
     vi.unstubAllEnvs();
   });
 
@@ -261,6 +274,7 @@ describeEmbeddedPostgres("Telegram bridged DM command menu (X8e)", () => {
 
   async function connectTelegramEndpoint(
     providerFetch: typeof globalThis.fetch,
+    botToken = "123456:dm-menu-test-token",
   ) {
     const { companyId, assignedAgentId } = await seedCompany();
     const service = createService(providerFetch);
@@ -269,15 +283,15 @@ describeEmbeddedPostgres("Telegram bridged DM command menu (X8e)", () => {
       { provider: "telegram", assignedAgentId },
       "owner-user",
     );
-    await service.configure(
+    const configured = await service.configure(
       endpoint.id,
       {
         action: "configure",
-        credentials: { botToken: "123456:dm-menu-test-token" },
+        credentials: { botToken },
       },
       "owner-user",
     );
-    return { endpoint, service };
+    return { endpoint, service, configured };
   }
 
   it("adds the all_private_chats bridged menu when the endpoint is enabled", async () => {
@@ -431,6 +445,171 @@ describeEmbeddedPostgres("Telegram bridged DM command menu (X8e)", () => {
       },
     ]);
   });
+
+  // myrmidon(B1b): the recovery sweep re-registers the "/" menu once for a bot
+  // connected before a menu copy change. The same register_commands action
+  // owns the bridged direct-message menu, so a refresh must leave that menu in
+  // the state the bridge settings ask for and must never replace or drop it.
+  // Only this bot's calls are recorded: the sweep scans every active Telegram
+  // endpoint in the database with this service's fetch.
+  function fetchRecordingOnly(
+    botToken: string,
+    captured: CapturedCommandsCall[],
+  ) {
+    const own = fakeTelegramFetch(captured);
+    const others = fakeTelegramFetch([]);
+    return ((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      return url.includes(botToken) || url.includes(encodeURIComponent(botToken))
+        ? own(input, init)
+        : others(input, init);
+    }) as unknown as typeof globalThis.fetch;
+  }
+
+  async function connectActiveEndpoint(list: string | undefined) {
+    vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", list);
+    const botToken = `123456:dm-menu-refresh-${randomUUID().replaceAll("-", "")}`;
+    const captured: CapturedCommandsCall[] = [];
+    const { endpoint, service, configured } = await connectTelegramEndpoint(
+      fetchRecordingOnly(botToken, captured),
+      botToken,
+    );
+    await db
+      .update(chatEndpoints)
+      .set({
+        status: "active",
+        setup: { ...configured.setup, step: "complete" },
+      })
+      .where(eq(chatEndpoints.id, endpoint.id));
+    activatedEndpointIds.push(endpoint.id);
+    const registrations = () =>
+      db
+        .select()
+        .from(chatActions)
+        .where(
+          and(
+            eq(chatActions.endpointId, endpoint.id),
+            eq(chatActions.kind, "telegram_maintenance"),
+            sql`${chatActions.payload}->>'operation' = 'register_commands'`,
+          ),
+        );
+    const sweep = async () => {
+      for (let pass = 0; pass < 3; pass++) await service.processPendingDeliveries();
+    };
+    const menuCalls = () =>
+      captured.filter(
+        (call) =>
+          call.method === "setMyCommands" || call.method === "deleteMyCommands",
+      );
+    // A bot connected before the copy change: its register action does not
+    // carry the current version.
+    const makeStale = async () => {
+      const [action] = await registrations();
+      await db
+        .update(chatActions)
+        .set({ payload: sql`${chatActions.payload} - 'commandsCopyVersion'` })
+        .where(eq(chatActions.id, action.id));
+    };
+    return { menuCalls, registrations, sweep, makeStale };
+  }
+
+  it("refresh keeps the bridged menu registered and versions both menus for an enabled endpoint", async () => {
+    const { menuCalls, registrations, sweep, makeStale } =
+      await connectActiveEndpoint("*");
+
+    // Connect: the vendor menu, then the bridged one.
+    const connectCalls = menuCalls();
+    expect(connectCalls.map((call) => call.method)).toEqual([
+      "setMyCommands",
+      "setMyCommands",
+    ]);
+    const vendorMenu = connectCalls[0].body;
+    expect(vendorMenu).not.toHaveProperty("scope");
+    const bridgedMenu = {
+      commands: TELEGRAM_DM_COMMANDS,
+      scope: { type: "all_private_chats" },
+    };
+    expect(connectCalls[1].body).toEqual(bridgedMenu);
+
+    // The version stamped on the action covers both menus.
+    const [connectAction] = await registrations();
+    expect(connectAction.payload.commandsCopyVersion).toBe(
+      createHash("sha256")
+        .update(JSON.stringify([vendorMenu.commands, TELEGRAM_DM_COMMANDS]))
+        .digest("hex")
+        .slice(0, 12),
+    );
+    expect(connectAction.payload.commandsCopyVersion).toBe(
+      telegramCommandsCopyVersion(),
+    );
+
+    // Current: sweeps leave the bot alone.
+    await sweep();
+    expect(menuCalls()).toHaveLength(2);
+    expect(await registrations()).toHaveLength(1);
+
+    // Stale: one refresh writes the vendor menu and asserts the bridged menu
+    // again (never a bare vendor menu that would leave the bridge unmentioned).
+    await makeStale();
+    await sweep();
+    expect(menuCalls().slice(2)).toEqual([
+      { method: "setMyCommands", body: vendorMenu },
+      { method: "setMyCommands", body: bridgedMenu },
+    ]);
+    const afterRefresh = await registrations();
+    expect(afterRefresh).toHaveLength(2);
+    expect(afterRefresh.every((row) => row.status === "processed")).toBe(true);
+
+    // Exactly once.
+    await sweep();
+    await sweep();
+    expect(menuCalls()).toHaveLength(4);
+    expect(await registrations()).toHaveLength(2);
+  });
+
+  it("refresh clears the bridged menu again for an endpoint the set list leaves out", async () => {
+    const { menuCalls, registrations, sweep, makeStale } =
+      await connectActiveEndpoint("33333333-3333-3333-3333-333333333333");
+    const clearBridged = {
+      method: "deleteMyCommands",
+      body: { scope: { type: "all_private_chats" } },
+    };
+    expect(menuCalls().map((call) => call.method)).toEqual([
+      "setMyCommands",
+      "deleteMyCommands",
+    ]);
+    const vendorMenu = menuCalls()[0].body;
+
+    await makeStale();
+    await sweep();
+
+    expect(menuCalls().slice(2)).toEqual([
+      { method: "setMyCommands", body: vendorMenu },
+      clearBridged,
+    ]);
+    expect(await registrations()).toHaveLength(2);
+    await sweep();
+    expect(menuCalls()).toHaveLength(4);
+  });
+
+  it("refresh makes only the vendor's own menu call when the bridge list is unset", async () => {
+    const { menuCalls, registrations, sweep, makeStale } =
+      await connectActiveEndpoint(undefined);
+    expect(menuCalls().map((call) => call.method)).toEqual(["setMyCommands"]);
+    const vendorMenu = menuCalls()[0].body;
+
+    await makeStale();
+    await sweep();
+
+    // One more unscoped setMyCommands and nothing else: no scoped call, no
+    // deleteMyCommands, so the vendor's service path is unchanged.
+    expect(menuCalls().slice(1)).toEqual([
+      { method: "setMyCommands", body: vendorMenu },
+    ]);
+    expect(await registrations()).toHaveLength(2);
+    await sweep();
+    expect(menuCalls()).toHaveLength(2);
+  });
 });
 
 // myrmidon(X8e): unit coverage for telegramDmConversationsEnabled's
@@ -500,6 +679,27 @@ describe("telegramDmConversationsConfigured (X8e)", () => {
     for (const value of ["*", "endpoint-a", " , endpoint-a ,"]) {
       vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", value);
       expect(telegramDmConversationsConfigured()).toBe(true);
+    }
+  });
+});
+
+// myrmidon(B1b): the menu copy version depends on the two menus' wording and
+// on nothing else. In particular not on the bridge list: a once-per-version
+// key cannot express a state that flips back and forth (enabled, left out,
+// enabled again), so the refresh action applies whatever state holds when it
+// runs and a changed list is applied by Reconnect, as before.
+describe("telegramCommandsCopyVersion (B1b)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is a stable 12-hex-digit value that does not follow the bridge list", () => {
+    vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", undefined);
+    const unset = telegramCommandsCopyVersion();
+    expect(unset).toMatch(/^[a-f0-9]{12}$/);
+    for (const value of ["*", "endpoint-a", " , "]) {
+      vi.stubEnv("MYRMIDON_TELEGRAM_DM_CONVERSATIONS", value);
+      expect(telegramCommandsCopyVersion()).toBe(unset);
     }
   });
 });
