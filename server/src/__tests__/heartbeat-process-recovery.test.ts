@@ -463,6 +463,15 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       );
       db = createDb(tempDb.connectionString);
     }
+    // myrmidon(L4): this suite is about the vendor board-escalation plumbing
+    // itself (`escalateStrandedAssignedIssue` and friends), not about the L4
+    // auto-policy layered in front of it for a succeeded last run — that
+    // policy has its own coverage in stranded-autopolicy.myrmidon.test.ts.
+    // None of these fixtures configure a manager (`agents.reportsTo`) for
+    // the agents this suite exercises through that guard, so zero retries
+    // makes the L4 policy a no-op here and the suite keeps asserting the
+    // vendor's own behavior unchanged.
+    vi.stubEnv("MYRMIDON_STRANDED_AUTO_RETRIES_PER_DAY", "0");
     const now = new Date();
     await db.insert(authUsers).values({
       id: "responsible-user",
@@ -659,6 +668,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     }
     cleanupPids.clear();
     runningProcesses.clear();
+    vi.unstubAllEnvs();
     if (externalTestDatabaseUrl) {
       await closeRegisteredClients(externalTestDatabaseUrl);
     }
