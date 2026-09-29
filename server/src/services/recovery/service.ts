@@ -143,6 +143,8 @@ import {
 } from "../../modules/active-run-watchdog/index.js";
 // myrmidon(R3): maintenance mode holds watchdog sweeps
 import { filterAgentsOutsideMaintenance } from "../../myrmidon/maintenance/gate.js";
+// myrmidon(L3b): an operator-paused agent's issues are not stranded
+import { operatorPauseExemptsStrandedIssue } from "../../myrmidon/paused-stranded.js";
 
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = [
   "queued",
@@ -4277,6 +4279,19 @@ export function recoveryService(
         agent && agent.companyId === issue.companyId
           ? await isAgentInvokable(agent)
           : false;
+      // myrmidon(L3b): a pause by the operator means "no new work", not
+      // "abandoned": the issue either drains on a live run or waits for
+      // resume, which wakes it. Skip before the non-invokable escalation.
+      if (
+        operatorPauseExemptsStrandedIssue({
+          issueStatus: issue.status,
+          issueCompanyId: issue.companyId,
+          agent,
+        })
+      ) {
+        result.skipped += 1;
+        continue;
+      }
       if (
         agent?.status === "paused" &&
         agent.companyId === issue.companyId &&

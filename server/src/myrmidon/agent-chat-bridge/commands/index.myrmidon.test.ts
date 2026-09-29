@@ -1,11 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  TELEGRAM_DM_COMMANDS,
-  parseBridgedCommand,
-  runBridgedDirectMessageCommand,
-  type BridgedCommandInput,
-} from "./index.js";
+import { describe, expect, it } from "vitest";
+import { TELEGRAM_DM_COMMANDS, parseBridgedCommand } from "./index.js";
 
+// myrmidon(X8a/X8c): pure, DB-free coverage of the parsing helper and the
+// command spec list shared by the whole X8 contract. `runBridgedDirectMessageCommand`
+// itself is covered end to end, with a real DB, in `commands.myrmidon.test.ts`
+// (X8c's full command set replaces X8a's `/new`/`/reset`-only stand-in).
 describe("parseBridgedCommand", () => {
   it("parses a bare command", () => {
     expect(parseBridgedCommand("/new")).toEqual({ name: "new", args: "" });
@@ -37,43 +36,6 @@ describe("parseBridgedCommand", () => {
 
   it("does not treat a slash followed by a space as a command", () => {
     expect(parseBridgedCommand("/ new")).toBeNull();
-  });
-});
-
-function input(text: string): BridgedCommandInput {
-  return {
-    db: {} as BridgedCommandInput["db"],
-    companyId: "company-a",
-    agentId: "agent-a",
-    endpointId: "endpoint-a",
-    deliveryId: "delivery-a",
-    boardUserId: "user-a",
-    conversationIssueId: "issue-a",
-    text,
-    publicBaseUrl: null,
-    cancelRun: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
-describe("runBridgedDirectMessageCommand", () => {
-  it("turns /new into a message '/new'", async () => {
-    expect(await runBridgedDirectMessageCommand(input("/new"))).toEqual({
-      kind: "message",
-      body: "/new",
-    });
-  });
-
-  it("turns /reset into a message '/new'", async () => {
-    expect(await runBridgedDirectMessageCommand(input("/reset"))).toEqual({
-      kind: "message",
-      body: "/new",
-    });
-  });
-
-  it("leaves other commands unhandled (null) until X8c", async () => {
-    expect(await runBridgedDirectMessageCommand(input("/model x"))).toBeNull();
-    expect(await runBridgedDirectMessageCommand(input("/help"))).toBeNull();
-    expect(await runBridgedDirectMessageCommand(input("hello"))).toBeNull();
   });
 });
 
