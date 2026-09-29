@@ -985,6 +985,8 @@ export function recoveryService(
         resultJson: heartbeatRuns.resultJson,
         startedAt: heartbeatRuns.startedAt,
         createdAt: heartbeatRuns.createdAt,
+        // myrmidon(L1): claimedAdapterType's input, see LatestIssueRun
+        runnerProfileJson: heartbeatRuns.runnerProfileJson,
       })
       .from(heartbeatRuns)
       .where(
@@ -1816,6 +1818,8 @@ export function recoveryService(
         resultJson: heartbeatRuns.resultJson,
         startedAt: heartbeatRuns.startedAt,
         createdAt: heartbeatRuns.createdAt,
+        // myrmidon(L1): claimedAdapterType's input, see LatestIssueRun
+        runnerProfileJson: heartbeatRuns.runnerProfileJson,
       })
       .from(heartbeatRuns)
       .where(
