@@ -854,14 +854,23 @@ describe("agent issue mutation checkout ownership", () => {
     ],
     ["attachment delete", (app: express.Express) => request(app).delete("/api/attachments/attachment-1")],
   ])("rejects peer agent %s on another agent's active checkout", async (_name, sendRequest) => {
+    // myrmidon(L5): "active checkout" now means a *live* run — name one, or
+    // the write-lock check reports no run and lets the write through.
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ checkoutRunId: ownerRunId, executionRunId: ownerRunId }),
+    );
+    mockHeartbeatService.getRun.mockResolvedValue({ id: ownerRunId, status: "running" });
+
     const res = await sendRequest(await createApp(peerActor()));
 
     expect(res.status, JSON.stringify(res.body)).toBe(409);
     // Plan §6: the run lock names the boundary and routes to the open channel.
     expect(res.body.details.code).toBe("issue_write_assignee_run_lock");
     expect(res.body.details.boundary).toBe("Run checkout lock");
+    expect(res.body.details.liveRunId).toBe(ownerRunId);
     expect(res.body.error).toContain("Who can act:");
     expect(res.body.error).toContain("Comment instead");
+    expect(res.body.error).toContain(ownerRunId);
     expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
     expect(mockIssueService.update).not.toHaveBeenCalled();
     expect(mockIssueService.addComment).not.toHaveBeenCalled();
@@ -870,6 +879,97 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockWorkProductService.update).not.toHaveBeenCalled();
     expect(mockStorageService.putFile).not.toHaveBeenCalled();
     expect(mockStorageService.deleteObject).not.toHaveBeenCalled();
+  });
+
+  // myrmidon(L5): scheduled_retry is not terminal — the vendor re-points the
+  // issue's executionRunId at exactly this run while requiring the issue to
+  // stay in_progress (heartbeat.ts's transient-retry scheduling), so the
+  // assignee's run is about to resume here. The lock must still hold.
+  it("rejects a peer agent write while the assignee's run is scheduled to retry", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ checkoutRunId: ownerRunId, executionRunId: ownerRunId }),
+    );
+    mockHeartbeatService.getRun.mockResolvedValue({ id: ownerRunId, status: "scheduled_retry" });
+
+    const res = await request(await createApp(peerActor()))
+      .patch(`/api/issues/${issueId}`)
+      .send({ title: "Blocked while retry is scheduled" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.details.code).toBe("issue_write_assignee_run_lock");
+    expect(res.body.details.liveRunId).toBe(ownerRunId);
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
+  // myrmidon(L5): an "in_progress" issue with no live run behind it is no
+  // longer a lock — the write proceeds and the bypass is logged.
+  it("lets a peer agent write to another agent's in_progress issue once its run is no longer live", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ checkoutRunId: ownerRunId, executionRunId: ownerRunId }),
+    );
+    mockHeartbeatService.getRun.mockResolvedValue({ id: ownerRunId, status: "succeeded" });
+
+    const res = await request(await createApp(peerActor()))
+      .patch(`/api/issues/${issueId}`)
+      .send({ title: "No run behind this lock" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.update).toHaveBeenCalled();
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "issue.write_lock_bypassed_no_live_run",
+        entityType: "issue",
+        entityId: issueId,
+        details: expect.objectContaining({
+          assigneeAgentId: ownerAgentId,
+          actorAgentId: peerAgentId,
+        }),
+      }),
+    );
+  });
+
+  // myrmidon(L5): the no-live-run "in_progress" case must fall through to
+  // exactly the same allowVisibleIssueWrite gate the idle-issue path uses —
+  // routes that never opted into that gate (DELETE /issues/:id among them)
+  // still deny a peer agent, run or no run.
+  it("still rejects a peer agent's delete of another agent's in_progress issue once its run is no longer live", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ checkoutRunId: ownerRunId, executionRunId: ownerRunId }),
+    );
+    mockHeartbeatService.getRun.mockResolvedValue({ id: ownerRunId, status: "succeeded" });
+
+    const res = await request(await createApp(peerActor())).delete(`/api/issues/${issueId}`);
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toBe("Agent cannot mutate another agent's issue");
+    expect(mockIssueService.remove).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "issue.write_lock_bypassed_no_live_run" }),
+    );
+  });
+
+  it("keeps the write locked when MYRMIDON_WRITE_LOCK_REQUIRES_LIVE_RUN=0 reverts to the status-only lock", async () => {
+    const previous = process.env.MYRMIDON_WRITE_LOCK_REQUIRES_LIVE_RUN;
+    process.env.MYRMIDON_WRITE_LOCK_REQUIRES_LIVE_RUN = "0";
+    try {
+      mockIssueService.getById.mockResolvedValue(
+        makeIssue({ checkoutRunId: ownerRunId, executionRunId: ownerRunId }),
+      );
+      mockHeartbeatService.getRun.mockResolvedValue({ id: ownerRunId, status: "succeeded" });
+
+      const res = await request(await createApp(peerActor()))
+        .patch(`/api/issues/${issueId}`)
+        .send({ title: "Should stay locked" });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+      expect(res.body.details.code).toBe("issue_write_assignee_run_lock");
+      expect(mockIssueService.update).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.MYRMIDON_WRITE_LOCK_REQUIRES_LIVE_RUN;
+      else process.env.MYRMIDON_WRITE_LOCK_REQUIRES_LIVE_RUN = previous;
+    }
   });
 
   it("allows mentioned peer agents to post comments without ownership of an active checkout", async () => {

@@ -63,7 +63,11 @@ function registerRouteMocks() {
     heartbeatService: () => ({
       wakeup: vi.fn(async () => undefined),
       reportRunActivity: vi.fn(async () => undefined),
-      getRun: vi.fn(async () => null),
+      // myrmidon(L5): the write-lock check reads run status through here —
+      // the fixture issue's checkout/execution run is "live" (running).
+      getRun: vi.fn(async (runId: string) =>
+        runId === ownerRunId ? { id: ownerRunId, status: "running" } : null,
+      ),
       getActiveRunForAgent: vi.fn(async () => null),
       cancelRun: vi.fn(async () => null),
     }),
@@ -95,6 +99,10 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
     identifier: "PAP-2265",
     title: "External object routes",
     executionWorkspaceId: null,
+    // myrmidon(L5): a live run behind the checkout — see the heartbeatService
+    // stub above, which reports this run id as "running".
+    checkoutRunId: ownerRunId,
+    executionRunId: ownerRunId,
     ...overrides,
   };
 }
@@ -283,6 +291,28 @@ describe("external object routes", () => {
 
     expect(res.status).toBe(409);
     expect(res.body.details.code).toBe("issue_write_assignee_run_lock");
+    // myrmidon(L5): the 409 names the live run it is blocked on.
+    expect(res.body.details.liveRunId).toBe(ownerRunId);
+    expect(res.body.error).toContain(ownerRunId);
+    expect(mockExternalObjectsService.refreshIssueObjects).not.toHaveBeenCalled();
+  });
+
+  // myrmidon(L5): once the checkout's run is no longer live, the run lock
+  // itself lifts, but this route never opted into allowVisibleIssueWrite —
+  // it still denies another agent's in_progress issue exactly like it would
+  // an idle one.
+  it("still denies a peer agent's manual refresh once the checkout run is no longer live", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ status: "in_progress", checkoutRunId: null, executionRunId: null }),
+    );
+    const app = await createApp(peerActor());
+
+    const res = await request(app)
+      .post(`/api/issues/${issueId}/external-objects/refresh`)
+      .send({});
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toBe("Agent cannot mutate another agent's issue");
     expect(mockExternalObjectsService.refreshIssueObjects).not.toHaveBeenCalled();
   });
 

@@ -329,6 +329,8 @@ import {
 import { resolveSelectedSuggestedTasks } from "../services/issue-thread-interactions.js";
 // myrmidon(P5): checkout run-context gate
 import { assertRunHasTaskSourceContext } from "../myrmidon/issue-checkout-guard.js";
+// myrmidon(L5): issue write lock only blocks while the assignee's run is live
+import { resolveIssueWriteAssigneeRunLock } from "../myrmidon/issue-write-run-lock.js";
 import {
   crossIssueInfluenceLimitError,
   crossIssueInfluenceRunContextError,
@@ -5080,9 +5082,16 @@ export function issueRoutes(
     issue: { identifier?: string | null; assigneeAgentId: string | null },
     code: IssueWriteDenialCode,
     extraDetails: Record<string, unknown> = {},
+    // myrmidon(L5): lets a caller (e.g. the run-lock 409) fold facts like the
+    // live run id into the denial *prose*, not just the machine-readable
+    // details — see docs/myrmidon/design/issue-write-lock.md.
+    extraContext: Partial<IssueWriteDenialContext> = {},
   ) {
     const labels = await issueWriteDenialLabels(req, issue);
-    const { status, body } = issueWriteDenialResponse(code, labels);
+    const { status, body } = issueWriteDenialResponse(code, {
+      ...labels,
+      ...extraContext,
+    });
     res.status(status).json({
       error: body.error,
       details: { ...body.details, ...extraDetails },
@@ -5261,6 +5270,9 @@ export function issueRoutes(
       reviewPolicy?: IssueReviewPolicy | null;
       /** Used only to name the task in denial copy (plan §6). */
       identifier?: string | null;
+      // myrmidon(L5): who actually holds the run lock (issue-write-run-lock.js)
+      checkoutRunId?: string | null;
+      executionRunId?: string | null;
     },
     options: { allowVisibleIssueWrite?: boolean } = {},
   ) {
@@ -5327,23 +5339,42 @@ export function issueRoutes(
       ) {
         return true;
       }
+      // myrmidon(L5): tracks only whether we fell through the "in_progress
+      // but no live run behind it" branch below, so the bypass activity log
+      // can fire once — after the allowVisibleIssueWrite gate has actually
+      // let the write through, not before it.
+      let bypassedNoLiveRun = false;
       if (issue.status === "in_progress") {
         // Run/checkout ownership stays assignee-scoped even though writes are
         // open, so this lock clears on its own — the copy routes to comments.
-        return denyIssueWrite(
-          req,
-          res,
-          issue,
-          "issue_write_assignee_run_lock",
-          {
-            issueId: issue.id,
-            assigneeAgentId: issue.assigneeAgentId,
-            actorAgentId,
-          },
-        );
+        // myrmidon(L5): the lock only holds while that run is actually live —
+        // a status-only lock let a stale "in_progress" block writes with
+        // nothing running behind it. See docs/myrmidon/design/issue-write-lock.md.
+        const runLock = await resolveIssueWriteAssigneeRunLock(heartbeat, issue);
+        if (runLock.live) {
+          return denyIssueWrite(
+            req,
+            res,
+            issue,
+            "issue_write_assignee_run_lock",
+            {
+              issueId: issue.id,
+              assigneeAgentId: issue.assigneeAgentId,
+              actorAgentId,
+              liveRunId: runLock.liveRunId,
+            },
+            { liveRunId: runLock.liveRunId },
+          );
+        }
+        // myrmidon(L5): no live run behind the "in_progress" status — this
+        // issue is no longer distinguishable from an idle one, so it falls
+        // through to exactly the same allowVisibleIssueWrite gate below
+        // instead of being treated as open on every channel.
+        bypassedNoLiveRun = true;
       }
-      // Past the run lock the issue is idle, so only channels that have not
-      // adopted the default-open rule still refuse another agent's issue.
+      // Past the run lock the issue is idle (or in_progress with no live run
+      // behind it), so only channels that have not adopted the default-open
+      // rule still refuse another agent's issue.
       if (!options.allowVisibleIssueWrite) {
         res.status(403).json({
           error: "Agent cannot mutate another agent's issue",
@@ -5360,6 +5391,24 @@ export function issueRoutes(
           },
         });
         return false;
+      }
+      if (bypassedNoLiveRun) {
+        const bypassActor = getActorInfo(req);
+        await logActivity(db, {
+          companyId: issue.companyId,
+          actorType: bypassActor.actorType,
+          actorId: bypassActor.actorId,
+          agentId: bypassActor.agentId,
+          runId: bypassActor.runId,
+          agentApiKeyId: bypassActor.agentApiKeyId,
+          action: "issue.write_lock_bypassed_no_live_run",
+          entityType: "issue",
+          entityId: issue.id,
+          details: {
+            assigneeAgentId: issue.assigneeAgentId,
+            actorAgentId,
+          },
+        });
       }
       return true;
     }

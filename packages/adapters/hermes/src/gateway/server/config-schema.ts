@@ -71,6 +71,17 @@ export function getConfigSchema(): AdapterConfigSchema {
         type: "textarea",
         hint: "Optional stable Hermes instructions sent separately from the wake input.",
       },
+      // myrmidon(G4): expose the debugEvents escape hatch (gateway/index.ts's
+      // agentConfigurationDoc, read by gateway/server/execute.ts) in the
+      // schema so operators can find and toggle it without editing raw JSON,
+      // same as the insecure-http toggle above.
+      {
+        key: "debugEvents",
+        label: "Debug events (raw JSON logs)",
+        type: "toggle",
+        default: false,
+        hint: "Log raw redacted Hermes gateway event JSON instead of the default compact hermes-chat-shaped progress lines. Verbose; for troubleshooting only.",
+      },
     ],
   };
 }

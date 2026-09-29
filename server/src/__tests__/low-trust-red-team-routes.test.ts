@@ -994,6 +994,28 @@ describeEmbeddedPostgres(
         expect(response.status, JSON.stringify(response.body)).toBe(201);
       }
 
+      // myrmidon(L5): the run lock now only holds a *live* run — give
+      // reviewRoot one, scoped to this test only (a permanent fixture-wide
+      // run here would make every wake into reviewRoot look permanently
+      // busy for unrelated tests, e.g. the wake assertions below in
+      // "redacts quarantined low-trust output…").
+      const [ctoReviewRun] = await db
+        .insert(heartbeatRuns)
+        .values({
+          companyId: fixture.company.id,
+          agentId: fixture.agents.cto.id,
+          status: "running",
+          contextSnapshot: { issueId: fixture.issues.reviewRoot.id },
+        })
+        .returning();
+      await db
+        .update(issues)
+        .set({
+          checkoutRunId: ctoReviewRun!.id,
+          executionRunId: ctoReviewRun!.id,
+        })
+        .where(eq(issues.id, fixture.issues.reviewRoot.id));
+
       const checkedOutPeerUpdate = await request(standardApp)
         .patch(`/api/issues/${fixture.issues.reviewRoot.id}`)
         .send({ status: "blocked" });
@@ -1003,6 +1025,11 @@ describeEmbeddedPostgres(
       ).toBe(409);
       expect(checkedOutPeerUpdate.body.details.code).toBe(
         "issue_write_assignee_run_lock",
+      );
+      // myrmidon(L5): the lock only holds because reviewRoot has a genuinely
+      // live run behind it (ctoReviewRun, inserted above) — the 409 names it.
+      expect(checkedOutPeerUpdate.body.details.liveRunId).toBe(
+        ctoReviewRun!.id,
       );
 
       const documentWrite = await request(standardApp)
@@ -1016,6 +1043,26 @@ describeEmbeddedPostgres(
       expect(documentWrite.body.details.code).toBe(
         "issue_write_assignee_run_lock",
       );
+
+      // myrmidon(L5): once that run is no longer live, the run lock itself
+      // lifts — but the document route never opted into
+      // allowVisibleIssueWrite, so it must still deny the write exactly like
+      // it would for an idle reviewRoot, not fall open just because the
+      // status is still "in_progress".
+      await db
+        .update(heartbeatRuns)
+        .set({ status: "succeeded" })
+        .where(eq(heartbeatRuns.id, ctoReviewRun!.id));
+
+      const documentWriteNoLiveRun = await request(standardApp)
+        .put(
+          `/api/issues/${fixture.issues.reviewRoot.id}/documents/upward-write`,
+        )
+        .send({ format: "markdown", body: "No upward document write either" });
+      expect(
+        documentWriteNoLiveRun.status,
+        JSON.stringify(documentWriteNoLiveRun.body),
+      ).toBe(403);
 
       for (const closedParent of [
         { assigneeAgentId: null, intent: { reopen: true } },

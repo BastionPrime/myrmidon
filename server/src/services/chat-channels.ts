@@ -124,6 +124,7 @@ import {
   normalizeUploadAttachmentContentType,
 } from "../attachment-types.js";
 import { isUniqueViolation } from "../db-errors.js";
+import { coalescedOwnerId } from "../myrmidon/chat-reconciliation/owner-join.js";
 import {
   bindTeamsPersonalRecipient,
   deriveTeamsPersonalRecipient,
@@ -228,6 +229,14 @@ import {
   type IssueAssignmentWakeupDeps,
 } from "./issue-assignment-wakeup.js";
 import { issueService } from "./issues.js";
+import {
+  afterTelegramDmMessage,
+  decideTelegramDmBinding,
+  ensureTelegramDmBinding,
+  handleTelegramDmCommand,
+  refuseUnlinkedTelegramDm,
+  type TelegramDmBridgeDeps,
+} from "../myrmidon/agent-chat-bridge/bridge.js";
 import {
   authorizeNativeChatReviewPresentation,
   NativeChatReviewPresentationContentionError,
@@ -351,6 +360,11 @@ import {
   createOmissionTracker,
   telegramAttachmentOmissionNotice,
 } from "../myrmidon/chat-attachment-omission.js";
+import { TELEGRAM_DM_COMMANDS } from "../myrmidon/agent-chat-bridge/commands/index.js";
+import {
+  telegramDmConversationsConfigured,
+  telegramDmConversationsEnabled,
+} from "../myrmidon/agent-chat-bridge/settings.js";
 import type {
   ActionEvent,
   AdapterPostableMessage,
@@ -1391,6 +1405,10 @@ export interface ChatChannelServiceOptions {
         errorCode?: string;
         eventMessage?: string;
         eventPayload?: Record<string, unknown>;
+        // myrmidon(X8b): merged into heartbeat_runs.result_json by the real
+        // heartbeatService.cancelRun (CancelRunOptions.resultJson); carries
+        // the bridged /stop attribution that recovery reads.
+        resultJson?: Record<string, unknown>;
       },
     ) => Promise<unknown>;
   };
@@ -2968,6 +2986,34 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     parseChatWebhookPublicBaseUrl(options.webhookPublicBaseUrl) ??
     publicBaseUrl;
   const issuesSvc = issueService(db);
+  // myrmidon(X8b): the Telegram-DM-as-Agent-Chat bridge (server/src/myrmidon/
+  // agent-chat-bridge/bridge.ts) needs a few of this closure's own helpers.
+  // The bridged-command contract (X8a) passes `resultJson`; forward it as
+  // `resultJson` so the cancelled run's result_json carries the operator
+  // attribution (`cancelledByActorType: "user"`) that stranded-work recovery
+  // reads to leave a /stop-ped conversation alone. It is also kept as the
+  // run event's payload, which is what this adapter sent before.
+  const x8CancelRun = options.heartbeat.cancelRun
+    ? async (
+        runId: string,
+        reason: string,
+        cancelOptions: { errorCode?: string; resultJson?: Record<string, unknown> },
+      ) =>
+        options.heartbeat.cancelRun!(runId, reason, {
+          errorCode: cancelOptions.errorCode,
+          resultJson: cancelOptions.resultJson,
+          eventPayload: cancelOptions.resultJson,
+        })
+    : undefined;
+  const x8TelegramDmBridgeDeps: TelegramDmBridgeDeps = {
+    issuesSvc,
+    stageTaskControlPublication: stageAuthorizedTaskControlPublication,
+    stageProviderEffect,
+    processProviderEffect,
+    logActivity,
+    publicBaseUrl,
+    cancelRun: x8CancelRun,
+  };
   const secrets = secretService(db);
   const questionResponses = questionResponseDeliveryService(db, {
     heartbeat:
@@ -4278,6 +4324,32 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             "setMyCommands",
             { commands: TELEGRAM_COMMANDS },
           );
+          // myrmidon(X8e): bridged DMs get their own command menu; groups
+          // and topics keep the vendor menu above (no scope = default menu).
+          // Only when MYRMIDON_TELEGRAM_DM_CONVERSATIONS is set: unset, the
+          // vendor path stays byte for byte (no extra API call, no extra
+          // lease check).
+          if (telegramDmConversationsConfigured()) {
+            await credentialLease.assertOwned();
+            if (telegramDmConversationsEnabled(record.endpoint.id)) {
+              await telegramMaintenanceRequest(
+                credentials.botToken,
+                "setMyCommands",
+                {
+                  commands: TELEGRAM_DM_COMMANDS,
+                  scope: { type: "all_private_chats" },
+                },
+              );
+            } else {
+              // Idempotent: clears a previously registered DM menu once this
+              // endpoint is left out of the (non-empty) list.
+              await telegramMaintenanceRequest(
+                credentials.botToken,
+                "deleteMyCommands",
+                { scope: { type: "all_private_chats" } },
+              );
+            }
+          }
           providerConfirmed = true;
         } else {
           await credentialLease.assertOwned();
@@ -4292,6 +4364,19 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             "deleteMyCommands",
             {},
           );
+          // myrmidon(X8e): also clear the bridged DM command menu on
+          // endpoint removal, so a re-added endpoint starts from the
+          // vendor default until the bridge is enabled again. Only when
+          // MYRMIDON_TELEGRAM_DM_CONVERSATIONS is set (same rule as
+          // register_commands above): unset, the vendor path is unchanged.
+          if (telegramDmConversationsConfigured()) {
+            await credentialLease.assertOwned();
+            await telegramMaintenanceRequest(
+              credentials.botToken,
+              "deleteMyCommands",
+              { scope: { type: "all_private_chats" } },
+            );
+          }
           providerConfirmed = true;
         }
         await credentialLease.assertOwned();
@@ -13776,12 +13861,31 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     if (shuttingDown) return 0;
     const retryInserted = await enqueueFailedChatRetryPublications(limit);
     const owner = alias(agentWakeupRequests, "chat_notice_owner");
+    // myrmidon(D1): a real join instead of a repeated correlated EXISTS —
+    // the three spots below that used to each write their own
+    // `exists (select 1 from issue_comments removed_comment ...)` made
+    // Postgres rebuild the same lookup three times per candidate row. See
+    // docs/myrmidon/DIVERGENCE.md.
+    const removedComment = alias(issueComments, "removed_comment");
+    const sourceRemoved = isNotNull(removedComment.id);
+    // myrmidon(D1): eligibility here depends on the owner's status, which
+    // can go terminal well after chat_actions.created_at, and not in
+    // created_at order between rows (12 concurrent run lanes can resolve a
+    // later-created row's owner before an earlier one's). A keyset cursor
+    // that only ever advances forward, and never resets, would then
+    // permanently skip the earlier row once a later one has pushed the
+    // cursor past it (review PR #98, senior round 1). So this cursor is
+    // reset to a start-of-table scan below on every call whose page does
+    // not fill the requested limit — the same rule the vendor's original
+    // (pre-D1) version of this sweep used — not just periodically: a
+    // straggler row is retried on the very next call, not left for up to
+    // several minutes. A full page only advances the cursor because that
+    // case means a real backlog, and rescanning it from the start on every
+    // call would defeat the point of the keyset scan; this matches vendor
+    // behavior and carries the same (pre-existing, not introduced by D1)
+    // out-of-order risk on a full page, which we do not attempt to close
+    // here.
     const cursor = inboundWakeNoticeCursor;
-    const sourceRemoved = sql`exists (select 1 from issue_comments removed_comment
-      where removed_comment.company_id = ${chatActions.companyId}
-        and removed_comment.issue_id::text = ${chatActions.payload}->>'issueId'
-        and removed_comment.id::text = ${chatActions.payload}->>'commentId'
-        and removed_comment.deleted_at is not null)`;
     const hasVisibleQueue = sql`exists (select 1 from chat_publications queued_notice
       join chat_message_links visible_queue on visible_queue.publication_id = queued_notice.id
         and visible_queue.company_id = queued_notice.company_id
@@ -13796,6 +13900,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           ${chatActions.endpointId}::text || ':' || ${chatActions.conversationId}::text)`;
     // A bounded keyset sweep, not an in-memory work queue. Advancing even past
     // revoked candidates prevents an inaccessible old message starving others.
+    const pageLimit = Math.max(1, Math.min(limit, 200));
     const candidates = await db
       .select({ action: chatActions })
       .from(chatActions)
@@ -13805,7 +13910,22 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       )
       .innerJoin(
         owner,
-        sql`${owner.id}::text = coalesce(${agentWakeupRequests.payload}->>'coalescedIntoWakeupRequestId', ${agentWakeupRequests.id}::text)`,
+        // myrmidon(D1): uuid-typed comparison instead of `owner.id::text =
+        // coalesce(...)::text`. Comparing as text stopped Postgres using the
+        // uuid primary key index on `owner`, forcing a hash/sort-merge join
+        // over the entire agent_wakeup_requests table on every call — the
+        // dominant cost of this sweep. See coalescedOwnerId's doc comment
+        // and docs/myrmidon/DIVERGENCE.md.
+        sql`${owner.id} = ${coalescedOwnerId(agentWakeupRequests.payload, agentWakeupRequests.id)}`,
+      )
+      .leftJoin(
+        removedComment,
+        and(
+          eq(removedComment.companyId, chatActions.companyId),
+          sql`${removedComment.issueId}::text = ${chatActions.payload}->>'issueId'`,
+          sql`${removedComment.id}::text = ${chatActions.payload}->>'commentId'`,
+          isNotNull(removedComment.deletedAt),
+        ),
       )
       .where(
         and(
@@ -13840,10 +13960,16 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         ),
       )
       .orderBy(asc(chatActions.createdAt), asc(chatActions.id))
-      .limit(Math.max(1, Math.min(limit, 200)));
+      .limit(pageLimit);
+    // myrmidon(D1): only advance the cursor on a full page (a real backlog);
+    // otherwise reset to a start-of-table scan, matching the vendor's
+    // original (pre-D1) rule. See the comment above `cursor` for why this
+    // reset can't be periodic-only: eligibility isn't in created_at order,
+    // so leaving the cursor advanced past a still-pending row would exclude
+    // that row from every future call.
     const last = candidates.at(-1)?.action;
     inboundWakeNoticeCursor =
-      candidates.length >= Math.max(1, Math.min(limit, 200)) && last
+      candidates.length >= pageLimit && last
         ? { createdAt: last.createdAt, id: last.id }
         : null;
     let inserted = retryInserted;
@@ -15432,6 +15558,33 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               )
               .then((rows) => rows[0] ?? null)
           : null;
+      // myrmidon(X8b): decide whether this DM belongs to the standing
+      // Telegram Agent Chat conversation bridge, before the vendor's own
+      // completed/done/cancelled rollover below (which must not run against
+      // a binding this turn is about to release or replace).
+      const x8Dm = await decideTelegramDmBinding(db, {
+        endpoint: {
+          provider: endpoint.provider,
+          id: endpoint.id,
+          assignedAgentId: endpoint.assignedAgentId,
+        },
+        isDirectMessage: thread.isDM,
+        boardUserId: principalResolution.userId,
+        existingConversation: existingConversation
+          ? { id: existingConversation.id, state: existingConversation.state }
+          : null,
+        existingIssue: existingIssue
+          ? {
+              id: existingIssue.id,
+              conversationAgentId: existingIssue.conversationAgentId,
+              conversationUserId: existingIssue.conversationUserId,
+            }
+          : null,
+      });
+      if (x8Dm.detachExisting) {
+        existingConversation = null;
+        existingIssue = null;
+      }
       if (
         isLinear &&
         existingConversation &&
@@ -15457,12 +15610,17 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       // A forum topic is a native provider thread and therefore stays bound to
       // one immutable Paperclip task, but the command must still be consumed
       // as control-plane input instead of becoming a task comment/wakeup.
-      const controlCommand =
-        isLinear || endpoint.provider === "telegram"
+      // myrmidon(X8b): the bridged Telegram DM conversation has its own
+      // command vocabulary (handled below, CP4/handleTelegramDmCommand); the
+      // vendor's /new would otherwise close this conversation (F7).
+      const controlCommand = x8Dm.applies
+        ? null
+        : isLinear || endpoint.provider === "telegram"
           ? linearControlCommand(message.text)
           : null;
-      const guidanceCommand =
-        endpoint.provider === "telegram"
+      const guidanceCommand = x8Dm.applies
+        ? null
+        : endpoint.provider === "telegram"
           ? telegramGuidanceCommand(message.text)
           : null;
       const endpointAllowed =
@@ -15567,6 +15725,34 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             updatedAt: new Date(),
           })
           .where(eq(chatDeliveries.id, activeDelivery.id));
+        // myrmidon(X8b): a bridged bot's DM is meant for linked workspace
+        // members only; give an unlinked sender one polite notice per day
+        // instead of silence, without creating a task or comment (F21).
+        if (
+          thread.isDM &&
+          endpoint.provider === "telegram" &&
+          telegramDmConversationsEnabled(endpoint.id) &&
+          endpointAllowed &&
+          destinationAllowed &&
+          !principalAllowed
+        ) {
+          const effectContext =
+            runtimeContext ??
+            runtimeContextForRecord(
+              (await endpointRecord(endpoint.id)) ??
+                (() => {
+                  throw new Error("Chat endpoint is unavailable");
+                })(),
+            );
+          await refuseUnlinkedTelegramDm(db, x8TelegramDmBridgeDeps, {
+            endpoint,
+            thread,
+            principalId: principalResolution.principal.id,
+            deliveryId: activeDelivery.id,
+            resourceId: resource.id,
+            runtimeContext: effectContext,
+          });
+        }
         return;
       }
 
@@ -15606,6 +15792,39 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         return true;
       };
       if (await filterPreControlSource(db)) return;
+      // myrmidon(X8b): OpenClaw-style commands (/model, /think, /stop, /new,
+      // …) in a bridged Telegram DM conversation. A recognized `reply`
+      // command finishes the whole turn here; a `message` command overrides
+      // the comment body/notice below (CP6/CP7) but still runs the normal
+      // task-mutation flow.
+      let x8MessageBody: string | undefined;
+      let x8Notice: string | undefined;
+      if (x8Dm.applies) {
+        const dmCommand = await handleTelegramDmCommand({
+          db,
+          deps: x8TelegramDmBridgeDeps,
+          endpoint,
+          resource,
+          thread: { id: thread.id, channelId: thread.channelId },
+          providerUrl,
+          boardUserId: principalResolution.userId!,
+          deliveryId: activeDelivery.id,
+          principalId: principalResolution.principal.id,
+          text: message.text,
+          current: existingConversation,
+          latestConversation,
+          // myrmidon(X8b): a `reply`-kind command result finishes the whole
+          // turn inside handleTelegramDmCommand, before persistTaskMutation
+          // below ever runs — so the release/migration this transition needs
+          // must be passed through and applied there too (F: reply-first
+          // migration).
+          releaseConversationId: x8Dm.releaseConversationId,
+          migratedFromIssueId: x8Dm.migratedFromIssueId,
+        });
+        if (dmCommand.done) return;
+        x8MessageBody = dmCommand.body;
+        x8Notice = dmCommand.notice;
+      }
       const photonQuote =
         endpoint.provider === "imessage-photon"
           ? photonReplyReference(message.raw)
@@ -15902,6 +16121,40 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         taskUserId: string | null,
       ) => {
         let conversation = existingConversation;
+        // myrmidon(X8b): release the binding this thread had before becoming
+        // (or ceasing to be) a Telegram DM bridge target, then reuse or
+        // create the standing Telegram conversation. `taskUserId` is the
+        // identity re-verified under the endpoint lock above (16221), not
+        // the pre-transaction snapshot `x8Dm.applies` was computed from.
+        if (x8Dm.releaseConversationId) {
+          await taskTx
+            .update(chatConversations)
+            .set({ state: "completed", updatedAt: new Date() })
+            .where(
+              and(
+                eq(chatConversations.id, x8Dm.releaseConversationId),
+                inArray(chatConversations.state, ["active", "waiting"]),
+              ),
+            );
+        }
+        if (x8Dm.applies && taskUserId) {
+          conversation = (
+            await ensureTelegramDmBinding(
+              taskTx,
+              x8TelegramDmBridgeDeps,
+              {
+                endpoint: taskEndpoint,
+                resource,
+                thread: { id: thread.id, channelId: thread.channelId },
+                providerUrl,
+                boardUserId: taskUserId,
+                current: conversation,
+                latestConversation,
+              },
+              inboundActivityPublications,
+            )
+          ).conversation;
+        }
         if (!conversation) {
           const sessionGeneration = isLinear
             ? (latestConversation?.sessionGeneration ?? 0) + 1
@@ -16024,15 +16277,18 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             taskTx,
           );
         }
+        // myrmidon(X8b): a `message`-kind bridged command (e.g. /new) overrides
+        // the comment body instead of the raw provider text.
         const body =
-          message.text.trim() ||
+          x8MessageBody ??
+          (message.text.trim() ||
           (message.attachments.length > 0
             ? taskEndpoint.provider === "microsoft-teams" &&
               !thread.isDM &&
               nativeInboundAttachments.length === 0
               ? `Shared ${message.attachments.length} Microsoft Teams file reference${message.attachments.length === 1 ? "" : "s"}.${providerUrl ? ` Open in Microsoft Teams: ${providerUrl}` : ""}`
               : `Shared ${message.attachments.length} file${message.attachments.length === 1 ? "" : "s"}.`
-            : "Sent an empty message.");
+            : "Sent an empty message."));
         let comment!: Awaited<ReturnType<typeof issuesSvc.addComment>>;
         await taskTx
           .update(chatEndpoints)
@@ -16323,6 +16579,27 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         publishActivity(publication);
       }
       const { actorUserId, comment, conversation, issue } = taskMutation;
+      // myrmidon(X8b): resume a paused bridged conversation on a literal
+      // "/new" comment (the web /new route does the same), and deliver any
+      // queued bridged-command notice or one-time migration notice. Runs
+      // before processInboundWakeup below so a resumed pause does not race
+      // the wakeup it is meant to unblock.
+      if (x8Dm.applies) {
+        await afterTelegramDmMessage({
+          db,
+          deps: x8TelegramDmBridgeDeps,
+          comment,
+          agentId: endpoint.assignedAgentId,
+          companyId: endpoint.companyId,
+          endpointId: endpoint.id,
+          conversationId: conversation.id,
+          issueId: issue.id,
+          deliveryId: activeDelivery.id,
+          principalId: principalResolution.principal.id,
+          notice: x8Notice,
+          migratedFromIssueId: x8Dm.migratedFromIssueId,
+        });
+      }
       const attachmentResult = await ingestAttachments({
         endpoint,
         endpointRuntime,

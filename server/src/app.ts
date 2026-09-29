@@ -98,6 +98,7 @@ import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
 import { myrmidonMaintenanceRoutes } from "./myrmidon/maintenance/index.js"; // myrmidon(R3)
 import { myrmidonReplayBlockedRoutes } from "./myrmidon/replay-blocked/index.js"; // myrmidon(N1)
+import { myrmidonBotContainerRoutes } from "./myrmidon/bot-containers/routes-wiring.js"; // myrmidon(W2b)
 import { instanceSettingsService } from "./services/instance-settings.js";
 import { openApiRoutes } from "./routes/openapi.js";
 import {
@@ -149,6 +150,7 @@ import { toolAccessService } from "./services/tool-access.js";
 import { chatChannelService } from "./services/chat-channels.js";
 import { deliverNativeQuestionResponse } from "./services/native-runtime/native-question-bridge.js";
 import { enqueueChatRunMilestones } from "./services/chat-run-publications.js";
+import { chatReconcileMinimumSpacingMs } from "./myrmidon/chat-reconciliation/reconcile-interval.js";
 import {
   createCoalescedAsyncTrigger,
   isChatPublicationCommitSignal,
@@ -295,6 +297,13 @@ export function createChatReconciliationCoordinator(input: {
   processPendingSlackFileUploadReceipts: () => Promise<unknown>;
   processPendingSlackSessionSyncs: () => Promise<unknown>;
   onError: (lane: ChatReconciliationLane, error: unknown) => void;
+  // myrmidon(D1): opt-in extra spacing for the run-milestone projection lane
+  // (a best-effort "queued/working/completed" notice, not message delivery
+  // itself — the publication lane below also dispatches real provider sends,
+  // so it keeps its normal cadence), on top of createCoalescedAsyncTrigger's
+  // own default spacing. See chatReconcileMinimumSpacingMs's doc comment and
+  // docs/myrmidon/SETTINGS.md.
+  milestoneMinimumSpacingMs?: number;
 }) {
   let stopped = false;
   const inFlight = new Map<ChatReconciliationLane, Promise<void>>();
@@ -311,6 +320,7 @@ export function createChatReconciliationCoordinator(input: {
       if (inserted > 0) publicationReconciliation.notify();
     },
     onError: (error) => input.onError("run milestones", error),
+    minimumSpacingMs: input.milestoneMinimumSpacingMs,
   });
   const start = (
     lane: ChatReconciliationLane,
@@ -787,6 +797,7 @@ export async function createApp(
   api.use(instanceSettingsRoutes(db));
   api.use(myrmidonMaintenanceRoutes(db)); // myrmidon(R3)
   api.use(myrmidonReplayBlockedRoutes(db)); // myrmidon(N1)
+  api.use(myrmidonBotContainerRoutes(db)); // myrmidon(W2b)
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }
@@ -1162,6 +1173,9 @@ export async function createApp(
     onError: (lane, err) => {
       logger.error({ err, lane }, `Failed to reconcile chat ${lane}`);
     },
+    // myrmidon(D1): unset by default (today's cadence). See
+    // docs/myrmidon/SETTINGS.md.
+    milestoneMinimumSpacingMs: chatReconcileMinimumSpacingMs(),
   });
   const unsubscribeChatPublicationSignals = subscribeAllCompanyLiveEvents(
     (event) => {
