@@ -789,6 +789,8 @@ describe.sequential("issue thread interaction routes", () => {
       "interaction-1",
       { selectedClientKeys: ["task-1"] },
       expect.objectContaining({ userId: "local-board" }),
+      // myrmidon(O1): the accept route now passes the outbox mutation hook.
+      { afterResolveInTransaction: expect.any(Function) },
     );
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(2);
     expect(mockHeartbeatService.wakeup).toHaveBeenNthCalledWith(
@@ -1743,6 +1745,8 @@ describe.sequential("issue thread interaction routes", () => {
       "interaction-checkbox",
       { selectedOptionIds: ["file-b"] },
       expect.objectContaining({ userId: "local-board" }),
+      // myrmidon(O1): the accept route now passes the outbox mutation hook.
+      { afterResolveInTransaction: expect.any(Function) },
     );
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(1);
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
@@ -2565,6 +2569,8 @@ describe.sequential("issue thread interaction routes", () => {
         resolverPolicyRestriction: "anyone",
         suggestedTaskEffectsAuthorized: true,
       },
+      // myrmidon(O1): no outbox hook for a card whose policy does not wake the assignee.
+      {},
     );
     expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       actorType: "agent",
