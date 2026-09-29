@@ -170,7 +170,7 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
   async function waitForCompanyIdle(companyId: string, timeoutMs = RUN_WAIT_MS) {
     const deadline = Date.now() + timeoutMs;
     let idlePolls = 0;
-    while (Date.now() < deadline && idlePolls < 3) {
+    while (Date.now() < deadline && idlePolls < 20) {
       const runs = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns)
         .where(eq(heartbeatRuns.companyId, companyId));
       idlePolls = runs.some((run) => ["queued", "running", "scheduled_retry"].includes(run.status)) ? 0 : idlePolls + 1;
@@ -261,13 +261,14 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
       resultJson: { executionRecovery: { kind: "bootstrap", providerWorkStarted: false } },
     }).where(eq(heartbeatRuns.id, run!.id));
 
-    const adapterCallsBefore = mockAdapterExecute.mock.calls.length;
     const scheduled = await heartbeat.scheduleBoundedRetry(run!.id, { now, random: () => 0 });
     expect(scheduled.outcome, await describeState(companyId, issueId)).toBe("scheduled");
     if (scheduled.outcome !== "scheduled") return;
     // The retry may already have been promoted (and even run) by the time this
-    // call looks, so what it returns is not asserted; it only makes sure a
-    // still-scheduled retry is handed to the dispatcher.
+    // call looks, and the vendor's own follow-up retry of a finished run can
+    // be the very run scheduleBoundedRetry hands back, so what this returns is
+    // not asserted; it only makes sure a still-scheduled retry is handed to
+    // the dispatcher.
     await heartbeat.promoteDueScheduledRetries(scheduled.dueAt);
 
     // The retry inherits the successor's context but not its authorization
@@ -277,9 +278,8 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
     // so the outcome is read from the run once it has left queued/running.
     const retry = await waitForRunToFinish(scheduled.run.id);
     const state = await describeState(companyId, issueId);
-    expect(retry?.status, state).not.toBe("cancelled");
     expect(retry?.errorCode, state).not.toBe("execution_reconciliation_required");
-    expect(mockAdapterExecute.mock.calls.length, state).toBeGreaterThan(adapterCallsBefore);
+    expect(retry?.status, state).toBe("succeeded");
   }, TEST_TIMEOUT_MS);
 
   it.each([
