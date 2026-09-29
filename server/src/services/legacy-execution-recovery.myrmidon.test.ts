@@ -126,6 +126,35 @@ describe("legacyExecutionNeedsReconciliation: infrastructure interruptions (L1)"
     },
   );
 
+  // Senior review, round 2: with the provider stop only requested (never
+  // acknowledged) the old turn may still be running; the hold is what keeps a
+  // next turn from overlapping it. This is the one case where the exception
+  // changes the outcome for a conversation adapter.
+  it.each(["agent_paused", "issue_reassigned"])(
+    "still holds a conversation-adapter run for %s while its provider stop is requested but not confirmed",
+    (errorCode) => {
+      expect(
+        legacyExecutionNeedsReconciliation({
+          ...baseRun,
+          errorCode,
+          scheduledRetryAttempt: 0,
+          resultJson: { executionCancellation: { state: "requested", requestedAt: "2026-09-29T00:00:00.000Z" } },
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("does not hold a conversation-adapter run once its provider stop is acknowledged", () => {
+    expect(
+      legacyExecutionNeedsReconciliation({
+        ...baseRun,
+        errorCode: "agent_paused",
+        scheduledRetryAttempt: 0,
+        resultJson: { executionCancellation: { state: "acknowledged", acknowledgedAt: "2026-09-29T00:00:00.000Z" } },
+      }),
+    ).toBe(false);
+  });
+
   it("still holds a run whose adapter was never claimed (no runnerProfileJson)", () => {
     expect(
       legacyExecutionNeedsReconciliation({

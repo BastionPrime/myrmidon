@@ -43,6 +43,9 @@ describeEmbeddedPostgres("reconcileStrandedAssignedIssues: infrastructure interr
     // positive path; pass a non-conversation adapter (or null) to exercise
     // the gate that keeps the vendor's escalation in place for those.
     adapterType?: string | null;
+    // myrmidon(L1): the run's persisted resultJson, e.g. an
+    // executionCancellation state the provider stop left behind.
+    resultJson?: Record<string, unknown> | null;
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -89,6 +92,7 @@ describeEmbeddedPostgres("reconcileStrandedAssignedIssues: infrastructure interr
       scheduledRetryAttempt: input.scheduledRetryAttempt ?? 0,
       scheduledRetryReason: input.scheduledRetryReason ?? null,
       runnerProfileJson: claimedAdapterType === null ? null : { adapterDispatch: { adapterType: claimedAdapterType } },
+      resultJson: input.resultJson ?? null,
       finishedAt: now,
       updatedAt: now,
     });
@@ -186,6 +190,39 @@ describeEmbeddedPostgres("reconcileStrandedAssignedIssues: infrastructure interr
     expect(actions[0]!.ownerType).toBe("board");
     const [issue] = await db.select().from(issues).where(eq(issues.id, issueId));
     expect(issue!.status).toBe("blocked");
+  }, 30_000);
+
+  // Senior review, round 2: a conversation adapter's run whose provider stop
+  // is only requested has not been proven stopped; waiting for resume would
+  // let the next turn overlap it, so the vendor escalation stays.
+  it("still escalates while paused and within budget when the provider stop was requested but never confirmed", async () => {
+    const { issueId } = await seedStrandedIssue({
+      errorCode: "agent_paused",
+      scheduledRetryAttempt: 0,
+      resultJson: { executionCancellation: { state: "requested", requestedAt: new Date().toISOString() } },
+    });
+
+    await heartbeatService(db).reconcileStrandedAssignedIssues();
+
+    const actions = await activeRecoveryActionsFor(issueId);
+    expect(actions.length).toBeGreaterThan(0);
+    expect(actions[0]!.ownerType).toBe("board");
+    const [issue] = await db.select().from(issues).where(eq(issues.id, issueId));
+    expect(issue!.status).toBe("blocked");
+  }, 30_000);
+
+  it("does not escalate while paused and within budget when the provider stop was acknowledged", async () => {
+    const { issueId } = await seedStrandedIssue({
+      errorCode: "agent_paused",
+      scheduledRetryAttempt: 0,
+      resultJson: { executionCancellation: { state: "acknowledged", acknowledgedAt: new Date().toISOString() } },
+    });
+
+    await heartbeatService(db).reconcileStrandedAssignedIssues();
+
+    expect(await activeRecoveryActionsFor(issueId)).toHaveLength(0);
+    const [issue] = await db.select().from(issues).where(eq(issues.id, issueId));
+    expect(issue!.status).toBe("in_progress");
   }, 30_000);
 
   it("still escalates while paused and within budget when the stranded run's adapter was never claimed", async () => {

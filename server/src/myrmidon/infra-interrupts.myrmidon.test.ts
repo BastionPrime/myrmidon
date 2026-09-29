@@ -5,6 +5,7 @@ import {
   INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY,
   infraInterruptAttemptCount,
   infraInterruptRetryBudgetExhausted,
+  infraInterruptStopUnconfirmed,
   isInfraInterruptErrorCode,
   parseInfraInterruptCodes,
   shouldRetryOriginalExecutorForInfraInterrupt,
@@ -224,6 +225,73 @@ describe("shouldSkipReconciliationForInfraInterrupt", () => {
     expect(
       shouldSkipReconciliationForInfraInterrupt({ errorCode: "agent_paused", scheduledRetryAttempt: 0 }),
     ).toBe(false);
+  });
+
+  // Senior review, round 2: a conversation adapter's run whose provider stop
+  // is only requested has not been proven stopped, so a next turn (resume, or
+  // the new assignee after a reassignment) could overlap the old one.
+  it.each(["agent_paused", "issue_reassigned"])(
+    "keeps the vendor hold for %s while the provider stop is requested but not confirmed",
+    (errorCode) => {
+      expect(
+        shouldSkipReconciliationForInfraInterrupt({
+          errorCode,
+          scheduledRetryAttempt: 0,
+          resultJson: { executionCancellation: { state: "requested", requestedAt: "2026-09-29T00:00:00.000Z" } },
+          ...dialogAdapterRun,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("skips the hold once the provider stop is acknowledged", () => {
+    expect(
+      shouldSkipReconciliationForInfraInterrupt({
+        errorCode: "agent_paused",
+        scheduledRetryAttempt: 0,
+        resultJson: { executionCancellation: { state: "acknowledged", acknowledgedAt: "2026-09-29T00:00:00.000Z" } },
+        ...dialogAdapterRun,
+      }),
+    ).toBe(true);
+  });
+
+  it("skips the hold when no cancellation state was written (nothing pending to wait for)", () => {
+    for (const resultJson of [null, undefined, {}, { executionCancellation: {} }]) {
+      expect(
+        shouldSkipReconciliationForInfraInterrupt({
+          errorCode: "agent_paused",
+          scheduledRetryAttempt: 0,
+          resultJson,
+          ...dialogAdapterRun,
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("does not retry the original executor while the provider stop is only requested", () => {
+    expect(
+      shouldRetryOriginalExecutorForInfraInterrupt({
+        errorCode: "agent_paused",
+        scheduledRetryAttempt: 0,
+        resultJson: { executionCancellation: { state: "requested" } },
+        ...dialogAdapterRun,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("infraInterruptStopUnconfirmed", () => {
+  it("is true only for executionCancellation.state === 'requested'", () => {
+    expect(infraInterruptStopUnconfirmed({ resultJson: { executionCancellation: { state: "requested" } } })).toBe(true);
+    expect(infraInterruptStopUnconfirmed({ resultJson: { executionCancellation: { state: "acknowledged" } } })).toBe(false);
+  });
+
+  it("is false for an absent, null, or malformed value", () => {
+    expect(infraInterruptStopUnconfirmed({})).toBe(false);
+    expect(infraInterruptStopUnconfirmed({ resultJson: null })).toBe(false);
+    expect(infraInterruptStopUnconfirmed({ resultJson: "requested" })).toBe(false);
+    expect(infraInterruptStopUnconfirmed({ resultJson: { executionCancellation: "requested" } })).toBe(false);
+    expect(infraInterruptStopUnconfirmed({ resultJson: { executionCancellation: { state: 1 } } })).toBe(false);
   });
 });
 

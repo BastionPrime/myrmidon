@@ -87,6 +87,7 @@ import {
 import {
   adapterQualifiesForInfraInterruptRelief,
   infraInterruptRetryBudgetExhausted,
+  infraInterruptStopUnconfirmed,
   isInfraInterruptErrorCode,
 } from "../../myrmidon/infra-interrupts.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
@@ -4326,13 +4327,16 @@ export function recoveryService(
       // board; the next sweep tick re-evaluates. A non-qualifying or unknown
       // adapter (process, http, openclaw_gateway, …) falls through to the
       // vendor's escalation below: retrying it here could replay whatever
-      // external action the interrupted run already took.
+      // external action the interrupted run already took. So does a run whose
+      // provider stop is only requested, not confirmed: the resumed agent's
+      // next turn could overlap the old one that has not stopped.
       if (
         issue.status !== "in_review" &&
         !agentInvokable &&
         agent?.status === "paused" &&
         isInfraInterruptErrorCode(latestRun?.errorCode ?? null) &&
-        adapterQualifiesForInfraInterruptRelief(latestRun ?? {})
+        adapterQualifiesForInfraInterruptRelief(latestRun ?? {}) &&
+        !infraInterruptStopUnconfirmed(latestRun ?? {})
       ) {
         // getLatestIssueRun's projection omits scheduledRetryAttempt; read it
         // directly for the one run this candidate already resolved.

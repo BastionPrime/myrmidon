@@ -28,6 +28,11 @@
  * unknown adapter type is treated the same as a non-qualifying one: this
  * exception never assumes a safety it cannot see.
  *
+ * The exception also stays out of the way while the provider stop is only
+ * requested, not confirmed (infraInterruptStopUnconfirmed): the next turn --
+ * a resume, or a new assignee after a reassignment -- could otherwise
+ * overlap the old turn that has not actually stopped.
+ *
  * Setting: MYRMIDON_INFRA_INTERRUPT_CODES, docs/myrmidon/SETTINGS.md.
  */
 
@@ -173,20 +178,46 @@ export function adapterQualifiesForInfraInterruptRelief(run: AdapterClaimingRun)
 }
 
 /**
+ * True when the run's provider stop was requested but never confirmed:
+ * heartbeat.ts writes `resultJson.executionCancellation.state = "requested"`
+ * when it cancels a run through the adapter's execution control, and only
+ * moves it to "acknowledged" once the provider is proven stopped
+ * (acknowledgeRemoteStop, or the adapter's own settlement). While it is still
+ * "requested" the old turn may be running, so the vendor's hold is the only
+ * thing keeping a next turn from overlapping it. An absent state is not
+ * "requested": cancelling without adapter control either writes
+ * "acknowledged" (a process this server holds, killed and awaited) or writes
+ * nothing (no process handle to stop), so absence carries no "stop is still
+ * pending" signal to act on. Reads the field defensively: `resultJson` may be
+ * null, or arrive as an unparsed value from a narrow projection.
+ */
+export function infraInterruptStopUnconfirmed(run: { resultJson?: unknown }): boolean {
+  const resultJson = run.resultJson;
+  if (!resultJson || typeof resultJson !== "object") return false;
+  const cancellation = (resultJson as Record<string, unknown>).executionCancellation;
+  if (!cancellation || typeof cancellation !== "object") return false;
+  return (cancellation as Record<string, unknown>).state === "requested";
+}
+
+/**
  * True when a run terminated by an infrastructure interruption should skip
  * the vendor's reconciliation hold: legacyExecutionNeedsReconciliation
  * (legacy-execution-recovery.ts) and the stranded-assigned-issue escalation
  * (services/recovery/service.ts) both call this with the same run shape.
  * Gated by adapterQualifiesForInfraInterruptRelief -- see the module comment
- * above for why a non-conversation adapter never qualifies here.
+ * above for why a non-conversation adapter never qualifies here -- and by
+ * infraInterruptStopUnconfirmed: a run whose provider stop is still only
+ * requested keeps the vendor's hold.
  */
 export function shouldSkipReconciliationForInfraInterrupt(
-  run: RetryBudgetRun & AdapterClaimingRun & { errorCode?: string | null },
+  run: RetryBudgetRun &
+    AdapterClaimingRun & { errorCode?: string | null; resultJson?: unknown },
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return (
     isInfraInterruptErrorCode(run.errorCode, env) &&
     adapterQualifiesForInfraInterruptRelief(run) &&
+    !infraInterruptStopUnconfirmed(run) &&
     !infraInterruptRetryBudgetExhausted(run, DEFAULT_INFRA_INTERRUPT_RETRY_BUDGET)
   );
 }
@@ -200,7 +231,8 @@ export function shouldSkipReconciliationForInfraInterrupt(
  * above, never for this.
  */
 export function shouldRetryOriginalExecutorForInfraInterrupt(
-  run: RetryBudgetRun & AdapterClaimingRun & { errorCode?: string | null },
+  run: RetryBudgetRun &
+    AdapterClaimingRun & { errorCode?: string | null; resultJson?: unknown },
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (run.errorCode === REASSIGNMENT_INTERRUPT_ERROR_CODE) return false;
