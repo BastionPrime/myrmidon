@@ -237,7 +237,6 @@ import {
   refuseUnlinkedTelegramDm,
   type TelegramDmBridgeDeps,
 } from "../myrmidon/agent-chat-bridge/bridge.js";
-import { telegramDmConversationsEnabled } from "../myrmidon/agent-chat-bridge/settings.js";
 import {
   authorizeNativeChatReviewPresentation,
   NativeChatReviewPresentationContentionError,
