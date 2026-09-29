@@ -49,7 +49,11 @@ Docker socket, no host mounts, and no media tools.
   and hindsight memory (`plugins/memory/hindsight/__init__.py`,
   `is_available()`) — so the builder also runs
   `python -c 'import aiohttp, mcp, hindsight_client'` against the synced
-  venv, to fail the build instead of shipping that silent regression.
+  venv, to fail the build instead of shipping that silent regression. A second
+  smoke imports every module a patch in `patches/` changes (`hermes_state`,
+  `plugins.memory.hindsight`, `tools.environments.base`,
+  `tools.environments.base_session_env`), because `git apply` only proves the
+  hunks land, not that the patched module still imports.
 - Bundled skills (`skills/` in the hermes source tree — 14 categories at
   `0.21.2`/`v2026.9.11`), read-only. They are **not** shipped via PyPI package-data
   (hermes' `pyproject.toml` package-data list does not include `skills/**`
