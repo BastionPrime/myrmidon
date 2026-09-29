@@ -81,6 +81,22 @@ export const agentWakeupRequests = pgTable(
     toolActionDeliveryIdempotencyUq: uniqueIndex("agent_wakeup_requests_tool_action_delivery_uq")
       .on(table.companyId, table.idempotencyKey)
       .where(sql`${table.idempotencyKey} LIKE 'tool-action-response:%' AND ${table.status} NOT IN ('skipped', 'failed', 'cancelled')`),
+    // myrmidon(WAKE-KEYS-UNIQUE): the pause-resume wake (pause-drain.ts) and
+    // the stranded auto-policy retry wake (stranded-autopolicy.ts) are keyed
+    // per issue, but two racers decide from a snapshot they read before the
+    // insert, so the caller-side checks cannot close the window. Terminal
+    // wakes stay out of the predicate: a refused or failed wake must not block
+    // the next legitimate one.
+    pauseResumeIdempotencyUq: uniqueIndex(
+      "agent_wakeup_requests_pause_resume_idempotency_uq",
+    )
+      .on(table.companyId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} LIKE 'pause_resume:%' AND ${table.status} NOT IN ('skipped', 'failed', 'cancelled')`),
+    strandedAutopolicyRetryIdempotencyUq: uniqueIndex(
+      "agent_wakeup_requests_stranded_autopolicy_retry_idempotency_uq",
+    )
+      .on(table.companyId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} LIKE 'myrmidon.stranded_autopolicy_retry:%' AND ${table.status} NOT IN ('skipped', 'failed', 'cancelled')`),
     companyPayloadIssueIdx: index("agent_wakeup_requests_company_payload_issue_idx").on(
       table.companyId,
       sql`(${table.payload} ->> 'issueId')`,
