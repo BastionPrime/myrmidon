@@ -64,6 +64,11 @@ function fake(options: FakeOptions = {}) {
   return { deps, state };
 }
 
+/** Every call of the fake that changes something (a read is not one). */
+function isWrite(call: string): boolean {
+  return call === "createKey" || call.startsWith("revokeKey:") || call === "createSecret" || call === "rotateSecret";
+}
+
 const ACTIVE_KEY: FakeKey = { id: "key-1", name: BOT_AGENT_API_KEY_NAME, token: "token-1", revoked: false };
 const REVOKED_KEY: FakeKey = { id: "key-0", name: BOT_AGENT_API_KEY_NAME, token: "token-0", revoked: true };
 
@@ -80,7 +85,7 @@ describe("myrmidon(W2a) ensureBotAgentKey", () => {
   it("writes nothing when the secret holds the token of an active key", async () => {
     const { deps, state } = fake({ keys: [ACTIVE_KEY], secret: { secretId: "secret-1", value: "token-1" } });
     expect(await ensureBotAgentKey(deps, AGENT_ID)).toEqual({ value: "token-1", warnings: [] });
-    expect(state.calls.filter((call) => call.startsWith("revokeKey") || call === "createKey" || call.endsWith("Secret"))).toEqual([]);
+    expect(state.calls.filter(isWrite)).toEqual([]);
   });
 
   it("issues a new key, rotates the secret and leaves the old token unused when the key was revoked", async () => {
@@ -188,6 +193,6 @@ describe("myrmidon(W2a) ensureBotAgentKey", () => {
     const second = await ensureBotAgentKey(deps, AGENT_ID);
     expect(second.value).toBe(first.value);
     const later = state.calls.slice(callsAfterFirst);
-    expect(later.some((call) => call === "createKey" || call.startsWith("revokeKey") || call.endsWith("Secret"))).toBe(false);
+    expect(later.filter(isWrite)).toEqual([]);
   });
 });
