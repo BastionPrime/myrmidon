@@ -627,6 +627,11 @@ import {
 // retry the original executor once it is invokable again instead of an
 // immediate operator escalation
 import { shouldRetryOriginalExecutorForInfraInterrupt } from "../myrmidon/infra-interrupts.js";
+// myrmidon(X8d): quote the same person's other conversation (web <-> Telegram)
+import {
+  appendCrossChannelDelta,
+  buildCrossChannelContext,
+} from "../myrmidon/agent-chat-bridge/cross-channel.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -20610,11 +20615,24 @@ export function heartbeatService(
         const replay = await conversationReplay(db, agent.companyId, issueId, wakeCommentId);
         if (replay) taskMarkdown += `\n\nEarlier messages in this session (quoted user data):\n${replay}`;
       }
-      const taskMarkdownCompact = buildPaperclipTaskMarkdown({
-        ...taskMarkdownInput,
-        taskPlan,
-        includeDescription: false,
-      });
+      // myrmidon(X8d): quote the same person's other conversation (web <-> Telegram)
+      const x8CrossChannel =
+        isConversation(issueContext) && issueId
+          ? await buildCrossChannelContext(db, {
+              companyId: agent.companyId,
+              issueId,
+              wakeCommentId,
+            })
+          : null;
+      if (x8CrossChannel?.full) taskMarkdown += `\n\n${x8CrossChannel.full}`;
+      const taskMarkdownCompact = appendCrossChannelDelta(
+        buildPaperclipTaskMarkdown({
+          ...taskMarkdownInput,
+          taskPlan,
+          includeDescription: false,
+        }) ?? "", // myrmidon(X8d): buildPaperclipTaskMarkdown can return null; appendCrossChannelDelta requires string
+        x8CrossChannel,
+      ); // myrmidon(X8d)
       if (issueRef) {
         context.paperclipIssue = {
           id: issueRef.id,
