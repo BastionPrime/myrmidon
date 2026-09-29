@@ -146,12 +146,21 @@ runtime by `hermes_cli/plugin_catalog.py`.
 ## Patches
 
 `patches/*.patch` are applied (`git apply`) against the cloned tag before
-`uv sync`. Two are ported at 1.1.0 — a hindsight `reflect` timeout/retry
-fix and a session-snapshot secret redaction — see `patches/README.md` for
-what each does and why. A reference checkout carries further local
-modifications beyond these two (CLI/agent-loop helper code, some tool
-behavior) that are **not yet** ported; `patches/README.md` flags this as a
-known gap for a maintainer/later phase, not silently dropped.
+`uv sync`. Four are ported: a hindsight `reflect` timeout/retry fix (01), a
+session-snapshot secret redaction (02), the configured `retain_async` in the
+explicit hindsight retain tool (03), and a bounded retry of state-database
+reads that find the database locked (04). See `patches/README.md` for what
+each does and why.
+
+A reference checkout carries further local modifications. A plain tree diff of
+it against the pinned tag (no repository history is needed) gives a closed
+list, and `patches/README.md` decides every file on it: ported (above), or not
+needed in this image with the reason — the `reasoning_content` storage
+optimization in `agent/chat_completion_helpers.py` (storage only, not a fix),
+the CLI query-label escape in `cli.py` (this image never runs that path), and
+the browser tool's socket-directory files `tools/browser_tool.py` and
+`tools/browser_tool_session.py` (the image ships no browser). As of that
+comparison nothing is left as an open gap.
 
 ## Required environment
 

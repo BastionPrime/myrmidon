@@ -154,7 +154,89 @@ describe("docker/bot-runtime/patches/", () => {
       // CONVENTIONS.md §9/§10: no internal ticket numbers or company-specific names
       // in a patch that lands in the open repository.
       assert.doesNotMatch(patch, /\bOPE-\d+\b/, `${file} must not carry an internal ticket number`);
+      // Comments in code are English (CONVENTIONS.md §8); a Cyrillic comment means a
+      // reference-checkout patch was copied instead of rewritten.
+      assert.doesNotMatch(patch, /[\u0400-\u04FF]/, `${file} must be written in English`);
+      // Every edit to hermes code carries the fork label (CONVENTIONS.md §8).
+      assert.match(patch, /myrmidon\(G1\)/, `${file} must carry the myrmidon(G1) label`);
     }
+  });
+
+  it("orders the patches by their two-digit prefix, one number each", () => {
+    // The Dockerfile applies patches in sorted filename order; a duplicated or
+    // unnumbered prefix would make the order accidental.
+    const files = fs.readdirSync(path.join(IMAGE_DIR, "patches")).filter((f) => f.endsWith(".patch"));
+    const numbers = files.map((f) => f.match(/^(\d\d)-/)?.[1]);
+    assert.ok(numbers.every((n) => n !== undefined), `every patch needs an NN- prefix: ${files.join(", ")}`);
+    assert.equal(new Set(numbers).size, numbers.length, "patch numbers must be unique");
+    assert.deepEqual(numbers, [...numbers].sort());
+  });
+
+  it("passes the configured retain_async from the explicit hindsight retain tool", () => {
+    // The tool path used to omit retain_async, so the client default applied and every
+    // explicit retain ran synchronously (bounded only by the shared client timeout).
+    // With memory_mode "tools" and auto_retain off this tool is the only retain path.
+    const patch = fs.readFileSync(
+      path.join(IMAGE_DIR, "patches/03-hindsight-tool-retain-async.patch"),
+      "utf8",
+    );
+    assert.match(patch, /^\+\+\+ b\/plugins\/memory\/hindsight\/__init__\.py$/m);
+    assert.match(patch, /^-\s+self\._retain_batch\(item, bank_id=self\._bank_id\)$/m);
+    assert.match(patch, /^\+\s+self\._retain_batch\(item, bank_id=self\._bank_id, retain_async=self\._retain_async\)$/m);
+  });
+
+  it("retries a state-database read that finds the database locked, with fixed bounds", () => {
+    // Two concurrent runs of one agent (a writer and a session-history reader) made the
+    // reader fail with "database is locked": the read path replayed only "disk I/O error".
+    const patch = fs.readFileSync(
+      path.join(IMAGE_DIR, "patches/04-state-read-retry-when-locked.patch"),
+      "utf8",
+    );
+    assert.match(patch, /^\+\+\+ b\/hermes_state\.py$/m);
+    assert.match(patch, /^\+_READ_LOCKED_MARKERS = \("database is locked", "database is busy"\)$/m);
+    assert.match(patch, /^\+_READ_LOCKED_RETRY_ATTEMPTS = 15$/m);
+    assert.match(patch, /^\+_READ_LOCKED_RETRY_CAP_S = 1\.0$/m);
+    // The wait is jittered and bounded, and any other OperationalError is still raised at once.
+    assert.match(patch, /^\+\s+time\.sleep\(delay \* \(0\.5 \+ random\.random\(\)\)\)$/m);
+    assert.match(patch, /^\+\s+raise$/m);
+    // No new environment knobs: every such variable would need its own documented setting.
+    assert.doesNotMatch(patch, /^\+.*os\.environ/m);
+  });
+
+  it("documents every patch in patches/README.md and closes the reference-checkout gap", () => {
+    const patchesDir = path.join(IMAGE_DIR, "patches");
+    const readme = fs.readFileSync(path.join(patchesDir, "README.md"), "utf8");
+    const mainReadme = fs.readFileSync(path.join(IMAGE_DIR, "README.md"), "utf8");
+    for (const file of fs.readdirSync(patchesDir).filter((f) => f.endsWith(".patch"))) {
+      assert.ok(readme.includes(`\`${file}\``), `patches/README.md must list ${file}`);
+    }
+    // A tree diff of the reference checkout against the pinned tag gives a closed list of
+    // files; the README decides every one of them (ported, or not needed and why).
+    for (const file of [
+      "hermes_state.py",
+      "agent/chat_completion_helpers.py",
+      "cli.py",
+      "tools/browser_tool.py",
+      "tools/browser_tool_session.py",
+      "plugins/memory/hindsight/README.md",
+    ]) {
+      assert.ok(readme.includes(`\`${file}\``), `patches/README.md must decide ${file}`);
+    }
+    // The old text called the remainder an open gap that needs the full history; it is a
+    // closed list obtained by a plain tree diff.
+    for (const text of [readme, mainReadme]) {
+      assert.doesNotMatch(text, /not yet\*\* ported/i);
+      assert.doesNotMatch(text, /known gap/i);
+      assert.doesNotMatch(text, /full (local )?history/i);
+      assert.doesNotMatch(text, /full access to that checkout/i);
+    }
+  });
+
+  it("ships no browser, which is why the browser-tool socket patches are not carried", () => {
+    // patches/README.md leaves tools/browser_tool*.py unported because the image has no
+    // agent-browser CLI, Node or Chromium. If a browser is ever added, this fails: port
+    // those two files together with it.
+    assert.doesNotMatch(dockerfileInstructions, /chromium|playwright|agent-browser|nodejs|\bnpm\b|\bnpx\b/i);
   });
 });
 
