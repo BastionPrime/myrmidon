@@ -634,6 +634,16 @@ export const chatMessageLinks = pgTable(
       foreignColumns: [chatConversations.companyId, chatConversations.id],
       name: "chat_message_links_company_conversation_fk",
     }).onDelete("cascade"),
+    // myrmidon(D1): the chat run-milestone reconciliation sweep looks up an
+    // inbound link by (company, conversation, direction, comment) on every
+    // candidate run it considers; without this index that lookup fell back
+    // to a full table scan. See docs/myrmidon/DIVERGENCE.md.
+    index("chat_message_links_inbound_link_idx").on(
+      table.companyId,
+      table.conversationId,
+      table.direction,
+      table.commentId,
+    ),
   ],
 );
 
@@ -669,6 +679,20 @@ export const chatActions = pgTable(
     uniqueIndex("chat_actions_provider_action_uq").on(
       table.endpointId,
       table.providerActionId,
+    ),
+    // myrmidon(D1): the inbound-wakeup notice sweep
+    // (enqueueInboundWakeupPublications) filters chat_actions by
+    // (kind, status) and orders/keyset-scans by (created_at, id), resetting
+    // to a start-of-table scan whenever a page doesn't fill the requested
+    // limit (rows can resolve eligible out of created_at order); without
+    // this index both the keyset page and the start-of-table scan fell
+    // back to a sequential scan of the whole table. See
+    // docs/myrmidon/DIVERGENCE.md.
+    index("chat_actions_inbound_wakeup_sweep_idx").on(
+      table.kind,
+      table.status,
+      table.createdAt,
+      table.id,
     ),
     foreignKey({
       columns: [table.companyId, table.deliveryId],
