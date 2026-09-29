@@ -617,7 +617,7 @@ import { hasOtherActionableWork, skipIdleHeartbeatsEnabled } from "../myrmidon/h
 import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
 // myrmidon(L3): pause drains instead of cancelling; resume wakes stranded work
 import {
-  isAgentNotInvokableConflict,
+  isSkippableStartupRecoveryConflict,
   resumeAgentAfterPause as pauseResumeWakeAgent,
 } from "../myrmidon/pause-drain.js";
 // myrmidon(L1): an agent pause is infrastructure, not a provider failure;
@@ -19210,9 +19210,12 @@ export function heartbeatService(
       );
     let enqueued = 0;
     for (const session of sessions) {
-      // myrmidon(L3): a paused (or otherwise non-invokable) agent must not
-      // crash startup recovery for every other agent; skip it here, resume
-      // wakes its stranded work later (myrmidon/pause-drain.ts)
+      // myrmidon(L3): a non-invokable agent (paused, ...) or one blocked by a
+      // budget hard-stop must not crash startup recovery for every other
+      // agent on the instance; skip it here. A paused agent's stranded work
+      // is woken later on resume (myrmidon/pause-drain.ts); a budget block
+      // clears itself once the policy is resolved and the next scheduled
+      // wakeup or resweep picks the session goal back up.
       let run: Awaited<ReturnType<typeof enqueueWakeup>> | null = null;
       try {
         run = await enqueueWakeup(session.agentId, {
@@ -19230,10 +19233,10 @@ export function heartbeatService(
           },
         });
       } catch (err) {
-        if (!isAgentNotInvokableConflict(err)) throw err;
+        if (!isSkippableStartupRecoveryConflict(err)) throw err;
         logger.warn(
           { agentId: session.agentId, sessionId: session.id },
-          "startup session-goal recovery skipped a non-invokable agent",
+          "startup session-goal recovery skipped a blocked agent",
         );
       }
       if (run) enqueued += 1;
@@ -19325,9 +19328,9 @@ export function heartbeatService(
         continue;
       }
 
-      // myrmidon(L3): a paused (or otherwise non-invokable) agent must not
-      // crash startup recovery for every other agent; skip it here, resume
-      // wakes its stranded work later (myrmidon/pause-drain.ts)
+      // myrmidon(L3): a non-invokable agent (paused, ...) or one blocked by a
+      // budget hard-stop must not crash startup recovery for every other
+      // agent on the instance; skip it here (myrmidon/pause-drain.ts).
       let run: Awaited<ReturnType<typeof enqueueWakeup>> | null = null;
       try {
         run = await enqueueWakeup(action.agentId, {
@@ -19354,10 +19357,10 @@ export function heartbeatService(
           },
         });
       } catch (err) {
-        if (!isAgentNotInvokableConflict(err)) throw err;
+        if (!isSkippableStartupRecoveryConflict(err)) throw err;
         logger.warn(
           { agentId: action.agentId, actionId: action.id },
-          "startup session-goal action recovery skipped a non-invokable agent",
+          "startup session-goal action recovery skipped a blocked agent",
         );
       }
       if (run) enqueued += 1;

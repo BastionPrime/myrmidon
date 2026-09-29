@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { HttpError } from "../errors.js";
 import {
   isAgentNotInvokableConflict,
+  isBudgetBlockConflict,
+  isSkippableStartupRecoveryConflict,
   readCancelActiveRequested,
   readPauseDrainsEnabled,
   shouldCancelActiveRunsOnOperatorPause,
@@ -87,5 +89,72 @@ describe("isAgentNotInvokableConflict", () => {
     expect(isAgentNotInvokableConflict(new Error("boom"))).toBe(false);
     expect(isAgentNotInvokableConflict(new HttpError(409, "no details"))).toBe(false);
     expect(isAgentNotInvokableConflict("not an error")).toBe(false);
+  });
+
+  // myrmidon(L3): it must not match the OTHER 409 `enqueueWakeup` throws —
+  // a budget-block conflict has no `reason`/`status` details fields at all
+  // (its reason text is the HttpError message), which is exactly why
+  // startup recovery re-threw it uncaught before `isBudgetBlockConflict`.
+  it("does not match a budget-block conflict (that is isBudgetBlockConflict's job)", () => {
+    expect(
+      isAgentNotInvokableConflict(
+        new HttpError(409, "Company is paused because its budget hard-stop was reached.", {
+          scopeType: "company",
+          scopeId: "company-a",
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("isBudgetBlockConflict", () => {
+  it("matches the 409 enqueueWakeup throws for a company/agent/project budget hard-stop", () => {
+    for (const scopeType of ["company", "agent", "project"] as const) {
+      const err = new HttpError(409, "Budget hard-stop reached", { scopeType, scopeId: "scope-a" });
+      expect(isBudgetBlockConflict(err)).toBe(true);
+    }
+  });
+
+  it("does not match the agent-invokability 409, other statuses, or a plain error", () => {
+    expect(
+      isBudgetBlockConflict(
+        new HttpError(409, "Agent is not invokable in its current state", { status: "paused", reason: "paused" }),
+      ),
+    ).toBe(false);
+    expect(isBudgetBlockConflict(new HttpError(409, "Budget hard-stop reached", { scopeType: "unknown-scope" })))
+      .toBe(false);
+    expect(
+      isBudgetBlockConflict(new HttpError(403, "Forbidden", { scopeType: "company", scopeId: "company-a" })),
+    ).toBe(false);
+    expect(isBudgetBlockConflict(new Error("boom"))).toBe(false);
+    expect(isBudgetBlockConflict(new HttpError(409, "no details"))).toBe(false);
+    expect(isBudgetBlockConflict("not an error")).toBe(false);
+  });
+});
+
+describe("isSkippableStartupRecoveryConflict", () => {
+  it("matches either 409 shape that startup session-goal recovery must skip instead of crash", () => {
+    expect(
+      isSkippableStartupRecoveryConflict(
+        new HttpError(409, "Agent is not invokable in its current state", { status: "paused", reason: "paused" }),
+      ),
+    ).toBe(true);
+    expect(
+      isSkippableStartupRecoveryConflict(
+        new HttpError(409, "Company is paused because its budget hard-stop was reached.", {
+          scopeType: "company",
+          scopeId: "company-a",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not swallow an unrelated error", () => {
+    expect(isSkippableStartupRecoveryConflict(new Error("boom"))).toBe(false);
+    expect(
+      isSkippableStartupRecoveryConflict(
+        new HttpError(422, "Unable to resolve responsible user for heartbeat run dispatch"),
+      ),
+    ).toBe(false);
   });
 });
