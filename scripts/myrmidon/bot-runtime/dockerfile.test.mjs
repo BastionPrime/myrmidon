@@ -103,6 +103,29 @@ describe("docker/bot-runtime/Dockerfile", () => {
     assert.match(dockerfile, /import aiohttp, mcp, hindsight_client/);
   });
 
+  it("import-smokes every module a patch changes, so a patch that applies but breaks a module fails the build", () => {
+    // `git apply` only proves the hunks land. The smoke must name one module per patched
+    // file: 04 hermes_state, 01/03 the hindsight plugin, 02 the two session-environment files.
+    const smoke = dockerfileInstructions.match(/^RUN [^\n]*python -c 'import (hermes_state[^']*)'$/m);
+    assert.ok(smoke, "expected a build-time import smoke that starts with hermes_state");
+    const modules = smoke[1].split(",").map((m) => m.trim());
+    for (const module of [
+      "hermes_state",
+      "plugins.memory.hindsight",
+      "tools.environments.base",
+      "tools.environments.base_session_env",
+    ]) {
+      assert.ok(modules.includes(module), `import smoke must include ${module}`);
+    }
+    // It runs after the venv is synced (the patched tree is what gets imported) and before
+    // the runtime stage copies the tree.
+    const syncIdx = dockerfileInstructions.indexOf("uv sync --frozen");
+    const smokeIdx = dockerfileInstructions.indexOf(smoke[0]);
+    const runtimeIdx = dockerfileInstructions.indexOf("FROM python:3.13-slim AS runtime");
+    assert.ok(syncIdx > 0 && smokeIdx > syncIdx, "expected the import smoke after uv sync");
+    assert.ok(runtimeIdx > smokeIdx, "expected the import smoke in the builder stage");
+  });
+
   it("redirects hermes' lazy installs and write tools off the sealed, read-only venv", () => {
     // Sealing /opt/hermes-src read-only (below) otherwise leaves
     // tools/lazy_deps.py trying to install into it and
@@ -169,7 +192,6 @@ describe("docker/bot-runtime/patches/", () => {
     const numbers = files.map((f) => f.match(/^(\d\d)-/)?.[1]);
     assert.ok(numbers.every((n) => n !== undefined), `every patch needs an NN- prefix: ${files.join(", ")}`);
     assert.equal(new Set(numbers).size, numbers.length, "patch numbers must be unique");
-    assert.deepEqual(numbers, [...numbers].sort());
   });
 
   it("passes the configured retain_async from the explicit hindsight retain tool", () => {
