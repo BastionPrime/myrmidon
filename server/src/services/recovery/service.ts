@@ -80,6 +80,16 @@ import {
   legacyExecutionNeedsReconciliation,
   terminalizeLegacyExecution,
 } from "../legacy-execution-recovery.js";
+// myrmidon(L1): infrastructure interruptions do not create a stranded-issue
+// escalation while the original agent is only briefly non-invokable (paused)
+// -- gated to a conversation adapter or one with its own idempotency key,
+// see infra-interrupts.ts's module comment
+import {
+  adapterQualifiesForInfraInterruptRelief,
+  infraInterruptRetryBudgetExhausted,
+  infraInterruptStopUnconfirmed,
+  isInfraInterruptErrorCode,
+} from "../../myrmidon/infra-interrupts.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
 import { isExternalChatPresentationContext } from "../heartbeat-run-summary.js";
 import {
@@ -239,6 +249,9 @@ type LatestIssueRun =
       | "livenessState"
       | "startedAt"
       | "createdAt"
+      // myrmidon(L1): claimedAdapterType's input, so the L1 branch below can
+      // gate hold suppression on the run's own adapter
+      | "runnerProfileJson"
     > & {
       resultJson?: unknown;
     })
@@ -982,6 +995,8 @@ export function recoveryService(
         resultJson: heartbeatRuns.resultJson,
         startedAt: heartbeatRuns.startedAt,
         createdAt: heartbeatRuns.createdAt,
+        // myrmidon(L1): claimedAdapterType's input, see LatestIssueRun
+        runnerProfileJson: heartbeatRuns.runnerProfileJson,
       })
       .from(heartbeatRuns)
       .where(
@@ -1012,6 +1027,8 @@ export function recoveryService(
         resultJson: heartbeatRuns.resultJson,
         startedAt: heartbeatRuns.startedAt,
         createdAt: heartbeatRuns.createdAt,
+        // myrmidon(L1): claimedAdapterType's input, see LatestIssueRun
+        runnerProfileJson: heartbeatRuns.runnerProfileJson,
       })
       .from(heartbeatRuns)
       .where(
@@ -1843,6 +1860,8 @@ export function recoveryService(
         resultJson: heartbeatRuns.resultJson,
         startedAt: heartbeatRuns.startedAt,
         createdAt: heartbeatRuns.createdAt,
+        // myrmidon(L1): claimedAdapterType's input, see LatestIssueRun
+        runnerProfileJson: heartbeatRuns.runnerProfileJson,
       })
       .from(heartbeatRuns)
       .where(
@@ -4733,6 +4752,55 @@ export function recoveryService(
       ) {
         result.skipped += 1;
         continue;
+      }
+      // myrmidon(L1): the agent is non-invokable only because it is paused
+      // (infrastructure), and the terminal run itself ended on an
+      // infrastructure interrupt code within its retry budget, on a run
+      // whose own claimed adapter can safely take a blind retry (a
+      // conversation adapter, or one with its own idempotency key -- see
+      // infra-interrupts.ts's module comment). This is not evidence against
+      // the agent, so wait for it to resume instead of escalating to the
+      // board; the next sweep tick re-evaluates. A non-qualifying or unknown
+      // adapter (process, http, openclaw_gateway, …) falls through to the
+      // vendor's escalation below: retrying it here could replay whatever
+      // external action the interrupted run already took. So does a run whose
+      // provider stop is only requested, not confirmed: the resumed agent's
+      // next turn could overlap the old one that has not stopped.
+      if (
+        issue.status !== "in_review" &&
+        !agentInvokable &&
+        agent?.status === "paused" &&
+        isInfraInterruptErrorCode(latestRun?.errorCode ?? null) &&
+        adapterQualifiesForInfraInterruptRelief(latestRun ?? {}) &&
+        !infraInterruptStopUnconfirmed(latestRun ?? {})
+      ) {
+        // getLatestIssueRun's projection omits scheduledRetryAttempt; read it
+        // directly for the one run this candidate already resolved.
+        // scheduledRetryReason travels with it so the shared budget check
+        // (executionFailureRetryCount) sees the exact same run shape
+        // legacyExecutionNeedsReconciliation uses elsewhere -- otherwise a
+        // run left over from a workspace_busy/ai_connection_busy wait, whose
+        // raw scheduledRetryAttempt column runs ahead of the failure count
+        // preserved in contextSnapshot, would make this call site disagree
+        // with the vendor gate about whether the budget is exhausted.
+        const scheduledRetryColumns = await db
+          .select({
+            scheduledRetryAttempt: heartbeatRuns.scheduledRetryAttempt,
+            scheduledRetryReason: heartbeatRuns.scheduledRetryReason,
+          })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, latestRun!.id))
+          .then((rows) => rows[0] ?? null);
+        if (
+          !infraInterruptRetryBudgetExhausted({
+            scheduledRetryAttempt: scheduledRetryColumns?.scheduledRetryAttempt ?? null,
+            scheduledRetryReason: scheduledRetryColumns?.scheduledRetryReason ?? null,
+            contextSnapshot: latestRun!.contextSnapshot,
+          })
+        ) {
+          result.skipped += 1;
+          continue;
+        }
       }
       if (issue.status !== "in_review" && !agentInvokable) {
         const classification = classifyContinuationFailure(latestRun);
