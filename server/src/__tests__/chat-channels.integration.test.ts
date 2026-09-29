@@ -64426,73 +64426,51 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     // and never reset, it would exclude A from every later call once A's
     // owner also goes deferred — even though A's chat_actions row was
     // created first. See enqueueInboundWakeupPublications's cursor comment.
+    // Each of the two conversations below sends exactly one message, so
+    // each wakeup is always its own (never-coalesced) owner — no need for
+    // deferredChatQueueFixture's owner-lookup-by-conversation bookkeeping.
+    // Both conversations are threads of the SAME channel: on a verifying
+    // endpoint only the first channel is auto-enabled as the setup
+    // destination, so a message in a second channel would be filtered before
+    // it ever staged a wakeup.
     const fixture = await seedCompany();
-    const owners = new Map<string, string>();
     const configured = await configuredSlackEndpoint(fixture, {
       wakeup: async (agentId, opts) => {
-        const conversationKey = String(
-          opts.contextSnapshot?.issueId ?? opts.payload?.issueId ?? "",
-        );
         const request = opts.durableChatRequest!;
         await db.transaction(async (tx) => {
           await request.authorize(
             tx as unknown as Parameters<typeof request.authorize>[0],
           );
-          const existingOwnerId = owners.get(conversationKey) ?? null;
-          const [owner] = existingOwnerId
-            ? await tx
-                .select()
-                .from(agentWakeupRequests)
-                .where(eq(agentWakeupRequests.id, existingOwnerId))
-            : [];
-          const existingContext = owner?.payload?._paperclipWakeContext as
-            Record<string, unknown> | undefined;
-          const commentIds = [
-            ...(Array.isArray(existingContext?.wakeCommentIds)
-              ? existingContext.wakeCommentIds
-              : []),
-            request.commentId,
-          ];
-          const payload = {
-            ...opts.payload,
-            _paperclipWakeContext: {
-              ...opts.contextSnapshot,
-              wakeCommentIds: commentIds,
-            },
-          };
-          if (owner)
-            await tx
-              .update(agentWakeupRequests)
-              .set({ payload, coalescedCount: owner.coalescedCount + 1 })
-              .where(eq(agentWakeupRequests.id, owner.id));
           await tx.insert(agentWakeupRequests).values({
             id: request.id,
             companyId: fixture.companyId,
             agentId,
             source: "assignment",
             reason: "issue_execution_deferred",
-            status: owner ? "coalesced" : "deferred_issue_execution",
-            payload: owner
-              ? { ...opts.payload, coalescedIntoWakeupRequestId: owner.id }
-              : payload,
+            status: "deferred_issue_execution",
+            payload: {
+              ...opts.payload,
+              _paperclipWakeContext: {
+                ...opts.contextSnapshot,
+                wakeCommentIds: [request.commentId],
+              },
+            },
             requestedByActorType: request.requestedByActorType,
             requestedByActorId: request.requestedByActorId,
             requestedAt: request.requestedAt,
             idempotencyKey: request.idempotencyKey,
           });
-          if (!owners.has(conversationKey))
-            owners.set(conversationKey, request.id);
         });
         return { accepted: true };
       },
     });
     const threadA = makeThread({
-      channelId: "C-STRAGGLER-A",
-      id: "slack:C-STRAGGLER-A:2000000.1",
+      channelId: "C-STRAGGLER",
+      id: "slack:C-STRAGGLER:2000000.1",
     });
     const threadB = makeThread({
-      channelId: "C-STRAGGLER-B",
-      id: "slack:C-STRAGGLER-B:2000001.1",
+      channelId: "C-STRAGGLER",
+      id: "slack:C-STRAGGLER:2000001.1",
     });
     await deliverMessage({
       callbacks: configured.callbacks,
