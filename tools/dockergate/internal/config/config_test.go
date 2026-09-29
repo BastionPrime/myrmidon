@@ -27,7 +27,7 @@ const goodJSON = `{
   "network": "bots-net",
   "images": ["ghcr.io/example/runtime@sha256:` + digest + `"],
   "bots": [
-    {"botKey": "3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e", "maxMemoryMb": 2048, "maxCpus": 2, "maxPids": 1024}
+    {"botKey": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "maxMemoryMb": 2048, "maxCpus": 2, "maxPids": 1024}
   ],
   "statsFile": "/run/dg-stats/stats.json"
 }`
@@ -60,7 +60,7 @@ func TestParseAccepts(t *testing.T) {
 	if got := c.Limits; got != config.DefaultLimits() {
 		t.Fatalf("limits are not the defaults: %+v", got)
 	}
-	b, ok := c.Bot("3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e")
+	b, ok := c.Bot("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 	if !ok || b.MaxMemoryMB != 2048 || b.MaxCPUs != 2 || b.MaxPids != 1024 {
 		t.Fatalf("bot: %+v %v", b, ok)
 	}
@@ -191,13 +191,13 @@ func TestParseRefuses(t *testing.T) {
 			return replace(t, goodJSON, img, img+`, `+img)
 		}},
 		{"bot key is not a uuid", func(t *testing.T) string {
-			return replace(t, goodJSON, `3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e`, `../etc`)
+			return replace(t, goodJSON, `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`, `../etc`)
 		}},
 		{"bot key in uppercase", func(t *testing.T) string {
-			return replace(t, goodJSON, `3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e`, `3F2B8C1E-4D5A-4B6C-8D7E-9F0A1B2C3D4E`)
+			return replace(t, goodJSON, `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`, `3F2B8C1E-4D5A-4B6C-8D7E-9F0A1B2C3D4E`)
 		}},
 		{"duplicate bot", func(t *testing.T) string {
-			b := `{"botKey": "3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e", "maxMemoryMb": 2048, "maxCpus": 2, "maxPids": 1024}`
+			b := `{"botKey": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "maxMemoryMb": 2048, "maxCpus": 2, "maxPids": 1024}`
 			return replace(t, goodJSON, b, b+`, `+b)
 		}},
 		{"zero memory ceiling", func(t *testing.T) string { return replace(t, goodJSON, `"maxMemoryMb": 2048`, `"maxMemoryMb": 0`) }},

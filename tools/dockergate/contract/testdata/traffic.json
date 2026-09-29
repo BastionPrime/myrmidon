@@ -12,7 +12,7 @@
  {
   "step": "create",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.next?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.next?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -22,7 +22,7 @@
  {
   "step": "create",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -32,7 +32,7 @@
  {
   "step": "create",
   "method": "POST",
-  "target": "/v1.45/containers/create?name=myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+  "target": "/v1.45/containers/create?name=myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -40,12 +40,12 @@
    "host": "localhost",
    "connection": "keep-alive"
   },
-  "bodyBase64": "eyJJbWFnZSI6ImdoY3IuaW8vaXRrYWRyLWdpdC9teXJtaWRvbi1oZXJtZXNAc2hhMjU2OjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJVc2VyIjoiMDowIiwiRW50cnlwb2ludCI6WyIvYmluL3NoIiwiLWMiXSwiQ21kIjpbInNldCAtZXVcbmNkIFwiJDFcIlxuZm9yIGQgaW4gZGF0YS9oZXJtZXMgd29ya3NwYWNlIHNjcmF0Y2g7IGRvXG4gIGNobW9kIDA3MDAgXCIkZFwiXG4gIGNob3duIDEwMDAxOjEwMDAxIFwiJGRcIlxuZG9uZSIsIm15cm1pZG9uLWhlbHBlciIsIi8iXSwiTGFiZWxzIjp7Im15cm1pZG9uLmJvdC1oZWxwZXIiOiIzZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUifSwiTmV0d29ya0Rpc2FibGVkIjp0cnVlLCJIb3N0Q29uZmlnIjp7Ik1lbW9yeSI6MTM0MjE3NzI4LCJQaWRzTGltaXQiOjY0LCJDYXBEcm9wIjpbIkFMTCJdLCJDYXBBZGQiOlsiQ0hPV04iLCJGT1dORVIiXSwiU2VjdXJpdHlPcHQiOlsibm8tbmV3LXByaXZpbGVnZXMiXSwiUmVhZG9ubHlSb290ZnMiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im5vIn0sIk5ldHdvcmtNb2RlIjoibm9uZSIsIkJpbmRzIjpbIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvaGVybWVzOi9kYXRhL2hlcm1lcyIsIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvd29ya3NwYWNlOi93b3Jrc3BhY2UiLCIvc3J2L215cm1pZG9uLWJvdHMvM2YyYjhjMWUtNGQ1YS00YjZjLThkN2UtOWYwYTFiMmMzZDRlL3NjcmF0Y2g6L3NjcmF0Y2giXSwiUHJpdmlsZWdlZCI6ZmFsc2V9fQ=="
+  "bodyBase64": "eyJJbWFnZSI6ImdoY3IuaW8vaXRrYWRyLWdpdC9teXJtaWRvbi1oZXJtZXNAc2hhMjU2OjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJVc2VyIjoiMDowIiwiRW50cnlwb2ludCI6WyIvYmluL3NoIiwiLWMiXSwiQ21kIjpbInNldCAtZXVcbmNkIFwiJDFcIlxuZm9yIGQgaW4gZGF0YS9oZXJtZXMgd29ya3NwYWNlIHNjcmF0Y2g7IGRvXG4gIGNobW9kIDA3MDAgXCIkZFwiXG4gIGNob3duIDEwMDAxOjEwMDAxIFwiJGRcIlxuZG9uZSIsIm15cm1pZG9uLWhlbHBlciIsIi8iXSwiTGFiZWxzIjp7Im15cm1pZG9uLmJvdC1oZWxwZXIiOiJhYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEifSwiTmV0d29ya0Rpc2FibGVkIjp0cnVlLCJIb3N0Q29uZmlnIjp7Ik1lbW9yeSI6MTM0MjE3NzI4LCJQaWRzTGltaXQiOjY0LCJDYXBEcm9wIjpbIkFMTCJdLCJDYXBBZGQiOlsiQ0hPV04iLCJGT1dORVIiXSwiU2VjdXJpdHlPcHQiOlsibm8tbmV3LXByaXZpbGVnZXMiXSwiUmVhZG9ubHlSb290ZnMiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im5vIn0sIk5ldHdvcmtNb2RlIjoibm9uZSIsIkJpbmRzIjpbIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvaGVybWVzOi9kYXRhL2hlcm1lcyIsIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvd29ya3NwYWNlOi93b3Jrc3BhY2UiLCIvc3J2L215cm1pZG9uLWJvdHMvYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhL3NjcmF0Y2g6L3NjcmF0Y2giXSwiUHJpdmlsZWdlZCI6ZmFsc2V9fQ=="
  },
  {
   "step": "create",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/start",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/start",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive",
@@ -56,7 +56,7 @@
  {
   "step": "create",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/wait?condition=not-running",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/wait?condition=not-running",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -69,7 +69,7 @@
  {
   "step": "create",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -79,7 +79,7 @@
  {
   "step": "create",
   "method": "POST",
-  "target": "/v1.45/containers/create?name=myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e",
+  "target": "/v1.45/containers/create?name=myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -87,12 +87,12 @@
    "host": "localhost",
    "connection": "keep-alive"
   },
-  "bodyBase64": "eyJJbWFnZSI6ImdoY3IuaW8vaXRrYWRyLWdpdC9teXJtaWRvbi1oZXJtZXNAc2hhMjU2OjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJMYWJlbHMiOnsibXlybWlkb24uYm90IjoiM2YyYjhjMWUtNGQ1YS00YjZjLThkN2UtOWYwYTFiMmMzZDRlIiwibXlybWlkb24uaW1hZ2UiOiJnaGNyLmlvL2l0a2Fkci1naXQvbXlybWlkb24taGVybWVzQHNoYTI1NjowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIn0sIkhvc3RDb25maWciOnsiTWVtb3J5IjoxMDczNzQxODI0LCJOYW5vQ3B1cyI6MTAwMDAwMDAwMCwiUGlkc0xpbWl0Ijo1MTIsIkNhcERyb3AiOlsiQUxMIl0sIlNlY3VyaXR5T3B0IjpbIm5vLW5ldy1wcml2aWxlZ2VzIl0sIlJlYWRvbmx5Um9vdGZzIjp0cnVlLCJUbXBmcyI6eyIvdG1wIjoiIn0sIkluaXQiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im9uLWZhaWx1cmUifSwiTmV0d29ya01vZGUiOiJteXJtaWRvbi1ib3RzIiwiQmluZHMiOlsiL3Nydi9teXJtaWRvbi1ib3RzLzNmMmI4YzFlLTRkNWEtNGI2Yy04ZDdlLTlmMGExYjJjM2Q0ZS9oZXJtZXM6L2RhdGEvaGVybWVzIiwiL3Nydi9teXJtaWRvbi1ib3RzLzNmMmI4YzFlLTRkNWEtNGI2Yy04ZDdlLTlmMGExYjJjM2Q0ZS93b3Jrc3BhY2U6L3dvcmtzcGFjZSIsIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvc2NyYXRjaDovc2NyYXRjaCJdLCJQcml2aWxlZ2VkIjpmYWxzZX19"
+  "bodyBase64": "eyJJbWFnZSI6ImdoY3IuaW8vaXRrYWRyLWdpdC9teXJtaWRvbi1oZXJtZXNAc2hhMjU2OjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJMYWJlbHMiOnsibXlybWlkb24uYm90IjoiYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhIiwibXlybWlkb24uaW1hZ2UiOiJnaGNyLmlvL2l0a2Fkci1naXQvbXlybWlkb24taGVybWVzQHNoYTI1NjowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIn0sIkhvc3RDb25maWciOnsiTWVtb3J5IjoxMDczNzQxODI0LCJOYW5vQ3B1cyI6MTAwMDAwMDAwMCwiUGlkc0xpbWl0Ijo1MTIsIkNhcERyb3AiOlsiQUxMIl0sIlNlY3VyaXR5T3B0IjpbIm5vLW5ldy1wcml2aWxlZ2VzIl0sIlJlYWRvbmx5Um9vdGZzIjp0cnVlLCJUbXBmcyI6eyIvdG1wIjoiIn0sIkluaXQiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im9uLWZhaWx1cmUifSwiTmV0d29ya01vZGUiOiJteXJtaWRvbi1ib3RzIiwiQmluZHMiOlsiL3Nydi9teXJtaWRvbi1ib3RzL2FhYWFhYWFhLWFhYWEtNGFhYS04YWFhLWFhYWFhYWFhYWFhYS9oZXJtZXM6L2RhdGEvaGVybWVzIiwiL3Nydi9teXJtaWRvbi1ib3RzL2FhYWFhYWFhLWFhYWEtNGFhYS04YWFhLWFhYWFhYWFhYWFhYS93b3Jrc3BhY2U6L3dvcmtzcGFjZSIsIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvc2NyYXRjaDovc2NyYXRjaCJdLCJQcml2aWxlZ2VkIjpmYWxzZX19"
  },
  {
   "step": "writeProfile-1",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -102,7 +102,7 @@
  {
   "step": "writeProfile-1",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/archive?path=%2Fdata%2Fhermes%2F.myrmidon%2Fapplied.json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/archive?path=%2Fdata%2Fhermes%2F.myrmidon%2Fapplied.json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -112,7 +112,7 @@
  {
   "step": "writeProfile-1",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -122,7 +122,7 @@
  {
   "step": "writeProfile-1",
   "method": "POST",
-  "target": "/v1.45/containers/create?name=myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+  "target": "/v1.45/containers/create?name=myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -130,12 +130,12 @@
    "host": "localhost",
    "connection": "keep-alive"
   },
-  "bodyBase64": "eyJJbWFnZSI6InNoYTI1NjpmZWRjYmE5ODc2NTQzMjEwZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTBmZWRjYmE5ODc2NTQzMjEwIiwiVXNlciI6IjEwMDAxOjEwMDAxIiwiRW50cnlwb2ludCI6WyIvYmluL3NoIiwiLWMiXSwiQ21kIjpbInNldCAtZXVcbnVtYXNrIDA3N1xuY2QgXCIkMVwiXG5uPTAxMjM0NTY3ODlhYmNkZWZcbiMgMS4gc3RhZ2luZyBmcm9tIGludGVycnVwdGVkIGVhcmxpZXIgYXBwbGllc1xuZm9yIHJvb3QgaW4gZGF0YS9oZXJtZXMgd29ya3NwYWNlIHNjcmF0Y2g7IGRvXG4gIGZvciBzdGFsZSBpbiBcIiRyb290XCIvLm15cm1pZG9uLW5leHQtKiBcIiRyb290XCIvLm15cm1pZG9uLWFwcGx5LSogXCIkcm9vdFwiLy5teXJtaWRvbi1vbGQtKjsgZG9cbiAgICBbIC1lIFwiJHN0YWxlXCIgXSB8fCBjb250aW51ZVxuICAgIGNhc2UgXCIke3N0YWxlI1wiJHJvb3RcIi99XCIgaW5cbiAgICAgIFwiLm15cm1pZG9uLW5leHQtJG5cIiB8IFwiLm15cm1pZG9uLWFwcGx5LSRuXCIpIDs7XG4gICAgICAqKSBybSAtcmYgLS0gXCIkc3RhbGVcIiA7O1xuICAgIGVzYWNcbiAgZG9uZVxuZG9uZVxuIyAyLiBjb21waWxlci1vd25lZCBkaXJlY3RvcmllcywgcmVwbGFjZWQgd2hvbGVzYWxlXG5zdGFnZWQ9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tbmV4dC0kbi9za2lsbHMtYm9hcmRcIlxubGl2ZT1cImRhdGEvaGVybWVzL3NraWxscy1ib2FyZFwiXG5pZiBbIC1kIFwiJHN0YWdlZFwiIF07IHRoZW5cbiAgb2xkPVwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLW9sZC0kblwiXG4gIG1rZGlyIC1wIC0tIFwiJG9sZFwiXG4gIGlmIFsgLWUgXCIkbGl2ZVwiIF0gfHwgWyAtTCBcIiRsaXZlXCIgXTsgdGhlbiBtdiAtZiAtVCAtLSBcIiRsaXZlXCIgXCIkb2xkLzBcIjsgZmlcbiAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkbGl2ZVwiKVwiXG4gIG12IC1mIC1UIC0tIFwiJHN0YWdlZFwiIFwiJGxpdmVcIlxuZmlcbiMgMy4gZXZlcnkgb3RoZXIgc3RhZ2VkIGZpbGUsIG9uZSBhdG9taWMgcmVuYW1lIGVhY2hcbmxpc3Q9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tYXBwbHktMDEyMzQ1Njc4OWFiY2RlZi9zdGFnZWQubGlzdFwiXG5mb3Igcm9vdCBpbiBkYXRhL2hlcm1lcyB3b3Jrc3BhY2Ugc2NyYXRjaDsgZG9cbiAgc3RhZ2luZz1cIiRyb290Ly5teXJtaWRvbi1uZXh0LSRuXCJcbiAgWyAtZCBcIiRzdGFnaW5nXCIgXSB8fCBjb250aW51ZVxuICAoY2QgXCIkc3RhZ2luZ1wiICYmIGZpbmQgLiAtdHlwZSBmKSA+IFwiJGxpc3RcIlxuICB3aGlsZSBJRlM9IHJlYWQgLXIgcmVsOyBkb1xuICAgIHJlbD1cIiR7cmVsIy4vfVwiXG4gICAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkcm9vdC8kcmVsXCIpXCJcbiAgICBtdiAtZiAtVCAtLSBcIiRzdGFnaW5nLyRyZWxcIiBcIiRyb290LyRyZWxcIlxuICBkb25lIDwgXCIkbGlzdFwiXG5kb25lXG4jIDQuIGZpbGVzIHRoZSBwcmV2aW91cyBhcHBseSB3cm90ZSB0aGF0IHRoaXMgcHJvZmlsZSBubyBsb25nZXIgaGFzXG5yZW1vdmFscz1cImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS0wMTIzNDU2Nzg5YWJjZGVmL3JlbW92ZS5saXN0XCJcbmlmIFsgLWYgXCIkcmVtb3ZhbHNcIiBdOyB0aGVuXG4gIHdoaWxlIElGUz0gcmVhZCAtciBwOyBkb1xuICAgIGNhc2UgXCIkcFwiIGluXG4gICAgICBoZXJtZXMvKikgZGVzdD1cImRhdGEvaGVybWVzLyR7cCNoZXJtZXMvfVwiIDs7XG4gICAgICB3b3Jrc3BhY2UvKikgZGVzdD1cIndvcmtzcGFjZS8ke3Ajd29ya3NwYWNlL31cIiA7O1xuICAgICAgc2NyYXRjaC8qKSBkZXN0PVwic2NyYXRjaC8ke3Ajc2NyYXRjaC99XCIgOztcbiAgICAgICopIGNvbnRpbnVlIDs7XG4gICAgZXNhY1xuICAgIGlmIFsgLWYgXCIkZGVzdFwiIF0gfHwgWyAtTCBcIiRkZXN0XCIgXTsgdGhlbiBybSAtZiAtLSBcIiRkZXN0XCI7IGZpXG4gIGRvbmUgPCBcIiRyZW1vdmFsc1wiXG5maVxuIyA1LiB0aGUgYXBwbGllZC1zdGF0ZSBtYXJrZXIsIHN0cmljdGx5IGxhc3Rcbm1rZGlyIC1wIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uXCJcbm12IC1mIC1UIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLWFwcGx5LTAxMjM0NTY3ODlhYmNkZWYvYXBwbGllZC5qc29uXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24vYXBwbGllZC5qc29uXCJcbnJtIC1yZiAtLSBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1uZXh0LSRuXCIgXCJ3b3Jrc3BhY2UvLm15cm1pZG9uLW5leHQtJG5cIiBcInNjcmF0Y2gvLm15cm1pZG9uLW5leHQtJG5cIiBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS0wMTIzNDU2Nzg5YWJjZGVmXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24tb2xkLSRuXCIiLCJteXJtaWRvbi1oZWxwZXIiLCIvIl0sIkxhYmVscyI6eyJteXJtaWRvbi5ib3QtaGVscGVyIjoiM2YyYjhjMWUtNGQ1YS00YjZjLThkN2UtOWYwYTFiMmMzZDRlIn0sIk5ldHdvcmtEaXNhYmxlZCI6dHJ1ZSwiSG9zdENvbmZpZyI6eyJNZW1vcnkiOjEzNDIxNzcyOCwiUGlkc0xpbWl0Ijo2NCwiQ2FwRHJvcCI6WyJBTEwiXSwiQ2FwQWRkIjpbXSwiU2VjdXJpdHlPcHQiOlsibm8tbmV3LXByaXZpbGVnZXMiXSwiUmVhZG9ubHlSb290ZnMiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im5vIn0sIk5ldHdvcmtNb2RlIjoibm9uZSIsIkJpbmRzIjpbIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvaGVybWVzOi9kYXRhL2hlcm1lcyIsIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvd29ya3NwYWNlOi93b3Jrc3BhY2UiLCIvc3J2L215cm1pZG9uLWJvdHMvM2YyYjhjMWUtNGQ1YS00YjZjLThkN2UtOWYwYTFiMmMzZDRlL3NjcmF0Y2g6L3NjcmF0Y2giXSwiUHJpdmlsZWdlZCI6ZmFsc2V9fQ=="
+  "bodyBase64": "eyJJbWFnZSI6InNoYTI1NjpmZWRjYmE5ODc2NTQzMjEwZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTBmZWRjYmE5ODc2NTQzMjEwIiwiVXNlciI6IjEwMDAxOjEwMDAxIiwiRW50cnlwb2ludCI6WyIvYmluL3NoIiwiLWMiXSwiQ21kIjpbInNldCAtZXVcbnVtYXNrIDA3N1xuY2QgXCIkMVwiXG5uPTAxMjM0NTY3ODlhYmNkZWZcbiMgMS4gc3RhZ2luZyBmcm9tIGludGVycnVwdGVkIGVhcmxpZXIgYXBwbGllc1xuZm9yIHJvb3QgaW4gZGF0YS9oZXJtZXMgd29ya3NwYWNlIHNjcmF0Y2g7IGRvXG4gIGZvciBzdGFsZSBpbiBcIiRyb290XCIvLm15cm1pZG9uLW5leHQtKiBcIiRyb290XCIvLm15cm1pZG9uLWFwcGx5LSogXCIkcm9vdFwiLy5teXJtaWRvbi1vbGQtKjsgZG9cbiAgICBbIC1lIFwiJHN0YWxlXCIgXSB8fCBjb250aW51ZVxuICAgIGNhc2UgXCIke3N0YWxlI1wiJHJvb3RcIi99XCIgaW5cbiAgICAgIFwiLm15cm1pZG9uLW5leHQtJG5cIiB8IFwiLm15cm1pZG9uLWFwcGx5LSRuXCIpIDs7XG4gICAgICAqKSBybSAtcmYgLS0gXCIkc3RhbGVcIiA7O1xuICAgIGVzYWNcbiAgZG9uZVxuZG9uZVxuIyAyLiBjb21waWxlci1vd25lZCBkaXJlY3RvcmllcywgcmVwbGFjZWQgd2hvbGVzYWxlXG5zdGFnZWQ9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tbmV4dC0kbi9za2lsbHMtYm9hcmRcIlxubGl2ZT1cImRhdGEvaGVybWVzL3NraWxscy1ib2FyZFwiXG5pZiBbIC1kIFwiJHN0YWdlZFwiIF07IHRoZW5cbiAgb2xkPVwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLW9sZC0kblwiXG4gIG1rZGlyIC1wIC0tIFwiJG9sZFwiXG4gIGlmIFsgLWUgXCIkbGl2ZVwiIF0gfHwgWyAtTCBcIiRsaXZlXCIgXTsgdGhlbiBtdiAtZiAtVCAtLSBcIiRsaXZlXCIgXCIkb2xkLzBcIjsgZmlcbiAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkbGl2ZVwiKVwiXG4gIG12IC1mIC1UIC0tIFwiJHN0YWdlZFwiIFwiJGxpdmVcIlxuZmlcbiMgMy4gZXZlcnkgb3RoZXIgc3RhZ2VkIGZpbGUsIG9uZSBhdG9taWMgcmVuYW1lIGVhY2hcbmxpc3Q9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tYXBwbHktMDEyMzQ1Njc4OWFiY2RlZi9zdGFnZWQubGlzdFwiXG5mb3Igcm9vdCBpbiBkYXRhL2hlcm1lcyB3b3Jrc3BhY2Ugc2NyYXRjaDsgZG9cbiAgc3RhZ2luZz1cIiRyb290Ly5teXJtaWRvbi1uZXh0LSRuXCJcbiAgWyAtZCBcIiRzdGFnaW5nXCIgXSB8fCBjb250aW51ZVxuICAoY2QgXCIkc3RhZ2luZ1wiICYmIGZpbmQgLiAtdHlwZSBmKSA+IFwiJGxpc3RcIlxuICB3aGlsZSBJRlM9IHJlYWQgLXIgcmVsOyBkb1xuICAgIHJlbD1cIiR7cmVsIy4vfVwiXG4gICAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkcm9vdC8kcmVsXCIpXCJcbiAgICBtdiAtZiAtVCAtLSBcIiRzdGFnaW5nLyRyZWxcIiBcIiRyb290LyRyZWxcIlxuICBkb25lIDwgXCIkbGlzdFwiXG5kb25lXG4jIDQuIGZpbGVzIHRoZSBwcmV2aW91cyBhcHBseSB3cm90ZSB0aGF0IHRoaXMgcHJvZmlsZSBubyBsb25nZXIgaGFzXG5yZW1vdmFscz1cImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS0wMTIzNDU2Nzg5YWJjZGVmL3JlbW92ZS5saXN0XCJcbmlmIFsgLWYgXCIkcmVtb3ZhbHNcIiBdOyB0aGVuXG4gIHdoaWxlIElGUz0gcmVhZCAtciBwOyBkb1xuICAgIGNhc2UgXCIkcFwiIGluXG4gICAgICBoZXJtZXMvKikgZGVzdD1cImRhdGEvaGVybWVzLyR7cCNoZXJtZXMvfVwiIDs7XG4gICAgICB3b3Jrc3BhY2UvKikgZGVzdD1cIndvcmtzcGFjZS8ke3Ajd29ya3NwYWNlL31cIiA7O1xuICAgICAgc2NyYXRjaC8qKSBkZXN0PVwic2NyYXRjaC8ke3Ajc2NyYXRjaC99XCIgOztcbiAgICAgICopIGNvbnRpbnVlIDs7XG4gICAgZXNhY1xuICAgIGlmIFsgLWYgXCIkZGVzdFwiIF0gfHwgWyAtTCBcIiRkZXN0XCIgXTsgdGhlbiBybSAtZiAtLSBcIiRkZXN0XCI7IGZpXG4gIGRvbmUgPCBcIiRyZW1vdmFsc1wiXG5maVxuIyA1LiB0aGUgYXBwbGllZC1zdGF0ZSBtYXJrZXIsIHN0cmljdGx5IGxhc3Rcbm1rZGlyIC1wIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uXCJcbm12IC1mIC1UIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLWFwcGx5LTAxMjM0NTY3ODlhYmNkZWYvYXBwbGllZC5qc29uXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24vYXBwbGllZC5qc29uXCJcbnJtIC1yZiAtLSBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1uZXh0LSRuXCIgXCJ3b3Jrc3BhY2UvLm15cm1pZG9uLW5leHQtJG5cIiBcInNjcmF0Y2gvLm15cm1pZG9uLW5leHQtJG5cIiBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS0wMTIzNDU2Nzg5YWJjZGVmXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24tb2xkLSRuXCIiLCJteXJtaWRvbi1oZWxwZXIiLCIvIl0sIkxhYmVscyI6eyJteXJtaWRvbi5ib3QtaGVscGVyIjoiYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhIn0sIk5ldHdvcmtEaXNhYmxlZCI6dHJ1ZSwiSG9zdENvbmZpZyI6eyJNZW1vcnkiOjEzNDIxNzcyOCwiUGlkc0xpbWl0Ijo2NCwiQ2FwRHJvcCI6WyJBTEwiXSwiQ2FwQWRkIjpbXSwiU2VjdXJpdHlPcHQiOlsibm8tbmV3LXByaXZpbGVnZXMiXSwiUmVhZG9ubHlSb290ZnMiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im5vIn0sIk5ldHdvcmtNb2RlIjoibm9uZSIsIkJpbmRzIjpbIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvaGVybWVzOi9kYXRhL2hlcm1lcyIsIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvd29ya3NwYWNlOi93b3Jrc3BhY2UiLCIvc3J2L215cm1pZG9uLWJvdHMvYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhL3NjcmF0Y2g6L3NjcmF0Y2giXSwiUHJpdmlsZWdlZCI6ZmFsc2V9fQ=="
  },
  {
   "step": "writeProfile-1",
   "method": "PUT",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/archive?path=%2Fdata%2Fhermes&noOverwriteDirNonDir=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/archive?path=%2Fdata%2Fhermes&noOverwriteDirNonDir=true",
   "headers": {
    "content-type": "application/x-tar",
    "content-length": "10752",
@@ -147,7 +147,7 @@
  {
   "step": "writeProfile-1",
   "method": "PUT",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/archive?path=%2Fworkspace&noOverwriteDirNonDir=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/archive?path=%2Fworkspace&noOverwriteDirNonDir=true",
   "headers": {
    "content-type": "application/x-tar",
    "content-length": "2560",
@@ -159,7 +159,7 @@
  {
   "step": "writeProfile-1",
   "method": "PUT",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/archive?path=%2Fscratch&noOverwriteDirNonDir=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/archive?path=%2Fscratch&noOverwriteDirNonDir=true",
   "headers": {
    "content-type": "application/x-tar",
    "content-length": "4096",
@@ -171,7 +171,7 @@
  {
   "step": "writeProfile-1",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/start",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/start",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive",
@@ -182,7 +182,7 @@
  {
   "step": "writeProfile-1",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/wait?condition=not-running",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/wait?condition=not-running",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -195,7 +195,7 @@
  {
   "step": "writeProfile-1",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -205,7 +205,7 @@
  {
   "step": "start",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/start",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/start",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive",
@@ -216,7 +216,7 @@
  {
   "step": "start",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -226,7 +226,7 @@
  {
   "step": "status",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -236,7 +236,7 @@
  {
   "step": "status",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/archive?path=%2Fdata%2Fhermes%2F.myrmidon%2Fapplied.json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/archive?path=%2Fdata%2Fhermes%2F.myrmidon%2Fapplied.json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -246,7 +246,7 @@
  {
   "step": "writeProfile-files",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -256,7 +256,7 @@
  {
   "step": "writeProfile-files",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/archive?path=%2Fdata%2Fhermes%2F.myrmidon%2Fapplied.json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/archive?path=%2Fdata%2Fhermes%2F.myrmidon%2Fapplied.json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -266,7 +266,7 @@
  {
   "step": "writeProfile-files",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -276,7 +276,7 @@
  {
   "step": "writeProfile-files",
   "method": "POST",
-  "target": "/v1.45/containers/create?name=myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+  "target": "/v1.45/containers/create?name=myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -284,12 +284,12 @@
    "host": "localhost",
    "connection": "keep-alive"
   },
-  "bodyBase64": "eyJJbWFnZSI6InNoYTI1NjpmZWRjYmE5ODc2NTQzMjEwZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTBmZWRjYmE5ODc2NTQzMjEwIiwiVXNlciI6IjEwMDAxOjEwMDAxIiwiRW50cnlwb2ludCI6WyIvYmluL3NoIiwiLWMiXSwiQ21kIjpbInNldCAtZXVcbnVtYXNrIDA3N1xuY2QgXCIkMVwiXG5uPWZlZGNiYTk4NzY1NDMyMTBcbiMgMS4gc3RhZ2luZyBmcm9tIGludGVycnVwdGVkIGVhcmxpZXIgYXBwbGllc1xuZm9yIHJvb3QgaW4gZGF0YS9oZXJtZXMgd29ya3NwYWNlIHNjcmF0Y2g7IGRvXG4gIGZvciBzdGFsZSBpbiBcIiRyb290XCIvLm15cm1pZG9uLW5leHQtKiBcIiRyb290XCIvLm15cm1pZG9uLWFwcGx5LSogXCIkcm9vdFwiLy5teXJtaWRvbi1vbGQtKjsgZG9cbiAgICBbIC1lIFwiJHN0YWxlXCIgXSB8fCBjb250aW51ZVxuICAgIGNhc2UgXCIke3N0YWxlI1wiJHJvb3RcIi99XCIgaW5cbiAgICAgIFwiLm15cm1pZG9uLW5leHQtJG5cIiB8IFwiLm15cm1pZG9uLWFwcGx5LSRuXCIpIDs7XG4gICAgICAqKSBybSAtcmYgLS0gXCIkc3RhbGVcIiA7O1xuICAgIGVzYWNcbiAgZG9uZVxuZG9uZVxuIyAyLiBjb21waWxlci1vd25lZCBkaXJlY3RvcmllcywgcmVwbGFjZWQgd2hvbGVzYWxlXG5zdGFnZWQ9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tbmV4dC0kbi9za2lsbHMtYm9hcmRcIlxubGl2ZT1cImRhdGEvaGVybWVzL3NraWxscy1ib2FyZFwiXG5pZiBbIC1kIFwiJHN0YWdlZFwiIF07IHRoZW5cbiAgb2xkPVwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLW9sZC0kblwiXG4gIG1rZGlyIC1wIC0tIFwiJG9sZFwiXG4gIGlmIFsgLWUgXCIkbGl2ZVwiIF0gfHwgWyAtTCBcIiRsaXZlXCIgXTsgdGhlbiBtdiAtZiAtVCAtLSBcIiRsaXZlXCIgXCIkb2xkLzBcIjsgZmlcbiAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkbGl2ZVwiKVwiXG4gIG12IC1mIC1UIC0tIFwiJHN0YWdlZFwiIFwiJGxpdmVcIlxuZmlcbiMgMy4gZXZlcnkgb3RoZXIgc3RhZ2VkIGZpbGUsIG9uZSBhdG9taWMgcmVuYW1lIGVhY2hcbmxpc3Q9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tYXBwbHktZmVkY2JhOTg3NjU0MzIxMC9zdGFnZWQubGlzdFwiXG5mb3Igcm9vdCBpbiBkYXRhL2hlcm1lcyB3b3Jrc3BhY2Ugc2NyYXRjaDsgZG9cbiAgc3RhZ2luZz1cIiRyb290Ly5teXJtaWRvbi1uZXh0LSRuXCJcbiAgWyAtZCBcIiRzdGFnaW5nXCIgXSB8fCBjb250aW51ZVxuICAoY2QgXCIkc3RhZ2luZ1wiICYmIGZpbmQgLiAtdHlwZSBmKSA+IFwiJGxpc3RcIlxuICB3aGlsZSBJRlM9IHJlYWQgLXIgcmVsOyBkb1xuICAgIHJlbD1cIiR7cmVsIy4vfVwiXG4gICAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkcm9vdC8kcmVsXCIpXCJcbiAgICBtdiAtZiAtVCAtLSBcIiRzdGFnaW5nLyRyZWxcIiBcIiRyb290LyRyZWxcIlxuICBkb25lIDwgXCIkbGlzdFwiXG5kb25lXG4jIDQuIGZpbGVzIHRoZSBwcmV2aW91cyBhcHBseSB3cm90ZSB0aGF0IHRoaXMgcHJvZmlsZSBubyBsb25nZXIgaGFzXG5yZW1vdmFscz1cImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS1mZWRjYmE5ODc2NTQzMjEwL3JlbW92ZS5saXN0XCJcbmlmIFsgLWYgXCIkcmVtb3ZhbHNcIiBdOyB0aGVuXG4gIHdoaWxlIElGUz0gcmVhZCAtciBwOyBkb1xuICAgIGNhc2UgXCIkcFwiIGluXG4gICAgICBoZXJtZXMvKikgZGVzdD1cImRhdGEvaGVybWVzLyR7cCNoZXJtZXMvfVwiIDs7XG4gICAgICB3b3Jrc3BhY2UvKikgZGVzdD1cIndvcmtzcGFjZS8ke3Ajd29ya3NwYWNlL31cIiA7O1xuICAgICAgc2NyYXRjaC8qKSBkZXN0PVwic2NyYXRjaC8ke3Ajc2NyYXRjaC99XCIgOztcbiAgICAgICopIGNvbnRpbnVlIDs7XG4gICAgZXNhY1xuICAgIGlmIFsgLWYgXCIkZGVzdFwiIF0gfHwgWyAtTCBcIiRkZXN0XCIgXTsgdGhlbiBybSAtZiAtLSBcIiRkZXN0XCI7IGZpXG4gIGRvbmUgPCBcIiRyZW1vdmFsc1wiXG5maVxuIyA1LiB0aGUgYXBwbGllZC1zdGF0ZSBtYXJrZXIsIHN0cmljdGx5IGxhc3Rcbm1rZGlyIC1wIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uXCJcbm12IC1mIC1UIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLWFwcGx5LWZlZGNiYTk4NzY1NDMyMTAvYXBwbGllZC5qc29uXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24vYXBwbGllZC5qc29uXCJcbnJtIC1yZiAtLSBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1uZXh0LSRuXCIgXCJ3b3Jrc3BhY2UvLm15cm1pZG9uLW5leHQtJG5cIiBcInNjcmF0Y2gvLm15cm1pZG9uLW5leHQtJG5cIiBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS1mZWRjYmE5ODc2NTQzMjEwXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24tb2xkLSRuXCIiLCJteXJtaWRvbi1oZWxwZXIiLCIvIl0sIkxhYmVscyI6eyJteXJtaWRvbi5ib3QtaGVscGVyIjoiM2YyYjhjMWUtNGQ1YS00YjZjLThkN2UtOWYwYTFiMmMzZDRlIn0sIk5ldHdvcmtEaXNhYmxlZCI6dHJ1ZSwiSG9zdENvbmZpZyI6eyJNZW1vcnkiOjEzNDIxNzcyOCwiUGlkc0xpbWl0Ijo2NCwiQ2FwRHJvcCI6WyJBTEwiXSwiQ2FwQWRkIjpbXSwiU2VjdXJpdHlPcHQiOlsibm8tbmV3LXByaXZpbGVnZXMiXSwiUmVhZG9ubHlSb290ZnMiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im5vIn0sIk5ldHdvcmtNb2RlIjoibm9uZSIsIkJpbmRzIjpbIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvaGVybWVzOi9kYXRhL2hlcm1lcyIsIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvd29ya3NwYWNlOi93b3Jrc3BhY2UiLCIvc3J2L215cm1pZG9uLWJvdHMvM2YyYjhjMWUtNGQ1YS00YjZjLThkN2UtOWYwYTFiMmMzZDRlL3NjcmF0Y2g6L3NjcmF0Y2giXSwiUHJpdmlsZWdlZCI6ZmFsc2V9fQ=="
+  "bodyBase64": "eyJJbWFnZSI6InNoYTI1NjpmZWRjYmE5ODc2NTQzMjEwZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTBmZWRjYmE5ODc2NTQzMjEwIiwiVXNlciI6IjEwMDAxOjEwMDAxIiwiRW50cnlwb2ludCI6WyIvYmluL3NoIiwiLWMiXSwiQ21kIjpbInNldCAtZXVcbnVtYXNrIDA3N1xuY2QgXCIkMVwiXG5uPWZlZGNiYTk4NzY1NDMyMTBcbiMgMS4gc3RhZ2luZyBmcm9tIGludGVycnVwdGVkIGVhcmxpZXIgYXBwbGllc1xuZm9yIHJvb3QgaW4gZGF0YS9oZXJtZXMgd29ya3NwYWNlIHNjcmF0Y2g7IGRvXG4gIGZvciBzdGFsZSBpbiBcIiRyb290XCIvLm15cm1pZG9uLW5leHQtKiBcIiRyb290XCIvLm15cm1pZG9uLWFwcGx5LSogXCIkcm9vdFwiLy5teXJtaWRvbi1vbGQtKjsgZG9cbiAgICBbIC1lIFwiJHN0YWxlXCIgXSB8fCBjb250aW51ZVxuICAgIGNhc2UgXCIke3N0YWxlI1wiJHJvb3RcIi99XCIgaW5cbiAgICAgIFwiLm15cm1pZG9uLW5leHQtJG5cIiB8IFwiLm15cm1pZG9uLWFwcGx5LSRuXCIpIDs7XG4gICAgICAqKSBybSAtcmYgLS0gXCIkc3RhbGVcIiA7O1xuICAgIGVzYWNcbiAgZG9uZVxuZG9uZVxuIyAyLiBjb21waWxlci1vd25lZCBkaXJlY3RvcmllcywgcmVwbGFjZWQgd2hvbGVzYWxlXG5zdGFnZWQ9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tbmV4dC0kbi9za2lsbHMtYm9hcmRcIlxubGl2ZT1cImRhdGEvaGVybWVzL3NraWxscy1ib2FyZFwiXG5pZiBbIC1kIFwiJHN0YWdlZFwiIF07IHRoZW5cbiAgb2xkPVwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLW9sZC0kblwiXG4gIG1rZGlyIC1wIC0tIFwiJG9sZFwiXG4gIGlmIFsgLWUgXCIkbGl2ZVwiIF0gfHwgWyAtTCBcIiRsaXZlXCIgXTsgdGhlbiBtdiAtZiAtVCAtLSBcIiRsaXZlXCIgXCIkb2xkLzBcIjsgZmlcbiAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkbGl2ZVwiKVwiXG4gIG12IC1mIC1UIC0tIFwiJHN0YWdlZFwiIFwiJGxpdmVcIlxuZmlcbiMgMy4gZXZlcnkgb3RoZXIgc3RhZ2VkIGZpbGUsIG9uZSBhdG9taWMgcmVuYW1lIGVhY2hcbmxpc3Q9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tYXBwbHktZmVkY2JhOTg3NjU0MzIxMC9zdGFnZWQubGlzdFwiXG5mb3Igcm9vdCBpbiBkYXRhL2hlcm1lcyB3b3Jrc3BhY2Ugc2NyYXRjaDsgZG9cbiAgc3RhZ2luZz1cIiRyb290Ly5teXJtaWRvbi1uZXh0LSRuXCJcbiAgWyAtZCBcIiRzdGFnaW5nXCIgXSB8fCBjb250aW51ZVxuICAoY2QgXCIkc3RhZ2luZ1wiICYmIGZpbmQgLiAtdHlwZSBmKSA+IFwiJGxpc3RcIlxuICB3aGlsZSBJRlM9IHJlYWQgLXIgcmVsOyBkb1xuICAgIHJlbD1cIiR7cmVsIy4vfVwiXG4gICAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkcm9vdC8kcmVsXCIpXCJcbiAgICBtdiAtZiAtVCAtLSBcIiRzdGFnaW5nLyRyZWxcIiBcIiRyb290LyRyZWxcIlxuICBkb25lIDwgXCIkbGlzdFwiXG5kb25lXG4jIDQuIGZpbGVzIHRoZSBwcmV2aW91cyBhcHBseSB3cm90ZSB0aGF0IHRoaXMgcHJvZmlsZSBubyBsb25nZXIgaGFzXG5yZW1vdmFscz1cImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS1mZWRjYmE5ODc2NTQzMjEwL3JlbW92ZS5saXN0XCJcbmlmIFsgLWYgXCIkcmVtb3ZhbHNcIiBdOyB0aGVuXG4gIHdoaWxlIElGUz0gcmVhZCAtciBwOyBkb1xuICAgIGNhc2UgXCIkcFwiIGluXG4gICAgICBoZXJtZXMvKikgZGVzdD1cImRhdGEvaGVybWVzLyR7cCNoZXJtZXMvfVwiIDs7XG4gICAgICB3b3Jrc3BhY2UvKikgZGVzdD1cIndvcmtzcGFjZS8ke3Ajd29ya3NwYWNlL31cIiA7O1xuICAgICAgc2NyYXRjaC8qKSBkZXN0PVwic2NyYXRjaC8ke3Ajc2NyYXRjaC99XCIgOztcbiAgICAgICopIGNvbnRpbnVlIDs7XG4gICAgZXNhY1xuICAgIGlmIFsgLWYgXCIkZGVzdFwiIF0gfHwgWyAtTCBcIiRkZXN0XCIgXTsgdGhlbiBybSAtZiAtLSBcIiRkZXN0XCI7IGZpXG4gIGRvbmUgPCBcIiRyZW1vdmFsc1wiXG5maVxuIyA1LiB0aGUgYXBwbGllZC1zdGF0ZSBtYXJrZXIsIHN0cmljdGx5IGxhc3Rcbm1rZGlyIC1wIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uXCJcbm12IC1mIC1UIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLWFwcGx5LWZlZGNiYTk4NzY1NDMyMTAvYXBwbGllZC5qc29uXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24vYXBwbGllZC5qc29uXCJcbnJtIC1yZiAtLSBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1uZXh0LSRuXCIgXCJ3b3Jrc3BhY2UvLm15cm1pZG9uLW5leHQtJG5cIiBcInNjcmF0Y2gvLm15cm1pZG9uLW5leHQtJG5cIiBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS1mZWRjYmE5ODc2NTQzMjEwXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24tb2xkLSRuXCIiLCJteXJtaWRvbi1oZWxwZXIiLCIvIl0sIkxhYmVscyI6eyJteXJtaWRvbi5ib3QtaGVscGVyIjoiYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhIn0sIk5ldHdvcmtEaXNhYmxlZCI6dHJ1ZSwiSG9zdENvbmZpZyI6eyJNZW1vcnkiOjEzNDIxNzcyOCwiUGlkc0xpbWl0Ijo2NCwiQ2FwRHJvcCI6WyJBTEwiXSwiQ2FwQWRkIjpbXSwiU2VjdXJpdHlPcHQiOlsibm8tbmV3LXByaXZpbGVnZXMiXSwiUmVhZG9ubHlSb290ZnMiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im5vIn0sIk5ldHdvcmtNb2RlIjoibm9uZSIsIkJpbmRzIjpbIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvaGVybWVzOi9kYXRhL2hlcm1lcyIsIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvd29ya3NwYWNlOi93b3Jrc3BhY2UiLCIvc3J2L215cm1pZG9uLWJvdHMvYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhL3NjcmF0Y2g6L3NjcmF0Y2giXSwiUHJpdmlsZWdlZCI6ZmFsc2V9fQ=="
  },
  {
   "step": "writeProfile-files",
   "method": "PUT",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/archive?path=%2Fdata%2Fhermes&noOverwriteDirNonDir=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/archive?path=%2Fdata%2Fhermes&noOverwriteDirNonDir=true",
   "headers": {
    "content-type": "application/x-tar",
    "content-length": "10752",
@@ -301,7 +301,7 @@
  {
   "step": "writeProfile-files",
   "method": "PUT",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/archive?path=%2Fworkspace&noOverwriteDirNonDir=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/archive?path=%2Fworkspace&noOverwriteDirNonDir=true",
   "headers": {
    "content-type": "application/x-tar",
    "content-length": "3584",
@@ -313,7 +313,7 @@
  {
   "step": "writeProfile-files",
   "method": "PUT",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/archive?path=%2Fscratch&noOverwriteDirNonDir=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/archive?path=%2Fscratch&noOverwriteDirNonDir=true",
   "headers": {
    "content-type": "application/x-tar",
    "content-length": "4096",
@@ -325,7 +325,7 @@
  {
   "step": "writeProfile-files",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/start",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/start",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive",
@@ -336,7 +336,7 @@
  {
   "step": "writeProfile-files",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/wait?condition=not-running",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/wait?condition=not-running",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -349,7 +349,7 @@
  {
   "step": "writeProfile-files",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -359,7 +359,7 @@
  {
   "step": "restart",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/restart?t=30",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/restart?t=30",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive",
@@ -370,7 +370,7 @@
  {
   "step": "restart",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -390,7 +390,7 @@
  {
   "step": "recreate",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.next?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.next?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -400,7 +400,7 @@
  {
   "step": "recreate",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -410,7 +410,7 @@
  {
   "step": "recreate",
   "method": "POST",
-  "target": "/v1.45/containers/create?name=myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+  "target": "/v1.45/containers/create?name=myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -418,12 +418,12 @@
    "host": "localhost",
    "connection": "keep-alive"
   },
-  "bodyBase64": "eyJJbWFnZSI6ImdoY3IuaW8vaXRrYWRyLWdpdC9teXJtaWRvbi1oZXJtZXNAc2hhMjU2OjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJVc2VyIjoiMDowIiwiRW50cnlwb2ludCI6WyIvYmluL3NoIiwiLWMiXSwiQ21kIjpbInNldCAtZXVcbmNkIFwiJDFcIlxuZm9yIGQgaW4gZGF0YS9oZXJtZXMgd29ya3NwYWNlIHNjcmF0Y2g7IGRvXG4gIGNobW9kIDA3MDAgXCIkZFwiXG4gIGNob3duIDEwMDAxOjEwMDAxIFwiJGRcIlxuZG9uZSIsIm15cm1pZG9uLWhlbHBlciIsIi8iXSwiTGFiZWxzIjp7Im15cm1pZG9uLmJvdC1oZWxwZXIiOiIzZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUifSwiTmV0d29ya0Rpc2FibGVkIjp0cnVlLCJIb3N0Q29uZmlnIjp7Ik1lbW9yeSI6MTM0MjE3NzI4LCJQaWRzTGltaXQiOjY0LCJDYXBEcm9wIjpbIkFMTCJdLCJDYXBBZGQiOlsiQ0hPV04iLCJGT1dORVIiXSwiU2VjdXJpdHlPcHQiOlsibm8tbmV3LXByaXZpbGVnZXMiXSwiUmVhZG9ubHlSb290ZnMiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im5vIn0sIk5ldHdvcmtNb2RlIjoibm9uZSIsIkJpbmRzIjpbIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvaGVybWVzOi9kYXRhL2hlcm1lcyIsIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvd29ya3NwYWNlOi93b3Jrc3BhY2UiLCIvc3J2L215cm1pZG9uLWJvdHMvM2YyYjhjMWUtNGQ1YS00YjZjLThkN2UtOWYwYTFiMmMzZDRlL3NjcmF0Y2g6L3NjcmF0Y2giXSwiUHJpdmlsZWdlZCI6ZmFsc2V9fQ=="
+  "bodyBase64": "eyJJbWFnZSI6ImdoY3IuaW8vaXRrYWRyLWdpdC9teXJtaWRvbi1oZXJtZXNAc2hhMjU2OjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJVc2VyIjoiMDowIiwiRW50cnlwb2ludCI6WyIvYmluL3NoIiwiLWMiXSwiQ21kIjpbInNldCAtZXVcbmNkIFwiJDFcIlxuZm9yIGQgaW4gZGF0YS9oZXJtZXMgd29ya3NwYWNlIHNjcmF0Y2g7IGRvXG4gIGNobW9kIDA3MDAgXCIkZFwiXG4gIGNob3duIDEwMDAxOjEwMDAxIFwiJGRcIlxuZG9uZSIsIm15cm1pZG9uLWhlbHBlciIsIi8iXSwiTGFiZWxzIjp7Im15cm1pZG9uLmJvdC1oZWxwZXIiOiJhYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEifSwiTmV0d29ya0Rpc2FibGVkIjp0cnVlLCJIb3N0Q29uZmlnIjp7Ik1lbW9yeSI6MTM0MjE3NzI4LCJQaWRzTGltaXQiOjY0LCJDYXBEcm9wIjpbIkFMTCJdLCJDYXBBZGQiOlsiQ0hPV04iLCJGT1dORVIiXSwiU2VjdXJpdHlPcHQiOlsibm8tbmV3LXByaXZpbGVnZXMiXSwiUmVhZG9ubHlSb290ZnMiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im5vIn0sIk5ldHdvcmtNb2RlIjoibm9uZSIsIkJpbmRzIjpbIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvaGVybWVzOi9kYXRhL2hlcm1lcyIsIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvd29ya3NwYWNlOi93b3Jrc3BhY2UiLCIvc3J2L215cm1pZG9uLWJvdHMvYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhL3NjcmF0Y2g6L3NjcmF0Y2giXSwiUHJpdmlsZWdlZCI6ZmFsc2V9fQ=="
  },
  {
   "step": "recreate",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/start",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/start",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive",
@@ -434,7 +434,7 @@
  {
   "step": "recreate",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/wait?condition=not-running",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/wait?condition=not-running",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -447,7 +447,7 @@
  {
   "step": "recreate",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -457,7 +457,7 @@
  {
   "step": "recreate",
   "method": "POST",
-  "target": "/v1.45/containers/create?name=myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.next",
+  "target": "/v1.45/containers/create?name=myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.next",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -465,12 +465,12 @@
    "host": "localhost",
    "connection": "keep-alive"
   },
-  "bodyBase64": "eyJJbWFnZSI6ImdoY3IuaW8vaXRrYWRyLWdpdC9teXJtaWRvbi1oZXJtZXNAc2hhMjU2OjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJMYWJlbHMiOnsibXlybWlkb24uYm90IjoiM2YyYjhjMWUtNGQ1YS00YjZjLThkN2UtOWYwYTFiMmMzZDRlIiwibXlybWlkb24uaW1hZ2UiOiJnaGNyLmlvL2l0a2Fkci1naXQvbXlybWlkb24taGVybWVzQHNoYTI1NjowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIn0sIkhvc3RDb25maWciOnsiTWVtb3J5IjoyMTQ3NDgzNjQ4LCJOYW5vQ3B1cyI6MTAwMDAwMDAwMCwiUGlkc0xpbWl0Ijo1MTIsIkNhcERyb3AiOlsiQUxMIl0sIlNlY3VyaXR5T3B0IjpbIm5vLW5ldy1wcml2aWxlZ2VzIl0sIlJlYWRvbmx5Um9vdGZzIjp0cnVlLCJUbXBmcyI6eyIvdG1wIjoiIn0sIkluaXQiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im9uLWZhaWx1cmUifSwiTmV0d29ya01vZGUiOiJteXJtaWRvbi1ib3RzIiwiQmluZHMiOlsiL3Nydi9teXJtaWRvbi1ib3RzLzNmMmI4YzFlLTRkNWEtNGI2Yy04ZDdlLTlmMGExYjJjM2Q0ZS9oZXJtZXM6L2RhdGEvaGVybWVzIiwiL3Nydi9teXJtaWRvbi1ib3RzLzNmMmI4YzFlLTRkNWEtNGI2Yy04ZDdlLTlmMGExYjJjM2Q0ZS93b3Jrc3BhY2U6L3dvcmtzcGFjZSIsIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvc2NyYXRjaDovc2NyYXRjaCJdLCJQcml2aWxlZ2VkIjpmYWxzZX19"
+  "bodyBase64": "eyJJbWFnZSI6ImdoY3IuaW8vaXRrYWRyLWdpdC9teXJtaWRvbi1oZXJtZXNAc2hhMjU2OjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJMYWJlbHMiOnsibXlybWlkb24uYm90IjoiYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhIiwibXlybWlkb24uaW1hZ2UiOiJnaGNyLmlvL2l0a2Fkci1naXQvbXlybWlkb24taGVybWVzQHNoYTI1NjowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIn0sIkhvc3RDb25maWciOnsiTWVtb3J5IjoyMTQ3NDgzNjQ4LCJOYW5vQ3B1cyI6MTAwMDAwMDAwMCwiUGlkc0xpbWl0Ijo1MTIsIkNhcERyb3AiOlsiQUxMIl0sIlNlY3VyaXR5T3B0IjpbIm5vLW5ldy1wcml2aWxlZ2VzIl0sIlJlYWRvbmx5Um9vdGZzIjp0cnVlLCJUbXBmcyI6eyIvdG1wIjoiIn0sIkluaXQiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im9uLWZhaWx1cmUifSwiTmV0d29ya01vZGUiOiJteXJtaWRvbi1ib3RzIiwiQmluZHMiOlsiL3Nydi9teXJtaWRvbi1ib3RzL2FhYWFhYWFhLWFhYWEtNGFhYS04YWFhLWFhYWFhYWFhYWFhYS9oZXJtZXM6L2RhdGEvaGVybWVzIiwiL3Nydi9teXJtaWRvbi1ib3RzL2FhYWFhYWFhLWFhYWEtNGFhYS04YWFhLWFhYWFhYWFhYWFhYS93b3Jrc3BhY2U6L3dvcmtzcGFjZSIsIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvc2NyYXRjaDovc2NyYXRjaCJdLCJQcml2aWxlZ2VkIjpmYWxzZX19"
  },
  {
   "step": "recreate",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/stop?t=30",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/stop?t=30",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive",
@@ -481,7 +481,7 @@
  {
   "step": "recreate",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -491,7 +491,7 @@
  {
   "step": "recreate",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.next/rename?name=myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.next/rename?name=myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive",
@@ -502,7 +502,7 @@
  {
   "step": "writeProfile-3",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -512,7 +512,7 @@
  {
   "step": "writeProfile-3",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/archive?path=%2Fdata%2Fhermes%2F.myrmidon%2Fapplied.json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/archive?path=%2Fdata%2Fhermes%2F.myrmidon%2Fapplied.json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -522,7 +522,7 @@
  {
   "step": "writeProfile-3",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -532,7 +532,7 @@
  {
   "step": "writeProfile-3",
   "method": "POST",
-  "target": "/v1.45/containers/create?name=myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper",
+  "target": "/v1.45/containers/create?name=myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -540,12 +540,12 @@
    "host": "localhost",
    "connection": "keep-alive"
   },
-  "bodyBase64": "eyJJbWFnZSI6InNoYTI1NjpmZWRjYmE5ODc2NTQzMjEwZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTBmZWRjYmE5ODc2NTQzMjEwIiwiVXNlciI6IjEwMDAxOjEwMDAxIiwiRW50cnlwb2ludCI6WyIvYmluL3NoIiwiLWMiXSwiQ21kIjpbInNldCAtZXVcbnVtYXNrIDA3N1xuY2QgXCIkMVwiXG5uPTAwMDAwMDAwZmZmZmZmZmZcbiMgMS4gc3RhZ2luZyBmcm9tIGludGVycnVwdGVkIGVhcmxpZXIgYXBwbGllc1xuZm9yIHJvb3QgaW4gZGF0YS9oZXJtZXMgd29ya3NwYWNlIHNjcmF0Y2g7IGRvXG4gIGZvciBzdGFsZSBpbiBcIiRyb290XCIvLm15cm1pZG9uLW5leHQtKiBcIiRyb290XCIvLm15cm1pZG9uLWFwcGx5LSogXCIkcm9vdFwiLy5teXJtaWRvbi1vbGQtKjsgZG9cbiAgICBbIC1lIFwiJHN0YWxlXCIgXSB8fCBjb250aW51ZVxuICAgIGNhc2UgXCIke3N0YWxlI1wiJHJvb3RcIi99XCIgaW5cbiAgICAgIFwiLm15cm1pZG9uLW5leHQtJG5cIiB8IFwiLm15cm1pZG9uLWFwcGx5LSRuXCIpIDs7XG4gICAgICAqKSBybSAtcmYgLS0gXCIkc3RhbGVcIiA7O1xuICAgIGVzYWNcbiAgZG9uZVxuZG9uZVxuIyAyLiBjb21waWxlci1vd25lZCBkaXJlY3RvcmllcywgcmVwbGFjZWQgd2hvbGVzYWxlXG5zdGFnZWQ9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tbmV4dC0kbi9za2lsbHMtYm9hcmRcIlxubGl2ZT1cImRhdGEvaGVybWVzL3NraWxscy1ib2FyZFwiXG5pZiBbIC1kIFwiJHN0YWdlZFwiIF07IHRoZW5cbiAgb2xkPVwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLW9sZC0kblwiXG4gIG1rZGlyIC1wIC0tIFwiJG9sZFwiXG4gIGlmIFsgLWUgXCIkbGl2ZVwiIF0gfHwgWyAtTCBcIiRsaXZlXCIgXTsgdGhlbiBtdiAtZiAtVCAtLSBcIiRsaXZlXCIgXCIkb2xkLzBcIjsgZmlcbiAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkbGl2ZVwiKVwiXG4gIG12IC1mIC1UIC0tIFwiJHN0YWdlZFwiIFwiJGxpdmVcIlxuZmlcbiMgMy4gZXZlcnkgb3RoZXIgc3RhZ2VkIGZpbGUsIG9uZSBhdG9taWMgcmVuYW1lIGVhY2hcbmxpc3Q9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tYXBwbHktMDAwMDAwMDBmZmZmZmZmZi9zdGFnZWQubGlzdFwiXG5mb3Igcm9vdCBpbiBkYXRhL2hlcm1lcyB3b3Jrc3BhY2Ugc2NyYXRjaDsgZG9cbiAgc3RhZ2luZz1cIiRyb290Ly5teXJtaWRvbi1uZXh0LSRuXCJcbiAgWyAtZCBcIiRzdGFnaW5nXCIgXSB8fCBjb250aW51ZVxuICAoY2QgXCIkc3RhZ2luZ1wiICYmIGZpbmQgLiAtdHlwZSBmKSA+IFwiJGxpc3RcIlxuICB3aGlsZSBJRlM9IHJlYWQgLXIgcmVsOyBkb1xuICAgIHJlbD1cIiR7cmVsIy4vfVwiXG4gICAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkcm9vdC8kcmVsXCIpXCJcbiAgICBtdiAtZiAtVCAtLSBcIiRzdGFnaW5nLyRyZWxcIiBcIiRyb290LyRyZWxcIlxuICBkb25lIDwgXCIkbGlzdFwiXG5kb25lXG4jIDQuIGZpbGVzIHRoZSBwcmV2aW91cyBhcHBseSB3cm90ZSB0aGF0IHRoaXMgcHJvZmlsZSBubyBsb25nZXIgaGFzXG5yZW1vdmFscz1cImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS0wMDAwMDAwMGZmZmZmZmZmL3JlbW92ZS5saXN0XCJcbmlmIFsgLWYgXCIkcmVtb3ZhbHNcIiBdOyB0aGVuXG4gIHdoaWxlIElGUz0gcmVhZCAtciBwOyBkb1xuICAgIGNhc2UgXCIkcFwiIGluXG4gICAgICBoZXJtZXMvKikgZGVzdD1cImRhdGEvaGVybWVzLyR7cCNoZXJtZXMvfVwiIDs7XG4gICAgICB3b3Jrc3BhY2UvKikgZGVzdD1cIndvcmtzcGFjZS8ke3Ajd29ya3NwYWNlL31cIiA7O1xuICAgICAgc2NyYXRjaC8qKSBkZXN0PVwic2NyYXRjaC8ke3Ajc2NyYXRjaC99XCIgOztcbiAgICAgICopIGNvbnRpbnVlIDs7XG4gICAgZXNhY1xuICAgIGlmIFsgLWYgXCIkZGVzdFwiIF0gfHwgWyAtTCBcIiRkZXN0XCIgXTsgdGhlbiBybSAtZiAtLSBcIiRkZXN0XCI7IGZpXG4gIGRvbmUgPCBcIiRyZW1vdmFsc1wiXG5maVxuIyA1LiB0aGUgYXBwbGllZC1zdGF0ZSBtYXJrZXIsIHN0cmljdGx5IGxhc3Rcbm1rZGlyIC1wIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uXCJcbm12IC1mIC1UIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLWFwcGx5LTAwMDAwMDAwZmZmZmZmZmYvYXBwbGllZC5qc29uXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24vYXBwbGllZC5qc29uXCJcbnJtIC1yZiAtLSBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1uZXh0LSRuXCIgXCJ3b3Jrc3BhY2UvLm15cm1pZG9uLW5leHQtJG5cIiBcInNjcmF0Y2gvLm15cm1pZG9uLW5leHQtJG5cIiBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS0wMDAwMDAwMGZmZmZmZmZmXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24tb2xkLSRuXCIiLCJteXJtaWRvbi1oZWxwZXIiLCIvIl0sIkxhYmVscyI6eyJteXJtaWRvbi5ib3QtaGVscGVyIjoiM2YyYjhjMWUtNGQ1YS00YjZjLThkN2UtOWYwYTFiMmMzZDRlIn0sIk5ldHdvcmtEaXNhYmxlZCI6dHJ1ZSwiSG9zdENvbmZpZyI6eyJNZW1vcnkiOjEzNDIxNzcyOCwiUGlkc0xpbWl0Ijo2NCwiQ2FwRHJvcCI6WyJBTEwiXSwiQ2FwQWRkIjpbXSwiU2VjdXJpdHlPcHQiOlsibm8tbmV3LXByaXZpbGVnZXMiXSwiUmVhZG9ubHlSb290ZnMiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im5vIn0sIk5ldHdvcmtNb2RlIjoibm9uZSIsIkJpbmRzIjpbIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvaGVybWVzOi9kYXRhL2hlcm1lcyIsIi9zcnYvbXlybWlkb24tYm90cy8zZjJiOGMxZS00ZDVhLTRiNmMtOGQ3ZS05ZjBhMWIyYzNkNGUvd29ya3NwYWNlOi93b3Jrc3BhY2UiLCIvc3J2L215cm1pZG9uLWJvdHMvM2YyYjhjMWUtNGQ1YS00YjZjLThkN2UtOWYwYTFiMmMzZDRlL3NjcmF0Y2g6L3NjcmF0Y2giXSwiUHJpdmlsZWdlZCI6ZmFsc2V9fQ=="
+  "bodyBase64": "eyJJbWFnZSI6InNoYTI1NjpmZWRjYmE5ODc2NTQzMjEwZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTBmZWRjYmE5ODc2NTQzMjEwIiwiVXNlciI6IjEwMDAxOjEwMDAxIiwiRW50cnlwb2ludCI6WyIvYmluL3NoIiwiLWMiXSwiQ21kIjpbInNldCAtZXVcbnVtYXNrIDA3N1xuY2QgXCIkMVwiXG5uPTAwMDAwMDAwZmZmZmZmZmZcbiMgMS4gc3RhZ2luZyBmcm9tIGludGVycnVwdGVkIGVhcmxpZXIgYXBwbGllc1xuZm9yIHJvb3QgaW4gZGF0YS9oZXJtZXMgd29ya3NwYWNlIHNjcmF0Y2g7IGRvXG4gIGZvciBzdGFsZSBpbiBcIiRyb290XCIvLm15cm1pZG9uLW5leHQtKiBcIiRyb290XCIvLm15cm1pZG9uLWFwcGx5LSogXCIkcm9vdFwiLy5teXJtaWRvbi1vbGQtKjsgZG9cbiAgICBbIC1lIFwiJHN0YWxlXCIgXSB8fCBjb250aW51ZVxuICAgIGNhc2UgXCIke3N0YWxlI1wiJHJvb3RcIi99XCIgaW5cbiAgICAgIFwiLm15cm1pZG9uLW5leHQtJG5cIiB8IFwiLm15cm1pZG9uLWFwcGx5LSRuXCIpIDs7XG4gICAgICAqKSBybSAtcmYgLS0gXCIkc3RhbGVcIiA7O1xuICAgIGVzYWNcbiAgZG9uZVxuZG9uZVxuIyAyLiBjb21waWxlci1vd25lZCBkaXJlY3RvcmllcywgcmVwbGFjZWQgd2hvbGVzYWxlXG5zdGFnZWQ9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tbmV4dC0kbi9za2lsbHMtYm9hcmRcIlxubGl2ZT1cImRhdGEvaGVybWVzL3NraWxscy1ib2FyZFwiXG5pZiBbIC1kIFwiJHN0YWdlZFwiIF07IHRoZW5cbiAgb2xkPVwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLW9sZC0kblwiXG4gIG1rZGlyIC1wIC0tIFwiJG9sZFwiXG4gIGlmIFsgLWUgXCIkbGl2ZVwiIF0gfHwgWyAtTCBcIiRsaXZlXCIgXTsgdGhlbiBtdiAtZiAtVCAtLSBcIiRsaXZlXCIgXCIkb2xkLzBcIjsgZmlcbiAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkbGl2ZVwiKVwiXG4gIG12IC1mIC1UIC0tIFwiJHN0YWdlZFwiIFwiJGxpdmVcIlxuZmlcbiMgMy4gZXZlcnkgb3RoZXIgc3RhZ2VkIGZpbGUsIG9uZSBhdG9taWMgcmVuYW1lIGVhY2hcbmxpc3Q9XCJkYXRhL2hlcm1lcy8ubXlybWlkb24tYXBwbHktMDAwMDAwMDBmZmZmZmZmZi9zdGFnZWQubGlzdFwiXG5mb3Igcm9vdCBpbiBkYXRhL2hlcm1lcyB3b3Jrc3BhY2Ugc2NyYXRjaDsgZG9cbiAgc3RhZ2luZz1cIiRyb290Ly5teXJtaWRvbi1uZXh0LSRuXCJcbiAgWyAtZCBcIiRzdGFnaW5nXCIgXSB8fCBjb250aW51ZVxuICAoY2QgXCIkc3RhZ2luZ1wiICYmIGZpbmQgLiAtdHlwZSBmKSA+IFwiJGxpc3RcIlxuICB3aGlsZSBJRlM9IHJlYWQgLXIgcmVsOyBkb1xuICAgIHJlbD1cIiR7cmVsIy4vfVwiXG4gICAgbWtkaXIgLXAgLS0gXCIkKGRpcm5hbWUgLS0gXCIkcm9vdC8kcmVsXCIpXCJcbiAgICBtdiAtZiAtVCAtLSBcIiRzdGFnaW5nLyRyZWxcIiBcIiRyb290LyRyZWxcIlxuICBkb25lIDwgXCIkbGlzdFwiXG5kb25lXG4jIDQuIGZpbGVzIHRoZSBwcmV2aW91cyBhcHBseSB3cm90ZSB0aGF0IHRoaXMgcHJvZmlsZSBubyBsb25nZXIgaGFzXG5yZW1vdmFscz1cImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS0wMDAwMDAwMGZmZmZmZmZmL3JlbW92ZS5saXN0XCJcbmlmIFsgLWYgXCIkcmVtb3ZhbHNcIiBdOyB0aGVuXG4gIHdoaWxlIElGUz0gcmVhZCAtciBwOyBkb1xuICAgIGNhc2UgXCIkcFwiIGluXG4gICAgICBoZXJtZXMvKikgZGVzdD1cImRhdGEvaGVybWVzLyR7cCNoZXJtZXMvfVwiIDs7XG4gICAgICB3b3Jrc3BhY2UvKikgZGVzdD1cIndvcmtzcGFjZS8ke3Ajd29ya3NwYWNlL31cIiA7O1xuICAgICAgc2NyYXRjaC8qKSBkZXN0PVwic2NyYXRjaC8ke3Ajc2NyYXRjaC99XCIgOztcbiAgICAgICopIGNvbnRpbnVlIDs7XG4gICAgZXNhY1xuICAgIGlmIFsgLWYgXCIkZGVzdFwiIF0gfHwgWyAtTCBcIiRkZXN0XCIgXTsgdGhlbiBybSAtZiAtLSBcIiRkZXN0XCI7IGZpXG4gIGRvbmUgPCBcIiRyZW1vdmFsc1wiXG5maVxuIyA1LiB0aGUgYXBwbGllZC1zdGF0ZSBtYXJrZXIsIHN0cmljdGx5IGxhc3Rcbm1rZGlyIC1wIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uXCJcbm12IC1mIC1UIC0tIFwiZGF0YS9oZXJtZXMvLm15cm1pZG9uLWFwcGx5LTAwMDAwMDAwZmZmZmZmZmYvYXBwbGllZC5qc29uXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24vYXBwbGllZC5qc29uXCJcbnJtIC1yZiAtLSBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1uZXh0LSRuXCIgXCJ3b3Jrc3BhY2UvLm15cm1pZG9uLW5leHQtJG5cIiBcInNjcmF0Y2gvLm15cm1pZG9uLW5leHQtJG5cIiBcImRhdGEvaGVybWVzLy5teXJtaWRvbi1hcHBseS0wMDAwMDAwMGZmZmZmZmZmXCIgXCJkYXRhL2hlcm1lcy8ubXlybWlkb24tb2xkLSRuXCIiLCJteXJtaWRvbi1oZWxwZXIiLCIvIl0sIkxhYmVscyI6eyJteXJtaWRvbi5ib3QtaGVscGVyIjoiYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhIn0sIk5ldHdvcmtEaXNhYmxlZCI6dHJ1ZSwiSG9zdENvbmZpZyI6eyJNZW1vcnkiOjEzNDIxNzcyOCwiUGlkc0xpbWl0Ijo2NCwiQ2FwRHJvcCI6WyJBTEwiXSwiQ2FwQWRkIjpbXSwiU2VjdXJpdHlPcHQiOlsibm8tbmV3LXByaXZpbGVnZXMiXSwiUmVhZG9ubHlSb290ZnMiOnRydWUsIlJlc3RhcnRQb2xpY3kiOnsiTmFtZSI6Im5vIn0sIk5ldHdvcmtNb2RlIjoibm9uZSIsIkJpbmRzIjpbIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvaGVybWVzOi9kYXRhL2hlcm1lcyIsIi9zcnYvbXlybWlkb24tYm90cy9hYWFhYWFhYS1hYWFhLTRhYWEtOGFhYS1hYWFhYWFhYWFhYWEvd29ya3NwYWNlOi93b3Jrc3BhY2UiLCIvc3J2L215cm1pZG9uLWJvdHMvYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhL3NjcmF0Y2g6L3NjcmF0Y2giXSwiUHJpdmlsZWdlZCI6ZmFsc2V9fQ=="
  },
  {
   "step": "writeProfile-3",
   "method": "PUT",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/archive?path=%2Fdata%2Fhermes&noOverwriteDirNonDir=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/archive?path=%2Fdata%2Fhermes&noOverwriteDirNonDir=true",
   "headers": {
    "content-type": "application/x-tar",
    "content-length": "10752",
@@ -557,7 +557,7 @@
  {
   "step": "writeProfile-3",
   "method": "PUT",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/archive?path=%2Fworkspace&noOverwriteDirNonDir=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/archive?path=%2Fworkspace&noOverwriteDirNonDir=true",
   "headers": {
    "content-type": "application/x-tar",
    "content-length": "2560",
@@ -569,7 +569,7 @@
  {
   "step": "writeProfile-3",
   "method": "PUT",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/archive?path=%2Fscratch&noOverwriteDirNonDir=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/archive?path=%2Fscratch&noOverwriteDirNonDir=true",
   "headers": {
    "content-type": "application/x-tar",
    "content-length": "4096",
@@ -581,7 +581,7 @@
  {
   "step": "writeProfile-3",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/start",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/start",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive",
@@ -592,7 +592,7 @@
  {
   "step": "writeProfile-3",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper/wait?condition=not-running",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper/wait?condition=not-running",
   "headers": {
    "content-type": "application/json",
    "accept": "application/json",
@@ -605,7 +605,7 @@
  {
   "step": "writeProfile-3",
   "method": "DELETE",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e.helper?force=true&v=true",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.helper?force=true&v=true",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"
@@ -615,7 +615,7 @@
  {
   "step": "start-after-recreate",
   "method": "POST",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/start",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/start",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive",
@@ -626,7 +626,7 @@
  {
   "step": "start-after-recreate",
   "method": "GET",
-  "target": "/v1.45/containers/myrmidon-bot-3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e/json",
+  "target": "/v1.45/containers/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/json",
   "headers": {
    "host": "localhost",
    "connection": "keep-alive"

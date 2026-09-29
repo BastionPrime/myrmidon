@@ -40,7 +40,7 @@ if (!outDir) {
 
 const VOLUME_ROOT = "/srv/myrmidon-bots";
 const NETWORK = "myrmidon-bots";
-const BOT_KEY = "3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e";
+const BOT_KEY = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const IMAGE = `ghcr.io/itkadr-git/myrmidon-hermes@sha256:${"0123456789abcdef".repeat(4)}`;
 const IMAGE_ID = `sha256:${"fedcba9876543210".repeat(4)}`;
 const NONCES = ["0123456789abcdef", "fedcba9876543210", "00000000ffffffff", "a1b2c3d4e5f60718", "9999999999999999"];
