@@ -12,7 +12,7 @@ this repository (`ROADMAP.md` says the same under C1).
 
 This image does **one** job: run the gateway. It does not run cron, a
 dashboard, or any messaging platform other than `api_server`. It has no
-Docker socket, no host mounts, and no media tools.
+Docker socket, no host mounts, and no media tools. (The optional Node.js variant below adds Node.js, not media tools.)
 
 ## What's in the image
 
@@ -76,6 +76,59 @@ Docker socket, no host mounts, and no media tools.
   `docs/myrmidon/CONVENTIONS.md` §8; media handling is a separate service
   outside this fork.
 - Non-root user, uid/gid `10001`.
+
+## Variant with Node.js
+
+`Dockerfile` has a second final stage, `runtime-node`, built `FROM runtime`. It is
+published as a separate image, `ghcr.io/itkadr-git/myrmidon-hermes-node`, by the same
+workflow with the same gating (push to `main` and `myr-v*` tags only; a pull request
+builds and checks it, never pushes). The default `runtime` target and the
+`myrmidon-hermes` image are unchanged and do not contain Node.js.
+
+This is an **interim measure** until a per-task sandbox exists. It is meant for the few
+bots whose work is node scripts (presentations and documents, diagram and image
+rendering); the roles that use it are listed in `docs/myrmidon/ci.md`. Every other bot
+should keep using `myrmidon-hermes`.
+
+What differs from `runtime` (everything else — uid/gid `10001:10001`, read-only root,
+volumes, entrypoint, health check, and the `myrmidon.bot-runtime.contract="1"` label
+inherited from `runtime` — is the same; the variant only adds the label
+`io.github.itkadr-git.myrmidon.variant="node"`):
+
+- Node.js 22 LTS from the official `nodejs.org` tarball, pinned by exact version and
+  sha256 (`NODE_VERSION` / `NODE_SHA256`; bump together, the build fails on a mismatch),
+  with the npm that ships in it, under `/opt/node`.
+- Packages, installed from a lockfile with `npm ci` into the sealed `/opt/node-tools`
+  (`node-tools/package.json` pins exact versions, `package-lock.json` every transitive
+  package with its integrity hash). Only what the bots' node scripts actually import:
+  `pptxgenjs` (presentations), `@napi-rs/canvas` (rendering diagrams and layouts),
+  `sharp` (image processing), `image-size`, `pdf-lib` (building PDF) and `pdfjs-dist`
+  (reading PDF). The native ones (`sharp`, `@napi-rs/canvas`) ship prebuilt binaries,
+  so no compiler is in the image. `docx`, `tesseract.js`, `puppeteer-core` and any
+  browser are deliberately not included.
+- Fonts (Liberation, DejaVu) copied from a build stage: `@napi-rs/canvas` draws with
+  system fonts only, and the slim base has none.
+- `NODE_PATH=/opt/node-tools/node_modules`, so `require('pptxgenjs')` works from any
+  working directory. **ES module `import` ignores `NODE_PATH`**: an `.mjs` script has to
+  import by absolute path (`$NODE_TOOLS_DIR/node_modules/...`) or go through
+  `createRequire`. `pdfjs-dist` is ES-module only.
+- The root is read-only, so npm and node write only to volumes: `NPM_CONFIG_CACHE` is
+  `/scratch/npm-cache`, `NPM_CONFIG_PREFIX` is `/scratch/npm-global` (its `bin` is on
+  `PATH`, its `lib/node_modules` on `NODE_PATH`), `$HOME` is `/data/hermes`. A local
+  `npm install` in `/workspace` works; a global one lands in `/scratch` and disappears
+  with that volume.
+
+Checks: the last build step runs `node /opt/node-tools/smoke.cjs` as uid `10001` (writes a
+`.pptx` to a temp file, renders Cyrillic text on a canvas, re-encodes it with `sharp`,
+reads its size, builds a PDF, imports `pdfjs-dist`), so a package that does not load
+fails the build. On pull requests the workflow repeats it on the finished image with
+`--read-only`, `--user 10001:10001` and `tmpfs` in place of the volumes, and checks that
+npm's cache goes to `/scratch`.
+
+The workflow builds the default image with an explicit `target: runtime`, so adding a
+stage to the Dockerfile can never silently change what `myrmidon-hermes` is. A plain
+`docker build docker/bot-runtime` (no `--target`) would produce the Node.js variant,
+since it is the last stage; always pass `--target`.
 
 ## Sealed image: lazy installs and the write-safe root
 
