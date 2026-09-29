@@ -51,7 +51,7 @@ Runtime mapping:
 - Sends Idempotency-Key equal to this attempt's own Paperclip run id — Hermes 0.21+ dedupes duplicate creates for the same run id and replies replayed:true, which this adapter then attaches to instead of starting a second execution.
 - Streams GET /v1/runs/{run_id}/events and polls GET /v1/runs/{run_id} as fallback; tool/message/reasoning events become compact log lines the shared Hermes transcript parser understands, and feed ctx.onRuntimeProgress.
 - Auto-denies an approval.request (POST /v1/runs/{run_id}/approval, choice=deny) instead of leaving the run parked until timeout.
-- Registers ctx.onCancellationReady before creating a run; a signal already cancelled at that point skips run creation entirely. An operator cancellation after the run exists calls POST /v1/runs/{run_id}/stop and waits up to 10s for a final status (errorCode hermes_gateway_cancelled), and only reports the cancellation acknowledged once that final status confirms termination.
+- Registers ctx.onCancellationReady before creating a run; a signal already cancelled at that point skips run creation entirely. The create request itself is time-bounded (15s), and a cancellation arriving while it is in flight gets a 5s grace to settle before the request is cut off (errorCode hermes_gateway_cancelled without an acknowledgement, since Hermes may already have accepted the run). An operator cancellation after the run exists calls POST /v1/runs/{run_id}/stop and waits up to 10s for a final status (errorCode hermes_gateway_cancelled), and only reports the cancellation acknowledged once that final status confirms termination.
 - Calls POST /v1/runs/{run_id}/stop on timeout.
 
 Security guidance:

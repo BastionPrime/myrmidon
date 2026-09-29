@@ -8,6 +8,7 @@ import { execute, mapFinalResultForTest, parseSseFramesForTest, resolveSessionKe
 import { testEnvironment } from "./test.js";
 import {
   CREATE_CANCEL_GRACE_MS,
+  CREATE_REQUEST_TIMEOUT_MS,
   DEFAULT_TIMEOUT_SEC,
   STOP_GRACE_MS,
   STOP_REQUEST_TIMEOUT_MS,
@@ -53,6 +54,41 @@ function sseStream(text: string): ReadableStream<Uint8Array> {
       controller.enqueue(new TextEncoder().encode(text));
       controller.close();
     },
+  });
+}
+
+/** myrmidon(G4): AbortSignal.timeout() runs on Node's own timers, which
+ * vi.useFakeTimers() does not fake. Replace the signal for one specific
+ * timeout length with an AbortController driven by the (faked) setTimeout,
+ * and hand back every signal created that way so a test can assert each one
+ * really fired with a TimeoutError. */
+function fakeAbortSignalTimeout(matchMs: number): { signals: AbortSignal[]; restore: () => void } {
+  const signals: AbortSignal[] = [];
+  const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+  const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+    if (ms !== matchMs) return realTimeout(ms);
+    const requestController = new AbortController();
+    setTimeout(
+      () => requestController.abort(new DOMException("The operation timed out.", "TimeoutError")),
+      ms,
+    ).unref();
+    signals.push(requestController.signal);
+    return requestController.signal;
+  });
+  return { signals, restore: () => spy.mockRestore() };
+}
+
+/** A fetch() reply that never arrives, but honours the request's own signal
+ * the way a real fetch does (rejects with the signal's reason on abort). */
+function hangUntilAborted(init?: RequestInit): Promise<Response> {
+  return new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal;
+    if (!signal) return;
+    signal.addEventListener(
+      "abort",
+      () => reject(signal.reason ?? new DOMException("aborted", "AbortError")),
+      { once: true },
+    );
   });
 }
 
@@ -940,18 +976,7 @@ describe("execute — operator cancellation (G4)", () => {
     // satisfy that too — so it never actually redlined without the fix.
     vi.useFakeTimers();
     const opCancel = new AbortController();
-    const timeoutSignals: AbortSignal[] = [];
-    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
-      if (ms !== STOP_REQUEST_TIMEOUT_MS) return realTimeout(ms);
-      const requestController = new AbortController();
-      setTimeout(
-        () => requestController.abort(new DOMException("The operation timed out.", "TimeoutError")),
-        ms,
-      ).unref();
-      timeoutSignals.push(requestController.signal);
-      return requestController.signal;
-    });
+    const stopTimeouts = fakeAbortSignalTimeout(STOP_REQUEST_TIMEOUT_MS);
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -965,15 +990,7 @@ describe("execute — operator cancellation (G4)", () => {
       // /stop, fetchFinalStatus's GET, and pollStatus's own background GET
       // all hang until their own signal fires — none of them get a response
       // from this fixture.
-      return new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        if (!signal) return;
-        signal.addEventListener(
-          "abort",
-          () => reject(signal.reason ?? new DOMException("aborted", "AbortError")),
-          { once: true },
-        );
-      });
+      return hangUntilAborted(init);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -989,11 +1006,11 @@ describe("execute — operator cancellation (G4)", () => {
     const result = await resultPromise;
     const elapsedMs = Date.now() - before;
 
-    timeoutSpy.mockRestore();
+    stopTimeouts.restore();
     vi.useRealTimers();
 
-    expect(timeoutSignals.length).toBeGreaterThanOrEqual(2);
-    for (const signal of timeoutSignals) {
+    expect(stopTimeouts.signals.length).toBeGreaterThanOrEqual(2);
+    for (const signal of stopTimeouts.signals) {
       expect(signal.aborted).toBe(true);
       expect((signal.reason as DOMException | undefined)?.name).toBe("TimeoutError");
     }
@@ -1013,23 +1030,17 @@ describe("execute — operator cancellation (G4)", () => {
     // CREATE_REQUEST_TIMEOUT_MS/CREATE_CANCEL_GRACE_MS.
     vi.useFakeTimers();
     const opCancel = new AbortController();
-    let createSignal: AbortSignal | undefined;
+    const createSignals: Array<AbortSignal | undefined> = [];
+    const requestedUrls: string[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      requestedUrls.push(url);
       if (!url.endsWith("/v1/runs")) throw new Error(`unexpected request to ${url}`);
-      createSignal = init?.signal ?? undefined;
+      createSignals.push(init?.signal ?? undefined);
       // The operator cancels while this request is still outstanding —
       // Hermes never gets a chance to answer within this test.
       opCancel.abort();
-      return new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        if (!signal) return;
-        signal.addEventListener(
-          "abort",
-          () => reject(signal.reason ?? new DOMException("aborted", "AbortError")),
-          { once: true },
-        );
-      });
+      return hangUntilAborted(init);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -1039,69 +1050,201 @@ describe("execute — operator cancellation (G4)", () => {
 
     const before = Date.now();
     const resultPromise = execute(ctx);
-    await vi.advanceTimersByTimeAsync(CREATE_CANCEL_GRACE_MS);
+    // Still inside the grace window: the request must not have been cut off
+    // yet (its response, with a run_id, may already be on the wire).
+    await vi.advanceTimersByTimeAsync(CREATE_CANCEL_GRACE_MS - 1);
+    expect(createSignals[0]?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     const result = await resultPromise;
     const elapsedMs = Date.now() - before;
     vi.useRealTimers();
 
-    expect(createSignal?.aborted).toBe(true);
-    expect(elapsedMs).toBeLessThan(60_000);
-    expect(result.errorCode).toBe("hermes_gateway_create_interrupted");
+    expect(createSignals[0]?.aborted).toBe(true);
+    // Only the create request was ever issued: no /stop for a run id that
+    // was never returned.
+    expect(requestedUrls).toEqual(["http://127.0.0.1:8642/v1/runs"]);
+    // Well inside the platform's 60s waitForAdapterStop deadline: bounded by
+    // the grace window itself, not by undici's own (300s) default.
+    expect(elapsedMs).toBeLessThanOrEqual(CREATE_CANCEL_GRACE_MS);
+    expect(result.errorCode).toBe("hermes_gateway_cancelled");
+    expect(result.errorCode).not.toBe("hermes_gateway_connect_failed");
+    expect(result.errorFamily ?? null).toBeNull();
+    expect(result.signal).toBe("SIGTERM");
     // Hermes may already have admitted the run under this Idempotency-Key —
     // this must not claim acknowledged cancellation or "never started".
     expect(result.resultJson?.executionCancellation).toBeUndefined();
     expect(result.executionRecovery).toBeUndefined();
   });
 
-  it("treats a definite Hermes rejection during a cancelled create as provider-never-started", async () => {
-    // myrmidon(G4): unlike the "hung create" case above, an HTTP 4xx
-    // response proves Hermes answered and did not admit the run — the same
-    // guarantee the before-dispatch abort branch relies on.
-    const opCancel = new AbortController();
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  it("times a create request out on its own, under a code that is not connect_failed and not provider-never-started", async () => {
+    // myrmidon(G4): same hung gateway, but nobody cancels — the create
+    // request's own CREATE_REQUEST_TIMEOUT_MS guard must still cut it off
+    // (undici's own default is 300s), and fetchJson's blanket "any fetch
+    // exception is connect_failed" mapping must not swallow the reason.
+    vi.useFakeTimers();
+    const createTimeouts = fakeAbortSignalTimeout(CREATE_REQUEST_TIMEOUT_MS);
+    const createSignals: Array<AbortSignal | undefined> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (!url.endsWith("/v1/runs")) throw new Error(`unexpected request to ${url}`);
-      opCancel.abort();
-      return new Response(JSON.stringify({ error: "bad request" }), { status: 400 });
+      createSignals.push(init?.signal ?? undefined);
+      return hangUntilAborted(init);
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
-    ctx.signal = opCancel.signal;
     ctx.onCancellationReady = vi.fn(async () => undefined);
 
-    const result = await execute(ctx);
+    const resultPromise = execute(ctx);
+    await vi.advanceTimersByTimeAsync(CREATE_REQUEST_TIMEOUT_MS);
+    const result = await resultPromise;
+    createTimeouts.restore();
+    vi.useRealTimers();
 
-    expect(result.errorCode).toBe("hermes_gateway_cancelled");
-    expect(result.executionRecovery).toEqual({ kind: "bootstrap", providerWorkStarted: false });
-    expect(result.resultJson?.executionCancellation).toMatchObject({
-      state: "acknowledged",
-      forced: false,
-    });
-  });
-
-  it("does not claim provider-never-started when a cancelled create fails ambiguously (5xx)", async () => {
-    // myrmidon(G4): the mirror image of the 4xx test above — a 5xx does not
-    // prove Hermes rejected the run outright (it may have accepted it and
-    // failed afterwards), so this must not claim "never started".
-    const opCancel = new AbortController();
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (!url.endsWith("/v1/runs")) throw new Error(`unexpected request to ${url}`);
-      opCancel.abort();
-      return new Response(JSON.stringify({ error: "internal" }), { status: 503 });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
-    ctx.signal = opCancel.signal;
-    ctx.onCancellationReady = vi.fn(async () => undefined);
-
-    const result = await execute(ctx);
-
-    expect(result.errorCode).toBe("hermes_gateway_upstream_error");
+    expect(createSignals[0]?.aborted).toBe(true);
+    expect(createTimeouts.signals.length).toBe(1);
+    expect((createTimeouts.signals[0]?.reason as DOMException | undefined)?.name).toBe("TimeoutError");
+    expect(result.timedOut).toBe(true);
+    expect(result.errorCode).toBe("hermes_gateway_create_timeout");
     expect(result.executionRecovery).toBeUndefined();
     expect(result.resultJson?.executionCancellation).toBeUndefined();
+  });
+
+  it("lets a create request that resolves inside the cancellation grace window take the normal stop path", async () => {
+    // myrmidon(G4): the grace window exists precisely so a run_id that is
+    // already on the wire is not thrown away — Hermes did start the run, so
+    // it must be stopped and confirmed like any other cancelled run.
+    vi.useFakeTimers();
+    const opCancel = new AbortController();
+    const requestedUrls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requestedUrls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.endsWith("/v1/runs")) {
+        opCancel.abort();
+        // Answers 1s into the grace window.
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        return new Response(JSON.stringify({ run_id: "run-grace-1", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) return new Promise<Response>(() => {});
+      if (url.endsWith("/stop")) return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      return new Response(JSON.stringify({ status: "cancelled" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+    ctx.signal = opCancel.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    const resultPromise = execute(ctx);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await resultPromise;
+    vi.useRealTimers();
+
+    expect(requestedUrls).toContain("POST http://127.0.0.1:8642/v1/runs/run-grace-1/stop");
+    expect(result.errorCode).toBe("hermes_gateway_cancelled");
+    expect(result.resultJson?.executionCancellation).toMatchObject({ state: "acknowledged", forced: false });
+  });
+
+  describe("a create that fails while the operator cancels", () => {
+    // myrmidon(G4): a definite Hermes rejection (HTTP 4xx other than 409, or
+    // a connection that never reached it) proves the run was never admitted:
+    // same acknowledged + bootstrap outcome as the before-dispatch abort
+    // branch. Anything ambiguous — Hermes may already have admitted the run
+    // — must stay a plain error with neither claim.
+    const connectError = (code: string): Error =>
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error(`connect ${code} 127.0.0.1:8642`), { code }),
+      });
+
+    const cases: Array<{
+      label: string;
+      respond: () => Promise<Response>;
+      unambiguous: boolean;
+      errorCode: string;
+    }> = [
+      {
+        label: "HTTP 400",
+        respond: async () => new Response(JSON.stringify({ error: "bad request" }), { status: 400 }),
+        unambiguous: true,
+        errorCode: "hermes_gateway_cancelled",
+      },
+      {
+        label: "HTTP 429",
+        respond: async () => new Response(JSON.stringify({ error: "slow down" }), { status: 429 }),
+        unambiguous: true,
+        errorCode: "hermes_gateway_cancelled",
+      },
+      {
+        label: "ECONNREFUSED",
+        respond: async () => {
+          throw connectError("ECONNREFUSED");
+        },
+        unambiguous: true,
+        errorCode: "hermes_gateway_cancelled",
+      },
+      {
+        label: "ENOTFOUND",
+        respond: async () => {
+          throw connectError("ENOTFOUND");
+        },
+        unambiguous: true,
+        errorCode: "hermes_gateway_cancelled",
+      },
+      {
+        label: "HTTP 503",
+        respond: async () => new Response(JSON.stringify({ error: "internal" }), { status: 503 }),
+        unambiguous: false,
+        errorCode: "hermes_gateway_upstream_error",
+      },
+      {
+        // A reset can land after the request was written.
+        label: "ECONNRESET",
+        respond: async () => {
+          throw connectError("ECONNRESET");
+        },
+        unambiguous: false,
+        errorCode: "hermes_gateway_connect_failed",
+      },
+      {
+        // The idempotency store saying a run under this key WAS admitted.
+        label: "HTTP 409 (idempotency conflict)",
+        respond: async () => new Response(JSON.stringify({ error: "conflict" }), { status: 409 }),
+        unambiguous: false,
+        errorCode: "hermes_gateway_idempotency_conflict",
+      },
+    ];
+
+    for (const testCase of cases) {
+      it(`${testCase.unambiguous ? "acknowledges as never-started" : "does not claim never-started"} on ${testCase.label}`, async () => {
+        const opCancel = new AbortController();
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (!url.endsWith("/v1/runs")) throw new Error(`unexpected request to ${url}`);
+          opCancel.abort();
+          return testCase.respond();
+        });
+        vi.stubGlobal("fetch", fetchMock);
+
+        const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 30 });
+        ctx.signal = opCancel.signal;
+        ctx.onCancellationReady = vi.fn(async () => undefined);
+
+        const result = await execute(ctx);
+
+        expect(result.errorCode).toBe(testCase.errorCode);
+        if (testCase.unambiguous) {
+          expect(result.executionRecovery).toEqual({ kind: "bootstrap", providerWorkStarted: false });
+          expect(result.resultJson?.executionCancellation).toMatchObject({
+            state: "acknowledged",
+            forced: false,
+          });
+        } else {
+          expect(result.executionRecovery).toBeUndefined();
+          expect(result.resultJson?.executionCancellation).toBeUndefined();
+        }
+      });
+    }
   });
 
   it("acknowledges cancellation when a poll-detected terminal status wins the race and cancellation is observed only during the final buffer flush", async () => {
@@ -1151,6 +1294,73 @@ describe("execute — operator cancellation (G4)", () => {
       state: "acknowledged",
       forced: false,
     });
+  });
+
+  it("acknowledges cancellation when it lands after the run timed out and Hermes confirms the run terminal", async () => {
+    // myrmidon(G4): Promise.race already picked "timeout" here, so the
+    // operator's cancellation arrives during the timeout branch's own
+    // stop/final-status calls (the /stop request is what triggers it below).
+    // Hermes then reports the run terminal — verified termination, so the
+    // platform's cancelRun must not be left to 409 on an unacknowledged
+    // "requested" state.
+    const opCancel = new AbortController();
+    let stopRequested = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-timeout-race", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) return new Promise<Response>(() => {});
+      if (url.endsWith("/stop")) {
+        stopRequested = true;
+        opCancel.abort();
+        return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      }
+      // pollStatus and fetchFinalStatus: running until /stop has been asked.
+      return new Response(JSON.stringify({ status: stopRequested ? "cancelled" : "running" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      timeoutSec: 0.05,
+    });
+    ctx.signal = opCancel.signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    const result = await execute(ctx);
+
+    expect(result.timedOut).toBe(true);
+    expect(result.errorCode).toBe("hermes_gateway_timeout");
+    expect(result.resultJson?.executionCancellation).toMatchObject({
+      state: "acknowledged",
+      forced: false,
+    });
+  });
+
+  it("does not acknowledge on timeout when no cancellation was requested", async () => {
+    // myrmidon(G4): the mirror image — the timeout branch must not start
+    // claiming cancellation acknowledged for runs nobody cancelled.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-timeout-plain", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) return new Promise<Response>(() => {});
+      if (url.endsWith("/stop")) return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      return new Response(JSON.stringify({ status: "cancelled" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 0.001 });
+    ctx.signal = new AbortController().signal;
+    ctx.onCancellationReady = vi.fn(async () => undefined);
+
+    const result = await execute(ctx);
+
+    expect(result.errorCode).toBe("hermes_gateway_timeout");
+    expect(result.resultJson?.executionCancellation).toBeUndefined();
   });
 });
 

@@ -1228,26 +1228,27 @@ function connectErrorCode(err: unknown): string | null {
 }
 
 // myrmidon(G4): network failures that unambiguously never reached Hermes at
-// all (refused, unresolvable, or unroutable host) — as opposed to e.g.
-// ECONNRESET or a timeout, either of which can happen after the request was
-// already sent and Hermes may have started acting on it.
+// all (refused, unresolvable, or unroutable host). ECONNRESET is deliberately
+// NOT here: a reset can arrive after the request was already written, when
+// Hermes may have admitted the run, and the error code alone cannot tell the
+// two cases apart — the same goes for a timeout.
 const UNAMBIGUOUS_PRE_SEND_CONNECT_ERROR_CODES = new Set([
   "ECONNREFUSED",
   "ENOTFOUND",
   "EHOSTUNREACH",
-  "ECONNRESET",
 ]);
 
 /** myrmidon(G4): true only when a failed POST /v1/runs proves Hermes never
- * admitted the run — either it answered outright (any 4xx, including 429),
- * or the connection itself never reached it. Anything else (a 5xx, or our
- * own create-request timeout/cancellation cutoff) is ambiguous: Hermes may
- * already have accepted the run under this Idempotency-Key. See execute()'s
- * create-request catch block. */
+ * admitted the run — either it answered outright with a 4xx (including 429),
+ * or the connection itself never reached it. Anything else (a 5xx, a reset,
+ * our own create-request timeout/cancellation cutoff, or a 409 — the
+ * idempotency store saying a run under this key WAS admitted) is ambiguous:
+ * Hermes may already have accepted the run under this Idempotency-Key. See
+ * execute()'s create-request catch block. */
 function isUnambiguousCreateNonStart(err: unknown): boolean {
   const hermesError = err as HermesHttpError;
   if (typeof hermesError.status === "number") {
-    return hermesError.status >= 400 && hermesError.status < 500;
+    return hermesError.status >= 400 && hermesError.status < 500 && hermesError.status !== 409;
   }
   const code = connectErrorCode(err);
   return code !== null && UNAMBIGUOUS_PRE_SEND_CONNECT_ERROR_CODES.has(code);
@@ -1465,13 +1466,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       // bucket, which both misreports "Hermes is unreachable" and, if the
       // branch below treated it as unambiguous, would wrongly tell the
       // platform provider work never started even though Hermes may already
-      // have admitted the run under this Idempotency-Key.
+      // have admitted the run under this Idempotency-Key. Operator
+      // cancellation reports hermes_gateway_cancelled (like the other
+      // cancelled outcomes) but, unlike the before-dispatch branch, carries
+      // neither executionCancellation nor executionRecovery: the outcome is
+      // unverified. A create that merely timed out gets its own code.
       const cancelled = Boolean(ctx.signal?.aborted);
       return {
         exitCode: 1,
         signal: cancelled ? "SIGTERM" : null,
         timedOut: !cancelled,
-        errorCode: "hermes_gateway_create_interrupted",
+        errorCode: cancelled ? "hermes_gateway_cancelled" : "hermes_gateway_create_timeout",
         errorMessage: cancelled
           ? "Hermes gateway run was cancelled while POST /v1/runs was still in flight; whether Hermes accepted it could not be confirmed."
           : `Hermes /v1/runs did not respond within ${CREATE_REQUEST_TIMEOUT_MS}ms.`,
