@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { and, desc, eq, inArray } from "drizzle-orm";
 import {
   agents,
+  agentTaskSessions,
   agentWakeupRequests,
   authUsers,
   chatActions,
@@ -27,6 +28,8 @@ import {
   createDb,
   heartbeatRuns,
   issueComments,
+  issueRecoveryActions,
+  issueThreadInteractions,
   issueTreeHolds,
   issues,
   principalPermissionGrants,
@@ -2007,6 +2010,26 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
           .from(issueTreeHolds)
           .where(eq(issueTreeHolds.companyId, fixture.companyId)),
         enqueueCalls: enqueueWakeup.mock.calls.length,
+        allIssues: await db
+          .select({
+            id: issues.id,
+            status: issues.status,
+            state: issues.conversationState,
+            createdAt: issues.createdAt,
+            hiddenAt: issues.hiddenAt,
+          })
+          .from(issues),
+        recoveryActions: await db.select().from(issueRecoveryActions),
+        taskSessions: await db
+          .select({ taskKey: agentTaskSessions.taskKey, goalStatus: agentTaskSessions.goalStatus })
+          .from(agentTaskSessions),
+        interactions: await db
+          .select({ id: issueThreadInteractions.id, status: issueThreadInteractions.status })
+          .from(issueThreadInteractions),
+        chatActionRows: await db
+          .select({ id: chatActions.id, kind: chatActions.kind, status: chatActions.status })
+          .from(chatActions),
+        experimental: await instanceSettingsService(db).getExperimental(),
       };
       expect(result.operatorCancelExempted, JSON.stringify(debug, null, 1)).toBe(1);
       expect(result.escalated).toBe(0);
