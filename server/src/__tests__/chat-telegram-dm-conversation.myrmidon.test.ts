@@ -1945,7 +1945,8 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
         endpointId: endpoint.id,
         userId: "700021",
       });
-      stubStopCommand(runId);
+      // The real X8c /stop command (not the stub of the test above): the whole
+      // chain from the Telegram message to the heartbeat cancel is exercised.
 
       await sendTelegramDm({
         callbacks,
