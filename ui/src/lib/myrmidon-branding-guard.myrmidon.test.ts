@@ -175,6 +175,50 @@ describe("myrmidon(B1a): shipped page and manifest advertise Myrmidon", () => {
   });
 });
 
+describe("myrmidon(1.2.1): every tab/app icon is the Myrmidon brand file", () => {
+  const PUBLIC = path.join(REPO_ROOT, "ui", "public");
+  const BRAND = path.join(PUBLIC, "brand", "myrmidon");
+  const PAIRS: Array<[string, string]> = [
+    ["favicon.ico", "favicon.ico"],
+    ["favicon.svg", "myrmidon-favicon.svg"],
+    ["favicon-16x16.png", "icon-16.png"],
+    ["favicon-32x32.png", "icon-32.png"],
+    ["apple-touch-icon.png", "icon-180.png"],
+    ["android-chrome-192x192.png", "icon-192.png"],
+    ["android-chrome-512x512.png", "icon-512.png"],
+    // Unreferenced legacy names: kept identical so no paperclip glyph ships.
+    ["worktree-favicon.ico", "favicon.ico"],
+    ["worktree-favicon.svg", "myrmidon-favicon.svg"],
+    ["worktree-favicon-16x16.png", "icon-16.png"],
+    ["worktree-favicon-32x32.png", "icon-32.png"],
+  ];
+
+  it.each(PAIRS)("ui/public/%s is byte-identical to brand/myrmidon/%s", (root, brand) => {
+    expect(readFileSync(path.join(PUBLIC, root)).equals(readFileSync(path.join(BRAND, brand)))).toBe(true);
+  });
+
+  it("every icon linked from index.html and the manifest exists in ui/public", () => {
+    const html = readFileSync(path.join(REPO_ROOT, "ui", "index.html"), "utf-8");
+    const hrefs = [...html.matchAll(/<link[^>]+href="(\/[^"?#]+)"/g)].map((m) => m[1]);
+    const manifest = JSON.parse(readFileSync(path.join(PUBLIC, "site.webmanifest"), "utf-8"));
+    const srcs: string[] = manifest.icons.map((i: { src: string }) => i.src);
+    expect(hrefs.length).toBeGreaterThanOrEqual(5);
+    expect(srcs.length).toBeGreaterThan(0);
+    for (const href of [...hrefs, ...srcs]) {
+      expect(existsSync(path.join(PUBLIC, href)), href).toBe(true);
+    }
+  });
+
+  it("the built ui/dist, when present, ships the same icons and manifest", () => {
+    const dist = path.join(REPO_ROOT, "ui", "dist");
+    if (!existsSync(path.join(dist, "index.html"))) return;
+    for (const [root, brand] of PAIRS.slice(0, 7)) {
+      expect(readFileSync(path.join(dist, root)).equals(readFileSync(path.join(BRAND, brand))), root).toBe(true);
+    }
+    expect(existsSync(path.join(dist, "site.webmanifest"))).toBe(true);
+  });
+});
+
 describe("myrmidon(B1a): no paperclip artwork is rendered", () => {
   const productFiles = () =>
     walk(UI_SRC, /\.(ts|tsx)$/).filter((fp) => !path.basename(fp).includes(".test."));
