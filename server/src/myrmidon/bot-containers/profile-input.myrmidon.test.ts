@@ -337,7 +337,46 @@ describe("myrmidon(W2a) buildHermesProfileInput — LLM gateway key", () => {
       source({ llmApiKey: null, adapterConfig: { provider: "anthropic", model: "claude-sonnet-5" } }),
       settings({ llmBaseUrl: null, llmApiKeyEnv: null, llmApiKeySecret: null }),
     );
-    expect(input.llm).toEqual({ baseUrl: undefined, apiKeyEnv: undefined });
+    expect(input.llm).toEqual({});
+  });
+
+  it.each(["gemini", "zai", "kimi-coding", "anthropic"])(
+    "gives a %s card neither the gateway's address nor its key, though the instance configures both",
+    (provider) => {
+      const built = buildHermesProfileInput(
+        source({
+          adapterConfig: { provider, model: "some-model", models: { fallbacks: ["other-model"] } },
+          env: { PROVIDER_API_KEY: { value: "fake-provider-key-0001", secret: true } },
+        }),
+        settings(),
+      );
+      expect(built.input.llm.baseUrl).toBeUndefined();
+      expect(built.input.llm.apiKeyEnv).toBeUndefined();
+      // The gateway key is not placed in .env; the card's own provider key is.
+      expect(built.input.env.FLEET_LLM_API_KEY).toBeUndefined();
+      expect(Object.keys(built.input.env)).toEqual(["PROVIDER_API_KEY"]);
+
+      // Through the G2 compiler: no endpoint override, no gateway key reference or value, fallbacks included.
+      const profile = compileHermesProfile(built.input);
+      const config = fileContent(profile, "hermes/config.yaml");
+      expect(config).toContain(`provider: "${provider}"`);
+      expect(config).toContain("other-model");
+      expect(config).not.toContain("base_url");
+      expect(config).not.toContain("key_env");
+      expect(config).not.toContain("api_key");
+      expect(config).not.toContain("example.com/llm");
+      expect(config).not.toContain("FLEET_LLM_API_KEY");
+      const envFile = fileContent(profile, "hermes/.env");
+      expect(envFile).toContain('PROVIDER_API_KEY="fake-provider-key-0001"');
+      expect(envFile).not.toContain("FLEET_LLM_API_KEY");
+      expect(envFile).not.toContain("fake-llm-key-0001");
+    },
+  );
+
+  it("does not even look at the gateway key for a native-provider card", () => {
+    // No gateway key anywhere: a gateway card would fail closed on this, a native one builds.
+    const built = buildHermesProfileInput(source({ llmApiKey: null, adapterConfig: { provider: "gemini" } }), settings());
+    expect(built.input.env.FLEET_LLM_API_KEY).toBeUndefined();
   });
 });
 
@@ -513,7 +552,7 @@ describe("myrmidon(W2a) buildHermesProfileInput — through the G2 compiler", ()
   it("compiles to a profile whose secrets are only in .env", () => {
     const { input } = buildHermesProfileInput(
       source({
-        adapterConfig: { model: "anthropic/claude-sonnet-5", provider: "anthropic", hindsight: { bankId: "agent-a-bank" } },
+        adapterConfig: { model: "some-model", provider: "custom", hindsight: { bankId: "agent-a-bank" } },
         mcpServers: [board],
       }),
       settings(),

@@ -360,7 +360,7 @@ export function createDbBotCardSyncPorts(db: Db, profilePorts: BotProfilePorts =
  *
  *   startBotContainerReconciliation(listAgents, { driver, maintenance, network, activity, ...botProfileWiring(db, { activity }) })
  *
- * (the call itself belongs to the pilot PR, P1, which also supplies `listAgents`).
+ * (the call is startup.ts, `startBotContainers`, with `listAgents` from agents-query.ts).
  *
  * Profile warnings (a skipped skill, a bundle file over the limit, the missing board
  * gateway) go to `opts.onWarnings`, or, when only `opts.activity` is given, to that

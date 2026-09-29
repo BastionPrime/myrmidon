@@ -27,6 +27,7 @@ import {
   BOT_MCP_SERVERS_ENV,
   assertBotLlmSettingsForCard,
   assertBotProfileSettings,
+  cardUsesLlmGateway,
   readBotProfileSettings,
   type BotMcpSource,
   type BotProfileSettings,
@@ -202,9 +203,11 @@ export function createBotProfileCompile(
         ports.instanceDefaults ? ports.instanceDefaults() : Promise.resolve(undefined),
       ]);
 
-    // The gateway key is only fetched when the card's own env does not carry it.
+    // The gateway key is only fetched for a card that goes through the gateway, and only
+    // when the card's own env does not carry it: a card with a native provider gets neither
+    // the gateway's address nor its key (see buildHermesProfileInput), so its secret is not read.
     let llmApiKey: string | null = null;
-    if (settings.llmApiKeyEnv && !cardEnv.env[settings.llmApiKeyEnv]?.value?.trim()) {
+    if (cardUsesLlmGateway(agent.adapterConfig) && settings.llmApiKeyEnv && !cardEnv.env[settings.llmApiKeyEnv]?.value?.trim()) {
       llmApiKey = await ports.readCompanySecret(agent.companyId, settings.llmApiKeySecret ?? settings.llmApiKeyEnv);
     }
 

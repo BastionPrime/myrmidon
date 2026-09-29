@@ -37,7 +37,9 @@ function agentRecord(overrides: Partial<BotProfileAgentRecord> = {}): BotProfile
     companyId: "company-1",
     name: "Agent A",
     adapterType: HERMES_GATEWAY_ADAPTER_TYPE,
-    adapterConfig: { model: "anthropic/claude-sonnet-5", provider: "anthropic" },
+    // A card that goes through the LLM gateway (the other tests read and place the gateway key for it);
+    // cards with a native provider are covered in "a card whose provider goes through the LLM gateway".
+    adapterConfig: { model: "some-model", provider: "custom" },
     runtimeConfig: { heartbeat: { maxConcurrentRuns: 2 } },
     ...overrides,
   };
@@ -573,11 +575,39 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
 
       it("compiles a card with a native provider without either setting, and reads no gateway key", async () => {
         const board = fakeBoard();
+        board.agent.current = agentRecord({ adapterConfig: { model: "some-model", provider: "gemini" } });
         const profile = await createBotProfileCompile(board.ports, {
           env: withoutLlm([BOT_LLM_BASE_URL_ENV, BOT_LLM_API_KEY_ENV_ENV]),
         })("agent-a", "agent-a");
         expect(profile.botKey).toBe("agent-a");
         expect(board.calls.filter((call) => call.startsWith("readCompanySecret"))).toEqual([]);
+      });
+
+      it("leaves a native-provider card alone even when the instance configures the gateway: no secret read, no address, no key", async () => {
+        const board = fakeBoard();
+        board.agent.current = agentRecord({
+          adapterConfig: { model: "some-model", provider: "gemini", models: { fallbacks: ["other-model"] } },
+        });
+        const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+        // The gateway key's company secret is not read at all (a read would be the leak's first step).
+        expect(board.calls.filter((call) => call.startsWith("readCompanySecret"))).toEqual([]);
+        const config = fileContent(profile, "hermes/config.yaml");
+        expect(config).toContain('provider: "gemini"');
+        expect(config).not.toContain("base_url");
+        expect(config).not.toContain("key_env");
+        expect(config).not.toContain("api_key");
+        expect(config).not.toContain("FLEET_LLM_API_KEY");
+        const env = fileContent(profile, "hermes/.env");
+        expect(env).not.toContain("FLEET_LLM_API_KEY");
+        expect(env).not.toContain("fake-llm-key-0001");
+        expect(profile.files.some((file) => file.content.includes("fake-llm-key-0001") || file.content.includes("example.com/llm"))).toBe(false);
+      });
+
+      it("still gives a gateway card the address and the key on the same instance", async () => {
+        const board = fakeBoard();
+        const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+        expect(fileContent(profile, "hermes/config.yaml")).toContain('base_url: "https://example.com/llm/v1"');
+        expect(fileContent(profile, "hermes/.env")).toContain('FLEET_LLM_API_KEY="fake-llm-key-0001"');
       });
     });
 

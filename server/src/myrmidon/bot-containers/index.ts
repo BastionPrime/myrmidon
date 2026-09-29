@@ -16,10 +16,10 @@
 // What is deliberately NOT here:
 //  - the actual agents-table query behind `startBotContainerReconciliation`: that
 //    is passed in as `listAgents` rather than written here, so this module does
-//    not guess at query shapes for a table it does not otherwise touch. The pilot
-//    PR (P1, containers-plan-senior-2026-09-28.md's release table) is expected to
-//    supply it and call startBotContainerReconciliation from server/src/index.ts,
-//    the same way that file already calls startMaintenanceMode.
+//    not guess at query shapes for a table it does not otherwise touch. It is
+//    agents-query.ts, and startup.ts (called from server/src/index.ts next to
+//    startMaintenanceMode) builds the runtime, starts the sweep with it and
+//    registers the runtime for the card's "Apply now" (routes-wiring.ts).
 //  - the container image builder and docker-compose network (G1).
 
 import type { Db } from "@paperclipai/db";

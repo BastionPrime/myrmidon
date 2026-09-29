@@ -65,12 +65,16 @@ export interface BotProfileSettings {
   hindsightBank: string | null;
   /**
    * OpenAI-compatible LLM gateway base URL; null = each provider's own default endpoint.
-   * Optional only for a card with a native provider (see {@link assertBotLlmSettingsForCard}).
+   * Only a card that goes through the gateway ({@link cardUsesLlmGateway}) gets it; a card
+   * with a native provider is not given the address, and the setting is optional for it
+   * (see {@link assertBotLlmSettingsForCard}).
    */
   llmBaseUrl: string | null;
   /**
    * Name of the .env variable that carries the LLM gateway key (never the key).
-   * Optional only for a card with a native provider (see {@link assertBotLlmSettingsForCard}).
+   * Only a card that goes through the gateway ({@link cardUsesLlmGateway}) gets the key;
+   * the setting is optional for a card with a native provider
+   * (see {@link assertBotLlmSettingsForCard}).
    */
   llmApiKeyEnv: string | null;
   /** Company secret that holds the LLM gateway key; defaults to `llmApiKeyEnv`. */
@@ -297,8 +301,9 @@ export interface BotProfileSource {
   instructions: string;
   /** The instructions bundle's other files, placed under workspace/ (names the gateway loads as project context are dropped). */
   workspaceFiles?: readonly HermesProfileWorkspaceFile[];
-  /** The LLM gateway key held as an instance/company secret; used when the card's
-   *  own env carries no value under `settings.llmApiKeyEnv`. */
+  /** The LLM gateway key held as an instance/company secret; used when the card goes
+   *  through the gateway (`cardUsesLlmGateway`) and its own env carries no value under
+   *  `settings.llmApiKeyEnv`. Ignored for a card with a native provider. */
   llmApiKey: string | null;
   /** Generated once per bot and stored as a company secret. */
   apiServerKey: string;
@@ -512,8 +517,14 @@ export function buildHermesProfileInput(source: BotProfileSource, settings: BotP
   const card = source.adapterConfig;
   assertBotLlmSettingsForCard(settings, card);
 
+  // A card with a native provider (gemini, zai, kimi-coding, anthropic, ...) talks to its own
+  // endpoint with its own key from the card's env. The gateway address and key must not reach
+  // its profile: the gateway would receive the provider's key in a protocol it does not speak,
+  // because Hermes reads `model.base_url` for the provider it names.
+  const usesGateway = cardUsesLlmGateway(card);
+
   const env: Record<string, HermesProfileEnvEntry> = { ...source.env };
-  if (settings.llmApiKeyEnv) {
+  if (usesGateway && settings.llmApiKeyEnv) {
     const cardValue = env[settings.llmApiKeyEnv]?.value;
     if (!cardValue || !cardValue.trim()) {
       if (!source.llmApiKey || !source.llmApiKey.trim()) {
@@ -536,10 +547,12 @@ export function buildHermesProfileInput(source: BotProfileSource, settings: BotP
     instructions: source.instructions,
     workspaceFiles: source.workspaceFiles,
     hindsight: readHindsight(card, settings),
-    llm: {
-      baseUrl: settings.llmBaseUrl ?? undefined,
-      apiKeyEnv: settings.llmApiKeyEnv ?? undefined,
-    },
+    llm: usesGateway
+      ? {
+          baseUrl: settings.llmBaseUrl ?? undefined,
+          apiKeyEnv: settings.llmApiKeyEnv ?? undefined,
+        }
+      : {},
     mcpServers: mcp.servers,
     maxConcurrentRuns: readMaxConcurrentRuns(source.runtimeConfig),
     instanceDefaults: source.instanceDefaults ?? {},
