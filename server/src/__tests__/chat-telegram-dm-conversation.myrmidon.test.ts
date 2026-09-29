@@ -2116,4 +2116,116 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
       expect(runsAfter).toEqual([{ id: runId }]);
     });
   });
+
+  // myrmidon(X8-e2e): the end-to-end path for the reply-kind commands. Every
+  // case above either stubs the dispatcher's result ("with a mocked command
+  // module") or drives the two commands that do board work (`/new`, `/stop`),
+  // so the commands whose whole job is to answer the sender were only checked
+  // as units (commands/commands.myrmidon.test.ts). These cases carry a real
+  // inbound DM through the real dispatcher and assert the answer that is
+  // published back to the Telegram thread.
+  describe("inbound command answered end to end (X8-e2e)", () => {
+    it("answers /help, /status and an unknown command through the canonical dispatcher", async () => {
+      const fixture = await seedCompany();
+      const { callbacks, endpoint, wakeup } = await configuredTelegramEndpoint(fixture);
+      await linkTelegramPrincipal({
+        companyId: fixture.companyId,
+        endpointId: endpoint.id,
+        userId: "700030",
+        boardUserId: "owner-user",
+      });
+
+      // A plain message opens the standing conversation and takes the usual
+      // reply path; its wakeup is what the command traffic below must not grow.
+      await sendTelegramDm({
+        callbacks,
+        endpointId: endpoint.id,
+        channelId: "700030",
+        text: "Hello there",
+        userId: "700030",
+        messageId: 1,
+      });
+      const wakeupsAfterFirstMessage = wakeup.mock.calls.length;
+
+      const [issue] = await db
+        .select()
+        .from(issues)
+        .where(
+          and(
+            eq(issues.companyId, fixture.companyId),
+            eq(issues.conversationUserId, telegramConversationUserId("owner-user")),
+          ),
+        );
+      const conversation = await conversationRow(endpoint.id, "700030");
+      expect(conversation?.state).toBe("active");
+
+      // /help — reply-kind: the canonical buildHelpText answer.
+      await sendTelegramDm({
+        callbacks,
+        endpointId: endpoint.id,
+        channelId: "700030",
+        text: "/help",
+        userId: "700030",
+        messageId: 2,
+      });
+      // /status — reply-kind: reads the real agent and conversation state back.
+      await sendTelegramDm({
+        callbacks,
+        endpointId: endpoint.id,
+        channelId: "700030",
+        text: "/status",
+        userId: "700030",
+        messageId: 3,
+      });
+      // A command the contract does not know — reply-kind with the hint.
+      await sendTelegramDm({
+        callbacks,
+        endpointId: endpoint.id,
+        channelId: "700030",
+        text: "/frobnicate",
+        userId: "700030",
+        messageId: 4,
+      });
+
+      const publications = await db
+        .select()
+        .from(chatPublications)
+        .where(eq(chatPublications.conversationId, conversation!.id));
+      const replies = (prefix: string) =>
+        publications.filter((row) => row.idempotencyKey.startsWith(prefix));
+
+      const helpReplies = replies("control:x8-help:");
+      expect(helpReplies).toHaveLength(1);
+      expect(helpReplies[0]!.payload.text).toContain("Talk to Maya here.");
+      expect(helpReplies[0]!.payload.text).toContain("/help — Show commands");
+
+      const statusReplies = replies("control:x8-status:");
+      expect(statusReplies).toHaveLength(1);
+      expect(statusReplies[0]!.payload.text).toContain("Maya · Telegram chat");
+      expect(statusReplies[0]!.payload.text).toContain("Model:");
+      expect(statusReplies[0]!.payload.text).toContain("Now: idle");
+
+      const unknownReplies = replies("control:x8-unknown:");
+      expect(unknownReplies).toHaveLength(1);
+      expect(unknownReplies[0]!.payload.text).toBe(
+        "Unknown command /frobnicate. Send /help for the list.",
+      );
+
+      // A command finishes its whole turn: the board keeps only the plain
+      // message's own comment, and no extra wakeup is queued.
+      const comments = await db
+        .select()
+        .from(issueComments)
+        .where(eq(issueComments.issueId, issue.id));
+      expect(comments.map((comment) => comment.body)).toEqual(["Hello there"]);
+      expect(wakeup.mock.calls.length).toBe(wakeupsAfterFirstMessage);
+
+      const deliveries = await db
+        .select()
+        .from(chatDeliveries)
+        .where(eq(chatDeliveries.endpointId, endpoint.id));
+      expect(deliveries.length).toBeGreaterThanOrEqual(4);
+      expect(deliveries.every((row) => row.state === "processed")).toBe(true);
+    });
+  });
 });
