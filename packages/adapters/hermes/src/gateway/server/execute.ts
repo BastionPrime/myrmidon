@@ -1287,7 +1287,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       errorMessage: `Invalid Hermes gateway apiBaseUrl: ${apiBaseUrlValue}`,
     };
   }
-  if (isRemotePlainHttp(baseUrl) && !allowsInsecureRemoteHttp(ctx.config)) {
+  // myrmidon(H3): pass the URL so the check can trust the fleet's own
+  // bot-container host names without any card flag (see transport-security).
+  if (isRemotePlainHttp(baseUrl) && !allowsInsecureRemoteHttp(baseUrl, ctx.config)) {
     return {
       exitCode: 1,
       signal: null,

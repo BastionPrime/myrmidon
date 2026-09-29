@@ -332,6 +332,19 @@ function isLoopbackHost(hostname: string): boolean {
   );
 }
 
+// myrmidon(H3), release 1.1.2: the fleet's fixed bot-container template names
+// containers `myrmidon-bot-<botKey>` (botKey: [a-z0-9-], see
+// server/src/myrmidon/bot-containers/template.ts), and the hermes_gateway
+// adapter trusts exactly those host names for plain http
+// (transport-security.ts isBotContainerHostname) because the traffic stays on
+// the board's own docker network. The access diagnostics follow the adapter:
+// such a base URL is not an unsafe remote and needs no escape hatch.
+function isBotContainerHost(hostname: string): boolean {
+  return /^myrmidon-bot-[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
+    hostname.trim().toLowerCase().replace(/^\[|\]$/g, ""),
+  );
+}
+
 function normalizeHermesGatewayApiBaseUrl(url: URL): URL {
   const normalized = new URL(url.toString());
   const normalizedPath = normalized.pathname.replace(/\/+$/, "") || "/";
@@ -779,6 +792,7 @@ export function normalizeAgentDefaultsForJoin(input: {
         } else if (
           apiBaseUrl.protocol === "http:" &&
           !isLoopbackHost(apiBaseUrl.hostname) &&
+          !isBotContainerHost(apiBaseUrl.hostname) &&
           parseBooleanLike(defaults.dangerouslyAllowInsecureRemoteHttp) !== true
         ) {
           diagnostics.push({
@@ -800,11 +814,26 @@ export function normalizeAgentDefaultsForJoin(input: {
               hint: "Hermes dashboard and /chat routes are browser UI routes. Paperclip gateway calls use /api/health and /api/v1/runs.",
             });
           }
-          if (apiBaseUrl.protocol === "http:" && !isLoopbackHost(apiBaseUrl.hostname)) {
+          if (
+            apiBaseUrl.protocol === "http:" &&
+            !isLoopbackHost(apiBaseUrl.hostname) &&
+            !isBotContainerHost(apiBaseUrl.hostname)
+          ) {
             diagnostics.push({
               code: "hermes_gateway_plain_http_remote_unsafe_allowed",
               level: "warn",
               message: "Unsafe dev escape hatch enabled for non-loopback HTTP Hermes traffic.",
+            });
+          } else if (
+            apiBaseUrl.protocol === "http:" &&
+            isBotContainerHost(apiBaseUrl.hostname)
+          ) {
+            // myrmidon(H3): the fleet's own container name — trusted transport,
+            // not an unsafe escape; report it as configured, without the warning.
+            diagnostics.push({
+              code: "hermes_gateway_api_base_url_configured",
+              level: "info",
+              message: `Hermes gateway endpoint set to ${apiBaseUrl.toString()}`,
             });
           } else {
             diagnostics.push({

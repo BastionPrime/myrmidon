@@ -9,17 +9,17 @@
 //   apiBaseUrl = http://myrmidon-bot-<botKey>:8642   (the container's name on the bot network)
 //   apiKey     = secret_ref -> the company secret that holds the bot's API_SERVER_KEY
 //                (the same secret profile-compile.ts writes into the bot's .env)
-//   dangerouslyAllowInsecureRemoteHttp = true
 //
-// The third field is required, not optional: the adapter refuses a plain-http
-// base URL to a non-loopback host unless that escape hatch is set (see
-// transport-security.ts), and a bot container is exactly that. Without it every
-// run against a container card fails at the transport check. The traffic never
-// leaves the docker network of the bots (MYRMIDON_BOT_NETWORK): it is the board
-// server talking to its own container on the same host, so plain http there is
-// the intended transport.
-// The narrower alternative, teaching the adapter to trust the bot-network host
-// names, is a change in the adapter, not in this wiring; see DIVERGENCE.md.
+// myrmidon(H3), release 1.1.2: the adapter now trusts the fleet's own
+// bot-container host names (`myrmidon-bot-<botKey>`) for plain http by itself
+// (transport-security.ts `isBotContainerHostname`), so the sync no longer
+// writes the `dangerouslyAllowInsecureRemoteHttp` escape hatch into the card.
+// A leftover `true` from the previous wiring is removed on the next pass: the
+// field belongs to the system in container mode, and a stale unsafe flag would
+// outlive its purpose (it widened trust to ANY remote plain-http host while
+// present). The traffic never leaves the docker network of the bots
+// (MYRMIDON_BOT_NETWORK): it is the board server talking to its own container
+// on the same host, so plain http there is the intended transport.
 //
 // The key is a secret_ref, never plaintext: the adapter's `apiKey` is a schema
 // secret field, resolved when a run starts, and the agent update path binds the
@@ -35,7 +35,8 @@ import { containerNameFor } from "./template.js";
 /**
  * The adapter's config key that allows plain http to a non-loopback host
  * (transport-security.ts `allowsInsecureRemoteHttp`). Kept as a literal here so
- * this module does not import the adapter package.
+ * this module does not import the adapter package. myrmidon(H3): only read to
+ * strip a leftover from the pre-H3 wiring; never written anymore.
  */
 const INSECURE_REMOTE_HTTP_KEY = "dangerouslyAllowInsecureRemoteHttp";
 
@@ -50,7 +51,7 @@ export interface GatewayCardPlan {
   changed: boolean;
   /** The card to store: the input with the changed fields replaced, all others untouched. */
   adapterConfig: Record<string, unknown>;
-  /** Which of `apiBaseUrl` / `apiKey` / the insecure-http flag differ from what the container needs. */
+  /** Which of `apiBaseUrl` / `apiKey` / the stripped insecure-http flag differ from what the container needs. */
   changedKeys: string[];
 }
 
@@ -65,10 +66,10 @@ function isMatchingSecretRef(value: unknown, secretId: string): boolean {
  * secret_ref keeps its extra fields (projectionClass and the like) when it
  * already points at the right secret with version "latest"; anything else —
  * a plain string typed by a person, a ref to another secret, a pinned version —
- * is replaced, because in container mode the key is the container's. The
- * insecure-http flag is normalized to the boolean `true`: the adapter would also
- * accept a string such as "yes", but one canonical value keeps the card stable
- * and makes the tick's "already matches" comparison exact.
+ * is replaced, because in container mode the key is the container's.
+ * myrmidon(H3): a leftover insecure-http flag from the pre-H3 wiring is
+ * deleted (the adapter's own bot-container trust replaced it); nothing is
+ * written in its place.
  */
 export function planGatewayCardSync(
   adapterConfig: Record<string, unknown>,
@@ -86,8 +87,10 @@ export function planGatewayCardSync(
     next.apiKey = { type: "secret_ref", secretId: target.apiKeySecretId, version: "latest" };
     changedKeys.push("apiKey");
   }
-  if (adapterConfig[INSECURE_REMOTE_HTTP_KEY] !== true) {
-    next[INSECURE_REMOTE_HTTP_KEY] = true;
+  // myrmidon(H3): strip the escape hatch the pre-H3 sync used to write; the
+  // adapter trusts myrmidon-bot-* host names on its own now.
+  if (INSECURE_REMOTE_HTTP_KEY in adapterConfig) {
+    delete next[INSECURE_REMOTE_HTTP_KEY];
     changedKeys.push(INSECURE_REMOTE_HTTP_KEY);
   }
   return { changed: changedKeys.length > 0, adapterConfig: next, changedKeys };
@@ -118,7 +121,7 @@ export function createBotCardSync(
     const agent = await ports.loadAgent(agentId);
     if (!agent) return { changedKeys: [] };
     const key = await ports.ensureApiServerKey(agent);
-    const plan = planGatewayCardSync(agent.adapterConfig, { botKey, apiKeySecretId: key.secretId });
+    const plan = planGatewayCardSync(agent.adapterConfig ?? {}, { botKey, apiKeySecretId: key.secretId });
     if (!plan.changed) return { changedKeys: [] };
     await ports.saveAdapterConfig(agent, plan.adapterConfig);
     return { changedKeys: plan.changedKeys };

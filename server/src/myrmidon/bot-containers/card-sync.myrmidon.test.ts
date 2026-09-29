@@ -15,11 +15,13 @@ const SECRET_ID = "secret-api-server-key-agent-a";
 const TARGET = { botKey: "agent-a", apiKeySecretId: SECRET_ID };
 const LATEST_REF = { type: "secret_ref", secretId: SECRET_ID, version: "latest" };
 const INSECURE_HTTP = "dangerouslyAllowInsecureRemoteHttp";
+// myrmidon(H3): the sync owns two connection fields now — the adapter trusts
+// the myrmidon-bot-* container name for plain http by itself, so the card the
+// sync aims at carries no insecure-http flag.
 /** A card that already matches on every field the sync owns. */
 const MATCHING_CARD = {
   apiBaseUrl: "http://myrmidon-bot-agent-a:8642",
   apiKey: LATEST_REF,
-  [INSECURE_HTTP]: true,
 };
 
 describe("myrmidon(W2a) gatewayApiBaseUrl", () => {
@@ -30,32 +32,40 @@ describe("myrmidon(W2a) gatewayApiBaseUrl", () => {
 });
 
 describe("myrmidon(W2a) planGatewayCardSync", () => {
-  it("fills the three connection fields into an empty card", () => {
+  it("fills the two connection fields into an empty card", () => {
     const plan = planGatewayCardSync({ model: "anthropic/claude-sonnet-5" }, TARGET);
     expect(plan.changed).toBe(true);
-    expect(plan.changedKeys).toEqual(["apiBaseUrl", "apiKey", INSECURE_HTTP]);
+    expect(plan.changedKeys).toEqual(["apiBaseUrl", "apiKey"]);
     expect(plan.adapterConfig).toEqual({
       model: "anthropic/claude-sonnet-5",
       apiBaseUrl: "http://myrmidon-bot-agent-a:8642",
       apiKey: LATEST_REF,
-      [INSECURE_HTTP]: true,
     });
   });
 
-  it("sets the insecure-http escape hatch, without which the adapter refuses the container address", () => {
+  // myrmidon(H3), release 1.1.2: the adapter trusts the fleet's own
+  // myrmidon-bot-* container names for plain http by itself
+  // (transport-security.ts isBotContainerHostname), so the sync writes no
+  // escape hatch — the container address passes the adapter's transport
+  // check with no flag in the card.
+  it("writes no insecure-http flag: the adapter trusts the bot-container name itself", () => {
     const plan = planGatewayCardSync({}, TARGET);
-    expect(plan.adapterConfig[INSECURE_HTTP]).toBe(true);
-    // The address really is a remote plain-http host to the adapter, which is why the flag is needed.
+    expect(plan.adapterConfig[INSECURE_HTTP]).toBeUndefined();
+    // The address really is a remote plain-http host to the adapter, which is
+    // exactly why the adapter-side hostname trust (H3) is what covers it.
     const url = new URL(String(plan.adapterConfig.apiBaseUrl));
     expect(url.protocol).toBe("http:");
     expect(url.hostname).not.toBe("localhost");
+    expect(url.hostname).toBe("myrmidon-bot-agent-a");
   });
 
-  it("normalizes a flag that is present but not the boolean true", () => {
-    for (const value of [false, "true", "yes", 1, null]) {
+  // myrmidon(H3): a leftover flag from the pre-H3 wiring is stripped, not
+  // kept: while present it widened trust to ANY remote plain-http host.
+  it("strips a leftover insecure-http flag from the pre-H3 wiring", () => {
+    for (const value of [true, false, "true", "yes", 1, null]) {
       const plan = planGatewayCardSync({ ...MATCHING_CARD, [INSECURE_HTTP]: value }, TARGET);
       expect(plan.changedKeys, JSON.stringify(value)).toEqual([INSECURE_HTTP]);
-      expect(plan.adapterConfig[INSECURE_HTTP]).toBe(true);
+      expect(plan.adapterConfig[INSECURE_HTTP]).toBeUndefined();
     }
   });
 
@@ -65,7 +75,7 @@ describe("myrmidon(W2a) planGatewayCardSync", () => {
     expect(card).toEqual({ model: "anthropic/claude-sonnet-5" });
   });
 
-  it("changes nothing on a card that already matches on all three fields", () => {
+  it("changes nothing on a card that already matches on every field the sync owns", () => {
     const card = { model: "m", ...MATCHING_CARD };
     const plan = planGatewayCardSync(card, TARGET);
     expect(plan.changed).toBe(false);
@@ -143,7 +153,7 @@ describe("myrmidon(W2a) createBotCardSync", () => {
     const { ports, saved } = fakePorts({ model: "m", toolsets: "web" });
     const syncCard = createBotCardSync(ports);
 
-    expect(await syncCard("agent-a", "agent-a")).toEqual({ changedKeys: ["apiBaseUrl", "apiKey", INSECURE_HTTP] });
+    expect(await syncCard("agent-a", "agent-a")).toEqual({ changedKeys: ["apiBaseUrl", "apiKey"] });
     expect(saved).toEqual([{ model: "m", toolsets: "web", ...MATCHING_CARD }]);
 
     expect(await syncCard("agent-a", "agent-a")).toEqual({ changedKeys: [] });

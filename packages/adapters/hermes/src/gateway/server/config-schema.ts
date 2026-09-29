@@ -1,6 +1,5 @@
 import type { AdapterConfigSchema } from "@paperclipai/adapter-utils";
 import { DEFAULT_EVENT_RECONNECT_MS, DEFAULT_TIMEOUT_SEC } from "../shared/constants.js";
-import { INSECURE_REMOTE_HTTP_ESCAPE_HATCH } from "./transport-security.js";
 
 export function getConfigSchema(): AdapterConfigSchema {
   return {
@@ -21,13 +20,13 @@ export function getConfigSchema(): AdapterConfigSchema {
         meta: { secret: true },
       },
       {
-        key: INSECURE_REMOTE_HTTP_ESCAPE_HATCH,
-        label: "Dangerously allow remote HTTP",
-        type: "toggle",
-        default: false,
-        hint: "Unsafe dev-only escape hatch. Remote Hermes gateways should use HTTPS; loopback HTTP remains allowed.",
-      },
-      {
+        // myrmidon(H3), release 1.1.2: the unsafe remote-HTTP toggle was
+        // removed from the card schema. Plain http now requires a fleet
+        // bot-container host name (myrmidon-bot-*, trusted by the adapter
+        // itself); the dev-only escape hatch stays readable from raw
+        // adapter config JSON (transport-security.ts) for local
+        // development, but the card no longer advertises it and the bot
+        // container sync (W2a) no longer writes it.
         key: "sessionKeyStrategy",
         label: "Session key strategy",
         type: "select",
