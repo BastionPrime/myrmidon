@@ -17,11 +17,12 @@
 //    call returns the same value (compile must give the same hashes tick after
 //    tick, or the bot restarts every minute).
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { Db } from "@paperclipai/db";
+import { agentApiKeys, type Db } from "@paperclipai/db";
+import { and, eq, isNull } from "drizzle-orm";
 import {
   readPaperclipSkillSyncPreference,
   resolveLegacyPaperclipDesiredSkillNames,
@@ -35,18 +36,21 @@ import {
   secretService,
 } from "../../services/index.js";
 import { skillVersionSelectionMap } from "../../services/runtime-skill-selections.js";
+import { BOT_AGENT_API_KEY_NAME, ensureBotAgentKey } from "./agent-key.js";
 import { createBotCardSync, type BotCardSyncPorts, type BotCardSyncResult } from "./card-sync.js";
+import { loadBotInstructionsBundle } from "./instructions-source.js";
 import {
+  createActivityWarningSink,
   createBotProfileCompile,
   type BotProfileAgentRecord,
   type BotProfileCompileOptions,
   type BotProfilePorts,
 } from "./profile-compile.js";
 import type { HermesProfileEnvEntry, HermesProfileSkillFile } from "./profile-compiler.js";
+import type { BotContainerActivitySink } from "./reconciler.js";
 import type { CompiledProfile } from "./types.js";
 
-/** The name the bot's board API key carries in agent_api_keys, so an operator can see what it is for. */
-export const BOT_AGENT_API_KEY_NAME = "myrmidon-bot-container";
+export { BOT_AGENT_API_KEY_NAME };
 
 export function apiServerKeySecretName(agentId: string): string {
   return `myrmidon-bot-${agentId}-api-server-key`;
@@ -182,8 +186,11 @@ function toAgentRecord(row: {
  * provided: the board tool gateway's run-scoped tokens live one hour and cannot
  * sit in a container's long-lived profile, and a durable gateway token is a
  * security decision that has no owner yet (see the PR's "Решения без владельца").
- * Until that is decided, a bot's profile carries no MCP servers, and the builder
- * (profile-input.ts) is ready for the day this port is filled in.
+ * Until that is decided, a bot's profile carries no board-gateway MCP server, and
+ * compile says so in the activity log (a warning, once per change) instead of
+ * staying silent. The instance-wide servers (ragflow and the like) do NOT depend
+ * on this port: they are declared in MYRMIDON_BOT_MCP_SERVERS, and compile
+ * resolves their tokens through `readCompanySecret`.
  */
 export function createDbBotProfilePorts(db: Db): BotProfilePorts {
   const agents = agentService(db);
@@ -236,32 +243,59 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
 
     async ensureAgentApiKey(agent) {
       const secretName = agentApiKeySecretName(agent.id);
-      const secret = await secrets.getByName(agent.companyId, secretName);
-      const keys = await agents.listKeys(agent.id);
-      const hasActiveKey = keys.some((key) => key.name === BOT_AGENT_API_KEY_NAME && !key.revokedAt);
-      if (secret && hasActiveKey) {
-        return { value: await secrets.resolveSecretValue(agent.companyId, secret.id, "latest") };
-      }
-      // No secret to read the token from, or its key was revoked: issue a fresh key
-      // (its token is shown once) and store that as the secret's new value. A key
-      // left behind by a lost secret stays listed under the same name for an
-      // operator to revoke; the board cannot tell which token it belonged to.
-      const created = await agents.createApiKey(agent.id, BOT_AGENT_API_KEY_NAME);
-      if (secret) {
-        await secrets.rotate(secret.id, { value: created.token }, SYSTEM_ACTOR);
-      } else {
-        await secrets.create(
-          agent.companyId,
-          {
-            name: secretName,
-            provider: getConfiguredSecretProvider(),
-            value: created.token,
-            description: `Board API key of the bot container for agent ${agent.name}`,
+      return ensureBotAgentKey(
+        {
+          async readSecret() {
+            const secret = await secrets.getByName(agent.companyId, secretName);
+            if (!secret) return null;
+            return { secretId: secret.id, value: await secrets.resolveSecretValue(agent.companyId, secret.id, "latest") };
           },
-          SYSTEM_ACTOR,
-        );
-      }
-      return { value: created.token };
+          async findActiveKeyIdByToken(agentId, token) {
+            // The token's own hash against the key table: "a key with the bot's name is active"
+            // says nothing about whether THIS token still opens the board.
+            const rows = await db
+              .select({ id: agentApiKeys.id })
+              .from(agentApiKeys)
+              .where(
+                and(
+                  eq(agentApiKeys.agentId, agentId),
+                  eq(agentApiKeys.keyHash, createHash("sha256").update(token).digest("hex")),
+                  isNull(agentApiKeys.revokedAt),
+                ),
+              )
+              .limit(1);
+            return rows[0]?.id ?? null;
+          },
+          async listActiveBotKeyIds(agentId) {
+            const keys = await agents.listKeys(agentId);
+            return keys.filter((key) => key.name === BOT_AGENT_API_KEY_NAME && !key.revokedAt).map((key) => key.id);
+          },
+          async createKey(agentId) {
+            const created = await agents.createApiKey(agentId, BOT_AGENT_API_KEY_NAME);
+            return { id: created.id, token: created.token };
+          },
+          async revokeKey(agentId, keyId) {
+            await agents.revokeKey(agentId, keyId);
+          },
+          async storeSecret(existing, token) {
+            if (existing) {
+              await secrets.rotate(existing.secretId, { value: token }, SYSTEM_ACTOR);
+              return;
+            }
+            await secrets.create(
+              agent.companyId,
+              {
+                name: secretName,
+                provider: getConfiguredSecretProvider(),
+                value: token,
+                description: `Board API key of the bot container for agent ${agent.name}`,
+              },
+              SYSTEM_ACTOR,
+            );
+          },
+        },
+        agent.id,
+      );
     },
 
     async loadSkills(agent) {
@@ -294,14 +328,20 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
     },
 
     async loadInstructions(agent) {
+      // Only the bundle is read here; the card's own instructions are added by compile.
       const bundle = await instructions.getBundle(agent);
-      if (bundle.rootPath && bundle.files.some((file) => file.path === bundle.entryFile)) {
-        const detail = await instructions.readFile(agent, bundle.entryFile);
-        if (detail.content.trim()) return detail.content;
-      }
-      // hermes_gateway keeps its "stable instructions" as a plain string on the card.
-      const inline = agent.adapterConfig.instructions;
-      return typeof inline === "string" ? inline : "";
+      return loadBotInstructionsBundle({
+        async listBundle() {
+          if (!bundle.rootPath) return null;
+          return {
+            entryFile: bundle.entryFile,
+            files: bundle.files.map((file) => ({ path: file.path, size: file.size, virtual: file.virtual })),
+          };
+        },
+        async readFile(relativePath) {
+          return (await instructions.readFile(agent, relativePath)).content;
+        },
+      });
     },
   };
 }
@@ -323,20 +363,26 @@ export function createDbBotCardSyncPorts(db: Db, profilePorts: BotProfilePorts =
 /**
  * The two fields of `BotContainerRuntimeDeps` W2a fills, bound to the database:
  *
- *   startBotContainerReconciliation(listAgents, { driver, maintenance, network, ...botProfileWiring(db) })
+ *   startBotContainerReconciliation(listAgents, { driver, maintenance, network, activity, ...botProfileWiring(db, { activity }) })
  *
  * (the call itself belongs to the pilot PR, P1, which also supplies `listAgents`).
+ *
+ * Profile warnings (a skipped skill, a bundle file over the limit, the missing board
+ * gateway) go to `opts.onWarnings`, or, when only `opts.activity` is given, to that
+ * activity log: the same place the reconciler writes its own events.
  */
 export function botProfileWiring(
   db: Db,
-  opts: BotProfileCompileOptions = {},
+  opts: BotProfileCompileOptions & { activity?: BotContainerActivitySink } = {},
 ): {
   compile: (agentId: string, botKey: string) => Promise<CompiledProfile>;
   syncCard: (agentId: string, botKey: string) => Promise<BotCardSyncResult>;
 } {
   const ports = createDbBotProfilePorts(db);
+  const { activity, ...compileOptions } = opts;
+  const onWarnings = compileOptions.onWarnings ?? (activity ? createActivityWarningSink(activity) : undefined);
   return {
-    compile: createBotProfileCompile(ports, opts),
+    compile: createBotProfileCompile(ports, { ...compileOptions, ...(onWarnings ? { onWarnings } : {}) }),
     syncCard: createBotCardSync(createDbBotCardSyncPorts(db, ports)),
   };
 }

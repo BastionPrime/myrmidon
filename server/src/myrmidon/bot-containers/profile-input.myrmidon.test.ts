@@ -9,10 +9,12 @@ import {
   BOT_LLM_API_KEY_ENV_ENV,
   BOT_LLM_API_KEY_SECRET_ENV,
   BOT_LLM_BASE_URL_ENV,
+  BOT_MCP_SERVERS_ENV,
   BOT_RUNTIME_MCP_URL_BASE_ENV,
   BotProfileInputError,
   assertBotProfileSettings,
   buildHermesProfileInput,
+  parseBotMcpServers,
   readBotProfileSettings,
   readMaxConcurrentRuns,
   rewriteMcpServerUrl,
@@ -32,6 +34,8 @@ function settings(overrides: Partial<BotProfileSettings> = {}): BotProfileSettin
     llmApiKeySecret: "FLEET_LLM_API_KEY",
     boardUrl: "http://board.example.com:3100",
     runtimeMcpUrlBase: null,
+    mcpServers: [],
+    mcpServersError: null,
     ...overrides,
   };
 }
@@ -77,6 +81,8 @@ describe("myrmidon(W2a) readBotProfileSettings", () => {
       llmApiKeySecret: "FLEET_LLM_API_KEY",
       boardUrl: "http://board.example.com:3100",
       runtimeMcpUrlBase: "http://board.example.com:3100",
+      mcpServers: [],
+      mcpServersError: null,
     });
     expect(readBotProfileSettings({ [BOT_BOARD_URL_ENV]: "   " }).boardUrl).toBeNull();
     expect(readBotProfileSettings({}).hindsightApiUrl).toBeNull();
@@ -89,6 +95,76 @@ describe("myrmidon(W2a) readBotProfileSettings", () => {
     });
     expect(read.llmApiKeyEnv).toBe("FLEET_LLM_API_KEY");
     expect(read.llmApiKeySecret).toBe("fleet-llm-gateway-key");
+  });
+});
+
+describe("myrmidon(W2a) parseBotMcpServers", () => {
+  const ragflow = { name: "ragflow", url: "https://example.com/ragflow/mcp", tokenSecret: "fleet-ragflow-token" };
+
+  it("is empty and error-free when the setting is unset", () => {
+    expect(parseBotMcpServers(null)).toEqual({ servers: [], error: null });
+  });
+
+  it("reads a server with its defaults: Authorization: Bearer, token by company-secret name", () => {
+    expect(parseBotMcpServers(JSON.stringify([ragflow]))).toEqual({
+      servers: [
+        {
+          name: "ragflow",
+          url: "https://example.com/ragflow/mcp",
+          tokenSecret: "fleet-ragflow-token",
+          header: "Authorization",
+          scheme: "Bearer",
+        },
+      ],
+      error: null,
+    });
+  });
+
+  it("reads a custom header, a raw scheme and a server without a token", () => {
+    const parsed = parseBotMcpServers(
+      JSON.stringify([
+        { ...ragflow, header: "X-Api-Key", scheme: "" },
+        { name: "docs", url: "https://example.com/docs/mcp", noAuth: true },
+      ]),
+    );
+    expect(parsed.error).toBeNull();
+    expect(parsed.servers[0]).toMatchObject({ header: "X-Api-Key", scheme: "" });
+    expect(parsed.servers[1]).toMatchObject({ name: "docs", tokenSecret: null });
+  });
+
+  it("folds a name the way the profile does, so two spellings of one name are a duplicate", () => {
+    expect(parseBotMcpServers(JSON.stringify([{ ...ragflow, name: "Rag Flow" }])).servers[0]?.name).toBe("rag-flow");
+    expect(parseBotMcpServers(JSON.stringify([ragflow, { ...ragflow, name: "RAGFLOW" }])).error).toContain("repeats");
+  });
+
+  it("rejects every malformed declaration, naming the setting and the entry, never a value", () => {
+    const bad: unknown[] = [
+      "not json",
+      "{}",
+      JSON.stringify([42]),
+      JSON.stringify([{ url: "https://example.com/mcp", tokenSecret: "s" }]),
+      JSON.stringify([{ ...ragflow, url: "ftp://example.com/mcp" }]),
+      JSON.stringify([{ ...ragflow, url: "not a url" }]),
+      JSON.stringify([{ name: "ragflow", url: "https://example.com/mcp" }]),
+      JSON.stringify([{ ...ragflow, noAuth: true }]),
+      JSON.stringify([{ ...ragflow, header: "bad header" }]),
+      JSON.stringify([{ ...ragflow, header: 7 }]),
+      JSON.stringify([{ ...ragflow, scheme: "two words" }]),
+    ];
+    for (const raw of bad) {
+      const parsed = parseBotMcpServers(raw as string);
+      expect(parsed.servers, String(raw)).toEqual([]);
+      expect(parsed.error, String(raw)).toContain(BOT_MCP_SERVERS_ENV);
+      expect(parsed.error ?? "", String(raw)).not.toContain("fleet-ragflow-token");
+    }
+  });
+
+  it("reaches the settings, and assertBotProfileSettings throws the error instead of dropping MCP silently", () => {
+    const read = readBotProfileSettings({ [BOT_MCP_SERVERS_ENV]: "not json" });
+    expect(read.mcpServers).toEqual([]);
+    expect(read.mcpServersError).toContain(BOT_MCP_SERVERS_ENV);
+    expect(() => assertBotProfileSettings(settings({ mcpServersError: read.mcpServersError }))).toThrow(BOT_MCP_SERVERS_ENV);
+    expect(readBotProfileSettings({ [BOT_MCP_SERVERS_ENV]: JSON.stringify([ragflow]) }).mcpServers).toHaveLength(1);
   });
 });
 
@@ -321,6 +397,52 @@ describe("myrmidon(W2a) buildHermesProfileInput — MCP servers", () => {
       "mcp.no-token: no token, the server was skipped",
       "mcp: a server with an empty name was skipped",
     ]);
+  });
+
+  it("sends the token in the configured header with the configured scheme, or raw", () => {
+    const custom = buildHermesProfileInput(
+      source({ mcpServers: [{ ...board, header: "X-Api-Key", scheme: "Token" }] }),
+      settings(),
+    );
+    expect(custom.input.mcpServers[0]?.headers).toEqual({ "X-Api-Key": "Token ${MYRMIDON_MCP_TOKEN_PAPERCLIP_BOARD}" });
+    const raw = buildHermesProfileInput(source({ mcpServers: [{ ...board, scheme: "" }] }), settings());
+    expect(raw.input.mcpServers[0]?.headers).toEqual({ Authorization: "${MYRMIDON_MCP_TOKEN_PAPERCLIP_BOARD}" });
+  });
+
+  it("skips a server whose header or scheme is malformed, with a warning", () => {
+    const { input, warnings } = buildHermesProfileInput(
+      source({ mcpServers: [{ ...board, header: "bad header" }, { ...board, name: "other", scheme: "a b" }] }),
+      settings(),
+    );
+    expect(input.mcpServers).toEqual([]);
+    expect(warnings).toEqual([
+      "mcp.paperclip-board: an invalid header name or scheme, the server was skipped",
+      "mcp.other: an invalid header name or scheme, the server was skipped",
+    ]);
+  });
+
+  it("gives a noAuth server neither a header nor an .env variable", () => {
+    const { input, warnings } = buildHermesProfileInput(
+      source({ mcpServers: [{ name: "docs", url: "https://example.com/docs/mcp", token: "", noAuth: true }] }),
+      settings(),
+    );
+    expect(warnings).toEqual([]);
+    expect(input.mcpServers).toEqual([{ name: "docs", url: "https://example.com/docs/mcp" }]);
+    expect(Object.keys(input.env).filter((name) => name.startsWith("MYRMIDON_MCP_TOKEN_"))).toEqual([]);
+  });
+
+  it("leaves the URL of a server that opts out of the rewrite as it is", () => {
+    const { input } = buildHermesProfileInput(
+      source({ mcpServers: [{ ...board, url: "https://example.com/ragflow/mcp", rewriteUrl: false }] }),
+      settings({ runtimeMcpUrlBase: "http://board.internal:3100" }),
+    );
+    expect(input.mcpServers[0]?.url).toBe("https://example.com/ragflow/mcp");
+  });
+
+  it("passes the bundle's workspace files into the compiler input", () => {
+    const workspaceFiles = [{ path: "HEARTBEAT.md", content: "# Heartbeat\n" }];
+    const { input } = buildHermesProfileInput(source({ workspaceFiles }), settings());
+    expect(input.workspaceFiles).toEqual(workspaceFiles);
   });
 
   it("rewriteMcpServerUrl leaves an unparseable URL or base as it was", () => {

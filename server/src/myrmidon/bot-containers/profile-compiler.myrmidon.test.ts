@@ -761,6 +761,102 @@ describe("myrmidon(G2) compileHermesProfile — instructions / AGENTS.md", () =>
   });
 });
 
+describe("myrmidon(W2a) compileHermesProfile — workspace files beside AGENTS.md", () => {
+  const bundle = [
+    { path: "SOUL.md", content: "# Soul\n" },
+    { path: "HEARTBEAT.md", content: "# Heartbeat\n" },
+    { path: "docs/style.md", content: "# Style\n" },
+  ];
+
+  it("writes each file under workspace/ with its relative path, plain mode, after AGENTS.md", () => {
+    const profile = compileHermesProfile(baseInput({ workspaceFiles: bundle }));
+    const paths = profile.files.map((f) => f.path);
+    expect(paths.slice(-4)).toEqual([
+      "workspace/AGENTS.md",
+      "workspace/HEARTBEAT.md",
+      "workspace/SOUL.md",
+      "workspace/docs/style.md",
+    ]);
+    for (const path of paths.slice(-3)) {
+      expect(fileByPath(profile.files, path).secret).toBe(false);
+    }
+    expect(fileByPath(profile.files, "workspace/docs/style.md").content).toBe("# Style\n");
+  });
+
+  it("is deterministic and independent of the input order", () => {
+    const forward = compileHermesProfile(baseInput({ workspaceFiles: bundle }));
+    const reversed = compileHermesProfile(baseInput({ workspaceFiles: [...bundle].reverse() }));
+    expect(reversed).toEqual(forward);
+  });
+
+  it("without workspace files the profile is the one it was before the field existed", () => {
+    expect(compileHermesProfile(baseInput({ workspaceFiles: [] }))).toEqual(compileHermesProfile(baseInput()));
+  });
+
+  it("changes filesHash, not restartHash, when a sibling file changes: a files-class change", () => {
+    const before = compileHermesProfile(baseInput({ workspaceFiles: bundle }));
+    const after = compileHermesProfile(
+      baseInput({ workspaceFiles: bundle.map((f) => (f.path === "SOUL.md" ? { ...f, content: "# Soul v2\n" } : f)) }),
+    );
+    expect(after.restartHash).toBe(before.restartHash);
+    expect(after.filesHash).not.toBe(before.filesHash);
+    expect(classifyProfileChange({ restartHash: before.restartHash, filesHash: before.filesHash }, after)).toBe("files");
+  });
+
+  it("changes filesHash when a sibling file is added, and again when it is removed", () => {
+    const none = compileHermesProfile(baseInput());
+    const one = compileHermesProfile(baseInput({ workspaceFiles: [bundle[0]!] }));
+    expect(one.filesHash).not.toBe(none.filesHash);
+    expect(one.restartHash).toBe(none.restartHash);
+    expect(classifyProfileChange({ restartHash: one.restartHash, filesHash: one.filesHash }, none)).toBe("files");
+  });
+
+  it("changes filesHash when only a file's path changes", () => {
+    const a = compileHermesProfile(baseInput({ workspaceFiles: [{ path: "a.md", content: "same" }] }));
+    const b = compileHermesProfile(baseInput({ workspaceFiles: [{ path: "b.md", content: "same" }] }));
+    expect(a.filesHash).not.toBe(b.filesHash);
+  });
+
+  it.each(["../escape.md", "docs/../../escape.md", "/absolute.md", "docs//double.md", "back\\slash.md", "nul\u0000.md", ""])(
+    "drops an unsafe path %j with a warning and keeps the safe files",
+    (path) => {
+      const { profile, warnings } = compileHermesProfileDetailed(
+        baseInput({ workspaceFiles: [{ path, content: "x" }, { path: "SOUL.md", content: "# Soul\n" }] }),
+      );
+      expect(profile.files.filter((f) => f.path.startsWith("workspace/")).map((f) => f.path)).toEqual([
+        "workspace/AGENTS.md",
+        "workspace/SOUL.md",
+      ]);
+      expect(warnings.some((w) => w.startsWith("workspaceFiles:") && w.includes("not a safe relative path"))).toBe(true);
+    },
+  );
+
+  it.each(["AGENTS.md", "agents.md", "Agents.MD"])(
+    "never lets %s replace the instructions entry file, and says so",
+    (path) => {
+      const { profile, warnings } = compileHermesProfileDetailed(
+        baseInput({ instructions: "# Real\n", workspaceFiles: [{ path, content: "# Impostor\n" }] }),
+      );
+      expect(fileByPath(profile.files, "workspace/AGENTS.md").content).toBe("# Real\n");
+      expect(profile.files.filter((f) => f.path.toLowerCase() === "workspace/agents.md")).toHaveLength(1);
+      expect(warnings.some((w) => w.includes("would replace the instructions entry file"))).toBe(true);
+    },
+  );
+
+  it("keeps the first of two files with the same path, with a warning", () => {
+    const { profile, warnings } = compileHermesProfileDetailed(
+      baseInput({
+        workspaceFiles: [
+          { path: "SOUL.md", content: "first" },
+          { path: "SOUL.md", content: "second" },
+        ],
+      }),
+    );
+    expect(fileByPath(profile.files, "workspace/SOUL.md").content).toBe("first");
+    expect(warnings.some((w) => w.includes("duplicate path"))).toBe(true);
+  });
+});
+
 describe("myrmidon(G2) compileHermesProfile — instance defaults", () => {
   it("maps compression settings", () => {
     const yaml = fileByPath(

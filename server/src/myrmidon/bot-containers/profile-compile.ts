@@ -14,19 +14,24 @@
 //     get-or-create by a deterministic name (the ports' job), never per-call.
 //   - warnings are reported when they change, not on every tick.
 
+import { composeAgentsMd, resolveCardInstructions } from "./instructions-source.js";
 import {
   compileHermesProfileDetailed,
   type HermesProfileEnvEntry,
   type HermesProfileInstanceDefaults,
   type HermesProfileSkillFile,
+  type HermesProfileWorkspaceFile,
 } from "./profile-compiler.js";
 import {
   buildHermesProfileInput,
   BotProfileInputError,
+  BOT_MCP_SERVERS_ENV,
   assertBotProfileSettings,
   readBotProfileSettings,
   type BotMcpSource,
+  type BotProfileSettings,
 } from "./profile-input.js";
+import type { BotContainerActivitySink } from "./reconciler.js";
 import type { CompiledProfile } from "./types.js";
 
 export const HERMES_GATEWAY_ADAPTER_TYPE = "hermes_gateway";
@@ -41,8 +46,35 @@ export interface BotProfileAgentRecord {
 }
 
 export interface BotProfileWarningSink {
-  (botKey: string, warnings: readonly string[]): void | Promise<void>;
+  (botKey: string, warnings: readonly string[], agentId: string): void | Promise<void>;
 }
+
+/**
+ * The warning sink that writes to the reconcile activity log (the same sink
+ * `startBotContainerReconciliation` takes as `activity`). Warnings are reported
+ * when they change, so this is one entry per change, not one per tick.
+ */
+export function createActivityWarningSink(activity: BotContainerActivitySink): BotProfileWarningSink {
+  return async (botKey, warnings, agentId) => {
+    await activity.record({
+      level: "info",
+      agentId,
+      botKey,
+      message: "bot profile warnings",
+      details: { warnings: [...warnings] },
+    });
+  };
+}
+
+/**
+ * Said for every bot while the board tool gateway is not part of the profile
+ * (`listMcpServers` unset). The gateway's run-scoped tokens live one hour and
+ * cannot sit in a container's long-lived profile; a durable token is an owner
+ * decision that is still open. The bot works without the gateway, but has no
+ * board tools through MCP, and this line makes that visible instead of silent.
+ */
+export const NO_BOARD_GATEWAY_WARNING =
+  "the profile has no board tool gateway MCP server: a durable gateway token for containers is an open owner decision";
 
 /** Everything compile needs from the board. Implemented over the database in
  *  profile-ports.ts; faked in tests. Every method is read-or-get-or-create: none
@@ -58,15 +90,20 @@ export interface BotProfilePorts {
    *  `secretId` is what the card's `apiKey` secret_ref points at (card-sync.ts). */
   ensureApiServerKey(agent: BotProfileAgentRecord): Promise<{ value: string; secretId: string }>;
   /** The bot's own board API key (PAPERCLIP_API_KEY): created once, company secret, then reused. */
-  ensureAgentApiKey(agent: BotProfileAgentRecord): Promise<{ value: string }>;
+  ensureAgentApiKey(agent: BotProfileAgentRecord): Promise<{ value: string; warnings?: string[] }>;
   /** Company skills the card's desiredSkills name, as files, keyed by runtime name. */
   loadSkills(
     agent: BotProfileAgentRecord,
   ): Promise<{ skills: Record<string, readonly HermesProfileSkillFile[]>; warnings: string[] }>;
-  /** The instructions bundle's entry file text ("" when there is none). */
-  loadInstructions(agent: BotProfileAgentRecord): Promise<string>;
+  /** The instructions bundle: the entry file's text ("" when there is none) and every other
+   *  text file of the bundle. The card's own instructions are added by compile, not here. */
+  loadInstructions(
+    agent: BotProfileAgentRecord,
+  ): Promise<{ entryText: string; files: HermesProfileWorkspaceFile[]; warnings: string[] }>;
   /** MCP servers for the bot: the board tool gateway and assigned connections. Optional:
-   *  without it the profile carries no MCP servers (see the PR's risks). */
+   *  without it the profile carries no gateway server (compile then says so in its
+   *  warnings). Instance-wide servers such as ragflow do not come through here: they
+   *  are declared in MYRMIDON_BOT_MCP_SERVERS and resolved by compile itself. */
   listMcpServers?(agent: BotProfileAgentRecord): Promise<BotMcpSource[]>;
   /** Instance-wide compression/retention defaults. Optional. */
   instanceDefaults?(): Promise<HermesProfileInstanceDefaults>;
@@ -75,6 +112,41 @@ export interface BotProfilePorts {
 export interface BotProfileCompileOptions {
   env?: NodeJS.ProcessEnv;
   onWarnings?: BotProfileWarningSink;
+}
+
+/**
+ * The servers declared in MYRMIDON_BOT_MCP_SERVERS, with each token read from
+ * its company secret. Fails loudly when a secret is missing or empty: a bot
+ * whose pilot acceptance depends on ragflow must not start without it and
+ * without a word. Nothing is created, so a failure leaves nothing behind.
+ */
+async function resolveStaticMcpServers(
+  ports: BotProfilePorts,
+  companyId: string,
+  settings: BotProfileSettings,
+): Promise<BotMcpSource[]> {
+  const sources: BotMcpSource[] = [];
+  for (const server of settings.mcpServers) {
+    if (server.tokenSecret === null) {
+      sources.push({ name: server.name, url: server.url, token: "", noAuth: true, rewriteUrl: false });
+      continue;
+    }
+    const token = await ports.readCompanySecret(companyId, server.tokenSecret);
+    if (!token || !token.trim()) {
+      throw new BotProfileInputError(
+        `${BOT_MCP_SERVERS_ENV}: the company secret "${server.tokenSecret}" for server "${server.name}" is missing or empty`,
+      );
+    }
+    sources.push({
+      name: server.name,
+      url: server.url,
+      token,
+      header: server.header,
+      scheme: server.scheme,
+      rewriteUrl: false,
+    });
+  }
+  return sources;
 }
 
 /**
@@ -88,13 +160,13 @@ export function createBotProfileCompile(
 ): (agentId: string, botKey: string) => Promise<CompiledProfile> {
   const lastWarnings = new Map<string, string>();
 
-  async function reportWarnings(botKey: string, warnings: string[]): Promise<void> {
+  async function reportWarnings(agentId: string, botKey: string, warnings: string[]): Promise<void> {
     const signature = warnings.join("\n");
     if ((lastWarnings.get(botKey) ?? "") === signature) return;
     lastWarnings.set(botKey, signature);
     if (warnings.length === 0) return;
     try {
-      await opts.onWarnings?.(botKey, warnings);
+      await opts.onWarnings?.(botKey, warnings, agentId);
     } catch {
       // A failing warning sink must never fail a compile.
     }
@@ -112,15 +184,20 @@ export function createBotProfileCompile(
       throw new BotProfileInputError(`agent adapter type is "${agent.adapterType}", not ${HERMES_GATEWAY_ADAPTER_TYPE}`);
     }
 
-    const [cardEnv, skills, instructions, apiServerKey, paperclipApiKey, mcpServers, instanceDefaults] = await Promise.all([
-      ports.resolveCardEnv(agent),
-      ports.loadSkills(agent),
-      ports.loadInstructions(agent),
-      ports.ensureApiServerKey(agent),
-      ports.ensureAgentApiKey(agent),
-      ports.listMcpServers ? ports.listMcpServers(agent) : Promise.resolve([] as BotMcpSource[]),
-      ports.instanceDefaults ? ports.instanceDefaults() : Promise.resolve(undefined),
-    ]);
+    // Read-only lookups first: a missing MCP token secret fails here, before the
+    // ports below create the bot's keys, so a broken instance setting leaves nothing behind.
+    const staticMcpServers = await resolveStaticMcpServers(ports, agent.companyId, settings);
+
+    const [cardEnv, skills, instructions, apiServerKey, paperclipApiKey, gatewayMcpServers, instanceDefaults] =
+      await Promise.all([
+        ports.resolveCardEnv(agent),
+        ports.loadSkills(agent),
+        ports.loadInstructions(agent),
+        ports.ensureApiServerKey(agent),
+        ports.ensureAgentApiKey(agent),
+        ports.listMcpServers ? ports.listMcpServers(agent) : Promise.resolve([] as BotMcpSource[]),
+        ports.instanceDefaults ? ports.instanceDefaults() : Promise.resolve(undefined),
+      ]);
 
     // The gateway key is only fetched when the card's own env does not carry it.
     let llmApiKey: string | null = null;
@@ -135,18 +212,30 @@ export function createBotProfileCompile(
         runtimeConfig: agent.runtimeConfig,
         env: cardEnv.env,
         skills: skills.skills,
-        instructions,
+        // The one place the model reads the instructions from (see instructions-source.ts):
+        // the bundle's entry file, then the card's own instructions.
+        instructions: composeAgentsMd(instructions.entryText, resolveCardInstructions(agent.adapterConfig)),
+        workspaceFiles: instructions.files,
         llmApiKey,
         apiServerKey: apiServerKey.value,
         paperclipApiKey: paperclipApiKey.value,
-        mcpServers,
+        // Declared servers first: a same-named server from the gateway port loses to the operator's declaration.
+        mcpServers: [...staticMcpServers, ...gatewayMcpServers],
         instanceDefaults,
       },
       settings,
     );
 
     const result = compileHermesProfileDetailed(built.input);
-    await reportWarnings(botKey, [...cardEnv.warnings, ...skills.warnings, ...built.warnings, ...result.warnings]);
+    await reportWarnings(agentId, botKey, [
+      ...(ports.listMcpServers ? [] : [NO_BOARD_GATEWAY_WARNING]),
+      ...cardEnv.warnings,
+      ...(paperclipApiKey.warnings ?? []),
+      ...skills.warnings,
+      ...instructions.warnings,
+      ...built.warnings,
+      ...result.warnings,
+    ]);
     return result.profile;
   };
 }

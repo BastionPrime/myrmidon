@@ -70,6 +70,13 @@ export interface HermesProfileAdapterConfig {
   toolsets?: string;
 }
 
+/** A text file placed under /workspace next to AGENTS.md (the sibling files of an instructions bundle). */
+export interface HermesProfileWorkspaceFile {
+  /** Path relative to /workspace, e.g. "HEARTBEAT.md", "docs/style.md". Never "AGENTS.md" (that is `instructions`). */
+  path: string;
+  content: string;
+}
+
 export interface HermesProfileEnvEntry {
   /** Already resolved: plain value or a resolved secret_ref/user_secret_ref value. */
   value: string;
@@ -199,6 +206,14 @@ export interface HermesProfileInput {
   skills: Record<string, readonly HermesProfileSkillFile[]>;
   /** The AGENTS.md instruction bundle text, already assembled by the caller. */
   instructions: string;
+  /**
+   * The instructions bundle's other files, placed under /workspace with their
+   * relative paths: the entry file refers to its siblings (`./HEARTBEAT.md`,
+   * `./SOUL.md`), and the agent resolves those against its working directory.
+   * Files-class, like AGENTS.md: read on demand, no restart needed. Optional;
+   * omitted means the bundle is the entry file alone.
+   */
+  workspaceFiles?: readonly HermesProfileWorkspaceFile[];
   hindsight: HermesProfileHindsightSettings;
   /** Instance-wide LLM gateway settings — see {@link HermesProfileLlmSettings}. */
   llm: HermesProfileLlmSettings;
@@ -645,6 +660,41 @@ function buildSkillFiles(
 }
 
 // ---------------------------------------------------------------------------
+// Workspace files (the instructions bundle's siblings of AGENTS.md)
+// ---------------------------------------------------------------------------
+
+/** The entry file's own name in the workspace; a sibling may not take it (compared case-insensitively). */
+const WORKSPACE_ENTRY_FILE_NAME = "agents.md";
+
+function buildWorkspaceFiles(
+  workspaceFiles: readonly HermesProfileWorkspaceFile[] | undefined,
+  warnings: string[],
+): CompiledProfileFile[] {
+  const out: CompiledProfileFile[] = [];
+  const seen = new Set<string>();
+  const sorted = [...(workspaceFiles ?? [])].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  for (const workspaceFile of sorted) {
+    if (!isSafeSkillPath(workspaceFile.path) || workspaceFile.path.includes("\\") || workspaceFile.path.includes("\u0000")) {
+      warnings.push(`workspaceFiles: path "${workspaceFile.path}" is not a safe relative path, dropped`);
+      continue;
+    }
+    if (workspaceFile.path.toLowerCase() === WORKSPACE_ENTRY_FILE_NAME) {
+      warnings.push(
+        `workspaceFiles: "${workspaceFile.path}" would replace the instructions entry file AGENTS.md, dropped`,
+      );
+      continue;
+    }
+    if (seen.has(workspaceFile.path)) {
+      warnings.push(`workspaceFiles: duplicate path "${workspaceFile.path}", keeping the first one`);
+      continue;
+    }
+    seen.add(workspaceFile.path);
+    out.push(file(`workspace/${workspaceFile.path}`, workspaceFile.content, { secret: false }));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Compile
 // ---------------------------------------------------------------------------
 
@@ -693,7 +743,9 @@ export function compileHermesProfileDetailed(input: HermesProfileInput): Compile
   // cached the way the skills index is), so a running gateway picks up an
   // edit without a restart.
   const agentsMdFile = file("workspace/AGENTS.md", input.instructions, { secret: false });
-  const filesTrackedFiles = [agentsMdFile];
+  // The bundle's sibling files ride the same class: the entry file names them
+  // relatively, and the agent reads them on demand, never through a cache.
+  const filesTrackedFiles = [agentsMdFile, ...buildWorkspaceFiles(input.workspaceFiles, warnings)];
 
   const restartHash = hashEntries(restartFiles);
   const filesHash = hashEntries(filesTrackedFiles);

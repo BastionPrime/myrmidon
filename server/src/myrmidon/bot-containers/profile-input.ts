@@ -23,6 +23,7 @@ import type {
   HermesProfileInstanceDefaults,
   HermesProfileMcpServer,
   HermesProfileSkillFile,
+  HermesProfileWorkspaceFile,
 } from "./profile-compiler.js";
 
 // ---------------------------------------------------------------------------
@@ -39,6 +40,23 @@ export const BOT_BOARD_URL_ENV = "MYRMIDON_BOT_BOARD_URL";
  *  the internal base a run-scoped MCP gateway URL's origin is rewritten to. Repeated
  *  here, not imported, because the server does not load that adapter module. */
 export const BOT_RUNTIME_MCP_URL_BASE_ENV = "MYRMIDON_HERMES_RUNTIME_MCP_URL_BASE";
+/** Instance-wide MCP servers every bot gets (ragflow and the like): a JSON array, see `parseBotMcpServers`. */
+export const BOT_MCP_SERVERS_ENV = "MYRMIDON_BOT_MCP_SERVERS";
+
+/**
+ * One instance-wide MCP server. The token is never in the setting: `tokenSecret`
+ * names a company secret, resolved by profile-compile.ts on every compile.
+ */
+export interface BotStaticMcpServer {
+  name: string;
+  url: string;
+  /** Company secret that holds the server's token; null for a server declared `noAuth`. */
+  tokenSecret: string | null;
+  /** HTTP header that carries the token. */
+  header: string;
+  /** Prefix of the header value ("Bearer"); "" sends the raw token. */
+  scheme: string;
+}
 
 export interface BotProfileSettings {
   /** hindsight service address as seen from a bot container. Required. */
@@ -55,6 +73,11 @@ export interface BotProfileSettings {
   boardUrl: string | null;
   /** Internal base for MCP gateway URLs; null = URLs are used as the board built them. */
   runtimeMcpUrlBase: string | null;
+  /** Instance-wide MCP servers (MYRMIDON_BOT_MCP_SERVERS); empty when unset or invalid. */
+  mcpServers: BotStaticMcpServer[];
+  /** Why MYRMIDON_BOT_MCP_SERVERS could not be used; null when it is unset or valid.
+   *  `assertBotProfileSettings` throws it: a broken declaration must not silently mean "no MCP". */
+  mcpServersError: string | null;
 }
 
 function readSetting(env: NodeJS.ProcessEnv, name: string): string | null {
@@ -62,8 +85,81 @@ function readSetting(env: NodeJS.ProcessEnv, name: string): string | null {
   return value ? value : null;
 }
 
+/** MCP server names become YAML keys and env-variable suffixes, so they are folded to a safe alphabet. */
+export function sanitizeMcpServerName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+/** An HTTP header name: letters, digits, hyphens and underscores. */
+const HEADER_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+/** An auth scheme word ("Bearer", "Token"); empty means the raw token. */
+const AUTH_SCHEME_PATTERN = /^[A-Za-z0-9-]*$/;
+const DEFAULT_MCP_HEADER = "Authorization";
+const DEFAULT_MCP_SCHEME = "Bearer";
+
+function parseHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * MYRMIDON_BOT_MCP_SERVERS: `[{"name":"ragflow","url":"http://...","tokenSecret":"<company secret name>"}]`.
+ * Optional per entry: `header` (default Authorization), `scheme` (default Bearer,
+ * "" sends the raw token), `noAuth: true` in place of `tokenSecret` for a server
+ * that takes no token. An entry with neither `tokenSecret` nor `noAuth` is an
+ * error, so a forgotten secret never becomes an unauthenticated server.
+ * Errors name the entry and the field, never a value.
+ */
+export function parseBotMcpServers(raw: string | null): { servers: BotStaticMcpServer[]; error: string | null } {
+  if (raw === null) return { servers: [], error: null };
+  const fail = (message: string) => ({ servers: [] as BotStaticMcpServer[], error: `${BOT_MCP_SERVERS_ENV}: ${message}` });
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return fail("is not valid JSON");
+  }
+  if (!Array.isArray(parsed)) return fail("must be a JSON array of servers");
+
+  const servers: BotStaticMcpServer[] = [];
+  const seen = new Set<string>();
+  for (const [index, entry] of parsed.entries()) {
+    const record = asRecord(entry);
+    const label = `entry ${index}`;
+    const rawName = typeof record.name === "string" ? record.name : "";
+    const name = sanitizeMcpServerName(rawName);
+    if (!name) return fail(`${label} has no usable "name"`);
+    if (seen.has(name)) return fail(`${label} ("${name}") repeats a server name`);
+    seen.add(name);
+    const url = typeof record.url === "string" ? record.url.trim() : "";
+    if (!url || !parseHttpUrl(url)) return fail(`${label} ("${name}") needs an http(s) "url"`);
+    const tokenSecret = typeof record.tokenSecret === "string" ? record.tokenSecret.trim() : "";
+    const noAuth = record.noAuth === true;
+    if (tokenSecret && noAuth) return fail(`${label} ("${name}") sets both "tokenSecret" and "noAuth"`);
+    if (!tokenSecret && !noAuth) {
+      return fail(`${label} ("${name}") needs "tokenSecret" (a company secret name), or "noAuth": true for a server without a token`);
+    }
+    const header = record.header === undefined ? DEFAULT_MCP_HEADER : typeof record.header === "string" ? record.header.trim() : "";
+    if (!HEADER_NAME_PATTERN.test(header)) return fail(`${label} ("${name}") has an invalid "header" name`);
+    const scheme = record.scheme === undefined ? DEFAULT_MCP_SCHEME : typeof record.scheme === "string" ? record.scheme.trim() : null;
+    if (scheme === null || !AUTH_SCHEME_PATTERN.test(scheme)) return fail(`${label} ("${name}") has an invalid "scheme"`);
+    servers.push({ name, url, tokenSecret: noAuth ? null : tokenSecret, header, scheme });
+  }
+  return { servers, error: null };
+}
+
 export function readBotProfileSettings(env: NodeJS.ProcessEnv = process.env): BotProfileSettings {
   const llmApiKeyEnv = readSetting(env, BOT_LLM_API_KEY_ENV_ENV);
+  const mcp = parseBotMcpServers(readSetting(env, BOT_MCP_SERVERS_ENV));
   return {
     hindsightApiUrl: readSetting(env, BOT_HINDSIGHT_API_URL_ENV),
     hindsightBank: readSetting(env, BOT_HINDSIGHT_BANK_ENV),
@@ -72,6 +168,8 @@ export function readBotProfileSettings(env: NodeJS.ProcessEnv = process.env): Bo
     llmApiKeySecret: readSetting(env, BOT_LLM_API_KEY_SECRET_ENV) ?? llmApiKeyEnv,
     boardUrl: readSetting(env, BOT_BOARD_URL_ENV),
     runtimeMcpUrlBase: readSetting(env, BOT_RUNTIME_MCP_URL_BASE_ENV)?.replace(/\/+$/, "") ?? null,
+    mcpServers: mcp.servers,
+    mcpServersError: mcp.error,
   };
 }
 
@@ -104,6 +202,7 @@ const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * leaves nothing behind.
  */
 export function assertBotProfileSettings(settings: BotProfileSettings): void {
+  if (settings.mcpServersError) throw new BotProfileInputError(settings.mcpServersError);
   if (!settings.hindsightApiUrl) {
     throw new BotProfileInputError(`${BOT_HINDSIGHT_API_URL_ENV} is not set (the shared hindsight service address)`);
   }
@@ -126,11 +225,20 @@ export function assertBotProfileSettings(settings: BotProfileSettings): void {
 // Source
 // ---------------------------------------------------------------------------
 
-/** One MCP server as the board's gateway hands it out: a URL and a bearer token. */
+/** One MCP server: a URL and a token, from the board's gateway or from MYRMIDON_BOT_MCP_SERVERS. */
 export interface BotMcpSource {
   name: string;
   url: string;
   token: string;
+  /** Header that carries the token; default Authorization. */
+  header?: string;
+  /** Prefix of the header value; default "Bearer", "" = the raw token. */
+  scheme?: string;
+  /** A server that takes no token: no header and no .env variable are produced. */
+  noAuth?: boolean;
+  /** Whether the runtime MCP URL base rewrite applies (default true: it is meant for the board gateway's
+   *  own URLs). Servers declared in MYRMIDON_BOT_MCP_SERVERS are reached at the address given, so they opt out. */
+  rewriteUrl?: boolean;
 }
 
 export interface BotProfileSource {
@@ -143,8 +251,10 @@ export interface BotProfileSource {
   env: Record<string, HermesProfileEnvEntry>;
   /** Company skills chosen by the card's desiredSkills: runtime name -> files. */
   skills: Record<string, readonly HermesProfileSkillFile[]>;
-  /** The instructions bundle's entry file text ("" when the card has none). */
+  /** The text of workspace/AGENTS.md, already assembled (bundle entry + card instructions; see instructions-source.ts). */
   instructions: string;
+  /** The instructions bundle's other files, placed beside AGENTS.md. */
+  workspaceFiles?: readonly HermesProfileWorkspaceFile[];
   /** The LLM gateway key held as an instance/company secret; used when the card's
    *  own env carries no value under `settings.llmApiKeyEnv`. */
   llmApiKey: string | null;
@@ -261,15 +371,6 @@ export function readMaxConcurrentRuns(runtimeConfig: Record<string, unknown>): n
 /** Env prefix of the variables that carry MCP bearer tokens inside a bot's .env. */
 export const BOT_MCP_TOKEN_ENV_PREFIX = "MYRMIDON_MCP_TOKEN_";
 
-function sanitizeMcpServerName(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
-}
-
 /** Same rewrite as the P4 adapter's rewriteRuntimeMcpServerUrl: origin replaced, path and query kept. */
 export function rewriteMcpServerUrl(url: string, internalBase: string): string {
   try {
@@ -298,8 +399,10 @@ function effectiveMcpUrlBase(card: Record<string, unknown>, settings: BotProfile
 
 /**
  * MCP servers for the profile. A token never lands in config.yaml as a value:
- * config.yaml carries `Authorization: Bearer ${MYRMIDON_MCP_TOKEN_<NAME>}` and the
- * token itself goes to the (0600) .env, where Hermes expands the reference at load.
+ * config.yaml carries `Authorization: Bearer ${MYRMIDON_MCP_TOKEN_<NAME>}` (the
+ * header and scheme are configurable per server) and the token itself goes to
+ * the (0600) .env, where Hermes expands the reference at load. A `noAuth` server
+ * gets neither a header nor a variable.
  */
 function buildMcpServers(
   sources: readonly BotMcpSource[],
@@ -319,8 +422,20 @@ function buildMcpServers(
       warnings.push(`mcp.${name}: duplicate server name, the first one is kept`);
       continue;
     }
+    const url = urlBase && source.rewriteUrl !== false ? rewriteMcpServerUrl(source.url, urlBase) : source.url;
+    if (source.noAuth) {
+      seenNames.add(name);
+      servers.push({ name, url });
+      continue;
+    }
     if (!source.token.trim()) {
       warnings.push(`mcp.${name}: no token, the server was skipped`);
+      continue;
+    }
+    const header = source.header ?? DEFAULT_MCP_HEADER;
+    const scheme = source.scheme ?? DEFAULT_MCP_SCHEME;
+    if (!HEADER_NAME_PATTERN.test(header) || !AUTH_SCHEME_PATTERN.test(scheme)) {
+      warnings.push(`mcp.${name}: an invalid header name or scheme, the server was skipped`);
       continue;
     }
     const variable = `${BOT_MCP_TOKEN_ENV_PREFIX}${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
@@ -332,8 +447,8 @@ function buildMcpServers(
     env[variable] = { value: source.token, secret: true };
     servers.push({
       name,
-      url: urlBase ? rewriteMcpServerUrl(source.url, urlBase) : source.url,
-      headers: { Authorization: `Bearer \${${variable}}` },
+      url,
+      headers: { [header]: scheme ? `${scheme} \${${variable}}` : `\${${variable}}` },
     });
   }
   return { servers, env };
@@ -376,6 +491,7 @@ export function buildHermesProfileInput(source: BotProfileSource, settings: BotP
     env,
     skills: source.skills,
     instructions: source.instructions,
+    workspaceFiles: source.workspaceFiles,
     hindsight: readHindsight(card, settings),
     llm: {
       baseUrl: settings.llmBaseUrl ?? undefined,
