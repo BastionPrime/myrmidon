@@ -14,7 +14,6 @@
 //     get-or-create by a deterministic name (the ports' job), never per-call.
 //   - warnings are reported when they change, not on every tick.
 
-import { composeAgentsMd, resolveCardInstructions } from "./instructions-source.js";
 import {
   compileHermesProfileDetailed,
   type HermesProfileEnvEntry,
@@ -26,6 +25,7 @@ import {
   buildHermesProfileInput,
   BotProfileInputError,
   BOT_MCP_SERVERS_ENV,
+  assertBotLlmSettingsForCard,
   assertBotProfileSettings,
   readBotProfileSettings,
   type BotMcpSource,
@@ -95,11 +95,11 @@ export interface BotProfilePorts {
   loadSkills(
     agent: BotProfileAgentRecord,
   ): Promise<{ skills: Record<string, readonly HermesProfileSkillFile[]>; warnings: string[] }>;
-  /** The instructions bundle: the entry file's text ("" when there is none) and every other
-   *  text file of the bundle. The card's own instructions are added by compile, not here. */
+  /** The instructions bundle's files (every text file except its entry file), for /workspace.
+   *  The instructions themselves are not compiled into the profile: they travel in the run request. */
   loadInstructions(
     agent: BotProfileAgentRecord,
-  ): Promise<{ entryText: string; files: HermesProfileWorkspaceFile[]; warnings: string[] }>;
+  ): Promise<{ files: HermesProfileWorkspaceFile[]; warnings: string[] }>;
   /** MCP servers for the bot: the board tool gateway and assigned connections. Optional:
    *  without it the profile carries no gateway server (compile then says so in its
    *  warnings). Instance-wide servers such as ragflow do not come through here: they
@@ -183,6 +183,9 @@ export function createBotProfileCompile(
     if (agent.adapterType !== HERMES_GATEWAY_ADAPTER_TYPE) {
       throw new BotProfileInputError(`agent adapter type is "${agent.adapterType}", not ${HERMES_GATEWAY_ADAPTER_TYPE}`);
     }
+    // A card that needs the LLM gateway (provider empty/auto/custom) fails here, by
+    // the missing setting's name, before the ports below create any key for the bot.
+    assertBotLlmSettingsForCard(settings, agent.adapterConfig);
 
     // Read-only lookups first: a missing MCP token secret fails here, before the
     // ports below create the bot's keys, so a broken instance setting leaves nothing behind.
@@ -212,9 +215,10 @@ export function createBotProfileCompile(
         runtimeConfig: agent.runtimeConfig,
         env: cardEnv.env,
         skills: skills.skills,
-        // The one place the model reads the instructions from (see instructions-source.ts):
-        // the bundle's entry file, then the card's own instructions.
-        instructions: composeAgentsMd(instructions.entryText, resolveCardInstructions(agent.adapterConfig)),
+        // No workspace/AGENTS.md: the gateway injection-scans it and drops the whole file
+        // on a match. The instructions reach the model through the run request instead
+        // (the adapter's `instructions` field, not scanned); see instructions-source.ts.
+        instructions: "",
         workspaceFiles: instructions.files,
         llmApiKey,
         apiServerKey: apiServerKey.value,

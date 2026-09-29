@@ -12,8 +12,10 @@ import {
   BOT_MCP_SERVERS_ENV,
   BOT_RUNTIME_MCP_URL_BASE_ENV,
   BotProfileInputError,
+  assertBotLlmSettingsForCard,
   assertBotProfileSettings,
   buildHermesProfileInput,
+  cardUsesLlmGateway,
   parseBotMcpServers,
   readBotProfileSettings,
   readMaxConcurrentRuns,
@@ -330,12 +332,65 @@ describe("myrmidon(W2a) buildHermesProfileInput — LLM gateway key", () => {
     ).toThrow("fleet-llm-gateway-key");
   });
 
-  it("asks for no key and sets no endpoint when the instance configures no gateway", () => {
+  it("asks for no key and sets no endpoint for a native-provider card when the instance configures no gateway", () => {
     const { input } = buildHermesProfileInput(
-      source({ llmApiKey: null }),
+      source({ llmApiKey: null, adapterConfig: { provider: "anthropic", model: "claude-sonnet-5" } }),
       settings({ llmBaseUrl: null, llmApiKeyEnv: null, llmApiKeySecret: null }),
     );
     expect(input.llm).toEqual({ baseUrl: undefined, apiKeyEnv: undefined });
+  });
+});
+
+describe("myrmidon(W2a) the LLM gateway settings a card needs", () => {
+  const noGateway = { llmBaseUrl: null, llmApiKeyEnv: null, llmApiKeySecret: null } as const;
+
+  it.each([
+    [{ provider: "custom" }, true],
+    [{ provider: "Custom" }, true],
+    [{ provider: "custom:gateway" }, true],
+    [{ provider: "auto" }, true],
+    [{ provider: "  " }, true],
+    [{ provider: 7 }, true],
+    [{}, true],
+    [{ provider: "anthropic" }, false],
+    [{ provider: "gemini" }, false],
+    [{ provider: "openrouter" }, false],
+  ])("cardUsesLlmGateway(%j) is %s", (card, expected) => {
+    expect(cardUsesLlmGateway(card)).toBe(expected);
+  });
+
+  it.each([{ provider: "custom" }, { provider: "custom:gateway" }, { provider: "auto" }, {}])(
+    "refuses to build the profile of %j when MYRMIDON_BOT_LLM_BASE_URL is unset, naming the setting",
+    (card) => {
+      const build = () => buildHermesProfileInput(source({ adapterConfig: card }), settings({ ...noGateway, llmApiKeyEnv: "FLEET_LLM_API_KEY" }));
+      expect(build).toThrow(BotProfileInputError);
+      expect(build).toThrow(BOT_LLM_BASE_URL_ENV);
+    },
+  );
+
+  it.each([{ provider: "custom" }, { provider: "auto" }, {}])(
+    "refuses to build the profile of %j when MYRMIDON_BOT_LLM_API_KEY_ENV is unset, naming the setting",
+    (card) => {
+      const build = () => buildHermesProfileInput(source({ adapterConfig: card }), settings({ ...noGateway, llmBaseUrl: "https://example.com/llm/v1" }));
+      expect(build).toThrow(BotProfileInputError);
+      expect(build).toThrow(BOT_LLM_API_KEY_ENV_ENV);
+    },
+  );
+
+  it("builds the profile of a gateway card once both settings are set", () => {
+    const { input } = buildHermesProfileInput(source({ adapterConfig: { provider: "custom", model: "some-model" } }), settings());
+    expect(input.llm).toEqual({ baseUrl: "https://example.com/llm/v1", apiKeyEnv: "FLEET_LLM_API_KEY" });
+  });
+
+  it("names the missing setting and the provider in the error", () => {
+    expect(() => assertBotLlmSettingsForCard(settings(noGateway), { provider: "custom" })).toThrow(
+      `${BOT_LLM_BASE_URL_ENV} is not set, but the card's provider is "custom"`,
+    );
+    expect(() => assertBotLlmSettingsForCard(settings(noGateway), {})).toThrow("the card sets no provider");
+  });
+
+  it("asks nothing of a native-provider card", () => {
+    expect(() => assertBotLlmSettingsForCard(settings(noGateway), { provider: "anthropic" })).not.toThrow();
   });
 });
 

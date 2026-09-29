@@ -1,68 +1,31 @@
 // server/src/myrmidon/bot-containers/instructions-source.ts
 //
-// myrmidon(W2a): what a container bot is told, and who owns telling it.
+// myrmidon(W2a): the files of a container bot's instructions bundle.
 //
-// One owner. The bot's instructions reach the model exactly once, as the
-// workspace/AGENTS.md this wiring writes into the container. The gateway
-// adapter (G4) must NOT add them a second time to the /v1/runs `instructions`
-// field for a card in container mode (`container.enabled === true`): the model
-// would read the same text twice, per run, at the price of the prompt. The
-// contract for the adapter is in DIVERGENCE.md.
+// The bot's instructions reach the model through the gateway adapter (G4): its
+// `/v1/runs` request carries the bundle's entry file and the card's own stable
+// instructions in the `instructions` field, the same in or out of a container.
+// This wiring deliberately does NOT write them into workspace/AGENTS.md. The
+// vendor gateway injection-scans every project context file it loads and
+// replaces a whole file that matches a pattern (a `curl ... $API_KEY` example is
+// enough) with a "[BLOCKED ... Content not loaded.]" stub, and the bot would run
+// without any instructions at all; the run request's `instructions` field is
+// not scanned.
 //
-// So AGENTS.md carries everything the adapter would have sent for a card that
-// is not in a container: the Paperclip-managed bundle's entry file, then the
-// card's own stable instructions, joined the way the adapter joins them (the
-// same "\n\n---\n\n" separator, the same default line when the card has none).
-// The bundle's other files (HEARTBEAT.md, SOUL.md, a docs/ folder) go beside it
-// under /workspace with their relative paths, because the entry file refers to
-// them and the agent resolves those references against its working directory.
+// What does go into the container is the rest of the bundle (HEARTBEAT.md,
+// SOUL.md, a docs/ folder), under /workspace with the relative paths the
+// instructions use: the agent resolves those references against its working
+// directory. The entry file itself is not read here.
 //
 // The functions here are pure over injected file access; profile-ports.ts binds
 // them to the board's instructions service.
 
 import type { HermesProfileWorkspaceFile } from "./profile-compiler.js";
 
-/** The separator between the bundle and the card's own instructions (the adapter's layering). */
-export const INSTRUCTIONS_SEPARATOR = "\n\n---\n\n";
-
-/**
- * What the adapter falls back to when a card carries no instructions of its own.
- * Kept identical to the adapter's line so a bot behaves the same in or out of a container.
- */
-export const DEFAULT_CARD_INSTRUCTIONS =
-  "Follow the Paperclip wake instructions exactly. Do not expose secrets in logs, comments, or final output.";
-
 /** Bundle limits: a bundle is a handful of markdown files, not a file store. */
 export const BUNDLE_MAX_FILES = 50;
 export const BUNDLE_MAX_FILE_BYTES = 256 * 1024;
 export const BUNDLE_MAX_PATH_LENGTH = 200;
-
-function nonEmpty(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-/**
- * The card's own stable instructions, resolved the way the adapter resolves them:
- * `adapterConfig.instructions`, else `adapterConfig.payloadTemplate.instructions`,
- * else the default line. Always non-empty.
- */
-export function resolveCardInstructions(adapterConfig: Record<string, unknown>): string {
-  return (
-    nonEmpty(adapterConfig.instructions) ??
-    nonEmpty(asRecord(adapterConfig.payloadTemplate).instructions) ??
-    DEFAULT_CARD_INSTRUCTIONS
-  );
-}
-
-/** The full text of workspace/AGENTS.md: the bundle's entry file (if any), then the card's instructions. */
-export function composeAgentsMd(bundleEntryText: string, cardInstructions: string): string {
-  const entry = bundleEntryText.trim();
-  return entry ? `${entry}${INSTRUCTIONS_SEPARATOR}${cardInstructions}` : cardInstructions;
-}
 
 export interface BotInstructionsBundleListing {
   entryFile: string;
@@ -82,15 +45,13 @@ export interface BotInstructionsBundleSource {
 }
 
 export interface LoadedBotInstructions {
-  /** The entry file's text; "" when the agent has no bundle or its entry file is missing or blank. */
-  entryText: string;
-  /** Every other text file of the bundle, sorted by path. */
+  /** Every text file of the bundle except its entry file, sorted by path; [] when the agent has no bundle. */
   files: HermesProfileWorkspaceFile[];
   warnings: string[];
 }
 
 /**
- * Reads a bundle for a container bot. Oversized, binary and over-count files are
+ * Reads a bundle's files for a container bot. Oversized, binary and over-count files are
  * skipped with a warning (never truncated: half a file is worse than none). A
  * file that fails to read is an error, not a warning: with the file gone the
  * profile's hash would change and a working bot would lose its instructions.
@@ -98,19 +59,9 @@ export interface LoadedBotInstructions {
 export async function loadBotInstructionsBundle(source: BotInstructionsBundleSource): Promise<LoadedBotInstructions> {
   const warnings: string[] = [];
   const listing = await source.listBundle();
-  if (!listing) return { entryText: "", files: [], warnings };
+  if (!listing) return { files: [], warnings };
 
   const real = listing.files.filter((file) => !file.virtual);
-  const entry = real.find((file) => file.path === listing.entryFile);
-  let entryText = "";
-  if (entry) {
-    if (entry.size > BUNDLE_MAX_FILE_BYTES) {
-      warnings.push(`instructions bundle: entry file ${entry.path} is larger than ${BUNDLE_MAX_FILE_BYTES} bytes, skipped`);
-    } else {
-      entryText = await source.readFile(entry.path);
-    }
-  }
-
   const siblings = real
     .filter((file) => file.path !== listing.entryFile)
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -136,5 +87,5 @@ export async function loadBotInstructionsBundle(source: BotInstructionsBundleSou
     }
     files.push({ path: sibling.path, content });
   }
-  return { entryText, files, warnings };
+  return { files, warnings };
 }

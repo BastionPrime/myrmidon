@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_CARD_INSTRUCTIONS, INSTRUCTIONS_SEPARATOR } from "./instructions-source.js";
 import {
   BOT_BOARD_URL_ENV,
   BOT_HINDSIGHT_API_URL_ENV,
@@ -87,7 +86,7 @@ function fakeBoard(overrides: Partial<BotProfilePorts> = {}): FakeBoard {
     },
     async loadInstructions() {
       calls.push("loadInstructions");
-      return { entryText: "# Role\n\nYou are agent-a.\n", files: [], warnings: [] };
+      return { files: [], warnings: [] };
     },
     // A quiet board: the gateway port is present (and has nothing to hand out), so the
     // "no board gateway" warning is not raised; the tests that want it override this.
@@ -117,7 +116,6 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
       "hermes/.env",
       "hermes/config.yaml",
       "hermes/hindsight/config.json",
-      "workspace/AGENTS.md",
     ]);
     const env = fileContent(profile, "hermes/.env");
     expect(env).toContain('FLEET_LLM_API_KEY="fake-llm-key-0001"');
@@ -126,7 +124,6 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
     expect(env).toMatch(/PAPERCLIP_API_KEY="fake-paperclip-api-key-\d+"/);
     expect(fileContent(profile, "hermes/config.yaml")).not.toContain("fake-llm-key-0001");
     expect(fileContent(profile, "hermes/hindsight/config.json")).toContain("fleet-default");
-    expect(fileContent(profile, "workspace/AGENTS.md")).toContain("You are agent-a.");
   });
 
   it("is idempotent: a second tick with nothing changed gives the same hashes", async () => {
@@ -367,7 +364,7 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
     it("carries the instructions bundle's and the board key's warnings too", async () => {
       const board = fakeBoard({
         async loadInstructions() {
-          return { entryText: "# Role\n", files: [], warnings: ["instructions bundle: big.md is larger than 262144 bytes, skipped"] };
+          return { files: [], warnings: ["instructions bundle: big.md is larger than 262144 bytes, skipped"] };
         },
         async ensureAgentApiKey() {
           return { value: "fake-paperclip-api-key-0001", warnings: ["board API key key-1: replaced by a new key, revoke failed (x)"] };
@@ -389,64 +386,56 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
     });
   });
 
-  describe("instructions: one owner, one place", () => {
-    const BUNDLE_MARKER = "BUNDLE-MARKER-7f3a";
+  describe("instructions: not compiled into the workspace", () => {
     const CARD_MARKER = "CARD-MARKER-91be";
+    // What tripped the gateway's injection scan on real bundles: a curl example that names a key variable.
+    const CURL_EXAMPLE = 'Post it with: curl -X POST -H "Authorization: Bearer $PAPERCLIP_API_KEY" https://example.com/api/comments';
 
     function occurrences(profile: CompiledProfile, marker: string): string[] {
       return profile.files.filter((file) => file.content.includes(marker)).map((file) => file.path);
     }
 
-    it("puts the bundle's text and the card's instructions into workspace/AGENTS.md, and nowhere else", async () => {
-      const board = fakeBoard({
-        async loadInstructions() {
-          return { entryText: `# Role\n\n${BUNDLE_MARKER}\n`, files: [], warnings: [] };
-        },
-      });
+    it("writes no AGENTS.md and carries no instruction text into the profile: the run request delivers it", async () => {
+      const board = fakeBoard();
       board.agent.current = agentRecord({
-        adapterConfig: { model: "anthropic/claude-sonnet-5", instructions: `Stay polite. ${CARD_MARKER}` },
+        adapterConfig: { model: "anthropic/claude-sonnet-5", provider: "anthropic", instructions: `Stay polite. ${CARD_MARKER}` },
       });
       const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
-      expect(occurrences(profile, BUNDLE_MARKER)).toEqual(["workspace/AGENTS.md"]);
-      expect(occurrences(profile, CARD_MARKER)).toEqual(["workspace/AGENTS.md"]);
-      const agentsMd = fileContent(profile, "workspace/AGENTS.md");
-      expect(agentsMd.split(BUNDLE_MARKER)).toHaveLength(2);
-      expect(agentsMd.split(CARD_MARKER)).toHaveLength(2);
-      // Bundle first, then the card's own text, joined exactly the way the adapter joins them for a
-      // card outside a container: that is why the adapter must add neither for a container card.
-      expect(agentsMd).toBe(`# Role\n\n${BUNDLE_MARKER}${INSTRUCTIONS_SEPARATOR}Stay polite. ${CARD_MARKER}`);
+      expect(occurrences(profile, CARD_MARKER)).toEqual([]);
+      expect(profile.files.filter((file) => file.path.toLowerCase().endsWith("agents.md"))).toEqual([]);
     });
 
-    it("carries the adapter's default line when the card has no instructions of its own", async () => {
+    it("cannot be blinded by an instruction text the gateway's injection scan would block", async () => {
       const board = fakeBoard();
-      const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
-      expect(fileContent(profile, "workspace/AGENTS.md")).toBe(
-        `# Role\n\nYou are agent-a.${INSTRUCTIONS_SEPARATOR}${DEFAULT_CARD_INSTRUCTIONS}`,
-      );
-    });
-
-    it("takes the card's payloadTemplate instructions when it has no instructions field, like the adapter", async () => {
-      const board = fakeBoard();
-      board.agent.current = agentRecord({ adapterConfig: { payloadTemplate: { instructions: `From template. ${CARD_MARKER}` } } });
-      const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
-      expect(occurrences(profile, CARD_MARKER)).toEqual(["workspace/AGENTS.md"]);
-    });
-
-    it("works for a card with no bundle: the card's instructions alone", async () => {
-      const board = fakeBoard({
-        async loadInstructions() {
-          return { entryText: "", files: [], warnings: [] };
+      board.agent.current = agentRecord({
+        adapterConfig: {
+          model: "anthropic/claude-sonnet-5",
+          provider: "anthropic",
+          instructions: `Report through the board. ${CURL_EXAMPLE}`,
+          payloadTemplate: { instructions: CURL_EXAMPLE },
         },
       });
-      board.agent.current = agentRecord({ adapterConfig: { instructions: `Only the card. ${CARD_MARKER}` } });
       const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
-      expect(fileContent(profile, "workspace/AGENTS.md")).toBe(`Only the card. ${CARD_MARKER}`);
+      // No file the gateway loads as project context: nothing for the scanner to replace with a stub.
+      expect(occurrences(profile, "curl")).toEqual([]);
+      expect(profile.files.filter((file) => file.path.startsWith("workspace/"))).toEqual([]);
+    });
+
+    it("does not read the card's instructions at all: the same profile whatever they say", async () => {
+      const compileWith = async (instructions: string) => {
+        const board = fakeBoard();
+        board.agent.current = agentRecord({ adapterConfig: { model: "anthropic/claude-sonnet-5", provider: "anthropic", instructions } });
+        return createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+      };
+      const one = await compileWith("First version.");
+      const two = await compileWith("Second version, quite different.");
+      expect(two.restartHash).toBe(one.restartHash);
+      expect(two.filesHash).toBe(one.filesHash);
     });
   });
 
   describe("instructions bundle files", () => {
     const bundle = {
-      entryText: "# Role\n\nSee HEARTBEAT.md and docs/style.md.\n",
       files: [
         { path: "HEARTBEAT.md", content: "# Heartbeat\n" },
         { path: "SOUL.md", content: "# Soul\n" },
@@ -455,7 +444,7 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
       warnings: [] as string[],
     };
 
-    it("places all four bundle files into the workspace under their relative paths", async () => {
+    it("places the bundle's files into the workspace under their relative paths, and no AGENTS.md", async () => {
       const board = fakeBoard({
         async loadInstructions() {
           return bundle;
@@ -464,14 +453,36 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
       const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
       const workspacePaths = profile.files.map((file) => file.path).filter((path) => path.startsWith("workspace/"));
       expect(workspacePaths.sort()).toEqual([
-        "workspace/AGENTS.md",
         "workspace/HEARTBEAT.md",
         "workspace/SOUL.md",
         "workspace/docs/style.md",
       ]);
       expect(fileContent(profile, "workspace/HEARTBEAT.md")).toBe("# Heartbeat\n");
       expect(fileContent(profile, "workspace/docs/style.md")).toBe("# Style\n");
-      expect(fileContent(profile, "workspace/AGENTS.md")).toContain("See HEARTBEAT.md and docs/style.md.");
+    });
+
+    it("drops a file the gateway would load as project context, with a warning, and keeps the rest", async () => {
+      const board = fakeBoard({
+        async loadInstructions() {
+          return {
+            files: [
+              { path: "CLAUDE.md", content: "# Impostor\n" },
+              { path: "docs/AGENTS.md", content: "# Impostor\n" },
+              { path: "SOUL.md", content: "# Soul\n" },
+            ],
+            warnings: [],
+          };
+        },
+      });
+      const reported: string[][] = [];
+      const profile = await createBotProfileCompile(board.ports, {
+        env: INSTANCE_ENV,
+        onWarnings: (_botKey, warnings) => {
+          reported.push([...warnings]);
+        },
+      })("agent-a", "agent-a");
+      expect(profile.files.map((file) => file.path).filter((path) => path.startsWith("workspace/"))).toEqual(["workspace/SOUL.md"]);
+      expect(reported.flat().filter((warning) => warning.includes("project context"))).toHaveLength(2);
     });
 
     it("treats an edit of a sibling as a files-class change: applied without a restart", async () => {
@@ -534,6 +545,40 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
         HERMES_GATEWAY_ADAPTER_TYPE,
       );
       expect(board.calls).toEqual(["loadAgent"]);
+    });
+
+    describe("a card whose provider goes through the LLM gateway", () => {
+      const withoutLlm = (drop: string[]): NodeJS.ProcessEnv => {
+        const env: NodeJS.ProcessEnv = { ...INSTANCE_ENV };
+        for (const name of drop) delete env[name];
+        return env;
+      };
+
+      it.each([
+        ["custom", { provider: "custom", model: "some-model" }],
+        ["a named custom provider", { provider: "custom:gateway", model: "some-model" }],
+        ["auto", { provider: "auto", model: "some-model" }],
+        ["no provider", { model: "some-model" }],
+      ])("fails, creating nothing, naming the missing setting, for %s", async (_label, adapterConfig) => {
+        for (const missing of [BOT_LLM_BASE_URL_ENV, BOT_LLM_API_KEY_ENV_ENV]) {
+          const board = fakeBoard();
+          board.agent.current = agentRecord({ adapterConfig });
+          const compile = createBotProfileCompile(board.ports, { env: withoutLlm([missing]) });
+          await expect(compile("agent-a", "agent-a")).rejects.toThrow(BotProfileInputError);
+          await expect(compile("agent-a", "agent-a")).rejects.toThrow(missing);
+          expect(board.calls).toEqual(["loadAgent", "loadAgent"]);
+          expect(board.secrets.size).toBe(1);
+        }
+      });
+
+      it("compiles a card with a native provider without either setting, and reads no gateway key", async () => {
+        const board = fakeBoard();
+        const profile = await createBotProfileCompile(board.ports, {
+          env: withoutLlm([BOT_LLM_BASE_URL_ENV, BOT_LLM_API_KEY_ENV_ENV]),
+        })("agent-a", "agent-a");
+        expect(profile.botKey).toBe("agent-a");
+        expect(board.calls.filter((call) => call.startsWith("readCompanySecret"))).toEqual([]);
+      });
     });
 
     it("fails closed when the LLM key exists nowhere, naming the secret", async () => {

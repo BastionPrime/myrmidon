@@ -8,11 +8,13 @@
 //
 // Two rules apply to everything in this file:
 //  - It runs on every reconcile tick (once a minute per bot), so it never writes
-//    unless something is missing, and never resolves a secret through a
-//    binding/audit context: resolving without a context writes no
-//    secret-access event, and a per-minute event per secret per bot would drown
-//    the audit log. The secrets read here are the card's own env and two
-//    secrets this file created itself.
+//    unless something is missing, and it resolves the secrets it reads without
+//    a binding/audit context (no access event per secret per bot per minute):
+//    two secrets this file created itself, the instance-wide gateway key and
+//    the MCP tokens. The exception is the card's own env, which a card's author
+//    controls: card-env.ts resolves it WITH a binding context (the board checks
+//    that the secret is bound to this agent) and keeps the result in memory,
+//    re-resolving only when the card's bindings or those secrets' versions change.
 //  - A secret it creates is get-or-create by a deterministic name, so a second
 //    call returns the same value (compile must give the same hashes tick after
 //    tick, or the bot restarts every minute).
@@ -38,6 +40,7 @@ import {
 import { skillVersionSelectionMap } from "../../services/runtime-skill-selections.js";
 import { BOT_AGENT_API_KEY_NAME, ensureBotAgentKey } from "./agent-key.js";
 import { createBotCardSync, type BotCardSyncPorts, type BotCardSyncResult } from "./card-sync.js";
+import { createCardEnvResolver } from "./card-env.js";
 import { loadBotInstructionsBundle } from "./instructions-source.js";
 import {
   createActivityWarningSink,
@@ -46,7 +49,7 @@ import {
   type BotProfileCompileOptions,
   type BotProfilePorts,
 } from "./profile-compile.js";
-import type { HermesProfileEnvEntry, HermesProfileSkillFile } from "./profile-compiler.js";
+import type { HermesProfileSkillFile } from "./profile-compiler.js";
 import type { BotContainerActivitySink } from "./reconciler.js";
 import type { CompiledProfile } from "./types.js";
 
@@ -198,6 +201,14 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
   const skills = companySkillService(db);
   const instructions = agentInstructionsService();
   const instanceSettings = instanceSettingsService(db);
+  const resolveCardEnv = createCardEnvResolver({
+    resolveEnvBindings: (companyId, bindings, context) => secrets.resolveEnvBindings(companyId, bindings, context),
+    async readSecretStamp(companyId, secretId) {
+      const secret = await secrets.getById(secretId);
+      if (!secret || secret.companyId !== companyId) return null;
+      return `${secret.latestVersion}:${secret.status}`;
+    },
+  });
 
   return {
     async loadAgent(agentId) {
@@ -205,24 +216,7 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
       return row ? toAgentRecord(row) : null;
     },
 
-    async resolveCardEnv(agent) {
-      const warnings: string[] = [];
-      const bindings: Record<string, unknown> = {};
-      for (const [name, binding] of Object.entries(asRecord(agent.adapterConfig.env))) {
-        if (asRecord(binding).type === "user_secret_ref") {
-          // A per-user secret has no value without a user; a container has none.
-          warnings.push(`env.${name}: a per-user secret cannot be used by a bot container, dropped`);
-          continue;
-        }
-        bindings[name] = binding;
-      }
-      const resolved = await secrets.resolveEnvBindings(agent.companyId, bindings);
-      const env: Record<string, HermesProfileEnvEntry> = {};
-      for (const [name, value] of Object.entries(resolved.env)) {
-        env[name] = { value, secret: resolved.secretKeys.has(name) };
-      }
-      return { env, warnings };
-    },
+    resolveCardEnv,
 
     async readCompanySecret(companyId, name) {
       const secret = await secrets.getByName(companyId, name);
@@ -328,7 +322,8 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
     },
 
     async loadInstructions(agent) {
-      // Only the bundle is read here; the card's own instructions are added by compile.
+      // Only the bundle's files beside its entry file are read here: the instructions
+      // themselves travel in the run request (see instructions-source.ts).
       const bundle = await instructions.getBundle(agent);
       return loadBotInstructionsBundle({
         async listBundle() {

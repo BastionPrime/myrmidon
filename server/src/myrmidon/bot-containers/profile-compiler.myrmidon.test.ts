@@ -761,6 +761,27 @@ describe("myrmidon(G2) compileHermesProfile — instructions / AGENTS.md", () =>
   });
 });
 
+describe("myrmidon(W2a) compileHermesProfile — blank instructions write no AGENTS.md", () => {
+  it.each(["", "   ", "\n\n", "\t \n"])("writes no workspace/AGENTS.md for instructions %j", (instructions) => {
+    const { profile, warnings } = compileHermesProfileDetailed(baseInput({ instructions }));
+    expect(profile.files.map((f) => f.path).sort()).toEqual(["hermes/.env", "hermes/config.yaml", "hermes/hindsight/config.json"]);
+    expect(warnings.some((w) => w.includes("AGENTS.md"))).toBe(false);
+  });
+
+  it("gives the sibling files a filesHash of their own when there is no AGENTS.md", () => {
+    const bare = compileHermesProfile(baseInput({ instructions: "" }));
+    const withSibling = compileHermesProfile(baseInput({ instructions: "", workspaceFiles: [{ path: "SOUL.md", content: "# Soul\n" }] }));
+    expect(withSibling.files.map((f) => f.path)).toContain("workspace/SOUL.md");
+    expect(withSibling.filesHash).not.toBe(bare.filesHash);
+    expect(withSibling.restartHash).toBe(bare.restartHash);
+  });
+
+  it("does not warn about the size of instructions that are blank", () => {
+    const { warnings } = compileHermesProfileDetailed(baseInput({ instructions: " ".repeat(20_001) }));
+    expect(warnings.some((w) => w.includes("AGENTS.md"))).toBe(false);
+  });
+});
+
 describe("myrmidon(W2a) compileHermesProfile — workspace files beside AGENTS.md", () => {
   const bundle = [
     { path: "SOUL.md", content: "# Soul\n" },
@@ -831,15 +852,40 @@ describe("myrmidon(W2a) compileHermesProfile — workspace files beside AGENTS.m
     },
   );
 
-  it.each(["AGENTS.md", "agents.md", "Agents.MD"])(
-    "never lets %s replace the instructions entry file, and says so",
+  it.each([
+    "AGENTS.md",
+    "agents.md",
+    "Agents.MD",
+    "AGENTS.override.md",
+    "CLAUDE.md",
+    "claude.md",
+    ".cursorrules",
+    ".hermes.md",
+    "HERMES.md",
+    "docs/AGENTS.md",
+    "docs/deep/CLAUDE.md",
+    "sub/.cursorrules",
+    ".cursor/rules/style.mdc",
+    ".Cursor/Rules/Style.MDC",
+  ])("drops %s: a name the gateway loads as project context, scans and may replace by a stub", (path) => {
+    const { profile, warnings } = compileHermesProfileDetailed(
+      baseInput({ workspaceFiles: [{ path, content: "# Sibling\n" }, { path: "SOUL.md", content: "# Soul\n" }] }),
+    );
+    expect(profile.files.filter((f) => f.path.startsWith("workspace/")).map((f) => f.path)).toEqual([
+      "workspace/AGENTS.md",
+      "workspace/SOUL.md",
+    ]);
+    // The one AGENTS.md is the instructions text, never the sibling.
+    expect(fileByPath(profile.files, "workspace/AGENTS.md").content).toBe(baseInput().instructions);
+    expect(warnings.some((w) => w.startsWith("workspaceFiles:") && w.includes("project context"))).toBe(true);
+  });
+
+  it.each(["SOUL.md", "HEARTBEAT.md", "docs/style.md", "notes/agents-guide.md", ".cursor/notes.md", ".cursor/rules/style.txt", "my.cursorrules.md"])(
+    "keeps %s: not a project-context name",
     (path) => {
-      const { profile, warnings } = compileHermesProfileDetailed(
-        baseInput({ instructions: "# Real\n", workspaceFiles: [{ path, content: "# Impostor\n" }] }),
-      );
-      expect(fileByPath(profile.files, "workspace/AGENTS.md").content).toBe("# Real\n");
-      expect(profile.files.filter((f) => f.path.toLowerCase() === "workspace/agents.md")).toHaveLength(1);
-      expect(warnings.some((w) => w.includes("would replace the instructions entry file"))).toBe(true);
+      const { profile, warnings } = compileHermesProfileDetailed(baseInput({ workspaceFiles: [{ path, content: "x" }] }));
+      expect(profile.files.some((f) => f.path === `workspace/${path}`)).toBe(true);
+      expect(warnings.some((w) => w.includes("project context"))).toBe(false);
     },
   );
 

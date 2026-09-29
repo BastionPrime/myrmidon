@@ -63,9 +63,15 @@ export interface BotProfileSettings {
   hindsightApiUrl: string | null;
   /** Default hindsight bank, used when the card names none. */
   hindsightBank: string | null;
-  /** OpenAI-compatible LLM gateway base URL; null = each provider's own default endpoint. */
+  /**
+   * OpenAI-compatible LLM gateway base URL; null = each provider's own default endpoint.
+   * Optional only for a card with a native provider (see {@link assertBotLlmSettingsForCard}).
+   */
   llmBaseUrl: string | null;
-  /** Name of the .env variable that carries the LLM gateway key (never the key). */
+  /**
+   * Name of the .env variable that carries the LLM gateway key (never the key).
+   * Optional only for a card with a native provider (see {@link assertBotLlmSettingsForCard}).
+   */
   llmApiKeyEnv: string | null;
   /** Company secret that holds the LLM gateway key; defaults to `llmApiKeyEnv`. */
   llmApiKeySecret: string | null;
@@ -221,6 +227,42 @@ export function assertBotProfileSettings(settings: BotProfileSettings): void {
   }
 }
 
+/**
+ * Does the card's provider go through the instance's LLM gateway rather than a
+ * native provider of its own? True for an empty or "auto" provider and for
+ * "custom" / "custom:<name>": the vendor gateway resolves those against an
+ * explicit endpoint, and without one it falls back to its OpenRouter default;
+ * without a key it sends the placeholder "no-key-required". A native provider
+ * ("anthropic", "gemini", ...) has its own endpoint and key and needs neither.
+ */
+export function cardUsesLlmGateway(card: Record<string, unknown>): boolean {
+  const provider = asTrimmedString(card.provider)?.toLowerCase();
+  return !provider || provider === "auto" || provider === "custom" || provider.startsWith("custom:");
+}
+
+/**
+ * The gateway settings a card needs, checked against the card: a card whose
+ * provider goes through the gateway ({@link cardUsesLlmGateway}) fails here,
+ * naming the missing setting, instead of compiling to a profile that talks to
+ * the wrong endpoint or sends a placeholder key. Throws BotProfileInputError.
+ * Called before any secret is created for the bot.
+ */
+export function assertBotLlmSettingsForCard(settings: BotProfileSettings, card: Record<string, unknown>): void {
+  if (!cardUsesLlmGateway(card)) return;
+  const provider = asTrimmedString(card.provider) ?? "";
+  const which = provider ? `the card's provider is "${provider}"` : "the card sets no provider";
+  if (!settings.llmBaseUrl) {
+    throw new BotProfileInputError(
+      `${BOT_LLM_BASE_URL_ENV} is not set, but ${which} and so needs the LLM gateway endpoint: without it the bot would go to the gateway's OpenRouter default`,
+    );
+  }
+  if (!settings.llmApiKeyEnv) {
+    throw new BotProfileInputError(
+      `${BOT_LLM_API_KEY_ENV_ENV} is not set, but ${which} and so needs the LLM gateway key: without it the bot would send a placeholder key`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Source
 // ---------------------------------------------------------------------------
@@ -251,9 +293,9 @@ export interface BotProfileSource {
   env: Record<string, HermesProfileEnvEntry>;
   /** Company skills chosen by the card's desiredSkills: runtime name -> files. */
   skills: Record<string, readonly HermesProfileSkillFile[]>;
-  /** The text of workspace/AGENTS.md, already assembled (bundle entry + card instructions; see instructions-source.ts). */
+  /** The text of workspace/AGENTS.md; blank writes none. The container wiring passes blank: instructions travel in the run request, not in a scanned context file (see instructions-source.ts). */
   instructions: string;
-  /** The instructions bundle's other files, placed beside AGENTS.md. */
+  /** The instructions bundle's other files, placed under workspace/ (names the gateway loads as project context are dropped). */
   workspaceFiles?: readonly HermesProfileWorkspaceFile[];
   /** The LLM gateway key held as an instance/company secret; used when the card's
    *  own env carries no value under `settings.llmApiKeyEnv`. */
@@ -468,6 +510,7 @@ export function buildHermesProfileInput(source: BotProfileSource, settings: BotP
   assertBotProfileSettings(settings);
   const warnings: string[] = [];
   const card = source.adapterConfig;
+  assertBotLlmSettingsForCard(settings, card);
 
   const env: Record<string, HermesProfileEnvEntry> = { ...source.env };
   if (settings.llmApiKeyEnv) {
