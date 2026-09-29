@@ -392,6 +392,13 @@ vi.mock("../services/plugin-worker-manager.js", () => ({
   createPluginWorkerManager: vi.fn(() => ({ id: "plugin-worker-manager" })),
 }));
 
+// The bot container sweep is off unless enabled and is not under test here; its port wiring
+// pulls the real services graph, which this test replaces with a partial @paperclipai/db mock.
+vi.mock("../myrmidon/bot-containers/startup.js", () => ({
+  startBotContainers: vi.fn(),
+  stopBotContainers: vi.fn(),
+}));
+
 vi.mock("../startup-banner.js", () => ({
   printStartupBanner: vi.fn(),
 }));
