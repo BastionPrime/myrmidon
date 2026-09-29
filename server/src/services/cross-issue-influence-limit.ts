@@ -4,8 +4,13 @@ import { activityLog, heartbeatRuns } from "@paperclipai/db";
 import { isUuidLike, issueWriteDenialResponse } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+// myrmidon(P5): the per-run cap is configurable through the environment; the default stays 20
+import {
+  DEFAULT_CROSS_ISSUE_INFLUENCE_LIMIT,
+  readCrossIssueInfluenceLimit,
+} from "../myrmidon/cross-issue-influence-cap.js";
 
-export const CROSS_ISSUE_INFLUENCE_LIMIT = 20;
+export const CROSS_ISSUE_INFLUENCE_LIMIT = DEFAULT_CROSS_ISSUE_INFLUENCE_LIMIT;
 export const CROSS_ISSUE_INFLUENCE_ENFORCE_AT = new Date("2026-08-11T00:00:00.000Z");
 
 const CROSS_ISSUE_INFLUENCE_ACTIVITY = "issue.cross_issue_influence_observed";
@@ -51,11 +56,13 @@ export function evaluateCrossIssueInfluenceLimit(input: {
   const now = input.now ?? new Date();
   const mode = now >= CROSS_ISSUE_INFLUENCE_ENFORCE_AT ? "enforce" : "log_only";
   const nextCount = input.priorCount + 1;
+  // myrmidon(P5): read the configured cap per attempt, so an operator change applies without a restart
+  const cap = readCrossIssueInfluenceLimit();
   return {
-    allowed: mode === "log_only" || nextCount <= CROSS_ISSUE_INFLUENCE_LIMIT,
+    allowed: mode === "log_only" || nextCount <= cap,
     mode,
     count: nextCount,
-    cap: CROSS_ISSUE_INFLUENCE_LIMIT,
+    cap,
     enforceAt: CROSS_ISSUE_INFLUENCE_ENFORCE_AT.toISOString(),
   };
 }
