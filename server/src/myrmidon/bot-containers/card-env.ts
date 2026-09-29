@@ -5,8 +5,12 @@
 // The same three rules a run of the card's agent lives by in the board's
 // heartbeat, applied to the container path, which reaches the same secrets:
 //   - The variables the board reserves for itself (PAPERCLIP_API_KEY, the runner
-//     network and GitHub bridge variables) are never taken from a card. A card
-//     that binds one is dropped with a warning, exactly as a run drops it.
+//     network and GitHub bridge variables) are never taken from a card, and
+//     neither are the GitHub tokens a run drops when the board manages GitHub
+//     credentials (GH_TOKEN, GITHUB_TOKEN and their siblings). A card that binds
+//     one is dropped with a warning, exactly as a run drops it. A container
+//     is never the host GitHub mode, in which a run would keep such a token, so
+//     it takes the managed side of that choice: no static GitHub token in its .env.
 //   - Secrets are resolved WITH a binding context (consumer: this agent, actor:
 //     system), so the board checks that the secret is bound to this agent at
 //     env.<NAME> and writes an access event. A resolve without a context checks
@@ -41,6 +45,21 @@ export const FORBIDDEN_CARD_ENV_KEYS: ReadonlySet<string> = new Set([
   "PAPERCLIP_GITHUB_BROKER_URL",
   "PAPERCLIP_GITHUB_BRIDGE_TOKEN",
   "PAPERCLIP_GITHUB_LAUNCHER_DIR",
+]);
+
+/**
+ * The GitHub tokens a run drops from a card when the board manages GitHub
+ * credentials (MANAGED_GITHUB_TOKEN_KEYS in services/heartbeat.ts, likewise
+ * unexported; card-env.myrmidon.test.ts reads that file and fails when the two
+ * lists differ). A run keeps them only in host GitHub mode (a local or ssh
+ * environment with no managed identity configured), which a container never is.
+ */
+export const MANAGED_GITHUB_CARD_ENV_KEYS: ReadonlySet<string> = new Set([
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+  "PAPERCLIP_GIT_TOKEN",
 ]);
 
 /** Who is asking, as the secrets service records and checks it. */
@@ -101,6 +120,10 @@ export function createCardEnvResolver(ports: CardEnvPorts): (agent: CardEnvAgent
     for (const [name, binding] of Object.entries(asRecord(agent.adapterConfig.env))) {
       if (FORBIDDEN_CARD_ENV_KEYS.has(name)) {
         warnings.push(`env.${name}: the board reserves this variable, a card cannot set it, dropped`);
+        continue;
+      }
+      if (MANAGED_GITHUB_CARD_ENV_KEYS.has(name)) {
+        warnings.push(`env.${name}: GitHub credentials are managed by the board, a bot container carries none from a card, dropped`);
         continue;
       }
       if (asRecord(binding).type === "user_secret_ref") {

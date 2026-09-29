@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FORBIDDEN_CARD_ENV_KEYS,
+  MANAGED_GITHUB_CARD_ENV_KEYS,
   createCardEnvResolver,
   type CardEnvBindingContext,
   type CardEnvPorts,
@@ -78,10 +79,51 @@ describe("myrmidon(W2a) card env — what a card may bind", () => {
     expect(Object.keys(state.resolveCalls[0]!.bindings)).toEqual(["KEEP_ME"]);
   });
 
+  it.each([...MANAGED_GITHUB_CARD_ENV_KEYS])(
+    "drops the managed GitHub token %s with a warning and never asks the secrets service for it",
+    async (name) => {
+      const { ports, state } = fakePorts({ s1: { stamp: "1:active", value: "fake-value-0001" } });
+      const resolve = createCardEnvResolver(ports);
+      const result = await resolve(card({ [name]: ref("s1"), KEEP_ME: plain("kept") }));
+      expect(result.env[name]).toBeUndefined();
+      expect(result.env.KEEP_ME).toEqual({ value: "kept", secret: false });
+      expect(result.warnings).toEqual([expect.stringContaining(`env.${name}`)]);
+      expect(state.resolveCalls).toHaveLength(1);
+      expect(Object.keys(state.resolveCalls[0]!.bindings)).toEqual(["KEEP_ME"]);
+    },
+  );
+
+  it("resolves nothing, and warns once per name, when a card binds only reserved variables", async () => {
+    const { ports, state } = fakePorts({ s1: { stamp: "1:active", value: "fake-value-0001" } });
+    const result = await createCardEnvResolver(ports)(
+      card({ GH_TOKEN: ref("s1"), PAPERCLIP_API_KEY: ref("s1") }),
+    );
+    expect(result.env).toEqual({});
+    expect(result.warnings).toHaveLength(2);
+    expect(state.resolveCalls).toHaveLength(0);
+    expect(state.stampCalls).toEqual([]);
+  });
+
+  it("keeps a variable that only looks like a GitHub token name", async () => {
+    const { ports } = fakePorts();
+    const result = await createCardEnvResolver(ports)(
+      card({ GITHUB_REPO: plain("example/repo"), GH_HOST: plain("github.example.com") }),
+    );
+    expect(Object.keys(result.env).sort()).toEqual(["GH_HOST", "GITHUB_REPO"]);
+    expect(result.warnings).toEqual([]);
+  });
+
   it("never lets a forbidden variable reach the compiled .env", async () => {
     const { ports } = fakePorts({ s1: { stamp: "1:active", value: "fake-secret-from-card" } });
     const resolved = await createCardEnvResolver(ports)(
-      card({ PAPERCLIP_GITHUB_BROKER_TOKEN: ref("s1"), PAPERCLIP_RUNNER_NETWORK_ACCESS: plain("open"), PAPERCLIP_API_KEY: ref("s1"), FLEET_NOTE: plain("ok") }),
+      card({
+        PAPERCLIP_GITHUB_BROKER_TOKEN: ref("s1"),
+        PAPERCLIP_RUNNER_NETWORK_ACCESS: plain("open"),
+        PAPERCLIP_API_KEY: ref("s1"),
+        GH_TOKEN: ref("s1"),
+        GITHUB_TOKEN: plain("fake-plain-github-token"),
+        FLEET_NOTE: plain("ok"),
+      }),
     );
     const settings: BotProfileSettings = {
       hindsightApiUrl: "https://example.com/hindsight",
@@ -113,6 +155,9 @@ describe("myrmidon(W2a) card env — what a card may bind", () => {
     expect(envFile).not.toContain("fake-secret-from-card");
     expect(envFile).not.toContain("PAPERCLIP_GITHUB_BROKER_TOKEN");
     expect(envFile).not.toContain("PAPERCLIP_RUNNER_NETWORK_ACCESS");
+    expect(envFile).not.toContain("GH_TOKEN");
+    expect(envFile).not.toContain("GITHUB_TOKEN");
+    expect(envFile).not.toContain("fake-plain-github-token");
     expect(envFile).toContain("PAPERCLIP_API_KEY=");
     expect(envFile).toContain("fake-bots-own-board-key-0001");
     expect(envFile).toContain("FLEET_NOTE");
@@ -138,6 +183,18 @@ describe("myrmidon(W2a) card env — what a card may bind", () => {
     const boardKeys = [...block![1]!.matchAll(/"([A-Z0-9_]+)"/g)].map((match) => match[1]!);
     expect(boardKeys.length).toBeGreaterThan(0);
     expect([...FORBIDDEN_CARD_ENV_KEYS].sort()).toEqual([...boardKeys].sort());
+  });
+
+  it("keeps the managed GitHub token list identical to the board's own", () => {
+    const heartbeat = fs.readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../services/heartbeat.ts"),
+      "utf8",
+    );
+    const block = /const MANAGED_GITHUB_TOKEN_KEYS = new Set\(\[([\s\S]*?)\]\);/.exec(heartbeat);
+    expect(block, "MANAGED_GITHUB_TOKEN_KEYS not found in services/heartbeat.ts").not.toBeNull();
+    const boardKeys = [...block![1]!.matchAll(/"([A-Z0-9_]+)"/g)].map((match) => match[1]!);
+    expect(boardKeys.length).toBeGreaterThan(0);
+    expect([...MANAGED_GITHUB_CARD_ENV_KEYS].sort()).toEqual([...boardKeys].sort());
   });
 });
 
