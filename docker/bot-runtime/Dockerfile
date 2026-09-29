@@ -142,6 +142,14 @@ RUN uv sync --frozen --extra sms --extra mcp --extra hindsight \
 # memory at runtime.
 RUN /opt/hermes-src/.venv/bin/python -c 'import aiohttp, mcp, hindsight_client'
 
+# myrmidon(G1): import smoke for every module a patch in patches/ changes
+# (hermes_state: 04; plugins.memory.hindsight, which pulls in its settings
+# module: 01 and 03; tools.environments.base and base_session_env: 02). `git apply`
+# only proves the hunks land; a patch that applies cleanly but breaks a module's
+# imports or top-level code would otherwise surface only when a bot starts.
+# No bytecode is written, so the sealed tree stays as the build left it.
+RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python -c 'import hermes_state, plugins.memory.hindsight, tools.environments.base, tools.environments.base_session_env'
+
 # myrmidon(G1): the runtime image only needs the installed package plus
 # bundled skills (tools/skills_sync.py resolves skills/ relative to its own
 # __file__, so that lookup is unaffected by anything removed below). Drop

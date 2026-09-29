@@ -1,5 +1,13 @@
 import type { TranscriptEntry } from "@paperclipai/adapter-utils";
 
+// myrmidon(G4): gateway/server/execute.ts now writes tool/assistant/thinking
+// progress in the same textual shape `hermes chat` prints without -Q (see its
+// logCompactEvent/flushCompactDeltaLines); reuse the local adapter's parser
+// for that shape instead of duplicating parseToolCompletionLine() here, so
+// there is one parser for both adapters (gateway-parity-gap.md #25).
+import { parseHermesStdoutLine } from "../../ui/parse-stdout.js";
+import { THINKING_PREFIX, TOOL_OUTPUT_PREFIX } from "../../shared/constants.js";
+
 /**
  * Strip ANSI escape sequences (CSI, OSC) from terminal text.
  * Same pattern used in claude-local adapter quota.ts.
@@ -80,6 +88,19 @@ export function parseHermesGatewayStdoutLine(line: string, ts: string): Transcri
 
   if (trimmed.startsWith("[hermes-gateway]")) {
     return [{ kind: "system", ts, text: trimmed.replace(/^\[hermes-gateway\]\s*/, "") }];
+  }
+
+  // myrmidon(G4): compact tool/assistant/thinking lines — recognized by the
+  // same markers parseHermesStdoutLine() itself keys off ("[tool]"/"[done]"
+  // prefixes, a "┊" tool-output line, or a "💭" thinking line) — are handed
+  // to that shared parser instead of falling through to a raw stdout blob.
+  if (
+    trimmed.startsWith("[tool]") ||
+    trimmed.startsWith("[done]") ||
+    trimmed.includes(TOOL_OUTPUT_PREFIX) ||
+    trimmed.includes(THINKING_PREFIX)
+  ) {
+    return parseHermesStdoutLine(line, ts);
   }
 
   return [{ kind: "stdout", ts, text: cleaned }];

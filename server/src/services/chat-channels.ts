@@ -361,6 +361,11 @@ import {
   createOmissionTracker,
   telegramAttachmentOmissionNotice,
 } from "../myrmidon/chat-attachment-omission.js";
+import { TELEGRAM_DM_COMMANDS } from "../myrmidon/agent-chat-bridge/commands/index.js";
+import {
+  telegramDmConversationsConfigured,
+  telegramDmConversationsEnabled,
+} from "../myrmidon/agent-chat-bridge/settings.js";
 import type {
   ActionEvent,
   AdapterPostableMessage,
@@ -4320,6 +4325,32 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             "setMyCommands",
             { commands: TELEGRAM_COMMANDS },
           );
+          // myrmidon(X8e): bridged DMs get their own command menu; groups
+          // and topics keep the vendor menu above (no scope = default menu).
+          // Only when MYRMIDON_TELEGRAM_DM_CONVERSATIONS is set: unset, the
+          // vendor path stays byte for byte (no extra API call, no extra
+          // lease check).
+          if (telegramDmConversationsConfigured()) {
+            await credentialLease.assertOwned();
+            if (telegramDmConversationsEnabled(record.endpoint.id)) {
+              await telegramMaintenanceRequest(
+                credentials.botToken,
+                "setMyCommands",
+                {
+                  commands: TELEGRAM_DM_COMMANDS,
+                  scope: { type: "all_private_chats" },
+                },
+              );
+            } else {
+              // Idempotent: clears a previously registered DM menu once this
+              // endpoint is left out of the (non-empty) list.
+              await telegramMaintenanceRequest(
+                credentials.botToken,
+                "deleteMyCommands",
+                { scope: { type: "all_private_chats" } },
+              );
+            }
+          }
           providerConfirmed = true;
         } else {
           await credentialLease.assertOwned();
@@ -4334,6 +4365,19 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             "deleteMyCommands",
             {},
           );
+          // myrmidon(X8e): also clear the bridged DM command menu on
+          // endpoint removal, so a re-added endpoint starts from the
+          // vendor default until the bridge is enabled again. Only when
+          // MYRMIDON_TELEGRAM_DM_CONVERSATIONS is set (same rule as
+          // register_commands above): unset, the vendor path is unchanged.
+          if (telegramDmConversationsConfigured()) {
+            await credentialLease.assertOwned();
+            await telegramMaintenanceRequest(
+              credentials.botToken,
+              "deleteMyCommands",
+              { scope: { type: "all_private_chats" } },
+            );
+          }
           providerConfirmed = true;
         }
         await credentialLease.assertOwned();

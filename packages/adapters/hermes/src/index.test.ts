@@ -39,7 +39,10 @@ test("root package export keeps explicit local and gateway adapter factories", (
   expect(gatewayAdapter.type).toBe("hermes_gateway");
   expect(hermesGatewayType).toBe("hermes_gateway");
   expect(gatewayAdapter.supportsLocalAgentJwt).toBe(false);
-  expect(gatewayAdapter.supportsInstructionsBundle).toBe(false);
+  // myrmidon(G4): the gateway adapter now reads the managed instructions
+  // bundle the server materializes into adapterConfig.instructionsFilePath,
+  // matching hermes_local (see gateway/server/execute.ts).
+  expect(gatewayAdapter.supportsInstructionsBundle).toBe(true);
 });
 
 test("gateway subpath export exposes the Hermes Gateway adapter entrypoint", () => {

@@ -1,8 +1,13 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { agents, heartbeatRuns, issues, type Db } from "@paperclipai/db";
 import { HttpError } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { parseObject, readNonEmptyString } from "../modules/wake-queue/domain/values.js";
+import {
+  infraInterruptAttemptCount,
+  INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY,
+  isInfraInterruptErrorCode,
+} from "./infra-interrupts.js";
 
 /**
  * Operator pause drains instead of cancelling (L3).
@@ -26,6 +31,12 @@ import { parseObject, readNonEmptyString } from "../modules/wake-queue/domain/va
  * route; they keep calling their own cancellation paths directly
  * (`services/budgets.ts` cancelBudgetScopeWork, `services/companies.ts`
  * archive cascade) and are unaffected by this setting.
+ *
+ * This module also holds `isSkippableStartupRecoveryConflict` (part c): the
+ * predicate `recoverActiveSessionGoals`/`recoverPendingSessionGoalActions`
+ * use to skip a session goal whose `enqueueWakeup` call 409s — for an
+ * unavailable agent or a budget hard-stop — instead of crashing server
+ * startup for every other agent on the instance.
  */
 export const PAUSE_DRAINS_ENV = "MYRMIDON_PAUSE_DRAINS";
 
@@ -74,6 +85,47 @@ export function isAgentNotInvokableConflict(err: unknown): boolean {
   if (!(err instanceof HttpError) || err.status !== 409) return false;
   const details = err.details as { reason?: unknown; status?: unknown } | undefined;
   return typeof details?.reason === "string" && typeof details?.status === "string";
+}
+
+const BUDGET_BLOCK_SCOPE_TYPES = new Set(["company", "agent", "project"]);
+
+/**
+ * True for the other 409 `enqueueWakeup` throws before it even checks
+ * invokability: a company/agent/project budget hard-stop
+ * (`budgets.getInvocationBlock`). Its details shape (`{scopeType, scopeId}`)
+ * has no `reason`/`status` string pair — the block's human-readable reason is
+ * the HttpError *message*, not a details field — so
+ * `isAgentNotInvokableConflict` never matches it. A company-wide budget pause
+ * is independent of any individual agent's own status, so this fires even for
+ * agents that are not themselves paused.
+ */
+export function isBudgetBlockConflict(err: unknown): boolean {
+  if (!(err instanceof HttpError) || err.status !== 409) return false;
+  const details = err.details as
+    | { scopeType?: unknown; scopeId?: unknown; reason?: unknown; status?: unknown }
+    | undefined;
+  const scopeType = details?.scopeType;
+  return (
+    typeof scopeType === "string" &&
+    BUDGET_BLOCK_SCOPE_TYPES.has(scopeType) &&
+    typeof details?.scopeId === "string" &&
+    typeof details?.reason !== "string" &&
+    typeof details?.status !== "string"
+  );
+}
+
+/**
+ * True for any 409 that startup session-goal recovery should skip-and-log
+ * instead of letting it crash the process: the agent cannot be invoked right
+ * now, or a budget hard-stop blocks it. Both are transient, per-agent/
+ * per-scope conditions un-fixable by a restart — not a reason to take the
+ * whole server down. Covers the exact failure mode point (c) of this PR
+ * closed for the invokability 409 ("server restarted 4 times on the 1.0.0
+ * rollout"), reproduced with a budget-paused company instead of a paused
+ * agent.
+ */
+export function isSkippableStartupRecoveryConflict(err: unknown): boolean {
+  return isAgentNotInvokableConflict(err) || isBudgetBlockConflict(err);
 }
 
 const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
@@ -171,6 +223,39 @@ export async function resumeAgentAfterPause(
   for (const issue of assigned) {
     if (liveIssueIds.has(issue.id)) continue;
     const idempotencyKey = `${RESUME_WAKE_IDEMPOTENCY_PREFIX}:${issue.id}`;
+    // myrmidon(L1): carries the shared infra-interrupt retry budget forward
+    // across this pause/resume cycle. This wake creates a brand-new
+    // heartbeat run rather than a scheduled retry of the run the pause
+    // cancelled, so heartbeat_runs.scheduledRetryAttempt (which defaults to
+    // 0 on the new row) cannot carry the budget on its own -- read it off
+    // the stranded run this issue is actually resuming from instead, and
+    // carry it into the new run's contextSnapshot (infra-interrupts.ts's
+    // infraInterruptAttemptCount reads it back from there). Once enough
+    // cycles have gone by, the carried count reaches the shared budget and
+    // shouldSkipReconciliationForInfraInterrupt stops suppressing the
+    // vendor's hold.
+    const priorRun = await deps.db
+      .select({
+        errorCode: heartbeatRuns.errorCode,
+        scheduledRetryAttempt: heartbeatRuns.scheduledRetryAttempt,
+        scheduledRetryReason: heartbeatRuns.scheduledRetryReason,
+        contextSnapshot: heartbeatRuns.contextSnapshot,
+      })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, companyId),
+          eq(heartbeatRuns.agentId, agentId),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+        ),
+      )
+      .orderBy(desc(heartbeatRuns.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    const infraInterruptAttempt =
+      priorRun && isInfraInterruptErrorCode(priorRun.errorCode)
+        ? infraInterruptAttemptCount(priorRun) + 1
+        : null;
     try {
       await deps.enqueueWakeup(agentId, {
         source: "automation",
@@ -179,7 +264,14 @@ export async function resumeAgentAfterPause(
         idempotencyKey,
         requestedByActorType: "system",
         requestedByActorId: "pause_resume",
-        contextSnapshot: { issueId: issue.id, taskKey: issue.id, resumeIntent: true },
+        contextSnapshot: {
+          issueId: issue.id,
+          taskKey: issue.id,
+          resumeIntent: true,
+          ...(infraInterruptAttempt !== null
+            ? { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: infraInterruptAttempt }
+            : {}),
+        },
       });
       strandedIssuesWoken += 1;
     } catch (err) {

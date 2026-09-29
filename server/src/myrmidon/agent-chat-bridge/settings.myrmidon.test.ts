@@ -5,6 +5,7 @@ import {
   DEFAULT_CROSS_CHANNEL_MESSAGE_CHARS,
   DEFAULT_CROSS_CHANNEL_TOTAL_CHARS,
   readCrossChannelSettings,
+  telegramDmConversationsConfigured,
   telegramDmConversationsEnabled,
 } from "./settings.js";
 
@@ -31,6 +32,29 @@ describe("telegramDmConversationsEnabled", () => {
     expect(telegramDmConversationsEnabled("bot-c", env)).toBe(true);
     expect(telegramDmConversationsEnabled("bot-d", env)).toBe(false);
     expect(telegramDmConversationsEnabled("", env)).toBe(false);
+  });
+});
+
+describe("telegramDmConversationsConfigured", () => {
+  it("is false when unset, blank, or only separators (vendor path stays untouched)", () => {
+    expect(telegramDmConversationsConfigured({})).toBe(false);
+    expect(telegramDmConversationsConfigured({ MYRMIDON_TELEGRAM_DM_CONVERSATIONS: "" })).toBe(false);
+    expect(telegramDmConversationsConfigured({ MYRMIDON_TELEGRAM_DM_CONVERSATIONS: "  " })).toBe(false);
+    expect(telegramDmConversationsConfigured({ MYRMIDON_TELEGRAM_DM_CONVERSATIONS: " , ,," })).toBe(false);
+  });
+
+  it("is true for '*' and for a list with at least one id, regardless of any one endpoint", () => {
+    expect(telegramDmConversationsConfigured({ MYRMIDON_TELEGRAM_DM_CONVERSATIONS: "*" })).toBe(true);
+    expect(telegramDmConversationsConfigured({ MYRMIDON_TELEGRAM_DM_CONVERSATIONS: "bot-a" })).toBe(true);
+    expect(telegramDmConversationsConfigured({ MYRMIDON_TELEGRAM_DM_CONVERSATIONS: " , bot-a ," })).toBe(true);
+  });
+
+  it("agrees with telegramDmConversationsEnabled: a matching endpoint implies configured", () => {
+    for (const value of ["*", "bot-a", " bot-b , bot-a "]) {
+      const env = { MYRMIDON_TELEGRAM_DM_CONVERSATIONS: value };
+      expect(telegramDmConversationsEnabled("bot-a", env)).toBe(true);
+      expect(telegramDmConversationsConfigured(env)).toBe(true);
+    }
   });
 });
 

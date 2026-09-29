@@ -1,6 +1,8 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// myrmidon(L3): env var name for the pause-drain-vs-cancel tests below
+import { PAUSE_DRAINS_ENV } from "../myrmidon/pause-drain.js";
 
 vi.unmock("http");
 vi.unmock("node:http");
@@ -750,5 +752,73 @@ describe.sequential("agent cross-tenant route authorization", () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("Only agents in error status can have their error cleared");
     expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  // myrmidon(L3): the pause route's drain-vs-cancel decision
+  // (shouldCancelActiveRunsOnOperatorPause) is unit-tested in
+  // pause-drain.myrmidon.test.ts; these cases exercise the real mounted
+  // route end to end for an authorized actor, since the only other test that
+  // touches POST /agents/:id/pause (above) is the cross-tenant 403 case,
+  // where the decision is never reached.
+  describe.sequential("agent pause: drain-vs-cancel decision (L3)", () => {
+    const boardActor = {
+      type: "board",
+      userId: "board-user",
+      companyIds: [companyId],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    };
+    const originalPauseDrainsEnv = process.env[PAUSE_DRAINS_ENV];
+
+    afterEach(() => {
+      if (originalPauseDrainsEnv === undefined) delete process.env[PAUSE_DRAINS_ENV];
+      else process.env[PAUSE_DRAINS_ENV] = originalPauseDrainsEnv;
+    });
+
+    it("drains by default: pause does not cancel active runs", async () => {
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post(`/api/agents/${agentId}/pause`).send({}),
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockAgentService.pause).toHaveBeenCalledWith(agentId);
+      expect(mockHeartbeatService.cancelActiveForAgent).not.toHaveBeenCalled();
+    });
+
+    it("cancels immediately when the request explicitly asks (cancelActive: true)", async () => {
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post(`/api/agents/${agentId}/pause`).send({ cancelActive: true }),
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockHeartbeatService.cancelActiveForAgent).toHaveBeenCalledWith(agentId);
+    });
+
+    it("cancels immediately with ?force=1", async () => {
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post(`/api/agents/${agentId}/pause?force=1`).send({}),
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockHeartbeatService.cancelActiveForAgent).toHaveBeenCalledWith(agentId);
+    });
+
+    it(`cancels immediately when ${PAUSE_DRAINS_ENV}=0, even with the default body`, async () => {
+      process.env[PAUSE_DRAINS_ENV] = "0";
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post(`/api/agents/${agentId}/pause`).send({}),
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockHeartbeatService.cancelActiveForAgent).toHaveBeenCalledWith(agentId);
+    });
   });
 });
