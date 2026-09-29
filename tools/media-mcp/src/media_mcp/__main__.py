@@ -15,7 +15,8 @@ def main() -> None:
     else:
         raise SystemExit(f"unknown role {role!r}: facade or worker")
     uvicorn.run(build_app(), host=os.environ.get("MEDIA_LISTEN_HOST", "0.0.0.0"), port=port,
-                log_level="info", access_log=False, timeout_keep_alive=30)
+                log_level="info", access_log=False, timeout_keep_alive=30,
+                proxy_headers=False)
 
 
 if __name__ == "__main__":

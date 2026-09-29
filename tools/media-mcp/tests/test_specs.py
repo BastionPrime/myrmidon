@@ -30,6 +30,24 @@ class FfmpegSpec(unittest.TestCase):
             with self.assertRaises(specs.SpecError):
                 ok({**BASE, "video_filter": bad}, ("a.mp4", "s.ass"))
 
+    def test_filter_escape_injection_rejected(self):
+        al = ("a.mp4", "s.srt")
+        attacks = (
+            r"subtitles=s.srt:force_style=a\:filename=..\/secret\/x.srt",
+            r"subtitles=s.srt:force_style=a\:filename=http\://example.invalid/x.srt",
+            r"subtitles=filename=s.srt:force_style='a\:filename=/etc/passwd'",
+            "subtitles=s.srt:force_style=a:filename=/etc/passwd",
+            "subtitles=s.srt:force_style='a:filename=http://x/y'",
+            r"scale=100\:100",
+            r"drawbox=x=0\:y=0",
+        )
+        for bad in attacks:
+            with self.assertRaises(specs.SpecError, msg=bad):
+                ok({**BASE, "video_filter": bad}, al)
+            with self.assertRaises(specs.SpecError, msg=bad):
+                ok({**BASE, "filter_complex": bad}, al)
+        ok({**BASE, "video_filter": "subtitles=s.srt:force_style='FontName=Arial,Fontsize=24,PrimaryColour=&H00FFFFFF&'"}, al)
+
     def test_paths_and_urls_rejected(self):
         for bad in ("scale=file:///etc/x", "overlay=http://x/y", "crop=/etc/passwd"):
             with self.assertRaises(specs.SpecError):

@@ -137,7 +137,14 @@ def _split_args(args: str) -> list[str]:
     return parts
 
 
+FORCE_STYLE_RE = re.compile(r"^[A-Za-z0-9=,&.\- ]{1,300}$")
+
+
 def check_filtergraph(graph: str, aliases: set[str]) -> str:
+    # ffmpeg unescapes filter arguments twice, so a backslash lets a value smuggle in a
+    # further `key=value` (e.g. force_style=a\:filename=...). No legitimate spec needs one.
+    if isinstance(graph, str) and "\\" in graph:
+        raise SpecError("backslash is not allowed in filters")
     for name, args in split_filtergraph(graph):
         if name not in ALLOWED_FILTERS:
             raise SpecError(f"filter {name!r} is not allowed")
@@ -150,6 +157,8 @@ def check_filtergraph(graph: str, aliases: set[str]) -> str:
                 if not sep:  # positional: subtitles=<filename>
                     key, val = ("filename" if idx == 0 else ""), part
                 if key == "force_style":
+                    if not FORCE_STYLE_RE.match(val.strip("'")):
+                        raise SpecError("force_style: only letters, digits and = , & . - space")
                     continue
                 if key not in allowed_keys:
                     raise SpecError(f"option {key!r} of {name} is not allowed")

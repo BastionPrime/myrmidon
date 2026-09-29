@@ -49,10 +49,15 @@ class Settings:
     max_inline_result_bytes: int = 4 * 1024 * 1024  # base64 in a tool result
     max_file_bytes: int = 512 * 1024 * 1024
     bot_quota_bytes: int = 4 * 1024**3
+    spool_max_bytes: int = 64 * 1024**3  # ceiling for all bots together; 0 = none
+    spool_min_free_bytes: int = 2 * 1024**3  # keep this much free on the spool filesystem; 0 = do not look
     file_ttl_hours: int = 48
     max_active_jobs_per_bot: int = 3
     rate_per_min: int = 90
     max_text_chars: int = 200_000
+    max_convert_bytes: int = 64 * 1024 * 1024  # input of extract_text / office_to_pdf (streamed, but the converters hold it in memory)
+    max_pdf_bytes: int = 128 * 1024 * 1024  # a converted PDF larger than this is cut off and refused
+    allowed_hosts: tuple[str, ...] = ("media-mcp", "media-mcp:8080")  # Host header values the MCP endpoint accepts
     backend_timeout_s: int = 120
     bots: dict[str, BotPolicy] = field(default_factory=dict)
 
@@ -92,10 +97,15 @@ def load_settings(*, need_bots: bool = True) -> Settings:
         max_inline_result_bytes=_int("MEDIA_MAX_INLINE_RESULT_BYTES", 4 * 1024 * 1024),
         max_file_bytes=_int("MEDIA_MAX_FILE_BYTES", 512 * 1024 * 1024),
         bot_quota_bytes=_int("MEDIA_BOT_QUOTA_BYTES", 4 * 1024**3),
+        spool_max_bytes=_int("MEDIA_SPOOL_MAX_BYTES", 64 * 1024**3),
+        spool_min_free_bytes=_int("MEDIA_SPOOL_MIN_FREE_BYTES", 2 * 1024**3),
         file_ttl_hours=_int("MEDIA_FILE_TTL_HOURS", 48),
         max_active_jobs_per_bot=_int("MEDIA_MAX_ACTIVE_JOBS_PER_BOT", 3),
         rate_per_min=_int("MEDIA_RATE_PER_MIN", 90),
         max_text_chars=_int("MEDIA_MAX_TEXT_CHARS", 200_000),
+        max_convert_bytes=_int("MEDIA_MAX_CONVERT_BYTES", 64 * 1024 * 1024),
+        max_pdf_bytes=_int("MEDIA_MAX_PDF_BYTES", 128 * 1024 * 1024),
+        allowed_hosts=tuple(h.strip() for h in e("MEDIA_ALLOWED_HOSTS", "media-mcp,media-mcp:8080").split(",") if h.strip()),
         backend_timeout_s=_int("MEDIA_BACKEND_TIMEOUT_S", 120),
     )
     if need_bots:

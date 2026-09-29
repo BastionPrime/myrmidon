@@ -19,7 +19,7 @@ import {
 import {
   ADAPTER_TYPE,
   CREATE_CANCEL_GRACE_MS,
-  CREATE_REQUEST_TIMEOUT_MS,
+  resolveCreateRequestTimeoutMs,
   DEFAULT_EVENT_RECONNECT_MS,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_TIMEOUT_SEC,
@@ -1442,8 +1442,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // above, so ctx.signal is live for the whole request; a cancellation that
   // lands here now gets CREATE_CANCEL_GRACE_MS to let the request settle on
   // its own before this cuts it off.
+  // myrmidon(G5): per-agent / per-instance create timeout.
+  const createTimeoutMs = resolveCreateRequestTimeoutMs(ctx.config.createRequestTimeoutSec);
   const createSignal = AbortSignal.any([
-    AbortSignal.timeout(CREATE_REQUEST_TIMEOUT_MS),
+    AbortSignal.timeout(createTimeoutMs),
     delayedAbortSignal(ctx.signal, CREATE_CANCEL_GRACE_MS),
   ]);
   try {
@@ -1485,7 +1487,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       // timedOut stays false in both cases: the platform maps timedOut to
       // outcome "timed_out" and overwrites the run's errorCode with a bare
       // "timeout", which would both drop hermes_gateway_create_timeout and
-      // present a 15s create failure as a timeout of the whole run (even
+      // present a create failure as a timeout of the whole run (even
       // with timeoutSec=1800). As a plain failure the adapter's errorCode is
       // kept; with no executionRecovery evidence the platform still holds
       // any automatic retry for reconciliation, as for any other create
@@ -1498,7 +1500,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         errorCode: cancelled ? "hermes_gateway_cancelled" : "hermes_gateway_create_timeout",
         errorMessage: cancelled
           ? "Hermes gateway run was cancelled while POST /v1/runs was still in flight; whether Hermes accepted it could not be confirmed."
-          : `Hermes /v1/runs did not respond within ${CREATE_REQUEST_TIMEOUT_MS}ms.`,
+          : `Hermes /v1/runs did not respond within ${createTimeoutMs}ms.`,
         errorFamily: cancelled ? null : "transient_upstream",
         provider: "hermes_gateway",
         sessionParams: { strategy },
