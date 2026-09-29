@@ -124,6 +124,7 @@ import {
   normalizeUploadAttachmentContentType,
 } from "../attachment-types.js";
 import { isUniqueViolation } from "../db-errors.js";
+import { coalescedOwnerId } from "../myrmidon/chat-reconciliation/owner-join.js";
 import {
   bindTeamsPersonalRecipient,
   deriveTeamsPersonalRecipient,
@@ -351,6 +352,11 @@ import {
   createOmissionTracker,
   telegramAttachmentOmissionNotice,
 } from "../myrmidon/chat-attachment-omission.js";
+import { TELEGRAM_DM_COMMANDS } from "../myrmidon/agent-chat-bridge/commands/index.js";
+import {
+  telegramDmConversationsConfigured,
+  telegramDmConversationsEnabled,
+} from "../myrmidon/agent-chat-bridge/settings.js";
 import type {
   ActionEvent,
   AdapterPostableMessage,
@@ -4278,6 +4284,32 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             "setMyCommands",
             { commands: TELEGRAM_COMMANDS },
           );
+          // myrmidon(X8e): bridged DMs get their own command menu; groups
+          // and topics keep the vendor menu above (no scope = default menu).
+          // Only when MYRMIDON_TELEGRAM_DM_CONVERSATIONS is set: unset, the
+          // vendor path stays byte for byte (no extra API call, no extra
+          // lease check).
+          if (telegramDmConversationsConfigured()) {
+            await credentialLease.assertOwned();
+            if (telegramDmConversationsEnabled(record.endpoint.id)) {
+              await telegramMaintenanceRequest(
+                credentials.botToken,
+                "setMyCommands",
+                {
+                  commands: TELEGRAM_DM_COMMANDS,
+                  scope: { type: "all_private_chats" },
+                },
+              );
+            } else {
+              // Idempotent: clears a previously registered DM menu once this
+              // endpoint is left out of the (non-empty) list.
+              await telegramMaintenanceRequest(
+                credentials.botToken,
+                "deleteMyCommands",
+                { scope: { type: "all_private_chats" } },
+              );
+            }
+          }
           providerConfirmed = true;
         } else {
           await credentialLease.assertOwned();
@@ -4292,6 +4324,19 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             "deleteMyCommands",
             {},
           );
+          // myrmidon(X8e): also clear the bridged DM command menu on
+          // endpoint removal, so a re-added endpoint starts from the
+          // vendor default until the bridge is enabled again. Only when
+          // MYRMIDON_TELEGRAM_DM_CONVERSATIONS is set (same rule as
+          // register_commands above): unset, the vendor path is unchanged.
+          if (telegramDmConversationsConfigured()) {
+            await credentialLease.assertOwned();
+            await telegramMaintenanceRequest(
+              credentials.botToken,
+              "deleteMyCommands",
+              { scope: { type: "all_private_chats" } },
+            );
+          }
           providerConfirmed = true;
         }
         await credentialLease.assertOwned();
@@ -13776,12 +13821,31 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     if (shuttingDown) return 0;
     const retryInserted = await enqueueFailedChatRetryPublications(limit);
     const owner = alias(agentWakeupRequests, "chat_notice_owner");
+    // myrmidon(D1): a real join instead of a repeated correlated EXISTS —
+    // the three spots below that used to each write their own
+    // `exists (select 1 from issue_comments removed_comment ...)` made
+    // Postgres rebuild the same lookup three times per candidate row. See
+    // docs/myrmidon/DIVERGENCE.md.
+    const removedComment = alias(issueComments, "removed_comment");
+    const sourceRemoved = isNotNull(removedComment.id);
+    // myrmidon(D1): eligibility here depends on the owner's status, which
+    // can go terminal well after chat_actions.created_at, and not in
+    // created_at order between rows (12 concurrent run lanes can resolve a
+    // later-created row's owner before an earlier one's). A keyset cursor
+    // that only ever advances forward, and never resets, would then
+    // permanently skip the earlier row once a later one has pushed the
+    // cursor past it (review PR #98, senior round 1). So this cursor is
+    // reset to a start-of-table scan below on every call whose page does
+    // not fill the requested limit — the same rule the vendor's original
+    // (pre-D1) version of this sweep used — not just periodically: a
+    // straggler row is retried on the very next call, not left for up to
+    // several minutes. A full page only advances the cursor because that
+    // case means a real backlog, and rescanning it from the start on every
+    // call would defeat the point of the keyset scan; this matches vendor
+    // behavior and carries the same (pre-existing, not introduced by D1)
+    // out-of-order risk on a full page, which we do not attempt to close
+    // here.
     const cursor = inboundWakeNoticeCursor;
-    const sourceRemoved = sql`exists (select 1 from issue_comments removed_comment
-      where removed_comment.company_id = ${chatActions.companyId}
-        and removed_comment.issue_id::text = ${chatActions.payload}->>'issueId'
-        and removed_comment.id::text = ${chatActions.payload}->>'commentId'
-        and removed_comment.deleted_at is not null)`;
     const hasVisibleQueue = sql`exists (select 1 from chat_publications queued_notice
       join chat_message_links visible_queue on visible_queue.publication_id = queued_notice.id
         and visible_queue.company_id = queued_notice.company_id
@@ -13796,6 +13860,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           ${chatActions.endpointId}::text || ':' || ${chatActions.conversationId}::text)`;
     // A bounded keyset sweep, not an in-memory work queue. Advancing even past
     // revoked candidates prevents an inaccessible old message starving others.
+    const pageLimit = Math.max(1, Math.min(limit, 200));
     const candidates = await db
       .select({ action: chatActions })
       .from(chatActions)
@@ -13805,7 +13870,22 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       )
       .innerJoin(
         owner,
-        sql`${owner.id}::text = coalesce(${agentWakeupRequests.payload}->>'coalescedIntoWakeupRequestId', ${agentWakeupRequests.id}::text)`,
+        // myrmidon(D1): uuid-typed comparison instead of `owner.id::text =
+        // coalesce(...)::text`. Comparing as text stopped Postgres using the
+        // uuid primary key index on `owner`, forcing a hash/sort-merge join
+        // over the entire agent_wakeup_requests table on every call — the
+        // dominant cost of this sweep. See coalescedOwnerId's doc comment
+        // and docs/myrmidon/DIVERGENCE.md.
+        sql`${owner.id} = ${coalescedOwnerId(agentWakeupRequests.payload, agentWakeupRequests.id)}`,
+      )
+      .leftJoin(
+        removedComment,
+        and(
+          eq(removedComment.companyId, chatActions.companyId),
+          sql`${removedComment.issueId}::text = ${chatActions.payload}->>'issueId'`,
+          sql`${removedComment.id}::text = ${chatActions.payload}->>'commentId'`,
+          isNotNull(removedComment.deletedAt),
+        ),
       )
       .where(
         and(
@@ -13840,10 +13920,16 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         ),
       )
       .orderBy(asc(chatActions.createdAt), asc(chatActions.id))
-      .limit(Math.max(1, Math.min(limit, 200)));
+      .limit(pageLimit);
+    // myrmidon(D1): only advance the cursor on a full page (a real backlog);
+    // otherwise reset to a start-of-table scan, matching the vendor's
+    // original (pre-D1) rule. See the comment above `cursor` for why this
+    // reset can't be periodic-only: eligibility isn't in created_at order,
+    // so leaving the cursor advanced past a still-pending row would exclude
+    // that row from every future call.
     const last = candidates.at(-1)?.action;
     inboundWakeNoticeCursor =
-      candidates.length >= Math.max(1, Math.min(limit, 200)) && last
+      candidates.length >= pageLimit && last
         ? { createdAt: last.createdAt, id: last.id }
         : null;
     let inserted = retryInserted;

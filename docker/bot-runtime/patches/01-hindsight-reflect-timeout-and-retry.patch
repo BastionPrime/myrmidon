@@ -1,0 +1,375 @@
+diff --git a/plugins/memory/hindsight/__init__.py b/plugins/memory/hindsight/__init__.py
+index c35b189..330f2b5 100644
+--- a/plugins/memory/hindsight/__init__.py
++++ b/plugins/memory/hindsight/__init__.py
+@@ -3,8 +3,9 @@ and multi-strategy retrieval; cloud (API key), local_external, or local_embedded
+ 
+ Config: $HERMES_HOME/hindsight/config.json (profile-scoped), else ~/.hindsight/
+ config.json (legacy, shared), else env: HINDSIGHT_API_KEY / BANK_ID / BUDGET /
+-API_URL / MODE / TIMEOUT / IDLE_TIMEOUT / RETAIN_TAGS / RETAIN_OBSERVATION_SCOPES /
+-RETAIN_SOURCE / RETAIN_USER_PREFIX / RETAIN_ASSISTANT_PREFIX, and
++API_URL / MODE / TIMEOUT / REFLECT_TIMEOUT / IDLE_TIMEOUT / RETAIN_TAGS / RETAIN_OBSERVATION_SCOPES /
++RETAIN_SOURCE / RETAIN_USER_PREFIX / RETAIN_ASSISTANT_PREFIX / REFLECT_FACT_TYPES /
++RETRY_503_ATTEMPTS / RETRY_503_MAX_TOTAL_WAIT, and
+ HINDSIGHT_EMBED_PORT_HEALTH_GRACE_TIMEOUT (config.json port_health_grace_timeout).
+ """
+ 
+@@ -38,10 +39,11 @@ from .embedded import (
+     _export_port_health_grace_timeout, _load_simple_env, _local_runtime_hint, _materialize_embedded_profile_env,
+ )
+ from .settings import (
+-    _DEFAULT_API_URL, _DEFAULT_IDLE_TIMEOUT, _DEFAULT_LOCAL_URL, _DEFAULT_RETAIN_SOURCE,
++    _DEFAULT_API_URL, _DEFAULT_IDLE_TIMEOUT, _DEFAULT_LOCAL_URL, _DEFAULT_REFLECT_FACT_TYPES,
++    _DEFAULT_REFLECT_TIMEOUT, _DEFAULT_RETAIN_SOURCE,
+     _DEFAULT_TIMEOUT, _HINDSIGHT_GLYPH, _MIN_CLIENT_VERSION, _MIN_VERSION_FOR_UPDATE_MODE_APPEND,
+     _PROVIDER_DEFAULT_MODELS, _VALID_BUDGETS, _daemon_llm_provider,
+-    _normalize_observation_scopes, _normalize_retain_tags, _parse_int_setting,
++    _normalize_observation_scopes, _normalize_reflect_fact_types, _normalize_retain_tags, _parse_int_setting,
+     _resolve_bank_id_template,
+ )
+ 
+@@ -50,6 +52,20 @@ logger = logging.getLogger(__name__)
+ _LOCAL_MODES = {"local", "local_embedded"}
+ _RETAIN_CONTEXT_DEFAULT = "conversation between Hermes Agent and the User"
+ 
++# myrmidon(G1): a bank whose reflect lane is occupied refuses the call with 503 +
++# Retry-After (admission control). The refusal is transient by contract, so the call
++# is retried within a bounded wait instead of being dropped — without this, a
++# reflect/recall/retain call could be lost outright whenever another reflect on the
++# same bank held the slot. Past the initial retries, the loop keeps retrying only
++# while the accumulated waits still fit the budget, and the budget is itself a share
++# of the operation's own timeout.
++_DEFAULT_RETRY_503_ATTEMPTS = 3
++_DEFAULT_RETRY_503_MAX_TOTAL_WAIT = 120  # seconds of waiting, hard cap
++_RETRY_503_BUDGET_SHARE = 0.4  # ...and never more than this share of the call's timeout
++_RETRY_503_MAX_WAIT_PER_ATTEMPT = 30.0  # clamp a bogus/oversized Retry-After
++_RETRY_503_DEFAULT_WAIT = 5.0  # when a 503 carries no usable Retry-After
++_RETRY_503_MAX_ATTEMPTS_HARD_CAP = 60  # never loop unbounded
++
+ 
+ def _ensure_client_dependency() -> None:
+     """Lazily install the Hindsight client (``tools.lazy_deps``) before importing it."""
+@@ -171,12 +187,68 @@ def _get_loop() -> asyncio.AbstractEventLoop:
+ 
+ 
+ def _run_sync(coro, timeout: float = _DEFAULT_TIMEOUT):
+-    """Schedule *coro* on the shared loop and block until done."""
++    """Schedule *coro* on the shared loop and block until done.
++
++    A bare ``TimeoutError`` carries an empty message, so an expired client-side wait
++    surfaced as ``Failed to reflect: `` and read as a policy refusal rather than a
++    timeout; name the timeout and its duration instead.
++    """
+     from agent.async_utils import safe_schedule_threadsafe
+     future = safe_schedule_threadsafe(coro, _get_loop())
+     if future is None:
+         raise RuntimeError("Hindsight loop unavailable")
+-    return future.result(timeout=timeout)
++    try:
++        return future.result(timeout=timeout)
++    except TimeoutError as exc:
++        # On 3.11+ concurrent.futures.TimeoutError IS builtins.TimeoutError, so a
++        # timeout raised INSIDE the coroutine lands here too: it leaves the future
++        # done, while our own wait expiring leaves it pending. Relabel only ours.
++        if future.done():
++            raise
++        raise TimeoutError(
++            f"Hindsight timeout: no reply within {timeout:g}s (the bank may still be processing the request)"
++        ) from exc
++
++
++# myrmidon(G1): 503-admission retry helpers — see _DEFAULT_RETRY_503_ATTEMPTS above.
++def _retry_after_seconds(exc: BaseException) -> float | None:
++    """Wait, in seconds, from a 503's ``Retry-After`` header (delta-seconds or HTTP-date).
++
++    ``ApiException.headers`` is the response header mapping (a CIMultiDictProxy on the
++    aiohttp transport). Absent or unparseable -> None, and the caller falls back to a
++    fixed wait; clamping happens there, not here.
++    """
++    headers = getattr(exc, "headers", None)
++    if headers is None:
++        return None
++    raw = None
++    with contextlib.suppress(Exception):
++        raw = headers.get("Retry-After") or headers.get("retry-after")
++    text = str(raw).strip() if raw is not None else ""
++    if not text:
++        return None
++    try:
++        return max(0.0, float(text))
++    except ValueError:
++        pass
++    with contextlib.suppress(Exception):  # HTTP-date form
++        from email.utils import parsedate_to_datetime
++        when = parsedate_to_datetime(text)
++        return max(0.0, (when - datetime.now(when.tzinfo)).total_seconds())
++    return None
++
++
++def _admission_503(exc: BaseException) -> bool:
++    """True for the bank's 503 admission refusal (its reflect lane is busy).
++
++    Only the explicit 503 is retried: 5xx siblings (500/502) are not transient, and a
++    504 means the bank already ran the operation to its own wall-clock verdict.
++    """
++    status = getattr(exc, "status", None)
++    if status is not None:
++        with contextlib.suppress(TypeError, ValueError):
++            return int(status) == 503
++    return "(503)" in f"{type(exc).__name__}: {exc}"
+ 
+ 
+ def _context_thread(target, name: str) -> threading.Thread:
+@@ -305,7 +377,7 @@ class HindsightMemoryProvider(MemoryProvider):
+     def __init__(self):
+         self._config = self._api_key = self._client = None
+         self._api_url, self._llm_base_url, self._mode = _DEFAULT_API_URL, "", "cloud"
+-        self._timeout, self._idle_timeout = _DEFAULT_TIMEOUT, _DEFAULT_IDLE_TIMEOUT
++        self._timeout, self._idle_timeout, self._reflect_timeout = _DEFAULT_TIMEOUT, _DEFAULT_IDLE_TIMEOUT, _DEFAULT_REFLECT_TIMEOUT
+         self._bank_id, self._budget, self._bank_id_template = "hermes", "mid", ""
+         self._bank_mission, self._bank_retain_mission = "", None
+         self._memory_mode = "hybrid"  # "context", "tools", or "hybrid"
+@@ -345,6 +417,13 @@ class HindsightMemoryProvider(MemoryProvider):
+         self._last_recall_returned, self._last_recall_count = False, 0
+         self._apply_recall_settings({})
+ 
++        # myrmidon(G1): reflect request shape (which fact-type layers it may search)
++        # and the 503/Retry-After retry policy — see _DEFAULT_RETRY_503_ATTEMPTS above.
++        self._apply_reflect_settings({})
++        self._retry_503_attempts, self._retry_503_max_total_wait = (
++            _DEFAULT_RETRY_503_ATTEMPTS, _DEFAULT_RETRY_503_MAX_TOTAL_WAIT)
++        self._apply_retry_settings({})
++
+     @property
+     def name(self) -> str:
+         return "hindsight"
+@@ -436,6 +515,10 @@ class HindsightMemoryProvider(MemoryProvider):
+             {"key": "recall_max_input_chars", "description": "Maximum input query length for auto-recall", "default": 800},
+             {"key": "recall_prompt_preamble", "description": "Custom preamble for recalled memories in context"},
+             {"key": "timeout", "description": "API request timeout in seconds", "default": _DEFAULT_TIMEOUT},
++            {"key": "reflect_timeout", "description": "Timeout in seconds for hindsight_reflect — synthesis runs an LLM over the whole bank and takes minutes, unlike recall/retain", "default": _DEFAULT_REFLECT_TIMEOUT},
++            {"key": "retry_503_attempts", "description": "Retries to take when the bank refuses a call with 503 because its slot is busy (admission control); every wait honours the response's Retry-After. 0 disables the retry.", "default": _DEFAULT_RETRY_503_ATTEMPTS},
++            {"key": "retry_503_max_total_wait", "description": "Hard cap in seconds on the total 503 retry waiting (also limited to a share of the call's own timeout), so a busy slot cannot park the caller past its budget", "default": _DEFAULT_RETRY_503_MAX_TOTAL_WAIT},
++            {"key": "reflect_fact_types", "description": "Fact-type layers the reflect agent may search (comma-separated). Default 'world,experience' skips the consolidated observations layer, whose forced pass is the expensive part of a reflect call while its content stays reachable through recall; set 'observation,world,experience' to search it again, or 'all' to send no filter at all", "default": "world,experience"},
+             {"key": "idle_timeout", "description": "Embedded daemon idle timeout in seconds (0 disables auto-shutdown)", "default": _DEFAULT_IDLE_TIMEOUT, "when": {"mode": "local_embedded"}},
+             {"key": "port_health_grace_timeout", "description": "Seconds to wait for a slow daemon /health before treating it as stale (raise on busy/low-resource hosts; blank uses the 30s default)", "default": "", "when": {"mode": "local_embedded"}},
+         ]
+@@ -471,7 +554,10 @@ class HindsightMemoryProvider(MemoryProvider):
+     def _new_cloud_client(self):
+         _ensure_client_dependency()
+         from hindsight_client import Hindsight
+-        kwargs = {"base_url": self._api_url, "timeout": float(self._timeout or _DEFAULT_TIMEOUT)}
++        # myrmidon(G1): the client's per-request ceiling must cover the slowest
++        # operation run on it (reflect); recall/retain stay capped per call by _run_sync.
++        request_timeout = max(self._timeout or _DEFAULT_TIMEOUT, self._reflect_timeout)
++        kwargs = {"base_url": self._api_url, "timeout": float(request_timeout)}
+         if self._api_key:
+             kwargs["api_key"] = self._api_key
+         logger.debug("Creating Hindsight cloud client (url=%s, has_key=%s, timeout=%s)",
+@@ -484,23 +570,72 @@ class HindsightMemoryProvider(MemoryProvider):
+             self._client = self._new_embedded_client() if self._mode == "local_embedded" else self._new_cloud_client()
+         return self._client
+ 
+-    def _run_sync(self, coro):
+-        """Schedule *coro* on the shared loop using the configured timeout."""
+-        return _run_sync(coro, timeout=self._timeout)
++    def _run_sync(self, coro, timeout: float | None = None):
++        """Schedule *coro* on the shared loop; *timeout* overrides the configured one."""
++        return _run_sync(coro, timeout=self._timeout if timeout is None else timeout)
++
++    # myrmidon(G1): bounded retry on the bank's 503 admission refusal, see
++    # _DEFAULT_RETRY_503_ATTEMPTS above.
++    def _plan_503_retry(self, exc: BaseException, retries: int, timeout: float,
++                        deadline: float | None) -> tuple[float, float] | None:
++        """``(wait_seconds, deadline)`` for one more try, or None to give up.
++
++        Waiting stays inside ``min(retry_503_max_total_wait, timeout * share)``, so a
++        busy slot cannot park the caller past its own budget. ``Retry-After`` is
++        honoured verbatim and clamped per attempt, so a bogus header cannot stall the
++        call either. The first ``retry_503_attempts`` retries are always taken; later
++        ones must fit the budget.
++        """
++        if not _admission_503(exc) or self._retry_503_attempts <= 0:
++            return None
++        if retries >= _RETRY_503_MAX_ATTEMPTS_HARD_CAP:
++            return None
++        if deadline is None:
++            budget = max(0.0, min(float(self._retry_503_max_total_wait),
++                                  float(timeout) * _RETRY_503_BUDGET_SHARE))
++            if budget <= 0:
++                return None
++            deadline = time.monotonic() + budget
++        wait = _retry_after_seconds(exc)
++        wait = _RETRY_503_DEFAULT_WAIT if wait is None else wait
++        wait = max(0.5, min(float(wait), _RETRY_503_MAX_WAIT_PER_ATTEMPT))
++        if retries >= self._retry_503_attempts and time.monotonic() + wait > deadline:
++            return None
++        return wait, deadline
++
++    def _run_hindsight_operation(self, operation, timeout: float | None = None):
++        """Run an async client operation with the retries that are worth waiting for.
+ 
+-    def _run_hindsight_operation(self, operation):
+-        """Run an async client operation; for local_embedded, a stale-daemon
+-        connection failure recreates the client and retries once."""
+-        try:
+-            return self._run_sync(operation(self._get_client()))
+-        except Exception as exc:
+-            text = f"{type(exc).__name__}: {exc}".lower()
+-            if self._mode != "local_embedded" or not any(m in text for m in _RETRIABLE_CONNECTION_MARKERS):
+-                raise
+-            logger.info("Hindsight embedded daemon appears unreachable; recreating client and retrying once: %s", exc)
+-            self._client = None
+-            self._client = client = self._get_client()
+-            return self._run_sync(operation(client))
++        * local_embedded: a stale-daemon connection failure recreates the client and
++          retries once;
++        * a 503 admission refusal (busy bank slot, ``Retry-After``) is retried inside a
++          bounded wait budget — the refusal is transient by contract, and dropping the
++          call loses the turn's memory whenever another reflect on the same bank held
++          the lane.
++        """
++        effective = self._timeout if timeout is None else timeout
++        can_retry = callable(operation)  # a bare coroutine object can only be awaited once
++        deadline: float | None = None
++        retries = 0
++        while True:
++            try:
++                return self._run_sync(operation(self._get_client()), timeout=effective)
++            except Exception as exc:
++                text = f"{type(exc).__name__}: {exc}".lower()
++                if self._mode == "local_embedded" and any(m in text for m in _RETRIABLE_CONNECTION_MARKERS):
++                    logger.info("Hindsight embedded daemon appears unreachable; recreating client and retrying once: %s", exc)
++                    self._client = None
++                    self._client = client = self._get_client()
++                    return self._run_sync(operation(client), timeout=timeout)
++                planned = self._plan_503_retry(exc, retries, effective, deadline) if can_retry else None
++                if planned is None:
++                    raise
++                wait, deadline = planned
++                retries += 1
++                logger.info("Hindsight call refused with 503 (busy bank slot); retry %d after %.1fs "
++                            "(%.0fs of the wait budget left): %s",
++                            retries, wait, deadline - time.monotonic(), exc)
++                time.sleep(wait)
+ 
+     # -- retain writer thread + server-side visibility -------------------------
+ 
+@@ -668,6 +803,7 @@ class HindsightMemoryProvider(MemoryProvider):
+         self._session_turns = []
+         self._mode = cfg.get("mode", "cloud")
+         self._timeout = self._int_setting("timeout", "HINDSIGHT_TIMEOUT", _DEFAULT_TIMEOUT)
++        self._reflect_timeout = self._int_setting("reflect_timeout", "HINDSIGHT_REFLECT_TIMEOUT", _DEFAULT_REFLECT_TIMEOUT)
+         self._idle_timeout = self._int_setting("idle_timeout", "HINDSIGHT_IDLE_TIMEOUT", _DEFAULT_IDLE_TIMEOUT)
+         if self._mode == "local":  # legacy alias
+             self._mode = "local_embedded"
+@@ -683,6 +819,8 @@ class HindsightMemoryProvider(MemoryProvider):
+         self._apply_connection_settings(cfg)
+         self._apply_retain_settings(cfg)
+         self._apply_recall_settings(cfg)
++        self._apply_reflect_settings(cfg)
++        self._apply_retry_settings(cfg)
+ 
+         client_version = "unknown"
+         with contextlib.suppress(Exception):
+@@ -778,6 +916,27 @@ class HindsightMemoryProvider(MemoryProvider):
+         self._recall_prompt_preamble = cfg.get("recall_prompt_preamble", "")
+         self._recall_indicator = bool(cfg.get("recall_indicator", True))
+ 
++    # myrmidon(G1): reflect request shape and 503 retry policy — pure config, both
++    # applied from __init__ before a config dict exists (hence the plain defaults
++    # there) and re-applied here from the real config.
++    def _apply_reflect_settings(self, cfg: dict) -> None:
++        """Reflect request shape (pure config; the observations layer is opt-in)."""
++        self._reflect_fact_types = _normalize_reflect_fact_types(
++            cfg.get("reflect_fact_types") or os.environ.get("HINDSIGHT_REFLECT_FACT_TYPES"))
++
++    def _apply_retry_settings(self, cfg: dict) -> None:
++        """503/Retry-After retry policy (the bank's admission lane can refuse a call).
++
++        No ``self._int_setting`` here: ``__init__`` applies the defaults before a config
++        dict exists.
++        """
++        self._retry_503_attempts = max(0, _parse_int_setting(
++            cfg.get("retry_503_attempts", os.environ.get("HINDSIGHT_RETRY_503_ATTEMPTS")),
++            _DEFAULT_RETRY_503_ATTEMPTS))
++        self._retry_503_max_total_wait = max(0, _parse_int_setting(
++            cfg.get("retry_503_max_total_wait", os.environ.get("HINDSIGHT_RETRY_503_MAX_TOTAL_WAIT")),
++            _DEFAULT_RETRY_503_MAX_TOTAL_WAIT))
++
+     def _start_embedded_daemon(self) -> None:
+         """Start the embedded daemon on a background thread (Rich output -> log file)."""
+         # PostgreSQL's initdb refuses root; without this guard the start thread
+@@ -851,8 +1010,12 @@ class HindsightMemoryProvider(MemoryProvider):
+         return resp.results or []
+ 
+     def _reflect(self, query: str) -> str | None:
++        kwargs: dict = {"bank_id": self._bank_id, "query": query, "budget": self._budget}
++        if self._reflect_fact_types:
++            kwargs["fact_types"] = list(self._reflect_fact_types)
+         resp = self._run_hindsight_operation(
+-            lambda client: client.areflect(bank_id=self._bank_id, query=query, budget=self._budget)
++            lambda client: client.areflect(**kwargs),
++            timeout=self._reflect_timeout,
+         )
+         return resp.text
+ 
+diff --git a/plugins/memory/hindsight/settings.py b/plugins/memory/hindsight/settings.py
+index 6655b2a..b02be35 100644
+--- a/plugins/memory/hindsight/settings.py
++++ b/plugins/memory/hindsight/settings.py
+@@ -16,6 +16,23 @@ _DEFAULT_LOCAL_URL = "http://localhost:8888"
+ # Keep in sync with tools/lazy_deps.py ("memory.hindsight") and plugin.yaml.
+ _MIN_CLIENT_VERSION = "0.6.1"
+ _DEFAULT_TIMEOUT = 120  # seconds — cloud API can take 30-40s per request
++# myrmidon(G1): ``reflect`` synthesizes the answer with an LLM over the whole bank, so it
++# is far slower than recall/retain: a busy bank can take several minutes to answer, well
++# past the shared client timeout above, which then aborts the call while the bank is
++# still working and answers correctly. Own ceiling, overridable per profile via
++# ``reflect_timeout`` / HINDSIGHT_REFLECT_TIMEOUT. Deliberately set above the bank's own
++# reflect wall-clock limit (which answers its own timeout error before this elapses) so
++# the client waits for the bank's own verdict instead of abandoning a live request one
++# second before it lands.
++_DEFAULT_REFLECT_TIMEOUT = 360  # seconds
++# myrmidon(G1): ``reflect`` runs one forced retrieval pass per enabled layer, so every
++# layer left enabled costs a whole extra pass. The observations layer is the expensive
++# one — a recall-like pass over the consolidated observations — while its content stays
++# in the bank and remains reachable through ``recall``. The default therefore asks for
++# world/experience only; set ``reflect_fact_types`` (HINDSIGHT_REFLECT_FACT_TYPES) to
++# "observation,world,experience" to bring the layer back, or to "all" to send no filter
++# at all (Hindsight's own default).
++_DEFAULT_REFLECT_FACT_TYPES = ("world", "experience")
+ _DEFAULT_IDLE_TIMEOUT = 300  # seconds — Hindsight embedded daemon default
+ # ``metadata.source`` on retained memories is OPT-IN (AGENTS.md forbids
+ # on-by-default attribution tags): ``retain_source`` / HINDSIGHT_RETAIN_SOURCE.
+@@ -79,6 +96,30 @@ def _normalize_retain_tags(value: Any) -> List[str]:
+     return normalized
+ 
+ 
++def _normalize_reflect_fact_types(value: Any) -> List[str] | None:
++    """Fact types the reflect agent may search; ``None`` means "send no field".
++
++    Missing/blank/empty -> the conservative default (``world``/``experience``: no
++    forced observations pass). ``all`` / ``*`` -> ``None``, which keeps the
++    ``fact_types`` field out of the request and restores Hindsight's own default
++    (every type, observations included). A comma-separated string is accepted for
++    parity with the other list settings.
++    """
++    if value is None or not value:
++        return list(_DEFAULT_REFLECT_FACT_TYPES)
++    if isinstance(value, str):
++        text = value.strip()
++        if text.lower() in {"all", "*"}:
++            return None
++        raw: list = text.split(",")
++    elif isinstance(value, (list, tuple)):
++        raw = list(value)
++    else:
++        return list(_DEFAULT_REFLECT_FACT_TYPES)
++    types = [str(item).strip() for item in raw if str(item).strip()]
++    return types or None
++
++
+ def _normalize_observation_scopes(value: Any) -> Any:
+     """Normalize observation_scopes to a keyword string, ``list[list[str]]`` (one inner
+     list per consolidation pass), or ``None`` (Hindsight's ``combined`` default).

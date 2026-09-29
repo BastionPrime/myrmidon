@@ -5,6 +5,7 @@ import { agentDetailHref } from "./agent-detail-navigation";
 import { deriveInitials } from "@/components/Identity";
 import { ExecutionBlockerNotice } from "../components/ExecutionBlockerNotice";
 import { ReplayBlockedNotice } from "../components/myrmidon/ReplayBlocked"; // myrmidon(N1)
+import { isTelegramConversationIssue } from "@/lib/myrmidon/telegram-conversation"; // myrmidon(X8f)
 import type { TaskComposerPause } from "../components/task-chat/TaskChatPausedTakeover";
 import { TaskDetailTasksPanel } from "@/components/task-detail/TaskDetailTasksPanel";
 import { EmailThreadProvider } from "../components/EmailMessageCard";
@@ -184,8 +185,8 @@ import { useStreamlinedUiEnabled } from "../hooks/useStreamlinedUiEnabled";
 import { workModeMetaFor } from "../lib/work-mode-meta";
 import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff";
 import { IssueAttachmentsSection } from "../components/IssueAttachmentsSection";
-// myrmidon(U3)
-import { IssueFilesPanel } from "@/components/myrmidon/IssueFilesPanel";
+// myrmidon(U3): files trigger + on-demand drawer, replacing the fixed panel below.
+import { IssueFilesDrawer } from "@/components/myrmidon/IssueFilesDrawer";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { IssuePlanDecompositionsSection } from "../components/IssuePlanDecompositionsSection";
 import { IssueOutputSection } from "../components/issue-output/IssueOutputSection";
@@ -6832,6 +6833,33 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     />
   );
 
+  // myrmidon(U3): trigger for the on-demand task files drawer (replaces the
+  // fixed IssueFilesPanel card the chat shell used to render below the
+  // thread). This one element is reused at up to three positions in the tree
+  // below (same pattern issueStatusControl already uses for its own
+  // mobile/desktop split) — each mount is independent, but only one is ever
+  // visible for a given viewport/branch: a desktop instance inside
+  // issueHeaderBlock's "hidden md:flex" action group, a mobile-only twin
+  // (md:hidden) next to it that is NOT gated on streamlinedTaskDetailEnabled
+  // (needed because the desktop group hides below md regardless of that
+  // flag, and the streamlined header — the default — has no other mobile
+  // action row at all), and, for the conversationAgentId branch where
+  // issueHeaderBlock itself is null (direct agent chats have no classic
+  // header row), a standalone always-visible slot in taskChatThreadHeader
+  // below.
+  const filesDrawerTrigger = taskChatShellEnabled ? (
+    <IssueFilesDrawer
+      attachments={attachments ?? []}
+      workProducts={workProducts ?? []}
+      resolveAuthor={(entry) =>
+        (entry.createdByAgentId ? agentMap.get(entry.createdByAgentId)?.name : null) ??
+        (entry.createdByUserId ? userLabelMap.get(entry.createdByUserId) : null) ??
+        null
+      }
+      isMobile={isMobile}
+    />
+  ) : null;
+
   const issueHeaderBlock = issue.conversationAgentId ? null : (
     <div
       data-testid="issue-detail-header"
@@ -7022,6 +7050,23 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
           </div>
         )}
 
+        {filesDrawerTrigger ? (
+          <div className="ml-auto flex items-center shrink-0 md:hidden">
+            {/* myrmidon(U3): mobile-only twin of the desktop trigger further
+            below (same reused `filesDrawerTrigger` element, same pattern
+            issueStatusControl already uses for its own mobile/desktop split
+            above — two independent mounts, toggled by breakpoint, not by
+            streamlinedTaskDetailEnabled). Both of the two action groups below
+            hide the desktop one on narrow viewports: the classic-only one via
+            its `!streamlinedTaskDetailEnabled` gate (skipped entirely in the
+            streamlined default), the always-present one via its own
+            "hidden md:flex" ancestor. Without this twin, phones running the
+            streamlined header (the default) have no way to reach the files
+            drawer at all. */}
+            {filesDrawerTrigger}
+          </div>
+        ) : null}
+
         {!streamlinedTaskDetailEnabled && !(isMobile && isFromInbox) && (
           <div className="ml-auto flex items-center gap-0.5 md:hidden shrink-0">
             <Button
@@ -7100,6 +7145,19 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
               />
             </TooltipProvider>
           ) : null}
+          {/* myrmidon(U3): desktop instance of the files drawer trigger —
+          the ancestor "hidden md:flex" group above hides this on mobile,
+          where the standalone twin further up (md:hidden) takes over
+          instead. Kept as a plain flow sibling of task-title-actions, not
+          nested inside it: that div goes `absolute right-0 top-0` in the
+          streamlined (default) header to float the kebab over the title
+          row, which only reserves `md:pr-8` (32px) there — just enough for
+          the kebab itself. A wider "Files (N)" trigger placed inside that
+          absolute box would extend past the reserved space and sit on top
+          of the title text, intercepting clicks meant for the title. In
+          normal flow here it lays out beside the kebab instead of over the
+          title. */}
+          {filesDrawerTrigger}
           <div
             data-slot="task-title-actions"
             className={cn(
@@ -7328,6 +7386,11 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     <>
       {ancestorsNav}
       {issueHeaderBlock}
+      {/* myrmidon(U3): issueHeaderBlock is null for direct agent-chat issues
+      (issue.conversationAgentId) — keep the files trigger reachable there too. */}
+      {issue.conversationAgentId ? (
+        <div className="flex justify-end">{filesDrawerTrigger}</div>
+      ) : null}
       {pluginOutletsBlock}
     </>
   ) : undefined;
@@ -7508,18 +7571,9 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
             />
           )}
 
-          {/* myrmidon(U3): the chat shell hides the attachment section; list every task file here */}
-          {taskChatShellEnabled ? (
-            <IssueFilesPanel
-              attachments={attachments ?? []}
-              workProducts={workProducts ?? []}
-              resolveAuthor={(entry) =>
-                (entry.createdByAgentId ? agentMap.get(entry.createdByAgentId)?.name : null) ??
-                (entry.createdByUserId ? userLabelMap.get(entry.createdByUserId) : null) ??
-                null
-              }
-            />
-          ) : null}
+          {/* myrmidon(U3): the chat shell hides the attachment section;
+          every task file is reachable from the "Files (N)" drawer trigger in
+          the task header (filesDrawerTrigger) instead of a fixed card here. */}
           {taskChatShellEnabled ? null : attachmentsInitialLoading ? (
             <IssueSectionSkeleton titleWidth="w-24" rows={2} />
           ) : hasAttachments ? (
@@ -7825,7 +7879,19 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                     } : undefined,
                     resumeHref: !activePauseHold.isRoot ? createIssueDetailPath(activePauseHoldRoot?.identifier ?? activePauseHold.rootIssueId) : undefined,
                   } : null}
-                  composerDisabledReason={issue.conversationAgentId && !instanceExperimentalSettings?.enableAgentChat ? "Agent Chat is disabled in Experimental settings." : treeControlStateError ? "Couldn’t check whether this task is paused. Refresh to try again." : null}
+                  composerDisabledReason={
+                    issue.conversationAgentId && !instanceExperimentalSettings?.enableAgentChat
+                      ? "Agent Chat is disabled in Experimental settings."
+                      // myrmidon(X8f): the Telegram conversation is read-only on the board.
+                      // Checked after enableAgentChat, matching the server's check order
+                      // (routes/issues.ts), so a globally disabled Agent Chat still reports
+                      // as disabled rather than as "lives in Telegram".
+                      : isTelegramConversationIssue(issue)
+                        ? "This conversation lives in Telegram. Reply to the bot there."
+                        : treeControlStateError
+                          ? "Couldn’t check whether this task is paused. Refresh to try again."
+                          : null
+                  }
                   composerHint={composerHint}
                   queuedCommentReason={queuedCommentReason}
                   onVote={handleCommentVote}

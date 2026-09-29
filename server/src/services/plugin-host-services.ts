@@ -2804,7 +2804,17 @@ export function buildHostServices(
         await ensurePluginAvailableForCompany(companyId);
         const agent = await agents.getById(params.agentId);
         requireInCompany("Agent", agent, companyId);
-        return (await agents.resume(params.agentId)) as Agent;
+        const resumed = (await agents.resume(params.agentId)) as Agent;
+        // myrmidon(L3): a drained pause never cancelled anything, so resume
+        // must wake it back up itself, the same as the operator HTTP route —
+        // otherwise an agent resumed through this plugin capability sits idle
+        // with queued runs and stranded assigned issues nothing ever wakes.
+        // Best-effort: a wake failure must not fail the plugin's resume call.
+        // Logic: myrmidon/pause-drain.ts.
+        await heartbeat.resumeAgentAfterPause(params.agentId).catch((err) => {
+          logger.warn({ err, agentId: params.agentId, pluginKey }, "pause-resume wake failed after plugin agent resume");
+        });
+        return resumed;
       },
       async invoke(params) {
         const companyId = ensureCompanyId(params.companyId);
