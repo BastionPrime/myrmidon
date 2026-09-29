@@ -80,7 +80,8 @@
 import {
   findRichFrameSpansFromEnd,
   isPanelRuleLine,
-  stripRichPanelFrames,
+  isPanelTitleLine,
+  isStreamBoxHeaderLine,
 } from "../shared/myrmidon-panel-frame.js";
 import type { RichFrame, RichFrameSpan } from "../shared/myrmidon-panel-frame.js";
 import { redactSecretsForLog } from "../shared/myrmidon-secret-redaction.js";
@@ -359,11 +360,27 @@ export function analyzeLiveTurn(turnText: string): LiveTurnAnalysis {
   return { answer: undefined, failureMessage };
 }
 
-// Re-exported so execute.ts's response cleaning needs a single G5 import.
-export { stripRichPanelFrames };
-
 /** The vendor's message when `--resume` names a session it does not have or cannot resume (cli_agent_setup_mixin.py). */
 const STALE_SESSION_RE = /^(?:Session not found|Cannot resume session):/m;
+
+/**
+ * What the CLI printed before the turn's own output: the text up to the first
+ * turn divider (a bare `─` rule, printed by cli_chat_turn_mixin.py right after
+ * `_init_agent` succeeded) or, failing that, the first frame's top border.
+ *
+ * The CLI reports a resume target it cannot use from `_init_agent`, so ahead of
+ * that divider. Anything after it is the turn's own output: a streamed answer,
+ * a tool result or a diff that merely quotes the phrase, which says nothing
+ * about the stored session.
+ */
+function textBeforeTurnOutput(output: string): string {
+  const lines = output.split(/\r?\n/);
+  const end = lines.findIndex((line) => {
+    const trimmed = line.trim();
+    return isPanelRuleLine(trimmed) || isPanelTitleLine(trimmed) || isStreamBoxHeaderLine(trimmed);
+  });
+  return end === -1 ? output : lines.slice(0, end).join("\n");
+}
 
 /** How many vendor lines an error message quotes, and how long that quote may get. */
 const MAX_EXCERPT_LINES = 5;
@@ -413,7 +430,10 @@ export interface LiveRunAnalysis {
   answer: RichFrame | undefined;
   /** Set when the run must be recorded as a failure although the CLI exited 0. */
   errorMessage: string | undefined;
-  /** The CLI said the `--resume` session is gone or cannot be resumed: the stored session id is dead. */
+  /**
+   * The CLI said the `--resume` session is gone or cannot be resumed, before any turn output, and the
+   * run then exited cleanly: the stored session id is dead.
+   */
   staleSession: boolean;
 }
 
@@ -452,8 +472,10 @@ export function analyzeLiveRun(
   const output = split.after;
   const summary = findExitSummary(output);
   if (summary === undefined) {
-    // The stored session is stale only when the CLI itself said so before any turn ran.
-    result.staleSession = STALE_SESSION_RE.test(output);
+    // The stored session is stale only when the CLI itself said so before any turn ran (so not in
+    // a streamed answer or a tool result that quotes the phrase) and then stopped cleanly. A run
+    // that timed out or died says nothing about the session it was resuming.
+    result.staleSession = exitedCleanly && STALE_SESSION_RE.test(textBeforeTurnOutput(output));
     if (exitedCleanly) result.errorMessage = withExcerpt(EARLY_EXIT_MESSAGE, output);
     return result;
   }

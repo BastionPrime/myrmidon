@@ -16,6 +16,13 @@ import {
   REAL_MULTI_TOOL_SUCCESS,
 } from "../server/myrmidon-live-progress.real-output.fixtures.js";
 
+/** Terminal cells a string takes: an emoji-presentation glyph is two, everything else here is one. */
+function cells(text: string): number {
+  let n = 0;
+  for (const ch of text) n += /\p{Emoji_Presentation}/u.test(ch) ? 2 : 1;
+  return n;
+}
+
 /**
  * Builds the exact bytes `rich.panel.Panel(..., box=box.HORIZONTALS,
  * padding=(1, N))` produces once rendered through prompt_toolkit's non-tty
@@ -28,7 +35,9 @@ function buildPanelBlock(title: string, bodyLines: string[], opts: { width?: num
   const leftPad = opts.leftPad ?? 0;
   const inner = width - 2;
   const titleSegment = `─ ${title} `;
-  const top = ` ${titleSegment}${"─".repeat(Math.max(inner - titleSegment.length, 0))} `;
+  // Rich pads the title row to the Panel width in terminal CELLS, so a title with a wide glyph
+  // ("⚡ Out of credits") has one code point fewer than the bottom rule.
+  const top = ` ${titleSegment}${"─".repeat(Math.max(inner - cells(titleSegment), 0))} `;
   const bottom = ` ${"─".repeat(inner)} `;
   const blank = ` ${" ".repeat(inner)} `;
   const row = (text: string) => ` ${(" ".repeat(leftPad) + text).padEnd(inner, " ")} `;
@@ -350,7 +359,7 @@ describe("findRichFrameSpans", () => {
 });
 
 describe("findRichFrameSpansFromEnd", () => {
-  const HEADER = "╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────╮";
+  const HEADER = `╭─ ⚕ Hermes ${"─".repeat(80 - 2 - "─ ⚕ Hermes ".length)}╮`;
   const FOOTER = `╰${"─".repeat(78)}╯`;
   const RULE = "─".repeat(40);
 
@@ -415,5 +424,64 @@ describe("findRichFrameSpansFromEnd", () => {
   it("is empty for plain text and for empty input", () => {
     expect(findRichFrameSpansFromEnd("just some text\nmore text")).toEqual([]);
     expect(findRichFrameSpansFromEnd("")).toEqual([]);
+  });
+});
+
+describe("frame widths: model text that only looks like a frame", () => {
+  const DIAGRAM = ["╭────────╮", "│ client │", "╰────────╯"];
+
+  it("keeps a rounded diagram inside a streaming answer, whichever scan reads it", () => {
+    const body = ["The flow is:", ...DIAGRAM, "Then the server answers."];
+    const text = buildStreamBox("⚕ Hermes", body);
+    const expected = [{ kind: "stream", title: "⚕ Hermes", bodyLines: body, startLine: 1, endLine: body.length + 2 }];
+
+    expect(findRichFrameSpans(text)).toEqual(expected);
+    expect(findRichFrameSpansFromEnd(text)).toEqual(expected);
+    expect(stripRichPanelFrames(text)).toBe(["", ...body].join("\n"));
+  });
+
+  it("keeps a diagram drawn with a header and footer of its own at the end of the answer", () => {
+    const body = ["Layout:", ...DIAGRAM];
+    const text = buildStreamBox("⚕ Hermes", body);
+
+    expect(findRichFrameSpansFromEnd(text).map((s) => s.bodyLines)).toEqual([body]);
+    expect(stripRichPanelFrames(text)).toBe(["", ...body].join("\n"));
+  });
+
+  it("keeps a lone rule line inside a Panel answer", () => {
+    const body = ["Summary", "──────", "Details follow."];
+    const text = buildPanelBlock("⚕ Hermes", body);
+
+    for (const spans of [findRichFrameSpans(text), findRichFrameSpansFromEnd(text)]) {
+      expect(spans).toHaveLength(1);
+      expect(spans[0].kind).toBe("panel");
+      expect(spans[0].bodyLines).toEqual(["", ...body, ""]);
+    }
+    expect(stripRichPanelFrames(text)).toBe(["", ...body, ""].join("\n"));
+  });
+
+  it("closes a Panel at its own bottom rule, not at a shorter rule of the answer", () => {
+    const text = [buildPanelBlock("⚕ Hermes", ["A", "────", "B"]), "after the panel"].join("\r\n");
+    // Every row of the Panel comes out unwrapped and none of its two borders is left behind.
+    expect(stripRichPanelFrames(text)).toBe(["", "A", "────", "B", "", "after the panel"].join("\n"));
+  });
+
+  it("pairs a Panel whose title has a wide glyph by terminal cells", () => {
+    const text = buildPanelBlock("⚡ Out of credits", ["Add credits."]);
+    const [top, , , , bottom] = text.split("\r\n").map((row) => row.trim());
+    // The title row has one code point fewer than the rule, and the same number of cells.
+    expect(Array.from(top).length).toBe(Array.from(bottom).length - 1);
+
+    for (const spans of [findRichFrameSpans(text), findRichFrameSpansFromEnd(text)]) {
+      expect(spans.map((s) => [s.kind, s.title])).toEqual([["panel", "⚡ Out of credits"]]);
+    }
+    expect(stripRichPanelFrames(text)).toContain("Add credits.");
+    expect(stripRichPanelFrames(text)).not.toMatch(/^─+$/m);
+  });
+
+  it("still pairs a header with its footer when both are one width but not the default 80", () => {
+    const text = buildStreamBox("⚕ Hermes", ["Narrow terminal."], 40);
+    expect(findRichFrameSpans(text).map((s) => s.bodyLines)).toEqual([["Narrow terminal."]]);
+    expect(findRichFrameSpansFromEnd(text).map((s) => s.bodyLines)).toEqual([["Narrow terminal."]]);
   });
 });

@@ -512,6 +512,37 @@ describe("execute() — G5 live progress wiring", () => {
     expect(result.sessionParams).toEqual({ sessionId: stored });
   });
 
+  it("does not drop the stored session for a run that timed out or failed while its streamed answer quoted the CLI's session message", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    const stored = "20260103_090000_feed01";
+    const quoting = buildStreamBox("⚕ Hermes", ["The CLI answers a bad id with:", "Session not found: 20200101_000000_nosuch"]);
+    const unfinished = quoting.split("\n").slice(0, 4).join("\n");
+    const divider = "─".repeat(40);
+    const cases: Array<[string, { exitCode: number | null; timedOut: boolean }, string]> = [
+      ["timed out mid-answer", { exitCode: null, timedOut: true }, unfinished],
+      ["timed out after a whole box", { exitCode: null, timedOut: true }, quoting],
+      ["exited nonzero", { exitCode: 1, timedOut: false }, quoting],
+    ];
+    for (const [label, ending, box] of cases) {
+      mockRun({ ...ending, stdout: echoThen(`Initializing agent...\r\n${divider}\n${box}\n`) });
+
+      const result = await execute(makeCtx({}, stored) as any);
+
+      const args = vi.mocked(serverUtils.runChildProcess).mock.calls.at(-1)![2] as string[];
+      expect(args, label).toContain("--resume");
+      expect(result.clearSession, label).toBeUndefined();
+    }
+  });
+
+  it("does not drop the stored session when a run that timed out printed only the CLI's session message", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    mockRun({ exitCode: null, timedOut: true, stdout: echoed(REAL_EARLY_EXIT_SESSION_NOT_FOUND) });
+
+    const result = await execute(makeCtx({}, "20260103_090000_feed01") as any);
+
+    expect(result.clearSession).toBeUndefined();
+  });
+
   it("does not flag a killed (timed-out) run the same way — its own timeout diagnostics own that case — and gives it no answer", async () => {
     delete process.env[LIVE_PROGRESS_ENV_VAR];
     mockRun({
@@ -565,6 +596,32 @@ describe("execute() — G5 live progress wiring", () => {
     expect(result.sessionParams).toEqual({ sessionId: SESSION_ID });
     expect(result.resultJson).toMatchObject({ session_id: SESSION_ID });
     expect(result.resultJson!.result).toContain("Done.");
+  });
+
+  it("keeps a rounded diagram and a rule line the model drew in its answer, in a streamed box and in a Panel", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    const body = ["The flow is:", "╭────────╮", "│ client │", "╰────────╯", "──────", "Then the server answers."];
+    for (const turn of [
+      "Initializing agent...\r\n" + buildStreamBox("⚕ Hermes", body) + "\n" + buildExitSummary(SESSION_ID) + "\n",
+      panelTurn(body),
+    ]) {
+      mockRun({ stdout: echoThen(turn) });
+
+      const result = await execute(makeCtx({}) as any);
+
+      expect(result.errorMessage).toBeUndefined();
+      expect(result.resultJson!.result).toBe(body.join("\n"));
+    }
+  });
+
+  it("keeps a rounded diagram in a quiet run's answer too", async () => {
+    delete process.env[LIVE_PROGRESS_ENV_VAR];
+    const diagram = ["╭────────╮", "│ client │", "╰────────╯"].join("\n");
+    mockRun({ stdout: `The flow is:\n${diagram}\n\nsession_id: abc123\n` });
+
+    const result = await execute(makeCtx({ quiet: true }) as any);
+
+    expect(result.resultJson!.result).toBe(`The flow is:\n${diagram}`);
   });
 
   it("takes the session id from the exit summary at the very end, not from one an answer prints in the same shape", async () => {

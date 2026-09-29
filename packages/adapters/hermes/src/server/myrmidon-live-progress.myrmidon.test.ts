@@ -413,7 +413,10 @@ describe("createLiveLogSanitizer", () => {
 function buildPanelBlock(title: string, bodyLines: string[], width = 80): string {
   const inner = width - 2;
   const titleSegment = `─ ${title} `;
-  const top = ` ${titleSegment}${"─".repeat(Math.max(inner - titleSegment.length, 0))} `;
+  // Rich pads the title row to the Panel width in terminal cells, and an emoji-presentation glyph
+  // ("⚡ Out of credits") is two of them.
+  const titleCells = Array.from(titleSegment).reduce((n, ch) => n + (/\p{Emoji_Presentation}/u.test(ch) ? 2 : 1), 0);
+  const top = ` ${titleSegment}${"─".repeat(Math.max(inner - titleCells, 0))} `;
   const bottom = ` ${"─".repeat(inner)} `;
   const blank = ` ${" ".repeat(inner)} `;
   const row = (text: string) => ` ${text.padEnd(inner, " ")} `;
@@ -651,6 +654,47 @@ describe("analyzeLiveRun — real CLI output, clean exit", () => {
     const result = run(capture);
     expect(result.errorMessage).toBeUndefined();
     expect(result.staleSession).toBe(false);
+  });
+
+  describe("staleSession needs the CLI's own message, before any turn output, on a clean exit", () => {
+    const NOT_FOUND = "Session not found: 20200101_000000_nosuch";
+    const init = "Initializing agent...\r\n";
+
+    it("is not set when a run that timed out has the phrase inside an unfinished streaming box", () => {
+      const capture = withEcho(
+        FIXTURE_PROMPT,
+        `Query: x\n${init}${DIVIDER}\n\n${buildStreamBox("⚕ Hermes", ["The CLI answers a bad id with:", NOT_FOUND]).split("\n").slice(0, 4).join("\n")}\n`,
+      );
+      const result = analyzeLiveRun(capture, FIXTURE_PROMPT, { timedOut: true, exitCode: null });
+      expect(result.staleSession).toBe(false);
+    });
+
+    it("is not set when a run that timed out printed the CLI's own message and nothing after it", () => {
+      const result = analyzeLiveRun(REAL_EARLY_EXIT_SESSION_NOT_FOUND, FIXTURE_PROMPT, { timedOut: true, exitCode: null });
+      expect(result.staleSession).toBe(false);
+    });
+
+    it("is not set when a run that exited nonzero printed the message", () => {
+      const result = analyzeLiveRun(REAL_EARLY_EXIT_SESSION_NOT_FOUND, FIXTURE_PROMPT, { timedOut: false, exitCode: 1 });
+      expect(result.staleSession).toBe(false);
+    });
+
+    it("is not set for a phrase after the turn divider, even on a clean exit with no exit summary", () => {
+      const toolLine = `  ┊ 💻 $ grep -r "${NOT_FOUND}" .  0.1s`;
+      const capture = withEcho(FIXTURE_PROMPT, `Query: x\n${init}${DIVIDER}\n\n${toolLine}\n${NOT_FOUND}\n`);
+      const result = run(capture);
+      expect(result.staleSession).toBe(false);
+      expect(result.errorMessage).toContain("without printing an exit summary");
+    });
+
+    it("is not set for a phrase in a frame that has no divider in front of it", () => {
+      const capture = withEcho(FIXTURE_PROMPT, `Query: x\n${buildStreamBox("⚕ Hermes", [NOT_FOUND])}\n`);
+      expect(run(capture).staleSession).toBe(false);
+    });
+
+    it("is set for the CLI's own message on a clean exit", () => {
+      expect(run(REAL_EARLY_EXIT_SESSION_NOT_FOUND).staleSession).toBe(true);
+    });
   });
 
   it("a resumed session that failed to initialize, with a full exit summary and no frame, is a failure (it used to be an empty success)", () => {

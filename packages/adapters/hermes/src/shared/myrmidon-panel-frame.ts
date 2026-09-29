@@ -1,9 +1,11 @@
 /**
  * myrmidon(G5): recognize the two frame shapes Hermes draws around its final
  * answer when run WITHOUT `-Q`, so both the UI stdout parser (drop the frame
- * from the live transcript, ui/parse-stdout.ts) and the server-side response
- * cleaner (strip it from the captured final text, server/execute.ts via
- * server/myrmidon-live-progress.ts) can recognize either one.
+ * from the live transcript, ui/parse-stdout.ts) and the server-side turn
+ * analysis (find the answer frame and take its body, server/myrmidon-live-progress.ts)
+ * can recognize either one. `stripRichPanelFrames` is the whole-text form of the
+ * same scan; the adapter no longer calls it on a stored response, because a
+ * response is a frame body and must keep any border-like line the model wrote.
  *
  * Which shape prints depends on `display.streaming`, which defaults to
  * `true` in the vendor CLI (cli.py `_cli_config_defaults`) and nothing on
@@ -72,6 +74,59 @@ export function isStreamBoxHeaderLine(trimmedLine: string): boolean {
 /** True for an ALREADY-TRIMMED line that is the streaming box's footer. */
 export function isStreamBoxFooterLine(trimmedLine: string): boolean {
   return STREAM_BOX_FOOTER_RE.test(trimmedLine);
+}
+
+/**
+ * Code points that take no terminal cell (combining marks, joiners, variation
+ * selectors) and code points that take two (emoji presentation, East Asian
+ * wide/fullwidth blocks). An approximation of the `wcwidth` tables Rich and
+ * prompt_toolkit measure with, enough for the labels a frame title can carry.
+ */
+const ZERO_WIDTH_RE = /[\u0300-\u036f\u200b-\u200f\u2060\u20d0-\u20ff\ufe00-\ufe0f]/u;
+const DOUBLE_WIDTH_RE =
+  /\p{Emoji_Presentation}|[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6\u{20000}-\u{3fffd}]/u;
+
+/** How many terminal cells an already-trimmed line takes. */
+function cellWidth(text: string): number {
+  let width = 0;
+  for (const ch of text) {
+    if (ZERO_WIDTH_RE.test(ch)) continue;
+    width += DOUBLE_WIDTH_RE.test(ch) ? 2 : 1;
+  }
+  return width;
+}
+
+/**
+ * True when two already-trimmed frame lines are as wide as each other.
+ *
+ * The vendor sizes every frame it draws to one width, `_scrollback_box_width()`:
+ * the streaming box's footer is `╰` + `─`×(w-2) + `╯`, its header is padded so
+ * that label and fill add up to the same number of terminal CELLS, and a Panel
+ * is drawn with `width=w`, so its title row and its bottom rule are equally
+ * wide too. Text of the model's own that only LOOKS like a frame — a rounded
+ * diagram, a lone `────` line — has no reason to match that width, which is
+ * what lets a header pair with its real footer and a title with its real rule
+ * instead of with the model's look-alike.
+ *
+ * Widths are compared in terminal cells (a label with a wide glyph such as
+ * `⚡` has one code point fewer than cells), and also in code points, so a
+ * glyph this module mis-measures cannot leave a real frame unpaired: a run
+ * that printed a frame must not fail for want of a lookup table. Two
+ * independent measures both agreeing by accident is not a realistic way for
+ * the model's text to pass.
+ */
+function sameFrameWidth(a: string, b: string): boolean {
+  return cellWidth(a) === cellWidth(b) || Array.from(a).length === Array.from(b).length;
+}
+
+/** True when `closing` is the bottom rule of the Panel whose already-trimmed top row is `title`. */
+function closesPanel(title: string, closing: string): boolean {
+  return isPanelRuleLine(closing) && sameFrameWidth(title, closing);
+}
+
+/** True when `closing` is the footer of the streaming box whose already-trimmed header is `header`. */
+function closesStreamBox(header: string, closing: string): boolean {
+  return isStreamBoxFooterLine(closing) && sameFrameWidth(header, closing);
 }
 
 /**
@@ -151,7 +206,7 @@ export function findRichFrameSpans(text: string): RichFrameSpan[] {
     if (isPanelTitleLine(trimmed)) {
       let close = -1;
       for (let j = i + 1; j < lines.length; j++) {
-        if (isPanelRuleLine(lines[j].trim())) {
+        if (closesPanel(trimmed, lines[j].trim())) {
           close = j;
           break;
         }
@@ -166,7 +221,7 @@ export function findRichFrameSpans(text: string): RichFrameSpan[] {
     } else if (isStreamBoxHeaderLine(trimmed)) {
       let close = -1;
       for (let j = i + 1; j < lines.length; j++) {
-        if (isStreamBoxFooterLine(lines[j].trim())) {
+        if (closesStreamBox(trimmed, lines[j].trim())) {
           close = j;
           break;
         }
@@ -206,7 +261,12 @@ export function findRichFrameSpans(text: string): RichFrameSpan[] {
  *    close: it is the turn divider (or any other lone rule) and is skipped;
  *  - a footer with no header above it before the next footer is skipped;
  *  - a title or header with no close below it is never returned (same "don't
- *    guess" rule as the forward scan).
+ *    guess" rule as the forward scan);
+ *  - only a line as wide as the closing rule/footer can be the other border of
+ *    its frame (see `sameFrameWidth`): the model's own rounded diagram or lone
+ *    `────` line inside the answer is looked past, so it can neither be taken
+ *    for the frame's border nor stop the search for the real one. The same
+ *    holds for the forward scans below.
  */
 export function findRichFrameSpansFromEnd(text: string): RichFrameSpan[] {
   const lines = text.split("\n");
@@ -220,6 +280,9 @@ export function findRichFrameSpansFromEnd(text: string): RichFrameSpan[] {
       kind = "panel";
       for (let j = i - 1; j >= 0; j--) {
         const above = lines[j].trim();
+        // Only a line as wide as this rule can be its frame's other border; anything narrower or
+        // wider is the model's own text and is looked past.
+        if (!sameFrameWidth(above, trimmed)) continue;
         if (isPanelRuleLine(above)) break; // the next rule up: this one closes nothing
         if (isPanelTitleLine(above)) {
           open = j;
@@ -230,6 +293,7 @@ export function findRichFrameSpansFromEnd(text: string): RichFrameSpan[] {
       kind = "stream";
       for (let j = i - 1; j >= 0; j--) {
         const above = lines[j].trim();
+        if (!sameFrameWidth(above, trimmed)) continue; // the model's own rounded box, not this frame
         if (isStreamBoxFooterLine(above)) break;
         if (isStreamBoxHeaderLine(above)) {
           open = j;
@@ -286,7 +350,7 @@ export function stripRichPanelFrames(text: string): string {
     if (isPanelTitleLine(trimmed)) {
       let close = -1;
       for (let j = i + 1; j < lines.length; j++) {
-        if (isPanelRuleLine(lines[j].trim())) {
+        if (closesPanel(trimmed, lines[j].trim())) {
           close = j;
           break;
         }
@@ -301,7 +365,7 @@ export function stripRichPanelFrames(text: string): string {
     } else if (isStreamBoxHeaderLine(trimmed)) {
       let close = -1;
       for (let j = i + 1; j < lines.length; j++) {
-        if (isStreamBoxFooterLine(lines[j].trim())) {
+        if (closesStreamBox(trimmed, lines[j].trim())) {
           close = j;
           break;
         }

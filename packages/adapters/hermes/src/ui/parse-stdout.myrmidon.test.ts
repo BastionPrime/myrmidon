@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createHermesStdoutParser, parseHermesStdoutLine } from "./parse-stdout.js";
+import { parseHermesStdoutLine } from "./parse-stdout.js";
 
 const TS = "2026-09-28T12:00:00.000Z";
 
@@ -121,9 +121,13 @@ describe("parseHermesStdoutLine — G5: streaming box (display.streaming: true, 
   });
 });
 
-describe("parseHermesStdoutLine — G5: vendor CLI's whole-prompt 'Query:' echo", () => {
-  it("drops the Query: line instead of emitting it as assistant garbage", () => {
-    expect(parseHermesStdoutLine("Query: Fix the missing null check in the session lookup.", TS)).toEqual([]);
+describe("parseHermesStdoutLine — G5: a line starting with 'Query:' is ordinary output", () => {
+  // The server cuts the vendor CLI's whole-prompt echo out of the run log by the exact prompt it
+  // sent, so the parser never sees an echo. A "Query:" line is the model's own text.
+  it("shows a Query: line as assistant text", () => {
+    expect(parseHermesStdoutLine("Query: SELECT id FROM orders WHERE status = 'open'", TS)).toEqual([
+      { kind: "assistant", ts: TS, text: "Query: SELECT id FROM orders WHERE status = 'open'" },
+    ]);
   });
 
   it("does not drop unrelated assistant text that merely mentions a query", () => {
@@ -132,61 +136,21 @@ describe("parseHermesStdoutLine — G5: vendor CLI's whole-prompt 'Query:' echo"
     ]);
   });
 
-  it("stateless fallback: still surfaces a wrapped continuation line as garbage assistant text (documented gap; use createHermesStdoutParser for a real live transcript)", () => {
-    expect(parseHermesStdoutLine("(the rest of the full prompt, wrapped with no per-line marker)", TS)).toEqual([
-      { kind: "assistant", ts: TS, text: "(the rest of the full prompt, wrapped with no per-line marker)" },
-    ]);
-  });
-});
-
-describe("createHermesStdoutParser — G5: suppresses the WHOLE wrapped 'Query:' echo, not just its first line", () => {
-  it("drops every wrapped continuation line until a tool-progress line arrives", () => {
-    const parser = createHermesStdoutParser();
-    expect(parser.parseLine("Query: You are \"agent-a\", an AI agent employee in a Paperclip-managed company.", TS)).toEqual([]);
-    expect(parser.parseLine("Continuing the wrapped instructions with no marker of their own.", TS)).toEqual([]);
-    expect(parser.parseLine("And a second wrapped continuation line.", TS)).toEqual([]);
-
-    // The first line Hermes prints that unambiguously starts real turn
-    // output ends the suppression AND is itself parsed normally.
-    const toolResult = parser.parseLine("[done] ┊ 💻 $         curl -s https://example.com  0.2s (0.2s)", TS);
-    expect(toolResult).toHaveLength(2);
-    expect(toolResult[0]).toMatchObject({ kind: "tool_call", name: "shell" });
-
-    // Suppression is over: ordinary assistant text after the boundary is not dropped.
-    expect(parser.parseLine("All fixed. See the PR.", TS)).toEqual([
-      { kind: "assistant", ts: TS, text: "All fixed. See the PR." },
-    ]);
-  });
-
-  it("ends suppression at the answer's streaming-box header just as well as at a tool line", () => {
-    const parser = createHermesStdoutParser();
-    parser.parseLine("Query: entire prompt echoed here", TS);
-    parser.parseLine("more wrapped prompt text, still no marker", TS);
-    expect(
-      parser.parseLine("╭─⚕ Hermes──────────────────────────────────────────────────────────────╮", TS),
-    ).toEqual([]); // the header itself is still chrome, dropped by the panel-frame check
-    expect(parser.parseLine("Done, verified with a targeted run.", TS)).toEqual([
-      { kind: "assistant", ts: TS, text: "Done, verified with a targeted run." },
-    ]);
-  });
-
-  it("does not suppress anything when the run never echoes a prompt (quiet mode / already covered format)", () => {
-    const parser = createHermesStdoutParser();
-    expect(parser.parseLine("┊ 💬 Here is the query result you asked for.", TS)).toEqual([
-      { kind: "assistant", ts: TS, text: "Here is the query result you asked for." },
-    ]);
-  });
-
-  it("reset() clears mid-echo suppression state, e.g. between separate runs sharing a parser instance", () => {
-    const parser = createHermesStdoutParser();
-    parser.parseLine("Query: entire prompt echoed here", TS);
-    expect(parser.parseLine("still inside the echo", TS)).toEqual([]);
-
-    parser.reset();
-
-    // Without the reset, this would still be swallowed as "inside the echo".
-    expect(parser.parseLine("Not part of any echo.", TS)).toEqual([
-      { kind: "assistant", ts: TS, text: "Not part of any echo." },
+  it("quiet (-Q) output with a Query: line in the middle of the answer: every following line stays visible", () => {
+    // A quiet run prints the bare answer and no boundary line, so nothing could end a suppression.
+    const lines = [
+      "The failing report runs this search:",
+      "Query: SELECT id FROM orders WHERE status = 'open'",
+      "It returns 3 rows.",
+      "Nothing else needs changing.",
+      "[hermes] Exit code: 0",
+    ];
+    expect(lines.flatMap((line) => parseHermesStdoutLine(line, TS))).toEqual([
+      { kind: "assistant", ts: TS, text: "The failing report runs this search:" },
+      { kind: "assistant", ts: TS, text: "Query: SELECT id FROM orders WHERE status = 'open'" },
+      { kind: "assistant", ts: TS, text: "It returns 3 rows." },
+      { kind: "assistant", ts: TS, text: "Nothing else needs changing." },
+      { kind: "system", ts: TS, text: "[hermes] Exit code: 0" },
     ]);
   });
 });

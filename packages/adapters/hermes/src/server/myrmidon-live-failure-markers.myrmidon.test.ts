@@ -58,8 +58,12 @@ function answerPanel(body: string, width = 80): string {
   return ["", top, blank, ...rows, blank, ` ${"─".repeat(inner)} `, ""].join("\r\n");
 }
 
-function streamBox(body: string): string {
-  return ["", "╭─ ⚕ Hermes ────────────────────────────────╮", ...wrap(body, 70), "╰──────────────────────────────────────────╯", ""].join("\n");
+function streamBox(body: string, width = 80): string {
+  // Header and footer are the same width, as the vendor CLI prints them.
+  const label = "⚕ Hermes ";
+  const header = `╭─ ${label}${"─".repeat(Math.max(width - 2 - (label.length + 1) - 1, 0))}╮`;
+  const footer = `╰${"─".repeat(width - 2)}╯`;
+  return ["", header, ...wrap(body, 70), footer, ""].join("\n");
 }
 
 describe("VENDOR_FAILURE_MARKERS table", () => {

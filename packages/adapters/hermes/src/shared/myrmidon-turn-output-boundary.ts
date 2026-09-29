@@ -7,17 +7,15 @@
  * before the turn starts, and Rich word-wraps that at the console width with
  * no per-line marker of its own.
  *
- * myrmidon(G5): the server side no longer guesses where that echo ends: it
- * knows the prompt it sent and cuts the echo exactly by it
+ * myrmidon(G5): the server side does not guess where that echo ends: it knows
+ * the prompt it sent and cuts the echo exactly by it
  * (`../server/myrmidon-query-echo.ts`), which is the only sound way — an echo
- * can hold anything, including whole pasted hermes runs. This line-shape check
- * is what remains for the two places that cannot do that:
+ * can hold anything, including whole pasted hermes runs. The UI's live
+ * transcript parser does not try to recognize the echo at all: the run log it
+ * reads has none, and a "Query:" line there is the model's own text. This
+ * line-shape check is what remains for the one place that cannot cut by the
+ * prompt:
  *
- *  - the UI's line-at-a-time live transcript parser
- *    (`../ui/parse-stdout.ts`'s `createHermesStdoutParser`), which sees only
- *    log lines and never the prompt; for a run recorded by the current
- *    adapter the echo is already gone from the log, so this only matters for
- *    a log that still contains one;
  *  - the run-log sanitizer's FALLBACK (`createLiveLogSanitizer`), used only
  *    after the text following `Query:` turned out not to be the prompt that
  *    was sent (the alignment is lost): it then keeps dropping lines until one
@@ -35,8 +33,8 @@
  * markdown) can legitimately contain verbatim — this repo's own doc
  * comments and test fixtures are proof — so treating either as sufficient
  * on its own would end suppression early on a look-alike line inside the
- * STILL-ECHOING prompt. Neither remaining consumer can look ahead: both
- * process one line at a time as it arrives.
+ * STILL-ECHOING prompt. Its one consumer cannot look ahead: it processes one
+ * line at a time as it arrives.
  */
 
 import { TOOL_OUTPUT_PREFIX } from "./constants.js";

@@ -32,11 +32,6 @@ import {
   isStreamBoxFooterLine,
   isStreamBoxHeaderLine,
 } from "../shared/myrmidon-panel-frame.js";
-// myrmidon(G5): the UI never knows the prompt, so it recognizes the end of the
-// vendor CLI's wrapped "Query:" echo by line shape; the server cuts the echo
-// exactly by the prompt it sent, so the run log this parser reads has no echo
-// left unless a log predates that
-import { isTurnOutputBoundaryLine } from "../shared/myrmidon-turn-output-boundary.js";
 
 // ── Kaomoji / noise stripping ──────────────────────────────────────────────
 
@@ -338,20 +333,14 @@ export function parseHermesStdoutLine(
   }
 
   // ── Vendor CLI's whole-prompt echo (non-quiet single-query mode) ────────
-  // myrmidon(G5): `_run_single_query_mode` (cli.py) prints "Query: <prompt>"
-  // before the turn starts, where <prompt> is the ENTIRE stdin payload
-  // Paperclip sent. This drops the line carrying the "Query:" label. A long
-  // prompt that Rich word-wraps across further lines has no marker of its
-  // own to recognize per-line — this stateless function only ever sees one
-  // line at a time and cannot suppress those continuation lines; they still
-  // surface as stray "assistant" lines here. `createHermesStdoutParser`
-  // below fixes that for real live transcripts by carrying a small amount
-  // of state across calls (see its own doc comment); this function stays as
-  // a stateless fallback for callers that only have one line at a time with
-  // no way to keep state between calls.
-  if (trimmed.startsWith("Query:")) {
-    return [];
-  }
+  // myrmidon(G5): deliberately NOT handled here. `_run_single_query_mode`
+  // (cli.py) prints "Query: <prompt>" before the turn, but the server cuts
+  // that echo out of the run log itself, by the exact prompt it sent
+  // (`../server/myrmidon-query-echo.ts`), so this parser never sees it. A line
+  // that starts with "Query:" is therefore the model's own text (a SQL or
+  // search query in an answer) and is shown like any other line. Suppressing
+  // it, and still more any state that swallows the lines after it, would hide
+  // the rest of a quiet (-Q) run's answer, which has no boundary line to end it.
 
   // ── Thinking blocks ────────────────────────────────────────────────────
   if (isThinkingLine(trimmed)) {
@@ -375,53 +364,4 @@ export function parseHermesStdoutLine(
 
   // ── Regular assistant output ───────────────────────────────────────────
   return [{ kind: "assistant", ts, text: trimmed }];
-}
-
-/**
- * myrmidon(G5): stateful wrapper around `parseHermesStdoutLine` that also
- * suppresses the WRAPPED CONTINUATION LINES of the vendor CLI's whole-prompt
- * `Query: <prompt>` echo, not just the line carrying the `Query:` label
- * itself.
- *
- * `_query_label` is the entire stdin payload Paperclip sent (agent
- * instructions + wake context + task markdown), and Rich's `Console.print`
- * word-wraps it at the console width with no per-line marker of its own —
- * so on every hermes_local run in live-progress mode (the default), the
- * stateless `parseHermesStdoutLine` used to drop only the first line and
- * then hand every wrapped continuation line to the "regular assistant
- * output" branch, surfacing dozens of spurious `assistant` entries at the
- * top of every live transcript before any real tool call or answer. This
- * carries a "still inside the echo" flag across calls: once a `Query:` line
- * is seen, further lines stay suppressed until `isTurnOutputBoundaryLine`
- * recognizes one that can't be part of the echo (a tool-progress line, the
- * answer's Panel/streaming-box frame, or the exit summary). This is a
- * heuristic (`../shared/myrmidon-turn-output-boundary.ts`): the server side
- * does not use it for the stored result — it cuts the echo exactly by the
- * known prompt (`../server/myrmidon-query-echo.ts`) and keeps the echo out of
- * the run log this parser reads, so this matters only for a log that still
- * holds an echo.
- *
- * Matches the `createStdoutParser` contract other adapters in this monorepo
- * already use for cross-line state (see e.g. `grok-local`'s
- * `createGrokStdoutParser`): `resolveStdoutParser` (ui/src/adapters/
- * transcript.ts) prefers this over the stateless `parseStdoutLine` whenever
- * an adapter provides it.
- */
-export function createHermesStdoutParser() {
-  let suppressingQueryEcho = false;
-  return {
-    parseLine(line: string, ts: string): TranscriptEntry[] {
-      const trimmed = stripAnsi(line).trim();
-      if (suppressingQueryEcho) {
-        if (!isTurnOutputBoundaryLine(trimmed)) return [];
-        suppressingQueryEcho = false; // boundary reached: fall through, parse this line normally
-      } else if (trimmed.startsWith("Query:")) {
-        suppressingQueryEcho = true; // parseHermesStdoutLine below drops this line itself
-      }
-      return parseHermesStdoutLine(line, ts);
-    },
-    reset() {
-      suppressingQueryEcho = false;
-    },
-  };
 }

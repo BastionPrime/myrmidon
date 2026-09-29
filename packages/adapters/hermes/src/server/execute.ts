@@ -73,12 +73,7 @@ import { materializeHermesRunModels } from "./myrmidon-profile-config.js";
 // and failure detection for a run without -Q, and a per-run sanitizer
 // (buffered redaction + Query-echo suppression) for the raw chunks forwarded
 // to Paperclip's persisted run log
-import {
-  analyzeLiveRun,
-  createLiveLogSanitizer,
-  resolveHermesQuietMode,
-  stripRichPanelFrames,
-} from "./myrmidon-live-progress.js";
+import { analyzeLiveRun, createLiveLogSanitizer, resolveHermesQuietMode } from "./myrmidon-live-progress.js";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -271,9 +266,11 @@ interface ParsedOutput {
 
 /** Strip noise lines from a Hermes response (tool output, system messages, etc.) */
 function cleanResponse(raw: string): string {
-  // myrmidon(G5): drop the Rich Panel border/title that live progress mode
-  // (no -Q) wraps the final answer in; see myrmidon-live-progress.ts.
-  return stripRichPanelFrames(raw)
+  // myrmidon(G5): no frame stripping here. In live progress mode (no -Q) the
+  // answer arrives as the BODY of its frame (analyzeLiveRun), borders already
+  // gone, and in quiet mode there is no frame at all. Stripping again would eat
+  // the borders of a rounded diagram or the rule line the model drew itself.
+  return raw
     .split("\n")
     .filter((line) => {
       const t = line.trim();
@@ -802,8 +799,10 @@ export async function execute(
   // ("Session not found: <id>", "Cannot resume session: ..."). The stored id
   // is dead, and every later run would fail the same way until someone cleared
   // it by hand, so ask the server to drop it (as claude-local does for a
-  // poisoned session). Only when we actually passed --resume.
-  if (parsed.staleSession && persistSession && prevSessionId) {
+  // poisoned session). Only when we actually passed --resume, and only when the
+  // run stopped cleanly: a run that timed out or was killed proves nothing about
+  // the session, whatever text it happened to print.
+  if (parsed.staleSession && persistSession && prevSessionId && !result.timedOut && result.exitCode === 0) {
     executionResult.clearSession = true;
   }
 
