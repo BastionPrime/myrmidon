@@ -4017,16 +4017,18 @@ export function recoveryService(
               ) {
                 // myrmidon(L4): review findings #1 and #2 — checked against
                 // the freshly row-locked `current`, not the caller's
-                // possibly-stale `input.issue`, so a workflow installed in
-                // the narrow window since this function's own read is still
+                // possibly-stale `input.issue`, so a policy installed in the
+                // narrow window since this function's own read is still
                 // caught. A brand-new single-stage policy must never
-                // overwrite an execution workflow that is already in effect:
-                // an owner-configured review/approval policy (whose stages
-                // may not have started yet), or — on a repeat stranding of
-                // an issue this same policy already handed off once — our
-                // own earlier manager-review policy and its round counter.
-                // Stand down to the vendor's own board escalation instead of
-                // building the patch.
+                // overwrite an execution policy that is already in effect,
+                // of any kind: an owner-configured review/approval stage
+                // (which may not have started yet), a policy with no stages
+                // that still carries the trust boundary / review preset /
+                // monitor, or — on a repeat stranding of an issue this same
+                // policy already handed off once — our own earlier
+                // manager-review policy and its round counter. Stand down to
+                // the vendor's own board escalation instead of building the
+                // patch.
                 if (issueHasExistingExecutionWorkflow(current)) {
                   return { outcome: "blocked" as const };
                 }

@@ -33,6 +33,7 @@ import {
   normalizeIssueExecutionPolicy,
 } from "../services/issue-execution-policy.js";
 import { issueRecoveryActionService } from "../services/issue-recovery-actions.js";
+import { issueService } from "../services/issues.js";
 import { recoveryService } from "../services/recovery/service.js";
 // myrmidon(L4): DB-backed coverage for the auto-policy's counters and its
 // two live-write branches; see ../myrmidon/stranded-autopolicy.myrmidon.test.ts
@@ -736,6 +737,36 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       });
     }
 
+    // myrmidon(L4): the manager's decision on a handed-off issue, applied the
+    // way the PATCH route applies any execution-stage decision
+    // (`server/src/routes/issues.ts`): run the vendor's own transition as the
+    // manager agent over the persisted row, merge the requested status with
+    // the transition's patch, and persist through the issue service. The
+    // route's access and wake plumbing is deliberately not part of this — the
+    // outcome of the decision on the persisted issue is.
+    async function decideAsManager(input: {
+      issueId: string;
+      managerId: string;
+      status: "done" | "in_progress";
+      comment: string;
+    }) {
+      const [row] = await db.select().from(issues).where(eq(issues.id, input.issueId));
+      const policy = normalizeIssueExecutionPolicy(row!.executionPolicy);
+      const transition = applyIssueExecutionPolicyTransition({
+        issue: row!,
+        policy,
+        previousPolicy: policy,
+        requestedStatus: input.status,
+        requestedAssigneePatch: {},
+        actor: { agentId: input.managerId, userId: null },
+        commentBody: input.comment,
+      });
+      return issueService(db).update(input.issueId, {
+        status: input.status,
+        ...transition.patch,
+      } as Partial<typeof issues.$inferInsert>);
+    }
+
     // myrmidon(L4): a minimal stand-in for heartbeat.ts's real `enqueueWakeup`
     // that actually persists a `heartbeat_runs` row and (when the caller
     // passed one) an `agent_wakeup_requests` row tagged with the same
@@ -900,6 +931,77 @@ describeEmbeddedPostgres("issue recovery actions", () => {
           ),
         );
       expect(activity).toHaveLength(1);
+    });
+
+    // Senior review, round 2: the outcome of the manager's decision was not
+    // pinned anywhere. Approving the only stage closes the issue as done (the
+    // manager stays the assignee — no stage to return into); only requesting
+    // changes sends it back to the original assignee.
+    it("the manager approving the handed-off issue closes it as done and stays its assignee", async () => {
+      const { companyId, managerId, coderId, sourceIssue } = await seedCompany();
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const recovery = recoveryService(db, { enqueueWakeup: vi.fn(async () => null) });
+      const handedOff = await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+      expect(handedOff?.status).toBe("in_review");
+      expect(handedOff?.assigneeAgentId).toBe(managerId);
+
+      await decideAsManager({
+        issueId: sourceIssue.id,
+        managerId,
+        status: "done",
+        comment: "Checked the result; the work is complete.",
+      });
+
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("done");
+      expect(persisted?.assigneeAgentId).toBe(managerId);
+      const state = persisted?.executionState as {
+        status?: string;
+        lastDecisionOutcome?: string;
+        currentParticipant?: unknown;
+      } | null;
+      expect(state?.status).toBe("completed");
+      expect(state?.lastDecisionOutcome).toBe("approved");
+      expect(state?.currentParticipant).toBeNull();
+    });
+
+    it("the manager requesting changes sends the handed-off issue back to the original assignee and counts one round", async () => {
+      const { companyId, managerId, coderId, sourceIssue } = await seedCompany();
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const recovery = recoveryService(db, { enqueueWakeup: vi.fn(async () => null) });
+      const handedOff = await recovery.escalateStrandedAssignedIssue({
+        issue: sourceIssue,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+      expect(handedOff?.assigneeAgentId).toBe(managerId);
+
+      await decideAsManager({
+        issueId: sourceIssue.id,
+        managerId,
+        status: "in_progress",
+        comment: "Not finished: the edge case still has no test.",
+      });
+
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("in_progress");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      const state = persisted?.executionState as {
+        status?: string;
+        lastDecisionOutcome?: string;
+        changesRequestedCount?: number;
+      } | null;
+      expect(state?.status).toBe("changes_requested");
+      expect(state?.lastDecisionOutcome).toBe("changes_requested");
+      expect(state?.changesRequestedCount).toBe(1);
     });
 
     it("falls back to the vendor's own board escalation once the cap is exhausted with no manager", async () => {
@@ -1213,6 +1315,66 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       expect(activity).toHaveLength(0);
     });
 
+    it("does not replace a stage-less execution policy that carries the trust boundary when handing off to the manager", async () => {
+      // Senior review, round 2: a policy is not only its stages. This one has
+      // none, yet it holds the task's trust preset and boundary and its
+      // assignment policy; the handoff builds a brand-new single-stage policy,
+      // so on this issue it would drop all of that and the manager (and, after
+      // a changes request, the original assignee) would run under the standard
+      // preset.
+      const { companyId, coderId, sourceIssue } = await seedCompany();
+      const trustPolicy = {
+        mode: "normal",
+        commentRequired: true,
+        stages: [],
+        authorizationPolicy: {
+          trustPreset: "low_trust_review",
+          trustBoundary: {
+            mode: "low_trust_review",
+            allowedAgentIds: [coderId],
+            allowedToolClasses: ["git.read", "tests.local"],
+          },
+          assignmentPolicy: { mode: "protected" },
+        },
+      };
+      await db
+        .update(issues)
+        .set({ executionPolicy: trustPolicy })
+        .where(eq(issues.id, sourceIssue.id));
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      await seedStrandedAutoPolicyRetryRun({ companyId, agentId: coderId, issueId: sourceIssue.id, createdAt: new Date() });
+      const enqueueWakeup = vi.fn(async () => null);
+      const recovery = recoveryService(db, { enqueueWakeup });
+
+      const [issueWithPolicy] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      const updated = await recovery.escalateStrandedAssignedIssue({
+        issue: issueWithPolicy!,
+        previousStatus: "in_progress",
+        latestRun: await succeededRun({ companyId, agentId: coderId }),
+        recoveryCause: "stranded_assigned_issue",
+      });
+
+      // Vendor's own board escalation, no handoff: the policy is byte-for-byte
+      // what the owner configured and the issue is still with its assignee.
+      expect(updated?.status).toBe("blocked");
+      const [persisted] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.assigneeAgentId).toBe(coderId);
+      expect(persisted?.executionPolicy).toEqual(trustPolicy);
+      expect(persisted?.executionState).toBeNull();
+      expect(enqueueWakeup).not.toHaveBeenCalled();
+      const activity = await db
+        .select()
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.entityId, sourceIssue.id),
+            eq(activityLog.action, "issue.stranded_autopolicy_reassigned_to_manager"),
+          ),
+        );
+      expect(activity).toHaveLength(0);
+    });
+
     it("does not hand off to the manager a second time after an earlier handoff sent the issue back with changes requested", async () => {
       // Review finding #2: without this guard, every later stranding on the
       // same issue re-triggers a manager handoff (the retry-attempt window
@@ -1236,23 +1398,15 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       expect(firstHandoff?.assigneeAgentId).toBe(managerId);
 
       // The manager requests changes: back to the original assignee,
-      // in_progress, same policy, changesRequestedCount now 1 — exactly what
-      // a real PATCH request-changes decision persists
-      // (`applyIssueExecutionStageTransition`'s changes-requested branch).
-      const [afterHandoff] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
-      const changesRequestedPatch = applyIssueExecutionPolicyTransition({
-        issue: afterHandoff!,
-        policy: normalizeIssueExecutionPolicy(afterHandoff!.executionPolicy),
-        previousPolicy: normalizeIssueExecutionPolicy(afterHandoff!.executionPolicy),
-        requestedStatus: "in_progress",
-        requestedAssigneePatch: {},
-        actor: { agentId: managerId, userId: null },
-        commentBody: "Please add a test for the edge case.",
-      }).patch;
-      await db
-        .update(issues)
-        .set(changesRequestedPatch as Partial<typeof issues.$inferInsert>)
-        .where(eq(issues.id, sourceIssue.id));
+      // in_progress, same policy, changesRequestedCount now 1 — the decision
+      // the manager's PATCH persists (`applyIssueExecutionStageTransition`'s
+      // changes-requested branch), applied through the issue service.
+      await decideAsManager({
+        issueId: sourceIssue.id,
+        managerId,
+        status: "in_progress",
+        comment: "Please add a test for the edge case.",
+      });
       const [backWithCoder] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
       expect(backWithCoder?.status).toBe("in_progress");
       expect(backWithCoder?.assigneeAgentId).toBe(coderId);

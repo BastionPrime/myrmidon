@@ -15,12 +15,13 @@
 //  2. Once that window's retries are used up, hand the issue to the
 //     assignee's direct manager (`agents.reportsTo`) as the `in_review`
 //     reviewer, if that manager exists, belongs to the same company and is
-//     invokable, *and* the issue does not already carry an execution
-//     workflow (see `issueHasExistingExecutionWorkflow` below — this covers
-//     both an owner-configured review/approval policy and a repeat handoff
-//     attempt on an issue this policy already handed off once). A system
-//     comment explains why. Approving the review closes the issue as done;
-//     requesting changes sends it back to the original assignee.
+//     invokable, *and* the issue carries no execution policy of any kind and
+//     no execution state in flight (see `issueHasExistingExecutionWorkflow`
+//     below — a policy with no stages still holds the trust boundary, the
+//     review preset or a monitor, and a non-idle state covers a repeat
+//     handoff attempt on an issue this policy already handed off once). A
+//     system comment explains why. Approving the review closes the issue as
+//     done; requesting changes sends it back to the original assignee.
 //  3. No eligible manager, or an execution workflow is already in effect —
 //     fall back to the vendor's own board escalation unchanged
 //     (`vendor_default`).
@@ -32,7 +33,9 @@
 // nothing of its own while the assignee is paused — no retry wake (which
 // would just throw: paused is not invokable) and no manager handoff — and
 // the vendor's own handling of a non-invokable assignee applies unchanged,
-// as it did before this policy existed (`vendor_default`).
+// as it did before this policy existed (`vendor_default`). That handling
+// still includes the vendor's board card and the `blocked` status: L4 does
+// not suppress them (that belongs to L3, see `DIVERGENCE.md`).
 //
 // The attempt count is derived from persisted heartbeat runs tagged with
 // `STRANDED_AUTO_POLICY_RETRY_SOURCE`, not a separate mutable counter, so
@@ -305,29 +308,35 @@ export function buildStrandedAutoPolicyManagerReviewComment(input: {
 }
 
 /**
- * True when the issue already has an execution workflow in effect: either a
- * configured review/approval policy (an owner set one up before this
- * stranding — its stages may not have started yet, since a policy only
- * *runs* on a transition to `in_review`/`done`, see
- * `applyIssueExecutionStageTransition`'s `shouldStartWorkflow` gate), or a
- * non-idle execution state (already mid-flight, including our own earlier
- * `buildStrandedAutoPolicyManagerReviewPatch` handoff on a repeat stranding).
- * Review findings (round 1), #1 and #2: handing such an issue to the
- * manager as a brand-new single-stage policy
- * (`buildStrandedAutoPolicyManagerReviewPatch`) discards whatever was
- * already there — an owner's required human approval, or (on a repeat
- * handoff) the review-round counter that is supposed to bound agent↔manager
- * ping-pong before the vendor's own human escalation. Both fold into the
- * same rule: when this is true, do not build a fresh handoff patch — stand
- * down to the vendor's own board escalation instead.
+ * True when the issue already carries an execution policy of any kind, or an
+ * execution state that is not idle. Either way the manager handoff must stand
+ * down to the vendor's own board escalation.
+ *
+ * An execution policy is more than its review stages. `stages` may be empty
+ * while the same policy still holds `authorizationPolicy` (the trust preset,
+ * the low-trust boundary, the assignment policy), `reviewPreset`, `monitor` or
+ * `maxReviewRounds` — the vendor keeps such a policy through
+ * `normalizeIssueExecutionPolicy`, and the trust resolver and the assignment
+ * authorization read those fields. `buildStrandedAutoPolicyManagerReviewPatch`
+ * replaces the whole policy with a brand-new single-stage one, so on any
+ * existing policy it would silently drop the trust boundary (the manager and
+ * later the original assignee would then run under the standard preset) as
+ * well as an owner's required approval stage.
+ *
+ * A non-idle execution state is a workflow already in flight: an earlier
+ * handoff of this very module on a repeat stranding (its review-round counter
+ * is what bounds agent/manager ping-pong before the vendor's own human
+ * escalation), or a review/approval that was already started.
+ *
+ * Nothing is "merged" on purpose: keeping the existing policy and only adding a
+ * manager stage would still change who reviews and how the assignment moves
+ * under a policy the owner set up; standing down is the conservative option.
  */
 export function issueHasExistingExecutionWorkflow(issue: {
   executionPolicy?: unknown;
   executionState?: unknown;
 }): boolean {
-  const policy = issue.executionPolicy;
-  const stages = policy && typeof policy === "object" ? (policy as { stages?: unknown }).stages : undefined;
-  if (Array.isArray(stages) && stages.length > 0) return true;
+  if (issue.executionPolicy != null) return true;
 
   const state = issue.executionState;
   if (state && typeof state === "object") {
@@ -395,8 +404,18 @@ export function isStrandedAutoPolicyManagerHandoffAlreadyApplied(input: {
  * Builds the `in_review` patch that hands the issue to `managerAgentId` as a
  * single-stage reviewer, using the vendor's own execution-policy transition
  * (`applyIssueExecutionPolicyTransition`) so the result is a normal review
- * stage the rest of the product already understands: approving it returns
- * the issue to the original assignee (the transition's `returnAssignee`).
+ * stage the rest of the product already understands.
+ *
+ * What each decision does (vendor semantics, pinned by DB tests): the manager
+ * becomes the issue's assignee while the review is pending; *approving* the
+ * only stage closes the issue as `done` with the manager still the assignee
+ * (there is no further stage to return into); *requesting changes* sends it
+ * back to the original assignee (the transition's `returnAssignee`) as
+ * `in_progress` and counts a review round.
+ *
+ * The caller must not use this on an issue that already has an execution
+ * policy or a non-idle execution state (`issueHasExistingExecutionWorkflow`):
+ * the patch replaces the whole policy.
  */
 export function buildStrandedAutoPolicyManagerReviewPatch(input: {
   issue: {

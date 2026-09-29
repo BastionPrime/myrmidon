@@ -264,13 +264,54 @@ describe("issueHasExistingExecutionWorkflow", () => {
     ).toBe(true);
   });
 
-  it("is false when the policy has no stages (monitor-only or empty)", () => {
+  // Review finding (senior review, round 2): a policy with no stages is still
+  // a policy. It can hold the trust boundary, the review preset, a monitor and
+  // a review-round cap, and the manager handoff replaces the whole policy, so
+  // every one of these must stand down.
+  it("is true for a policy with no stages that carries an authorization policy (trust preset and boundary)", () => {
+    expect(
+      issueHasExistingExecutionWorkflow({
+        executionPolicy: {
+          mode: "normal",
+          commentRequired: true,
+          stages: [],
+          authorizationPolicy: {
+            trustPreset: "low_trust_review",
+            trustBoundary: {
+              mode: "low_trust_review",
+              allowedAgentIds: ["00000000-0000-4000-8000-000000000001"],
+              allowedToolClasses: ["git.read"],
+            },
+            assignmentPolicy: { mode: "protected" },
+          },
+        },
+        executionState: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("is true for a policy with no stages that carries only a review preset, a monitor or a round cap", () => {
+    for (const extra of [
+      { reviewPreset: { id: "low_trust_review", version: 1, rawOutputDisposition: "quarantine" } },
+      { monitor: { nextCheckAt: "2026-01-01T00:00:00.000Z", scheduledBy: "assignee" } },
+      { maxReviewRounds: 2 },
+    ]) {
+      expect(
+        issueHasExistingExecutionWorkflow({
+          executionPolicy: { mode: "normal", commentRequired: true, stages: [], ...extra },
+          executionState: null,
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("is true for any stored policy object, even one with empty stages and nothing else", () => {
     expect(
       issueHasExistingExecutionWorkflow({
         executionPolicy: { mode: "normal", commentRequired: true, stages: [] },
         executionState: null,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("is true for a non-idle execution state (pending, changes_requested or completed)", () => {
