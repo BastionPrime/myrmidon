@@ -1,7 +1,7 @@
-// myrmidon(L2, round 1 fix): end-to-end regressions for the defects senior
-// review found in round 1, run through the real admission
-// (heartbeat.ts's enqueueWakeup), claim (run-dispatch/adapters/postgres.ts)
-// and retry scheduling:
+// myrmidon(L2, rounds 1 to 3 fixes): end-to-end regressions for the defects
+// senior review found, run through the real admission (heartbeat.ts's
+// enqueueWakeup), claim (run-dispatch/adapters/postgres.ts), retry scheduling
+// and the /wakeup route:
 //  - an explicit wake with no message of its own (here: reassignment) used to
 //    adopt a deferred agent comment and then lose it, because admission and
 //    the successor run's own first claim classified "explicit" from
@@ -11,13 +11,21 @@
 //    atomically with the successor;
 //  - a wake requested by anything but a person never bypasses a hold, even
 //    when its reason/source shape is an explicit wake's;
-//  - round 2: a wake admitted only by the bypass is never merged into a run
-//    of the same agent still waiting in the queue (here: a scheduled
-//    retry). That run's claim would meet the hold and cancel it, taking the
-//    merged wake along, so the wake is deferred as it was before the bypass.
-// See supersede-explicit-wake.ts.
+//  - round 3: a wake admitted only by the bypass, for an issue on which the
+//    same agent already has a run waiting in the queue (queued or a scheduled
+//    retry). That run's claim would meet the hold and cancel it, so a wake
+//    merged into it, or parked behind it, was lost with it. The admission now
+//    cancels the waiting run as its claim would (same transaction, under the
+//    issue lock, `execution_reconciliation_required`) and creates the
+//    successor, which supersedes the hold. A wake the bypass does not admit
+//    (a live hold, a wake by a non-person, the opt-out flag) is still
+//    rejected, leaves the waiting run alone, and the /wakeup answer names the
+//    lock.
+// See supersede-explicit-wake.ts and cancel-waiting-run.ts.
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
+import express from "express";
+import request from "supertest";
 import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   agents, agentWakeupRequests, companies, createDb, heartbeatRuns, issueComments, issueRecoveryActions, issues,
@@ -47,6 +55,8 @@ vi.mock("../../adapters/index.ts", async () => {
   };
 });
 
+import { errorHandler } from "../../middleware/index.js";
+import { agentRoutes } from "../../routes/agents.js";
 import { heartbeatService } from "../../services/heartbeat.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -58,7 +68,7 @@ const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : 
 const RUN_WAIT_MS = 60_000;
 const TEST_TIMEOUT_MS = 120_000;
 
-describeEmbeddedPostgres("explicit wake past a settled hold (L2, rounds 1 and 2)", () => {
+describeEmbeddedPostgres("explicit wake past a settled hold (L2, rounds 1 to 3)", () => {
   let db!: ReturnType<typeof createDb>;
   let heartbeat!: ReturnType<typeof heartbeatService>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
@@ -309,54 +319,239 @@ describeEmbeddedPostgres("explicit wake past a settled hold (L2, rounds 1 and 2)
     expect(retry?.status, state).toBe("succeeded");
   }, TEST_TIMEOUT_MS);
 
-  it("defers, instead of merging it into the same agent's scheduled retry, a wake admitted only by the bypass", async () => {
-    // Merged into that retry, the wake would ride on a run whose own claim
-    // meets the hold (nothing superseded it: only the run this admission
-    // creates is covered) and is cancelled as `execution_reconciliation_required`,
-    // taking the wake with it. Deferring is what happened before the bypass.
+  // A run of the same agent already waiting in the queue: not yet claimed, and
+  // (a queued run takes the issue's execution lock only when claimed) not
+  // stamped on the issue. The wake receipt it was created from is the durable
+  // record of what asked for it.
+  async function seedQueuedRun(companyId: string, agentId: string, issueId: string) {
+    const [receipt] = await db.insert(agentWakeupRequests).values({
+      companyId, agentId, source: "automation", triggerDetail: "system", reason: "issue_assigned",
+      status: "queued", payload: { issueId },
+    }).returning();
+    const [run] = await db.insert(heartbeatRuns).values({
+      companyId, agentId, invocationSource: "automation", triggerDetail: "system", status: "queued",
+      wakeupRequestId: receipt!.id,
+      contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_assigned" },
+    }).returning();
+    await db.update(agentWakeupRequests).set({ runId: run!.id }).where(eq(agentWakeupRequests.id, receipt!.id));
+    return { runId: run!.id, receiptId: receipt!.id };
+  }
+
+  async function runOf(runId: string) {
+    const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+    return run!;
+  }
+
+  // Round 3. The same agent already has a run waiting in the queue, and that
+  // run's own claim would meet the settled hold and cancel it. So the wake
+  // retires the waiting run (as its claim would, in the same transaction that
+  // holds the issue lock) and creates a successor that supersedes the hold.
+  it("cancels the same agent's queued run and starts the successor, when the wake is admitted only by the bypass", async () => {
     const { companyId, agentId, issueId, actionId } = await seed();
+    const waiting = await seedQueuedRun(companyId, agentId, issueId);
+
+    const run = await assignmentWake(agentId, issueId);
+
+    const state = await describeState(companyId, issueId);
+    expect(run, state).not.toBeNull();
+    expect(run!.id, state).not.toBe(waiting.runId);
+
+    // The waiting run is cancelled with exactly what its own claim would have
+    // written, and its wake receipt is closed with it.
+    const cancelled = await runOf(waiting.runId);
+    expect(cancelled.status, state).toBe("cancelled");
+    expect(cancelled.errorCode, state).toBe("execution_reconciliation_required");
+    expect(cancelled.error, state).toBe("Automatic recovery stopped.");
+    expect(cancelled.finishedAt, state).not.toBeNull();
+    expect(cancelled.resultJson, state).toMatchObject({
+      stopReason: "execution_reconciliation_required",
+      executionWait: { issueId, recoveryActionId: actionId },
+    });
+    const [receipt] = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, waiting.receiptId));
+    expect(receipt!.status, state).toBe("skipped");
+
+    // The hold is retired for the successor only, in that same transaction.
+    const recovery = (await holdOf(actionId)).evidence.automaticRecovery as Record<string, unknown>;
+    expect(recovery.replay, state).toBe("explicit_wake_superseded");
+    expect(recovery.successorRunId, state).toBe(run!.id);
+
+    // A run that had not been retried carries no retry budget over.
+    expect((run!.contextSnapshot as Record<string, unknown>).infraInterruptAttempt).toBeUndefined();
+
+    // The successor is claimed and executed: it is not cancelled by the hold
+    // that cancelled the run it replaces.
+    const finished = await waitForRunToFinish(run!.id);
+    const after = await describeState(companyId, issueId);
+    expect(finished?.status, after).not.toBe("cancelled");
+    expect(finished?.errorCode, after).not.toBe("execution_reconciliation_required");
+    expect(mockAdapterExecute.mock.calls.length, after).toBeGreaterThan(0);
+    expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId)))
+      .filter((row) => row.errorCode === "execution_reconciliation_required").map((row) => row.id), after)
+      .toEqual([waiting.runId]);
+  }, TEST_TIMEOUT_MS);
+
+  it("cancels the same agent's scheduled retry and starts the successor, keeping the retry budget it had used", async () => {
+    const { companyId, agentId, issueId, actionId } = await seed();
+    const retryRunId = await seedScheduledRetry(companyId, agentId, issueId);
+
+    const run = await assignmentWake(agentId, issueId);
+
+    const state = await describeState(companyId, issueId);
+    expect(run, state).not.toBeNull();
+    expect(run!.id, state).not.toBe(retryRunId);
+    const cancelled = await runOf(retryRunId);
+    expect(cancelled.status, state).toBe("cancelled");
+    expect(cancelled.errorCode, state).toBe("execution_reconciliation_required");
+    expect(cancelled.resultJson, state).toMatchObject({
+      stopReason: "execution_reconciliation_required",
+      executionWait: { issueId, recoveryActionId: actionId },
+    });
+    expect((await holdOf(actionId)).evidence.automaticRecovery, state)
+      .toMatchObject({ replay: "explicit_wake_superseded", successorRunId: run!.id });
+
+    // The retry it replaces had used one attempt (scheduledRetryAttempt 1). The
+    // successor is a new row that starts at zero, so the count travels in its
+    // context: a person's wake does not hand the issue a fresh budget.
+    expect((run!.contextSnapshot as Record<string, unknown>).infraInterruptAttempt, state).toBe(1);
+
+    const finished = await waitForRunToFinish(run!.id);
+    await waitForCompanyIdle(companyId);
+    const after = await describeState(companyId, issueId);
+    expect(finished?.status, after).toBe("succeeded");
+    // Cancelling the retry ends it: nothing schedules another one from it.
+    const rows = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId));
+    expect(rows.filter((row) => row.status === "cancelled").map((row) => row.id), after).toEqual([retryRunId]);
+    expect(rows.filter((row) => row.status === "scheduled_retry"), after).toHaveLength(0);
+  }, TEST_TIMEOUT_MS);
+
+  it("does not cancel the waiting run, nor supersede anything, while another hold on the issue is still open", async () => {
+    // The bypass covers closed holds only. With a live hold next to the settled
+    // one the wake is rejected before the waiting run is looked at, and neither
+    // hold changes.
+    const { companyId, agentId, issueId, actionId } = await seed();
+    const [live] = await db.insert(issueRecoveryActions).values({
+      companyId, sourceIssueId: issueId, kind: "execution_reconciliation",
+      status: "active", cause: "uncertain_provider_action", fingerprint: randomUUID(),
+      evidence: {}, nextAction: "Confirm what the provider did.",
+    }).returning();
     const retryRunId = await seedScheduledRetry(companyId, agentId, issueId);
     try {
       expect(await assignmentWake(agentId, issueId)).toBeNull();
 
       const state = await describeState(companyId, issueId);
-      const receipts = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentId));
-      const waits = receipts.filter((receipt) => receipt.reason === "execution_reconciliation_required");
-      expect(waits, state).toHaveLength(1);
-      expect(waits[0], state).toMatchObject({ runId: null });
-      expect((waits[0]!.payload as Record<string, unknown>).executionWait, state)
-        .toMatchObject({ recoveryActionId: actionId });
-      expect(receipts.filter((receipt) => receipt.status === "coalesced")).toHaveLength(0);
-
-      // No successor was created, the retry is untouched and the hold stands.
-      const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId));
-      expect(runs.map((run) => [run.id, run.status]), state).toEqual([[retryRunId, "scheduled_retry"]]);
-      const hold = await holdOf(actionId);
-      expect(hold.status).toBe("resolved");
-      expect((hold.evidence.automaticRecovery as Record<string, unknown>).replay).toBe("blocked");
+      expect((await runOf(retryRunId)).status, state).toBe("scheduled_retry");
+      expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId))), state)
+        .toHaveLength(1);
+      expect((await holdOf(live!.id)).status, state).toBe("active");
+      const settled = await holdOf(actionId);
+      expect(settled.status, state).toBe("resolved");
+      expect((settled.evidence.automaticRecovery as Record<string, unknown>).replay, state).toBe("blocked");
       expect(mockAdapterExecute).not.toHaveBeenCalled();
     } finally {
       await cancelRun(retryRunId);
     }
   }, TEST_TIMEOUT_MS);
 
-  it("does not defer the same wake for the scheduled retry once the hold is cleared", async () => {
-    // Control for the test above: with no hold in the way, the deferral seen
-    // there is the hold's doing, not the retry's.
+  it("with MYRMIDON_SETTLED_HOLDS_BLOCK_EXPLICIT_WAKES=1 the wake is deferred and the waiting run untouched, as in the vendor", async () => {
     const { companyId, agentId, issueId, actionId } = await seed();
-    await db.update(issueRecoveryActions).set({ evidence: { automaticRecovery: { replay: "cleared" } } })
-      .where(eq(issueRecoveryActions.id, actionId));
+    const retryRunId = await seedScheduledRetry(companyId, agentId, issueId);
+    const saved = process.env.MYRMIDON_SETTLED_HOLDS_BLOCK_EXPLICIT_WAKES;
+    process.env.MYRMIDON_SETTLED_HOLDS_BLOCK_EXPLICIT_WAKES = "1";
+    try {
+      expect(await assignmentWake(agentId, issueId)).toBeNull();
+
+      const state = await describeState(companyId, issueId);
+      expect((await runOf(retryRunId)).status, state).toBe("scheduled_retry");
+      expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId)), state).toHaveLength(1);
+      const hold = await holdOf(actionId);
+      expect(hold.status, state).toBe("resolved");
+      expect((hold.evidence.automaticRecovery as Record<string, unknown>).replay, state).toBe("blocked");
+      expect(mockAdapterExecute).not.toHaveBeenCalled();
+    } finally {
+      if (saved === undefined) delete process.env.MYRMIDON_SETTLED_HOLDS_BLOCK_EXPLICIT_WAKES;
+      else process.env.MYRMIDON_SETTLED_HOLDS_BLOCK_EXPLICIT_WAKES = saved;
+      await cancelRun(retryRunId);
+    }
+  }, TEST_TIMEOUT_MS);
+
+  it("does not touch the same agent's scheduled retry for a wake the bypass does not admit (requested by a system actor)", async () => {
+    const { companyId, agentId, issueId } = await seed();
     const retryRunId = await seedScheduledRetry(companyId, agentId, issueId);
     try {
-      await assignmentWake(agentId, issueId);
-
-      const receipts = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentId));
-      expect(receipts.map((receipt) => receipt.reason), await describeState(companyId, issueId))
-        .not.toContain("execution_reconciliation_required");
+      expect(await assignmentWake(agentId, issueId, { requestedByActorType: "system", requestedByActorId: "system-a" }))
+        .toBeNull();
+      const state = await describeState(companyId, issueId);
+      expect((await runOf(retryRunId)).status, state).toBe("scheduled_retry");
     } finally {
       await cancelRun(retryRunId);
     }
   }, TEST_TIMEOUT_MS);
+
+  // What `POST /agents/:id/wakeup` answers when the wake is rejected. With a
+  // hold still open the wake is refused (nothing is created), and the answer
+  // names the lock instead of the generic "already being executed" / "skipped".
+  describe("POST /agents/:id/wakeup", () => {
+    function wakeupApp(companyId: string) {
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        req.actor = {
+          type: "board", userId: "user-a", companyIds: [companyId],
+          memberships: [{ companyId, membershipRole: "owner", status: "active" }],
+          isInstanceAdmin: true, source: "local_implicit",
+        };
+        next();
+      });
+      app.use("/api", agentRoutes(db));
+      app.use(errorHandler);
+      return app;
+    }
+
+    it("names the hold that still blocks the wake, and changes nothing", async () => {
+      const { companyId, agentId, issueId, actionId } = await seed();
+      await db.update(issueRecoveryActions).set({ status: "active", evidence: {} })
+        .where(eq(issueRecoveryActions.id, actionId));
+      const retryRunId = await seedScheduledRetry(companyId, agentId, issueId);
+      try {
+        const res = await request(wakeupApp(companyId)).post(`/api/agents/${agentId}/wakeup`)
+          .send({ payload: { issueId } });
+
+        const state = await describeState(companyId, issueId);
+        expect(res.status, state).toBe(202);
+        expect(res.body, state).toMatchObject({
+          status: "skipped",
+          reason: "execution_reconciliation_required",
+          message: "Automatic recovery stopped.",
+          issueId,
+        });
+        expect((await runOf(retryRunId)).status, state).toBe("scheduled_retry");
+        expect((await holdOf(actionId)).status, state).toBe("active");
+        expect(mockAdapterExecute).not.toHaveBeenCalled();
+      } finally {
+        await cancelRun(retryRunId);
+      }
+    }, TEST_TIMEOUT_MS);
+
+    it("creates the run when the only hold is a closed one and the waiting run is the agent's own", async () => {
+      // The counterpart: the same request against a settled hold is not a
+      // rejection at all.
+      const { companyId, agentId, issueId, actionId } = await seed();
+      const retryRunId = await seedScheduledRetry(companyId, agentId, issueId);
+
+      const res = await request(wakeupApp(companyId)).post(`/api/agents/${agentId}/wakeup`)
+        .send({ payload: { issueId } });
+
+      const state = await describeState(companyId, issueId);
+      expect(res.status, state).toBe(202);
+      expect(res.body.status, state).not.toBe("skipped");
+      expect(res.body.id, state).toEqual(expect.any(String));
+      expect(res.body.id, state).not.toBe(retryRunId);
+      expect((await runOf(retryRunId)).errorCode, state).toBe("execution_reconciliation_required");
+      expect((await holdOf(actionId)).evidence.automaticRecovery, state)
+        .toMatchObject({ replay: "explicit_wake_superseded", successorRunId: res.body.id });
+      await waitForRunToFinish(res.body.id);
+    }, TEST_TIMEOUT_MS);
+  });
 
   it.each([
     ["system", { requestedByActorType: "system", requestedByActorId: "system-a" }],

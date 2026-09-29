@@ -8,12 +8,6 @@ import { assertAiConnectionCreateAccess, canInstallSharedAiConnectionForNewAgent
 import { isAiConnectionCompatible } from "@paperclipai/shared";
 import { applyConnectorSkills, resolveConnectorAssignments, annotateConnectorSkills, isConnectorSkill } from "../services/connector-runtime.js";
 import { getExecutionBlocker } from "../services/execution-blocker.js";
-// myrmidon(L2): classify a skipped /wakeup the same way enqueueWakeup does,
-// so the skip diagnostic stays consistent with the admission decision it
-// just made. See myrmidon/settled-holds/explicit-wake-gate.ts and
-// docs/myrmidon/DIVERGENCE.md "L2".
-import { bypassesSettledHold } from "../myrmidon/settled-holds/explicit-wake-gate.js";
-import { deriveCommentId } from "../modules/run-dispatch/domain/wake-context.js";
 import { paperclipRunnerTransitionConfig, normalizeLegacyRunnerProvider, isPaperclipRunnerProvider } from "@paperclipai/adapter-utils";
 import { executionProjectionForRun, executionProjectionsForRuns } from "../services/execution-projection.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
@@ -2028,10 +2022,6 @@ export function agentRoutes(
   async function buildSkippedWakeupResponse(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     payload: Record<string, unknown> | null | undefined,
-    // myrmidon(L2): same explicit-wake verdict enqueueWakeup used to admit
-    // (or not) this wake, so a settled no-replay hold it already bypassed
-    // isn't reported here as the reason the wake was skipped.
-    explicitWake: boolean,
   ) {
     const issueId = typeof payload?.issueId === "string" && payload.issueId.trim() ? payload.issueId : null;
     if (!issueId) {
@@ -2055,7 +2045,7 @@ export function agentRoutes(
       .where(and(eq(issuesTable.id, issueId), eq(issuesTable.companyId, agent.companyId)))
       .then((rows) => rows[0] ?? null);
 
-    const blocker = issue ? await getExecutionBlocker(db, agent.companyId, issueId, { explicitWake }) : null;
+    const blocker = issue ? await getExecutionBlocker(db, agent.companyId, issueId) : null;
     if (blocker) return {
       status: "skipped" as const, reason: "execution_reconciliation_required",
       message: blocker.nextAction, issueId,
@@ -5723,9 +5713,7 @@ export function agentRoutes(
   type HeartbeatSource = "timer" | "assignment" | "on_demand" | "automation";
   type WakeupRouteOpts = {
     source: HeartbeatSource | undefined;
-    // myrmidon(L2): `explicitWake` is handleWakeupRoute's own classification
-    // of the wake it just tried to admit — see explicit-wake-gate.ts.
-    skippedResponse: (agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>, payload: Record<string, unknown> | null, explicitWake: boolean) => unknown | Promise<unknown>;
+    skippedResponse: (agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>, payload: Record<string, unknown> | null) => unknown | Promise<unknown>;
   };
   const handleWakeupRoute = async (
     req: Request,
@@ -5865,58 +5853,39 @@ export function agentRoutes(
         ),
       );
     }
-    const wakeTriggerDetail = req.body.triggerDetail ?? "manual";
-    const wakeReason = req.body.reason ?? null;
-    const effectiveWakePayload = req.actor.type === "agent" && wakePayload
-      ? { ...wakePayload, commentId: undefined, wakeCommentId: undefined, wakeCommentIds: undefined }
-      : wakePayload;
-    const wakeContextSnapshot: Record<string, unknown> = {
-      triggeredBy: req.actor.type,
-      originIdentityContextId: req.actor.identityContextId ?? null,
-      responsibleUserId: req.actor.type === "agent" ? req.actor.onBehalfOfUserId ?? null : req.actor.userId ?? null,
-      actorId: req.actor.type === "agent" ? req.actor.agentId : req.actor.userId,
-      forceFreshSession: req.body.forceFreshSession === true,
-      ...(req.body.reason === "rerun_with_provider_trace" &&
-      req.body.debug?.providerTrace === "raw"
-        ? { resumeIntent: true }
-        : {}),
-      ...(req.body.debug?.providerTrace === "raw"
-        ? {
-            debug: { providerTrace: "raw" },
-            providerTraceRequestedBy: req.actor.userId ?? "local-admin",
-          }
-        : {}),
-    };
     const run = await heartbeat.wakeup(id, {
       failedRunId: req.body.failedRunId ?? null,
       ...(req.actor.type === "board" && !req.body.failedRunId ? { manualUserWake: true } : {}),
       source: opts.source,
-      triggerDetail: wakeTriggerDetail,
-      reason: wakeReason,
-      payload: effectiveWakePayload,
+      triggerDetail: req.body.triggerDetail ?? "manual",
+      reason: req.body.reason ?? null,
+      payload: req.actor.type === "agent" && wakePayload
+        ? { ...wakePayload, commentId: undefined, wakeCommentId: undefined, wakeCommentIds: undefined }
+        : wakePayload,
       idempotencyKey: req.body.idempotencyKey ?? null,
       requestedByActorType: req.actor.type === "agent" ? "agent" : "user",
       requestedByActorId: req.actor.type === "agent" ? req.actor.agentId ?? null : req.actor.userId ?? null,
-      contextSnapshot: wakeContextSnapshot,
+      contextSnapshot: {
+        triggeredBy: req.actor.type,
+        originIdentityContextId: req.actor.identityContextId ?? null,
+        responsibleUserId: req.actor.type === "agent" ? req.actor.onBehalfOfUserId ?? null : req.actor.userId ?? null,
+        actorId: req.actor.type === "agent" ? req.actor.agentId : req.actor.userId,
+        forceFreshSession: req.body.forceFreshSession === true,
+        ...(req.body.reason === "rerun_with_provider_trace" &&
+        req.body.debug?.providerTrace === "raw"
+          ? { resumeIntent: true }
+          : {}),
+        ...(req.body.debug?.providerTrace === "raw"
+          ? {
+              debug: { providerTrace: "raw" },
+              providerTraceRequestedBy: req.actor.userId ?? "local-admin",
+            }
+          : {}),
+      },
     });
 
     if (!run) {
-      // myrmidon(L2): mirror enqueueWakeup's own explicit-wake classification
-      // (settled-holds/explicit-wake-gate.ts) so this diagnostic doesn't blame
-      // a settled no-replay hold that admission already bypassed for this
-      // same wake. See docs/myrmidon/DIVERGENCE.md "L2".
-      const explicitWake = bypassesSettledHold({
-        // myrmidon(L2): mirror enqueueWakeup's own `opts.source ?? "on_demand"`
-        // default (heartbeat.ts) so an omitted source classifies the same way.
-        source: opts.source ?? "on_demand",
-        triggerDetail: wakeTriggerDetail,
-        reason: wakeReason,
-        commentId: deriveCommentId(wakeContextSnapshot, effectiveWakePayload),
-        // myrmidon(L2, round 1 fix): mirror the exact `requestedByActorType`
-        // the real `heartbeat.wakeup` call above this one was given.
-        requestedByActorType: req.actor.type === "agent" ? "agent" : "user",
-      });
-      res.status(202).json(await opts.skippedResponse(agent, wakePayload, explicitWake));
+      res.status(202).json(await opts.skippedResponse(agent, wakePayload));
       return;
     }
 
@@ -5956,7 +5925,7 @@ export function agentRoutes(
   router.post("/agents/:id/wakeup", validate(wakeAgentSchema), async (req, res) => {
     await handleWakeupRoute(req, res, {
       source: req.body.source,
-      skippedResponse: (agent, payload, explicitWake) => buildSkippedWakeupResponse(agent, payload, explicitWake),
+      skippedResponse: (agent, payload) => buildSkippedWakeupResponse(agent, payload),
     });
   });
 
