@@ -44,7 +44,6 @@ vi.mock("../../adapters/index.ts", async () => {
 });
 
 import { heartbeatService } from "../../services/heartbeat.js";
-import { createPostgresRunDispatchAdapter } from "../../modules/run-dispatch/adapters/postgres.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -69,7 +68,7 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
   afterEach(async () => {
     for (let attempt = 0; attempt < 600; attempt += 1) {
       const runs = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns);
-      if (!runs.some((run) => run.status === "queued" || run.status === "running")) break;
+      if (!runs.some((run) => ["queued", "running", "scheduled_retry"].includes(run.status))) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     mockAdapterExecute.mockClear();
@@ -159,7 +158,7 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const run = await heartbeat.getRun(runId);
-      if (run && !["queued", "running"].includes(run.status)) return run;
+      if (run && !["queued", "running", "scheduled_retry"].includes(run.status)) return run;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     return heartbeat.getRun(runId);
@@ -174,7 +173,7 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
     while (Date.now() < deadline && idlePolls < 3) {
       const runs = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns)
         .where(eq(heartbeatRuns.companyId, companyId));
-      idlePolls = runs.some((run) => run.status === "queued" || run.status === "running") ? 0 : idlePolls + 1;
+      idlePolls = runs.some((run) => ["queued", "running", "scheduled_retry"].includes(run.status)) ? 0 : idlePolls + 1;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
@@ -262,26 +261,25 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
       resultJson: { executionRecovery: { kind: "bootstrap", providerWorkStarted: false } },
     }).where(eq(heartbeatRuns.id, run!.id));
 
+    const adapterCallsBefore = mockAdapterExecute.mock.calls.length;
     const scheduled = await heartbeat.scheduleBoundedRetry(run!.id, { now, random: () => 0 });
     expect(scheduled.outcome, await describeState(companyId, issueId)).toBe("scheduled");
     if (scheduled.outcome !== "scheduled") return;
-    const promotion = await heartbeat.promoteDueScheduledRetries(scheduled.dueAt);
-    expect(promotion.runIds, await describeState(companyId, issueId)).toContain(scheduled.run.id);
+    // The retry may already have been promoted (and even run) by the time this
+    // call looks, so what it returns is not asserted; it only makes sure a
+    // still-scheduled retry is handed to the dispatcher.
+    await heartbeat.promoteDueScheduledRetries(scheduled.dueAt);
 
     // The retry inherits the successor's context but not its authorization
     // (the record is bound to the successor's id); without the superseded
-    // hold, the old one would cancel it here as
-    // `execution_reconciliation_required`. The promotion has already handed
-    // the run to the dispatcher, which may claim it before this explicit
-    // check does ("lost_race"); either way it must not end up cancelled.
-    const outcome = await createPostgresRunDispatchAdapter(db).cancelStaleQueuedRun({
-      companyId, runId: scheduled.run.id, expectedStatus: "queued", now: scheduled.dueAt,
-    });
-    const state = `${JSON.stringify(outcome)} ${await describeState(companyId, issueId)}`;
-    expect(["not_stale", "lost_race"], state).toContain(outcome.outcome);
+    // hold, the old one would cancel it at claim as
+    // `execution_reconciliation_required`. The dispatcher's own claim decides,
+    // so the outcome is read from the run once it has left queued/running.
     const retry = await waitForRunToFinish(scheduled.run.id);
+    const state = await describeState(companyId, issueId);
     expect(retry?.status, state).not.toBe("cancelled");
     expect(retry?.errorCode, state).not.toBe("execution_reconciliation_required");
+    expect(mockAdapterExecute.mock.calls.length, state).toBeGreaterThan(adapterCallsBefore);
   }, TEST_TIMEOUT_MS);
 
   it.each([
