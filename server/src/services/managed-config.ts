@@ -37,6 +37,8 @@ import {
   instanceExperimentalSettingsSchema,
   type ManagedExperimentalFeatureKey,
 } from "@paperclipai/shared";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 export type ManagedConfigEnv = Record<string, string | undefined>;
 
@@ -262,7 +264,7 @@ export function parseManagedConfigEnv(env: ManagedConfigEnv): ManagedInstanceCon
     // here provisions that row, so a longer list can never be satisfied.
     if (doc.environments.length > 1) {
       fail(
-        `"environments" supports at most one entry: each entry provisions the single Paperclip-managed sandbox environment (DB invariant environments_managed_sandbox_idx)`,
+        `"environments" supports at most one entry: each entry provisions the single ${PN}-managed sandbox environment (DB invariant environments_managed_sandbox_idx)`,
       );
     }
     for (const [index, entry] of doc.environments.entries()) {

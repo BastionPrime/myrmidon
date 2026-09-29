@@ -30,7 +30,7 @@ describe("awsSecretsManagerProvider", () => {
     }
   });
 
-  it("creates Paperclip-managed AWS secrets without persisting plaintext in provider material", async () => {
+  it("creates Myrmidon-managed AWS secrets without persisting plaintext in provider material", async () => {
     const calls: Array<{ op: string; input: Record<string, unknown> }> = [];
     const provider = createAwsSecretsManagerProvider({
       config: {
@@ -363,7 +363,7 @@ describe("awsSecretsManagerProvider", () => {
     expect(prepared.valueSha256).toBeTruthy();
   });
 
-  it("rejects linked external references under the Paperclip-managed namespace", async () => {
+  it("rejects linked external references under the Myrmidon-managed namespace", async () => {
     const provider = createAwsSecretsManagerProvider({
       config: {
         region: "us-east-1",
@@ -383,7 +383,7 @@ describe("awsSecretsManagerProvider", () => {
           "arn:aws:secretsmanager:us-east-1:123456789012:secret:paperclip/prod-use1/company-2/openai-api-key",
         providerVersionRef: "linked-version-7",
       }),
-    ).rejects.toThrow(/Paperclip-managed namespace/i);
+    ).rejects.toThrow(/Myrmidon-managed namespace/i);
   });
 
   it("writes new values through to externally referenced AWS secrets as AWSCURRENT", async () => {
@@ -460,7 +460,7 @@ describe("awsSecretsManagerProvider", () => {
     expect(prepared.material.source).toBe("external_reference");
   });
 
-  it("rejects external value writes under the Paperclip-managed namespace", async () => {
+  it("rejects external value writes under the Myrmidon-managed namespace", async () => {
     const provider = createAwsSecretsManagerProvider({
       config: {
         region: "us-east-1",
@@ -480,7 +480,7 @@ describe("awsSecretsManagerProvider", () => {
           "arn:aws:secretsmanager:us-east-1:123456789012:secret:paperclip/prod-use1/company-2/openai-api-key",
         value: "new-value",
       }),
-    ).rejects.toThrow(/Paperclip-managed namespace/i);
+    ).rejects.toThrow(/Myrmidon-managed namespace/i);
   });
 
   it("restores the previous AWSCURRENT version when an external value write is rolled back", async () => {
@@ -914,7 +914,7 @@ describe("awsSecretsManagerProvider", () => {
     ).rejects.toThrow(/PAPERCLIP_SECRETS_AWS_REGION|AWS_REGION/i);
   });
 
-  it("deletes only Paperclip-managed AWS secrets", async () => {
+  it("deletes only Myrmidon-managed AWS secrets", async () => {
     const calls: Array<{ op: string; input: Record<string, unknown> }> = [];
     const provider = createAwsSecretsManagerProvider({
       config: {
@@ -1009,7 +1009,7 @@ describe("awsSecretsManagerProvider", () => {
     ]);
   });
 
-  it("archives pending Paperclip-managed AWS versions without deleting the secret", async () => {
+  it("archives pending Myrmidon-managed AWS versions without deleting the secret", async () => {
     const calls: Array<{ op: string; input: Record<string, unknown> }> = [];
     const provider = createAwsSecretsManagerProvider({
       config: {

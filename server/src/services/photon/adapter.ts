@@ -30,6 +30,8 @@ import {
   type PhotonAttachmentLocator,
 } from "./attachments.js";
 import { MAX_ATTACHMENT_BYTES } from "../../attachment-types.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../../myrmidon/product.js";
 
 export interface PhotonThread {
   lineId: string;
@@ -376,7 +378,7 @@ export class PhotonChatAdapter implements Adapter<PhotonThread, PhotonMessage> {
     _message: AdapterPostableMessage,
   ): Promise<never> {
     throw new Error(
-      "Photon sends require an immutable Paperclip publication identity",
+      `Photon sends require an immutable ${PN} publication identity`,
     );
   }
   async editMessage(
@@ -385,7 +387,7 @@ export class PhotonChatAdapter implements Adapter<PhotonThread, PhotonMessage> {
     _message: AdapterPostableMessage,
   ): Promise<never> {
     throw new Error(
-      "Photon edits require an immutable Paperclip publication identity",
+      `Photon edits require an immutable ${PN} publication identity`,
     );
   }
   async deleteMessage(): Promise<never> {

@@ -2,6 +2,8 @@ import { z } from "zod";
 import { badRequest, forbidden, unprocessable } from "../../errors.js";
 import { runnerApiOperation, type RunnerApiOperation } from "./runner-api-catalog.js";
 import { runnerApiRestriction } from "./runner-api-policy.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../../myrmidon/product.js";
 
 export const RUNNER_API_MAX_BYTES = 10 * 1024 * 1024;
 export const RUNNER_API_INLINE_BYTES = 24 * 1024;
@@ -90,7 +92,7 @@ export function validateRunnerApiCall(value: unknown, context: RunnerApiContext)
 
 export function runnerApiUrl(operation: RunnerApiOperation, input: RunnerApiCall, context: RunnerApiContext, apiUrl: string): URL {
   const origin = new URL(apiUrl);
-  if (!["http:", "https:"].includes(origin.protocol) || origin.username || origin.password || origin.search || origin.hash) throw new Error("Invalid configured Paperclip API origin");
+  if (!["http:", "https:"].includes(origin.protocol) || origin.username || origin.password || origin.search || origin.hash) throw new Error(`Invalid configured ${PN} API origin`);
   const params = { ...input.pathParams };
   if (operation.path.includes("{companyId}")) params.companyId ??= context.companyId;
   const names = [...operation.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
@@ -141,7 +143,7 @@ export async function readBoundedResponse(response: Response, maxBytes = RUNNER_
 export async function executeRunnerApi(input: RunnerApiCall, context: RunnerApiContext, io: RunnerApiIo) {
   const { operation } = validateRunnerApiCall(input, context);
   const url = runnerApiUrl(operation, input, context, io.apiUrl);
-  if (!io.token) throw new Error("Paperclip run authentication is unavailable");
+  if (!io.token) throw new Error(`${PN} run authentication is unavailable`);
   const headers = new Headers({ Authorization: `Bearer ${io.token}`, "X-Paperclip-Run-Id": context.runId });
   let body: BodyInit | undefined;
   const contentType = input.contentType ?? (input.files?.length ? "multipart/form-data" : "application/json");

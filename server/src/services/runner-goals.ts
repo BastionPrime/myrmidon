@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+// myrmidon(B1c): product name in user-facing goal reasons; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 import {
   agents,
   agentSessionGoalActions,
@@ -89,7 +91,7 @@ function capabilityForAgent(agent: AgentBinding): RunnerGoalCapability {
       ? "Unsupported by OpenCode."
       : provider === "acpx"
         ? "This ACP agent does not advertise a structured session goal extension."
-        : "This Paperclip runner provider does not expose a durable session goal lifecycle.";
+        : `This ${PRODUCT_NAME} runner provider does not expose a durable session goal lifecycle.`;
     return {
       availability: "unsupported",
       verified: true,
@@ -110,7 +112,7 @@ function capabilityForAgent(agent: AgentBinding): RunnerGoalCapability {
   const reason = agent.adapterType === "opencode_local"
     ? "Unsupported by OpenCode."
     : directAcp
-      ? "This direct ACP adapter has no live session goal controller. Use Paperclip Runner with a supported provider."
+      ? `This direct ACP adapter has no live session goal controller. Use ${PRODUCT_NAME} Runner with a supported provider.`
     : (agent.adapterType === "claude_local" || agent.adapterType === "codex_local") && sessionMode === "oneshot"
       ? "Session goals require a persistent ACP session."
     : agent.adapterType === "claude_local"

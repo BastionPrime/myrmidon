@@ -8,6 +8,8 @@ import {
   normalizeUploadAttachmentContentType,
 } from "../attachment-types.js";
 import { guardedRemoteHttpFetch } from "./remote-http-fetch.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 const MAX_URL_LENGTH = 2048;
 const DOWNLOAD_TIMEOUT_MS = 20_000;
@@ -714,7 +716,7 @@ export async function prepareGitHubPublicAttachment(
           redirect: "manual",
           credentials: "omit",
           signal,
-          headers: { accept: "*/*", "user-agent": "Paperclip/ChatAttachments" },
+          headers: { accept: "*/*", "user-agent": `${PN}/ChatAttachments` },
         },
         {
           allowPrivateNetwork: false,

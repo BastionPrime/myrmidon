@@ -5,6 +5,8 @@ import type {
 } from "../types.js";
 import { asString, parseObject } from "../utils.js";
 import { guardedHttpAdapterFetch } from "./remote-fetch.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../../myrmidon/product.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
   if (checks.some((check) => check.level === "error")) return "fail";
@@ -87,7 +89,7 @@ export async function testEnvironment(
           code: "http_endpoint_probe_unexpected_status",
           level: "warn",
           message: `Endpoint probe returned HTTP ${response.status}.`,
-          hint: "Verify the endpoint is reachable from the Paperclip server host.",
+          hint: `Verify the endpoint is reachable from the ${PN} server host.`,
         });
       } else {
         checks.push({

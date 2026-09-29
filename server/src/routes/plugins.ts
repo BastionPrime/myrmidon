@@ -21,6 +21,8 @@
 
 import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+// myrmidon(B1c): product name in the bundled-plugin description; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Router } from "express";
@@ -331,7 +333,7 @@ async function discoverBundledPlugins(): Promise<DiscoveredBundledPlugin[]> {
         pluginKey: metadata.pluginKey ?? packageName,
         displayName: metadata.displayName ?? titleCasePluginName(packageName),
         description: metadata.description
-          ?? `Bundled Paperclip plugin from ${path.relative(REPO_ROOT, packageRoot)}.`,
+          ?? `Bundled ${PN} plugin from ${path.relative(REPO_ROOT, packageRoot)}.`,
         localPath: packageRoot,
         tag,
         experimental: isExperimentalBundledPlugin(packageRoot, packageName),

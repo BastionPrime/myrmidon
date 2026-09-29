@@ -16,7 +16,7 @@ describe("agent skill contract", () => {
       originLabel: "User-installed",
       locationLabel: "~/.claude/skills",
       readOnly: true,
-      detail: "Installed outside Paperclip management.",
+      detail: "Installed outside Myrmidon management.",
     })).toMatchObject({
       origin: "user_installed",
       locationLabel: "~/.claude/skills",

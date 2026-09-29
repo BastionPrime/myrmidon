@@ -15,6 +15,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePaperclipHomeDir } from "../home-paths.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,7 +74,7 @@ function ensureDirs(): string {
       name: "paperclip-adapter-plugins",
       version: "0.0.0",
       private: true,
-      description: "Managed directory for Paperclip external adapter plugins. Do not edit manually.",
+      description: `Managed directory for ${PN} external adapter plugins. Do not edit manually.`,
     }, null, 2) + "\n");
   }
   return adapterPluginsDir;

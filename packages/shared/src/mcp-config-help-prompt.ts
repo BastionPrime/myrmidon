@@ -1,3 +1,6 @@
+// myrmidon(B1c): product name in operator-facing help copy; see myrmidon-product.
+import { PRODUCT_NAME } from "./myrmidon-product.js";
+
 /**
  * The static prompt an operator copies and hands to an agent to get a
  * paste-ready MCP config back (PAP-17087, plan section 3A).
@@ -52,5 +55,5 @@ Please:
 export const MCP_CONFIG_HELP_INSTRUCTIONS = [
   "Copy this prompt and send it to an agent or assistant that can look up the server's documentation.",
   "Paste only the JSON block it replies with back into the box on this page.",
-  "Paperclip reads the header names from that JSON and asks you for the values, then stores them as Paperclip secrets — so the config you paste should contain placeholders, not live credentials.",
+  `${PRODUCT_NAME} reads the header names from that JSON and asks you for the values, then stores them as ${PRODUCT_NAME} secrets — so the config you paste should contain placeholders, not live credentials.`,
 ] as const;

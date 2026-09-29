@@ -1,6 +1,8 @@
 import { unprocessable } from "../errors.js";
 import type { PreparedSecretVersion, SecretProviderModule } from "./types.js";
 import { createHash } from "node:crypto";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 function unavailableProvider(
   id: "aws_secrets_manager" | "gcp_secret_manager" | "vault",
@@ -49,10 +51,10 @@ function unavailableProvider(
       return { ok: false, warnings: [`${id} provider is not configured in this deployment`] };
     },
     async createSecret() {
-      throw unprocessable(`${id} provider is not configured for Paperclip-managed values`);
+      throw unprocessable(`${id} provider is not configured for ${PN}-managed values`);
     },
     async createVersion() {
-      throw unprocessable(`${id} provider is not configured for Paperclip-managed values`);
+      throw unprocessable(`${id} provider is not configured for ${PN}-managed values`);
     },
     async linkExternalSecret(input) {
       return prepareExternalReference(input);

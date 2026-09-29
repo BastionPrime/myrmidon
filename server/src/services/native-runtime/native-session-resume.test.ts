@@ -1749,7 +1749,7 @@ describe("rebindNativeSessionCheckpoint", () => {
       );
       expect(result.execution.task.prompt).toContain("Full task instructions");
       expect(result.execution.task.prompt).not.toContain(
-        "Paperclip Resume Delta",
+        "Myrmidon Resume Delta",
       );
       expect(result.execution.task.prompt).not.toContain("Compact context");
     },
@@ -1791,7 +1791,7 @@ describe("rebindNativeSessionCheckpoint", () => {
           task: {
             ...current.task,
             prompt: options.resumedSession
-              ? "Paperclip Resume Delta"
+              ? "Myrmidon Resume Delta"
               : "Full task instructions",
           },
         };
@@ -1841,7 +1841,7 @@ describe("rebindNativeSessionCheckpoint", () => {
             task: {
               ...current.task,
               prompt: options.resumedSession
-                ? "Paperclip Resume Delta"
+                ? "Myrmidon Resume Delta"
                 : "Full context for the same Paperclip task",
             },
           };
@@ -2600,7 +2600,7 @@ describe("buildNativeExecutionInput wake projection", () => {
 
     expect(input.task.prompt.includes("Execution contract:")).toBe(!conversationMode);
     expect(input.task.prompt.includes("Use child issues")).toBe(!conversationMode);
-    expect(input.task.prompt).toContain("## Paperclip Resume Delta");
+    expect(input.task.prompt).toContain("## Myrmidon Resume Delta");
     expect(input.task.prompt).toContain("reason: issue_children_completed");
     expect(input.task.prompt).toContain("DOT-147 Build utility (done)");
     expect(input.task.prompt).toContain(

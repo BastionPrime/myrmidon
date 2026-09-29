@@ -6,6 +6,8 @@ import {
 } from "@paperclipai/shared";
 import { ZodError } from "zod";
 import { resolvePaperclipConfigPath } from "./paths.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "./myrmidon/product.js";
 
 function formatConfigValidationError(error: ZodError): string {
   return error.issues
@@ -26,7 +28,7 @@ export function readConfigFile(): PaperclipConfig | null {
     raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid Paperclip config at ${configPath}: failed to read or parse JSON: ${reason}`);
+    throw new Error(`Invalid ${PN} config at ${configPath}: failed to read or parse JSON: ${reason}`);
   }
 
   try {
@@ -39,7 +41,7 @@ export function readConfigFile(): PaperclipConfig | null {
     return config;
   } catch (error) {
     if (error instanceof ZodError) {
-      throw new Error(`Invalid Paperclip config at ${configPath}: ${formatConfigValidationError(error)}`);
+      throw new Error(`Invalid ${PN} config at ${configPath}: ${formatConfigValidationError(error)}`);
     }
 
     throw error;

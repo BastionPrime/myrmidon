@@ -356,7 +356,7 @@ describe("POST /invites/:token/accept", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe(
-      "Paperclip Runner is not available through agent invite onboarding.",
+      "Myrmidon Runner is not available through agent invite onboarding.",
     );
     expect(insert).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();

@@ -400,7 +400,8 @@ function buildWakeText(
 
   if (conversationTaskMarkdown !== undefined) {
     return [
-      "Paperclip conversation turn for a cloud adapter.",
+      // myrmidon(B1c): wake prompt headers name our product.
+      "Myrmidon conversation turn for a cloud adapter.",
       "Set these values in your run context:",
       ...envLines,
       `Load PAPERCLIP_API_KEY from ${claimedApiKeyPath} (the token saved after claim-api-key).`,
@@ -412,7 +413,8 @@ function buildWakeText(
   }
 
   const lines = [
-    "Paperclip wake event for a cloud adapter.",
+    // myrmidon(B1c): wake prompt headers name our product.
+    "Myrmidon wake event for a cloud adapter.",
     "",
     "Run this procedure now. Do not guess undocumented endpoints and do not ask for additional heartbeat docs.",
     "",

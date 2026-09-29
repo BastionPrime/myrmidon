@@ -21,6 +21,8 @@ import {
 import type { StorageService } from "../storage/types.js";
 import { documentAnnotationService } from "./document-annotations.js";
 import { documentService, issueDocumentSelect, mapIssueDocumentRow } from "./documents.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 export type EnsureArtifactReviewWorkProduct = Pick<
   IssueWorkProduct,
@@ -163,7 +165,7 @@ export function artifactReviewDocumentService(db: Db, storage: StorageService) {
       }
       const metadata = getAttachmentArtifactWorkProductMetadata(workProduct);
       if (!metadata) {
-        throw unprocessable("Work product is not an attachment-backed Paperclip artifact", {
+        throw unprocessable(`Work product is not an attachment-backed ${PN} artifact`, {
           code: "not_attachment_backed_artifact",
           workProductId: workProduct.id,
         });

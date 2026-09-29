@@ -1761,7 +1761,7 @@ describeEmbeddedPostgres("generic remote MCP connections", () => {
 
     expect(thrown).toMatchObject({
       status: 502,
-      message: "The authorization server rejected Paperclip's callback URL.",
+      message: "The authorization server rejected Myrmidon's callback URL.",
       details: {
         code: "oauth_dynamic_client_registration_failed",
         providerError: "invalid_redirect_uri",

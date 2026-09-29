@@ -75,7 +75,7 @@ test("renders standard assignment wake with task authority and no backlog discov
     ].join("\n"),
   }), {});
 
-  expect(prompt).toContain("## Paperclip Wake Payload");
+  expect(prompt).toContain("## Myrmidon Wake Payload");
   expect(prompt).toContain("- reason: issue_assigned");
   expect(prompt).toContain("- issue: PAP-11750 Add Hermes prompt rendering regression tests");
   expect(prompt).toContain("- issue work mode: standard");
@@ -92,7 +92,7 @@ test("renders scoped planning wake authority before the Hermes default workflow"
     paperclipApiUrl: "http://127.0.0.1:3101/api",
   });
 
-  expect(prompt).toContain("## Paperclip Wake Payload");
+  expect(prompt).toContain("## Myrmidon Wake Payload");
   expect(prompt).toContain("- issue: PAP-3404 Plan the Hermes prompt update");
   expect(prompt).toContain("- planning directive: Make the plan only. Do not write code or perform implementation work.");
   expect(prompt).toContain("- checkout: already claimed by the harness for this run");
@@ -123,8 +123,8 @@ test("renders resume deltas instead of full scoped-wake boilerplate when continu
     },
   }), {}, { resumedSession: true });
 
-  expect(prompt).toContain("## Paperclip Resume Delta");
-  expect(prompt).toContain("You are resuming an existing Paperclip session.");
+  expect(prompt).toContain("## Myrmidon Resume Delta");
+  expect(prompt).toContain("You are resuming an existing Myrmidon session.");
   expect(prompt).toContain("Focus on the new wake delta below");
   expect(prompt).toContain("Please add the resume-delta case.");
   expect(prompt).toContain("- fallback fetch needed: no");
@@ -238,11 +238,11 @@ test("preserves custom prompt templates while exposing runtime and wake variable
   expect(prompt).toContain("api=http://paperclip.local/api");
   expect(prompt).toContain("keyEnv=PAPERCLIP_API_KEY");
   expect(prompt).toContain("runEnv=PAPERCLIP_RUN_ID");
-  expect(prompt).toContain("wakePrompt=## Paperclip Wake Payload");
+  expect(prompt).toContain("wakePrompt=## Myrmidon Wake Payload");
   expect(prompt).toContain("task=Paperclip task context:");
   expect(prompt).toContain("wakeJson={\"reason\":\"issue_assigned\"");
   expect(prompt).toContain('"reason":"issue_assigned"');
-  expect(prompt).toContain("## Paperclip Wake Payload");
+  expect(prompt).toContain("## Myrmidon Wake Payload");
   expect(prompt).toContain("Issue description:\n```text\nUse the wake payload as runtime authority.\n```");
   expect(prompt).not.toContain("Paperclip runtime identity:");
 });

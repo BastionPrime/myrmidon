@@ -61,6 +61,8 @@ import {
   workspaceLoginHandoffFailureStatus,
 } from "../services/workspace-login-handoff-issuer.js";
 import { conflict, unprocessable } from "../errors.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 const WORKSPACE_CONTROL_OUTPUT_MAX_CHARS = 256 * 1024;
 
@@ -284,7 +286,7 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
 
     const workspaceCwd = existing.cwd;
     if (!workspaceCwd) {
-      res.status(422).json({ error: "Execution workspace needs a local path before Paperclip can run workspace commands" });
+      res.status(422).json({ error: `Execution workspace needs a local path before ${PN} can run workspace commands` });
       return;
     }
 
@@ -428,7 +430,7 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
             ? [cliDist]
             : null;
         if (!repairCliArgs) {
-          throw new Error("Workspace repair cannot find a runnable Paperclip CLI in the base workspace.");
+          throw new Error(`Workspace repair cannot find a runnable ${PN} CLI in the base workspace.`);
         }
       } catch (error) {
         throw unprocessable(
@@ -577,7 +579,7 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
           }
           const availableWorkspace = await ensureWorkspaceAvailable();
           if (!availableWorkspace) {
-            throw new Error("Execution workspace needs a local path before Paperclip can run workspace commands");
+            throw new Error(`Execution workspace needs a local path before ${PN} can run workspace commands`);
           }
           return await runWorkspaceJobForControl({
             actor: {
@@ -808,7 +810,7 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
             if (repairRestartsRuntimeServices) {
               const availableWorkspace = await ensureWorkspaceAvailable();
               if (!availableWorkspace) {
-                throw new Error("Execution workspace needs a local path before Paperclip can restart it.");
+                throw new Error(`Execution workspace needs a local path before ${PN} can restart it.`);
               }
               startedServices = await startRuntimeServicesForWorkspaceControl({
                 db,
@@ -864,7 +866,7 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
         if (action === "start" || action === "restart") {
           const availableWorkspace = await ensureWorkspaceAvailable();
           if (!availableWorkspace) {
-            throw new Error("Execution workspace needs a local path before Paperclip can manage local runtime services");
+            throw new Error(`Execution workspace needs a local path before ${PN} can manage local runtime services`);
           }
           let startedServices;
           try {

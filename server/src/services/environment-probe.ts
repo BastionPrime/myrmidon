@@ -11,6 +11,8 @@ import { isBuiltinSandboxProvider, probeSandboxProvider } from "./sandbox-provid
 import { probePluginEnvironmentDriver, probePluginSandboxProviderDriver } from "./plugin-environment-driver.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { environmentRuntimeService } from "./environment-runtime.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 export async function probeEnvironment(
   db: Db,
@@ -38,7 +40,7 @@ export async function probeEnvironment(
     return {
       ok: true,
       driver: "local",
-      summary: "Local environment is available on this Paperclip host.",
+      summary: `Local environment is available on this ${PN} host.`,
       details: {
         hostname: os.hostname(),
         cwd: process.cwd(),

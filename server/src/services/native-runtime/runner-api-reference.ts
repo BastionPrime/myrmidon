@@ -512,7 +512,7 @@ export const runnerApiReference: Record<string, { section: string; description?:
       },
       {
         "body": {
-          "name": "Paperclip Mobile App",
+          "name": "Myrmidon Mobile App",
           "description": "Ship iOS + Android client",
           "status": "planned",
           "goalIds": [
@@ -529,7 +529,7 @@ export const runnerApiReference: Record<string, { section: string; description?:
       },
       {
         "body": {
-          "name": "Paperclip Mobile App",
+          "name": "Myrmidon Mobile App",
           "description": "Ship iOS + Android client",
           "status": "planned"
         }
@@ -671,7 +671,7 @@ export const runnerApiReference: Record<string, { section: string; description?:
           "instructionsBundle": {
             "entryFile": "AGENTS.md",
             "files": {
-              "AGENTS.md": "# Marketing Analyst\nResearch markets and competitors. Report findings with sources to your manager. Follow the Paperclip operational skill.\n"
+              "AGENTS.md": "# Marketing Analyst\nResearch markets and competitors. Report findings with sources to your manager. Follow the Myrmidon operational skill.\n"
             }
           },
           "runtimeConfig": {

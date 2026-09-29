@@ -1,4 +1,6 @@
 import type { Request, RequestHandler } from "express";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();
@@ -50,7 +52,7 @@ export function resolvePrivateHostnameAllowSet(opts: { allowedHostnames: string[
 // outer shell. Emit a static `<host>` placeholder and do not echo the raw request
 // value. The operator supplies the real hostname.
 const BLOCKED_HOSTNAME_MESSAGE =
-  "This hostname is not allowed for this Paperclip instance. " +
+  `This hostname is not allowed for this ${PN} instance. ` +
   "If you want to allow a hostname, run npx paperclipai allowed-hostname <host>.";
 
 export function privateHostnameGuard(opts: {

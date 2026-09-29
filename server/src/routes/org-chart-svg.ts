@@ -555,12 +555,18 @@ function treeBounds(ln: LayoutNode): { minX: number; minY: number; maxX: number;
   return { minX, minY, maxX, maxY };
 }
 
-// Paperclip logo: scaled icon (~16px) + wordmark (13px), vertically centered
-const PAPERCLIP_LOGO_SVG = `<g>
-  <g transform="scale(0.72)" transform-origin="0 0">
-    <path stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" d="m18 4-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>
+// myrmidon(B1c): Myrmidon mark (line ant, from the owner's brand-v2 export)
+// + wordmark, replacing the vendor's paperclip glyph in the org-chart
+// watermark. Stroke uses currentColor so the theme watermark color applies.
+const MYRMIDON_LOGO_SVG = `<g>
+  <g transform="translate(1,0) scale(0.032) translate(73.5,233.5)" fill="none" stroke="currentColor" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M346,516 L246,470 L263,392 L227,361 M426,516 L526,470 L509,392 L545,361 M351,564 L254,531 L204,622 L170,622 M421,564 L518,531 L568,622 L602,622 M360,603 L264,634 L208,818 L170,818 M412,603 L508,634 L564,818 L602,818"/>
+    <path d="M287,268 L386,414 L485,268"/>
+    <path d="M386,330 C421,330 445,357 452,391 C457,417 447,435 426,447 L386,472 L346,447 C325,435 315,417 320,391 C327,357 351,330 386,330 Z"/>
+    <path d="M386,466 L421,497 C428,503 431,512 429,521 L417,589 C415,599 409,607 401,613 L386,628 L371,613 C363,607 357,599 355,589 L343,521 C341,512 344,503 351,497 Z"/>
+    <path d="M386,620 L437,654 C455,666 463,688 459,712 C453,749 426,795 405,817 C399,823 393,826 386,826 C379,826 373,823 367,817 C346,795 319,749 313,712 C309,688 317,666 335,654 Z"/>
   </g>
-  <text x="22" y="11.5" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="600" fill="currentColor">Paperclip</text>
+  <text x="26" y="12" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="600" fill="currentColor">Myrmidon</text>
 </g>`;
 
 // ── Public API ───────────────────────────────────────────────────
@@ -750,7 +756,7 @@ export function renderOrgChartSvg(orgTree: OrgNode[], style: OrgChartStyle = "wa
   <rect width="100%" height="100%" fill="${theme.bgColor}" rx="6"/>
   ${theme.bgExtras(TARGET_W, TARGET_H)}
   <g transform="translate(${logoX}, ${logoY})" color="${theme.watermarkColor}">
-    ${PAPERCLIP_LOGO_SVG}
+    ${MYRMIDON_LOGO_SVG}
   </g>
   ${overlayNameSvg}
   ${overlayStatsSvg}

@@ -27,6 +27,8 @@ import {
   stockHash,
   type ManagedResourceStockStatus,
 } from "./managed-resource-drift.js";
+// myrmidon(B1c): product name in built-in agent instructions; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 export type BuiltInAgentStatus = "not_provisioned" | "pending_approval" | "needs_setup" | "ready" | "paused";
 
@@ -152,9 +154,9 @@ const SOURCE_BUILT_INS_DIR = path.resolve(moduleDir, "../../src/built-ins/agents
 const FALLBACK_REFLECTION_COACH_INSTRUCTIONS = [
   "# Reflection Coach",
   "",
-  "You are Paperclip's built-in Reflection Coach.",
+  `You are ${PN}'s built-in Reflection Coach.`,
   "Review recent agent execution records, identify evidence-backed improvement patterns, and propose the smallest durable instruction, skill, or tool-description change.",
-  "Do not apply changes in the same run. Present a reviewable diff and wait for the required Paperclip issue-thread approval before any follow-up applies it.",
+  `Do not apply changes in the same run. Present a reviewable diff and wait for the required ${PN} issue-thread approval before any follow-up applies it.`,
   "",
 ].join("\n");
 
@@ -179,9 +181,9 @@ const FALLBACK_REFLECTION_COACH_SKILL = [
 ].join("\n");
 
 const FALLBACK_SUMMARIZER_INSTRUCTIONS = [
-  "You are Summarizer, a built-in reporting agent at Paperclip.",
+  `You are Summarizer, a built-in reporting agent at ${PN}.`,
   "",
-  "Turn the current state of a Paperclip scope (project, workspaces overview, project workspace, or execution workspace) into a short, honest, human-readable Markdown summary and write it back to that scope's summary slot as a new revision. Use the `summarize-status` skill as your operating procedure.",
+  `Turn the current state of a ${PN} scope (project, workspaces overview, project workspace, or execution workspace) into a short, honest, human-readable Markdown summary and write it back to that scope's summary slot as a new revision. Use the \`summarize-status\` skill as your operating procedure.`,
   "",
   "Read-and-report only: never change issues, workspaces, or code. Cite issue identifiers, never fabricate status, keep every read company-scoped, and run on the low-cost model profile lane by default.",
   "",
@@ -197,13 +199,13 @@ const FALLBACK_SUMMARIZER_ROUTINE = [
 const FALLBACK_SUMMARIZER_SKILL = [
   "---",
   "name: summarize-status",
-  "description: Write a short, colloquial summary for a Paperclip summary slot: open with the 1–3 specific, concrete actions the reader needs to take right now to unblock the work, then a brief plain-language status, streaming progress as it works.",
+  `description: Write a short, colloquial summary for a ${PN} summary slot: open with the 1–3 specific, concrete actions the reader needs to take right now to unblock the work, then a brief plain-language status, streaming progress as it works.`,
   "key: paperclipai/bundled/paperclip-operations/summarize-status",
   "---",
   "",
   "# Summarize status",
   "",
-  "Turn a Paperclip scope's current state into a short, colloquial Markdown summary and write it back to the scope's summary slot. Open with the 1–3 specific, concrete, actionable items the reader should do right now to unblock the work — each saying what to do and why it's the thing holding up progress, with an inline link — then a brief plain-prose status of where things stand, written for a reader who has not memorized issue ids or threads. Read whatever issues you need to understand the state, then focus on what's most important; never a task list or a dump of issue links. If genuinely nothing needs the reader, say so plainly in one line and name the next thing worth watching. Post the first `STATUS:` line immediately from the first task in context, keep streaming `STATUS:` lines while working, and emit the final Markdown between the summary-draft sentinels before the slot write. Read-and-report only; never fabricate status.",
+  `Turn a ${PN} scope's current state into a short, colloquial Markdown summary and write it back to the scope's summary slot. Open with the 1–3 specific, concrete, actionable items the reader should do right now to unblock the work — each saying what to do and why it's the thing holding up progress, with an inline link — then a brief plain-prose status of where things stand, written for a reader who has not memorized issue ids or threads. Read whatever issues you need to understand the state, then focus on what's most important; never a task list or a dump of issue links. If genuinely nothing needs the reader, say so plainly in one line and name the next thing worth watching. Post the first \`STATUS:\` line immediately from the first task in context, keep streaming \`STATUS:\` lines while working, and emit the final Markdown between the summary-draft sentinels before the slot write. Read-and-report only; never fabricate status.`,
   "",
 ].join("\n");
 
@@ -307,7 +309,7 @@ const DEFINITIONS = validateBuiltInAgentDefinitions([
     featureKeys: ["briefs"],
     shortPurpose: "Prepares concise operational briefs for the board and agent company.",
     defaultInstructions:
-      "You are Paperclip's built-in Briefs agent. Produce concise, sourced operational briefs that help the board understand current company work, risks, and next actions.",
+      `You are ${PN}'s built-in Briefs agent. Produce concise, sourced operational briefs that help the board understand current company work, risks, and next actions.`,
     defaultRole: "general",
     allowedAdapterTypes: ["codex_local", "claude_local", "gemini_local", "opencode_local", "process"],
     defaultBudgetMonthlyCents: 0,
@@ -318,7 +320,7 @@ const DEFINITIONS = validateBuiltInAgentDefinitions([
     featureKeys: ["learning"],
     shortPurpose: "Maintains reusable company learning from completed work and recurring patterns.",
     defaultInstructions:
-      "You are Paperclip's built-in Learning agent. Extract durable lessons from completed work, preserve useful patterns, and keep learning artifacts grounded in source context.",
+      `You are ${PN}'s built-in Learning agent. Extract durable lessons from completed work, preserve useful patterns, and keep learning artifacts grounded in source context.`,
     defaultRole: "general",
     allowedAdapterTypes: ["codex_local", "claude_local", "gemini_local", "opencode_local", "process"],
     defaultBudgetMonthlyCents: 0,

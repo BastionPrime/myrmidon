@@ -14,6 +14,8 @@
 import { createHash } from "node:crypto";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+// myrmidon(B1c): product name in the tool-profile descriptions; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 import {
   agents,
   heartbeatRuns,
@@ -220,7 +222,7 @@ export async function resolveAgentAssignedToolSet(input: {
         body: {
           name: `Native ${input.agent.name} ${assignmentDigest.slice(0, 8)}`,
           slug,
-          description: "Run-scoped Paperclip Runner MCP gateway.",
+          description: `Run-scoped ${PN} Runner MCP gateway.`,
           profileId: profile!.id,
           defaultProfileMode: "gateway_only",
           metadata: {
@@ -356,7 +358,7 @@ async function ensureAssignedProfile(
       const created = await access.createProfile(input.agent.companyId, {
         profileKey,
         name: `Native ${input.agent.id.slice(0, 8)} ${assignmentDigest.slice(0, 12)}`,
-        description: "Immutable Paperclip Runner MCP assignment profile.",
+        description: `Immutable ${PN} Runner MCP assignment profile.`,
         status: "active",
         defaultAction: "deny",
         metadata: {

@@ -1,3 +1,6 @@
+// myrmidon(B1c): product name in agent-facing tool copy; see myrmidon-product.
+import { PRODUCT_NAME } from "./myrmidon-product.js";
+
 /**
  * Canonical instructions for the run-scoped connection tools.
  *
@@ -20,7 +23,7 @@ export const CONNECTION_INTENT_AGENT_GUIDANCE = [
 ].join("\n");
 
 export const CONNECTIONS_SEARCH_TOOL_DESCRIPTION = [
-  "Search Paperclip's catalog services and authorized configured custom connections and report this run's agent-relative access state.",
+  `Search ${PRODUCT_NAME}'s catalog services and authorized configured custom connections and report this run's agent-relative access state.`,
   "Use it when work requires a known external service and usable access is uncertain; do not use it for arbitrary MCP URLs or unrelated work.",
   "If the user already asked to connect the service, search and request it through the connection tools instead of asking a generic confirmation question.",
 ].join(" ");

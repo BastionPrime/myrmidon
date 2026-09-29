@@ -30,6 +30,8 @@ import type {
 } from "@paperclipai/shared";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { instanceSettingsService } from "./instance-settings.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 export const SMOKE_LAB_DEMO_EMAIL = "smoke@paperclip.test";
 export const SMOKE_LAB_DEMO_PASSWORD = "smoke-password";
@@ -1098,14 +1100,14 @@ export function smokeLabService(db: Db, options: {
         companyId,
         applicationKey: HTTP_APP_KEY,
         name: "Smoke Lab HTTP MCP fixture",
-        description: "Deterministic loopback HTTP MCP fixture for Paperclip smoke scenarios.",
+        description: `Deterministic loopback HTTP MCP fixture for ${PN} smoke scenarios.`,
         type: "mcp_http",
       });
       const stdioApp = await ensureApplication({
         companyId,
         applicationKey: STDIO_APP_KEY,
         name: "Smoke Lab stdio MCP fixture",
-        description: "Deterministic stdio MCP fixture for Paperclip smoke scenarios.",
+        description: `Deterministic stdio MCP fixture for ${PN} smoke scenarios.`,
         type: "mcp_stdio",
       });
       const httpConnection = await ensureConnection({

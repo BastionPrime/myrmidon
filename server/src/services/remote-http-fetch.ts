@@ -13,6 +13,8 @@ import {
   type RemoteHttpEndpointErrorFactory,
   type RemoteHttpEndpointGuardOptions,
 } from "./remote-http-endpoint-guard.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 /** Statuses whose HTTP semantics forbid a response body. */
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
@@ -286,7 +288,7 @@ async function sendRequest(input: {
   // OAuth service sees the request (Coda returns 403 instead of its 401 OAuth
   // challenge), so give every guarded request a stable, non-identifying client
   // token while preserving an explicit caller value.
-  if (!headers.has("user-agent")) headers.set("user-agent", "Paperclip/1.0");
+  if (!headers.has("user-agent")) headers.set("user-agent", `${PN}/1.0`);
   if (body !== undefined && !headers.has("content-length") && !headers.has("transfer-encoding")) {
     headers.set("content-length", String(body.byteLength));
   }

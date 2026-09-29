@@ -16,6 +16,8 @@
 // is replaced by a call to it.
 
 import { createHash } from "node:crypto";
+// myrmidon(B1c): product name in the gateway tool description; see product.ts.
+import { PRODUCT_NAME } from "../product.js";
 
 import { agents, toolMcpGateways, toolMcpGatewayTokens, toolProfiles, type Db } from "@paperclipai/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
@@ -148,7 +150,7 @@ export async function resolveBotToolAssignment(
       const created = await access.createProfile(agent.companyId, {
         profileKey,
         name: `Native ${agent.id.slice(0, 8)} ${assignmentDigest.slice(0, 12)}`,
-        description: "Immutable Paperclip Runner MCP assignment profile.",
+        description: `${PRODUCT_NAME} Runner MCP assignment profile.`,
         status: "active",
         defaultAction: "deny",
         metadata: {

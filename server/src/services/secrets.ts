@@ -61,6 +61,8 @@ import type {
   SecretProviderVaultRuntimeConfig,
   SecretProviderWriteContext,
 } from "../secrets/types.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 import { isSecretProviderClientError } from "../secrets/types.js";
 import { authorizationDeniedDetails, authorizationService } from "./authorization.js";
 import { findActiveServerAdapter } from "../adapters/index.js";
@@ -407,7 +409,7 @@ async function throwProviderWriteOrReservedRowRollbackError(input: {
       },
       "remote secret provider write failed and reserved secret rollback failed",
     );
-    throw new HttpError(500, "Secret create failed and Paperclip could not roll back the local secret reservation.", {
+    throw new HttpError(500, `Secret create failed and ${PN} could not roll back the local secret reservation.`, {
       code: "secret_create_rollback_failed",
       provider: input.provider,
       operation: input.operation,
@@ -453,7 +455,7 @@ async function deleteLocalSecretCreateReservationOrThrow(input: {
       },
       "secret create failed and local reserved secret rollback failed",
     );
-    throw new HttpError(500, "Secret create failed and Paperclip could not roll back the local secret reservation.", {
+    throw new HttpError(500, `Secret create failed and ${PN} could not roll back the local secret reservation.`, {
       code: "secret_create_rollback_failed",
       provider: input.provider,
       operation: input.operation,
@@ -470,7 +472,7 @@ function throwProviderCleanupFailedAfterCreateRollback(input: {
   operation: string;
 }): never {
   const providerConfigId = providerConfigIdentifier(input);
-  throw new HttpError(500, "Secret create failed and Paperclip could not clean up the remote provider secret.", {
+  throw new HttpError(500, `Secret create failed and ${PN} could not clean up the remote provider secret.`, {
     code: "secret_create_provider_cleanup_failed",
     provider: input.provider,
     operation: input.operation,
@@ -503,14 +505,14 @@ function safeRemoteProviderErrorDetails(
     };
     const region = safeString(context.providerConfig?.region);
     if (region) details.region = region;
-    details.credentialPath = "Paperclip server runtime/provider credential path";
+    details.credentialPath = `${PN} server runtime/provider credential path`;
     if (error?.code === "access_denied") {
       if (context.operation === "secret.create") {
         details.requiredCapability = "secretsmanager:CreateSecret";
         details.actionableMessage =
           "AWS managed secret creation needs secretsmanager:CreateSecret in the selected region for this provider vault. If the vault config uses a KMS key, the runtime credentials also need KMS write permissions for that key.";
         details.safeAlternative =
-          "If the secret already exists in AWS, link it as an external reference instead of creating a Paperclip-managed value.";
+          `If the secret already exists in AWS, link it as an external reference instead of creating a ${PN}-managed value.`;
       } else if (context.operation === "secret.rotate") {
         details.requiredCapability = "secretsmanager:PutSecretValue";
         details.actionableMessage =
@@ -528,11 +530,11 @@ function safeRemoteProviderErrorDetails(
   const region = safeString(context.providerConfig?.region);
   if (region) details.region = region;
   details.providerVaultContext = context.providerConfigId === "discovery-preview" ? "draft_config" : "provider_config";
-  details.credentialPath = "Paperclip server runtime/provider credential path";
+  details.credentialPath = `${PN} server runtime/provider credential path`;
   if (error?.code === "access_denied") {
     details.requiredCapability = "secretsmanager:ListSecrets";
     details.actionableMessage =
-      "AWS discovery preview needs secretsmanager:ListSecrets in the selected region for the Paperclip server runtime/provider credential path.";
+      `AWS discovery preview needs secretsmanager:ListSecrets in the selected region for the ${PN} server runtime/provider credential path.`;
     details.safeAlternative =
       "If the operator already knows the exact AWS Secrets Manager ARN, paste/link that ARN instead of using discovery. Exact-resource DescribeSecret and runtime read permissions are still required.";
   }

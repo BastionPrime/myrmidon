@@ -3,6 +3,8 @@ import {
   type NativeAuthoritativeIssueStatus,
   type NativeStatusDecision,
 } from "./status-arbiter.js";
+// myrmidon(B1c): product name in user-facing runner errors; see product.ts.
+import { PRODUCT_NAME } from "../../myrmidon/product.js";
 import {
   PaperclipRunnerProviderProfileError,
   resolvePaperclipRunnerProviderProfile,
@@ -118,7 +120,7 @@ export function resolveNativeRuntimeMode(input: {
   if (!input.enabled) {
     throw ineligible(
       "paperclip_runner_rollout_disabled",
-      "Paperclip Runner is experimental and disabled on this instance.",
+      `${PRODUCT_NAME} Runner is experimental and disabled on this instance.`,
     );
   }
   let runnerProfile: PaperclipRunnerProviderProfile;
@@ -136,14 +138,14 @@ export function resolveNativeRuntimeMode(input: {
   ) {
     throw ineligible(
       "paperclip_runner_agent_ineligible",
-      "Paperclip Runner requires an active agent.",
+      `${PRODUCT_NAME} Runner requires an active agent.`,
     );
   }
   const allowedWorkModes = ["standard", "planning", "ask"];
   if (!input.issue || !allowedWorkModes.includes(input.issue.workMode)) {
     throw ineligible(
       "paperclip_runner_issue_ineligible",
-      "Paperclip Runner requires a standard, planning, or ask task.",
+      `${PRODUCT_NAME} Runner requires a standard, planning, or ask task.`,
     );
   }
   const rollout = resolveNativeMigrationStatus({
@@ -273,7 +275,7 @@ export function resolveHeartbeatNativeRuntimeMode(input: {
       if (input.agent.adapterType !== "paperclip_runner") {
         throw ineligible(
           "paperclip_runner_adapter_binding_mismatch",
-          "A persisted native run must remain bound to the Paperclip Runner adapter.",
+          `${PRODUCT_NAME} Runner adapter.`,
         );
       }
       if (
@@ -282,7 +284,7 @@ export function resolveHeartbeatNativeRuntimeMode(input: {
       ) {
         throw ineligible(
           "paperclip_runner_agent_ineligible",
-          "A persisted Paperclip Runner run cannot recover through a non-invokable agent.",
+          `${PRODUCT_NAME} Runner run cannot recover through a non-invokable agent.`,
         );
       }
       const driverKind = input.persisted.driverKind;
@@ -303,7 +305,7 @@ export function resolveHeartbeatNativeRuntimeMode(input: {
       if (backend === null) {
         throw ineligible(
           "paperclip_runner_driver_unsupported",
-          `Persisted Paperclip Runner driver is unsupported: ${driverKind}`,
+          `Persisted ${PRODUCT_NAME} Runner driver is unsupported: ${driverKind}`,
         );
       }
       return {

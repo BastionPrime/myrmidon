@@ -73,6 +73,8 @@ import {
   listCurrentRuntimeServicesForProjectWorkspaces,
   selectConfiguredRuntimeServiceRows,
 } from "./workspace-runtime-read-model.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 type ExecutionWorkspaceRow = typeof executionWorkspaces.$inferSelect;
 type WorkspaceRuntimeServiceRow = typeof workspaceRuntimeServices.$inferSelect;
@@ -529,7 +531,7 @@ function explainGitWorktreeBranchReconcileInspection(input: {
   ancestryVerdict: GitWorktreeBranchAncestryVerdict;
 }) {
   if (!input.fromSha || !input.toSha) {
-    return `Paperclip could not determine branch ancestry because "${input.fromBranch}" or "${input.toBranch}" is missing a resolvable HEAD commit.`;
+    return `${PN} could not determine branch ancestry because "${input.fromBranch}" or "${input.toBranch}" is missing a resolvable HEAD commit.`;
   }
   if (input.fromSha === input.toSha) {
     return `The recorded branch "${input.fromBranch}" and checked-out branch "${input.toBranch}" resolve to the same commit.`;
@@ -540,7 +542,7 @@ function explainGitWorktreeBranchReconcileInspection(input: {
   if (input.ancestryVerdict === "diverged") {
     return `The recorded branch "${input.fromBranch}" is not an ancestor of the checked-out branch "${input.toBranch}".`;
   }
-  return `Paperclip could not determine whether "${input.toBranch}" is forward of "${input.fromBranch}".`;
+  return `${PN} could not determine whether "${input.toBranch}" is forward of "${input.fromBranch}".`;
 }
 
 async function inspectExecutionWorkspaceBranchForReconcile(
@@ -553,7 +555,7 @@ async function inspectExecutionWorkspaceBranchForReconcile(
 
   const worktreePath = readNullableString(workspace.providerRef) ?? readNullableString(workspace.cwd);
   if (!worktreePath) {
-    throw unprocessable("Execution workspace needs a local worktree path before Paperclip can reconcile its branch record");
+    throw unprocessable(`Execution workspace needs a local worktree path before ${PN} can reconcile its branch record`);
   }
 
   const repoRoot = await readGitStdout(["rev-parse", "--show-toplevel"], worktreePath).catch(() => null);
@@ -563,7 +565,7 @@ async function inspectExecutionWorkspaceBranchForReconcile(
 
   const toBranch = await readGitStdout(["symbolic-ref", "--quiet", "--short", "HEAD"], worktreePath).catch(() => null);
   if (!toBranch) {
-    throw unprocessable("Execution workspace is detached; Paperclip cannot reconcile it to a branch name");
+    throw unprocessable(`Execution workspace is detached; ${PN} cannot reconcile it to a branch name`);
   }
 
   const status = await runExpensiveGitStatus({
@@ -827,12 +829,12 @@ async function inspectGitCloseReadiness(workspace: ExecutionWorkspace): Promise<
   }
 
   if (!workspacePath) {
-    warnings.push("Workspace has no local path, so Paperclip cannot inspect git status before close.");
+    warnings.push(`Workspace has no local path, so ${PN} cannot inspect git status before close.`);
     return { git: null, warnings, statusInspectionSucceeded: false };
   }
 
   if (!(await pathExists(workspacePath))) {
-    warnings.push(`Workspace path "${workspacePath}" does not exist, so Paperclip cannot inspect git status before close.`);
+    warnings.push(`Workspace path "${workspacePath}" does not exist, so ${PN} cannot inspect git status before close.`);
     return {
       git: {
         repoRoot: null,
@@ -2430,7 +2432,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
       const warnings = [...gitWarnings];
       const blockingReasons: string[] = [];
       if (!statusInspectionSucceeded) {
-        blockingReasons.push("Paperclip could not verify the workspace git status. Retry before destructive cleanup.");
+        blockingReasons.push(`${PN} could not verify the workspace git status. Retry before destructive cleanup.`);
       }
       const isSharedWorkspace = executionWorkspace.mode === "shared_workspace";
       const workspacePath = readNullableString(executionWorkspace.providerRef) ?? readNullableString(executionWorkspace.cwd);
@@ -2561,7 +2563,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
         plannedActions.push({
           kind: "git_worktree_remove",
           label: "Remove git worktree",
-          description: `Paperclip will run git worktree cleanup for ${workspacePath}.`,
+          description: `${PN} will run git worktree cleanup for ${workspacePath}.`,
           command: `git worktree remove --force ${workspacePath}`,
         });
       }
@@ -2570,7 +2572,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
         plannedActions.push({
           kind: "git_branch_delete",
           label: "Delete runtime-created branch",
-          description: "Paperclip will try to delete the runtime-created branch after removing the worktree.",
+          description: `${PN} will try to delete the runtime-created branch after removing the worktree.`,
           command: `git branch -d ${executionWorkspace.branchName}`,
         });
       }
@@ -2585,12 +2587,12 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
             )
           : false;
         if (containsProjectWorkspace) {
-          warnings.push(`Paperclip will archive this workspace but keep "${workspacePath}" because it contains the project workspace.`);
+          warnings.push(`${PN} will archive this workspace but keep "${workspacePath}" because it contains the project workspace.`);
         } else {
           plannedActions.push({
             kind: "remove_local_directory",
             label: "Remove runtime-created directory",
-            description: `Paperclip will remove the runtime-created directory at ${workspacePath}.`,
+            description: `${PN} will remove the runtime-created directory at ${workspacePath}.`,
             command: `rm -rf ${workspacePath}`,
           });
         }
@@ -3507,7 +3509,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
 
       const existing = toExecutionWorkspace(existingRow);
       if (!existing.sourceIssueId) {
-        throw unprocessable("Execution workspace needs a source issue before Paperclip can audit branch reconciliation");
+        throw unprocessable(`Execution workspace needs a source issue before ${PN} can audit branch reconciliation`);
       }
 
       const inspection = await inspectExecutionWorkspaceBranchForReconcile(existing);
@@ -3620,7 +3622,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
         const lockedRuntimeServices = (lockedRuntimeServicesByWorkspaceId.get(lockedRow.id) ?? []).map(toRuntimeService);
         const lockedWorkspace = toExecutionWorkspace(lockedRow, lockedRuntimeServices);
         if (!lockedWorkspace.sourceIssueId) {
-          throw unprocessable("Execution workspace needs a source issue before Paperclip can audit branch reconciliation");
+          throw unprocessable(`Execution workspace needs a source issue before ${PN} can audit branch reconciliation`);
         }
 
         let updatedRow: ExecutionWorkspaceRow = lockedRow;

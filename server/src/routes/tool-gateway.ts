@@ -1,4 +1,6 @@
 import { Router, type Request, type Response } from "express";
+// myrmidon(B1c): product name in the gateway initialize response; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 import { and, desc, eq, gte, ilike, inArray, lt, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, toolApplications, toolCallEvents, toolConnections, toolInvocations } from "@paperclipai/db";
@@ -86,10 +88,10 @@ async function handleMcpGatewayProtocol(
         result: {
           protocolVersion: "2025-03-26",
           capabilities: { tools: {}, resources: {}, prompts: {} },
-          serverInfo: { name: "Paperclip MCP Gateway", version: "1.0.0" },
+          serverInfo: { name: `${PRODUCT_NAME} MCP Gateway`, version: "1.0.0" },
           _meta: {
             "paperclip/mcp-app-ui": "unsupported",
-            "paperclip/mcp-app-ui-detail": "Interactive ui:// iframe hosting is not available in Paperclip Runner.",
+            "paperclip/mcp-app-ui-detail": `Interactive ui:// iframe hosting is not available in ${PRODUCT_NAME} Runner.`,
           },
         },
       });

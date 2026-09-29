@@ -28,6 +28,8 @@ import {
   joinRequests,
   principalPermissionGrants,
 } from "@paperclipai/db";
+// myrmidon(B1c): product name in user-facing onboarding texts; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 import {
   acceptInviteSchema,
   createCliAuthChallengeSchema,
@@ -676,7 +678,8 @@ export function assertLegacyAgentInviteAdapterType(
 ) {
   if (adapterType === "paperclip_runner") {
     throw badRequest(
-      "Paperclip Runner is not available through agent invite onboarding.",
+      // myrmidon(B1c): visible onboarding error names our product part.
+      `${PRODUCT_NAME} Runner is not available through agent invite onboarding.`,
       { code: "paperclip_runner_invite_onboarding_disabled" },
     );
   }
@@ -797,7 +800,7 @@ export function normalizeAgentDefaultsForJoin(input: {
               code: "hermes_gateway_dashboard_root_mapped",
               level: "info",
               message: `Default Hermes dashboard root mapped to API base ${apiBaseUrl.toString()}`,
-              hint: "Hermes dashboard and /chat routes are browser UI routes. Paperclip gateway calls use /api/health and /api/v1/runs.",
+              hint: "Hermes dashboard and /chat routes are browser UI routes. Myrmidon gateway calls use /api/health and /api/v1/runs.",
             });
           }
           if (apiBaseUrl.protocol === "http:" && !isLoopbackHost(apiBaseUrl.hostname)) {
@@ -1635,7 +1638,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       code: "openclaw_onboarding_api_loopback",
       level: "warn",
       message:
-        "Onboarding URL resolves to loopback hostname. Remote OpenClaw agents cannot reach localhost on your Paperclip host.",
+        `Onboarding URL resolves to loopback hostname. Remote OpenClaw agents cannot reach localhost on your ${PRODUCT_NAME} host.`,
       hint: "Use a reachable hostname/IP (for example Tailscale hostname, Docker host alias, or public domain)."
     });
   }
@@ -1648,7 +1651,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
     diagnostics.push({
       code: "openclaw_onboarding_private_loopback_bind",
       level: "warn",
-      message: "Paperclip is bound to loopback in authenticated/private mode.",
+      message: `${PRODUCT_NAME} is bound to loopback in authenticated/private mode.`,
       hint: "Use a reachable private bind mode such as `pnpm dev --bind lan` or `pnpm dev --bind tailnet` for private-network onboarding."
     });
   }
@@ -1770,7 +1773,7 @@ function buildInviteOnboardingManifest(
     ),
     onboarding: {
       instructions:
-        "Join as an external Paperclip agent, save your one-time claim secret, wait for board approval, then claim your Paperclip API key through the standard claim endpoint. Use requestType='agent', include your agentName and capabilities, and set adapterType plus agentDefaultsPayload for your runtime when applicable. Hermes Gateway agents must use adapterType='hermes_gateway', start a clean Hermes install with API_SERVER_ENABLED=true and a fresh API_SERVER_KEY, then run `hermes gateway run --replace --accept-hooks`. Put the Hermes gateway URL in agentDefaultsPayload.apiBaseUrl, put the exact API_SERVER_KEY value in agentDefaultsPayload.apiKey, and put the reachable Paperclip base URL in agentDefaultsPayload.paperclipApiUrl. If you use the default Hermes dashboard root or /chat URL on port 9119, Paperclip maps it to /api automatically. OpenClaw Gateway agents must use adapterType='openclaw_gateway', set agentDefaultsPayload.url to a ws:// or wss:// gateway endpoint, and include agentDefaultsPayload.headers.x-openclaw-token.",
+        `Join as an external ${PRODUCT_NAME} agent, save your one-time claim secret, wait for board approval, then claim your ${PRODUCT_NAME} API key through the standard claim endpoint. Use requestType='agent', include your agentName and capabilities, and set adapterType plus agentDefaultsPayload for your runtime when applicable. Hermes Gateway agents must use adapterType='hermes_gateway', start a clean Hermes install with API_SERVER_ENABLED=true and a fresh API_SERVER_KEY, then run \`hermes gateway run --replace --accept-hooks\`. Put the Hermes gateway URL in agentDefaultsPayload.apiBaseUrl, put the exact API_SERVER_KEY value in agentDefaultsPayload.apiKey, and put the reachable ${PRODUCT_NAME} base URL in agentDefaultsPayload.paperclipApiUrl. If you use the default Hermes dashboard root or /chat URL on port 9119, ${PRODUCT_NAME} maps it to /api automatically. OpenClaw Gateway agents must use adapterType='openclaw_gateway', set agentDefaultsPayload.url to a ws:// or wss:// gateway endpoint, and include agentDefaultsPayload.headers.x-openclaw-token.`,
       inviteMessage: extractInviteMessage(invite),
       recommendedAdapterType: null,
       requiredFields: {
@@ -1805,8 +1808,8 @@ function buildInviteOnboardingManifest(
         guidance:
           opts.deploymentMode === "authenticated" &&
           opts.deploymentExposure === "private"
-            ? "If OpenClaw runs on another machine, ensure the Paperclip hostname is reachable and allowed via `npx paperclipai allowed-hostname <host>`."
-            : "Ensure OpenClaw can reach this Paperclip API base URL for invite, claim, and skill bootstrap calls."
+            ? `If OpenClaw runs on another machine, ensure the ${PRODUCT_NAME} hostname is reachable and allowed via \`npx paperclipai allowed-hostname <host>\`.`
+            : `Ensure OpenClaw can reach this ${PRODUCT_NAME} API base URL for invite, claim, and skill bootstrap calls.`
       },
       textInstructions: {
         path: onboardingTextPath,
@@ -1817,7 +1820,7 @@ function buildInviteOnboardingManifest(
         name: "paperclip",
         path: skillPath,
         url: skillUrl,
-        installPath: "runtime-specific Paperclip skill location"
+        installPath: `runtime-specific ${PRODUCT_NAME} skill location`
       }
     }
   };
@@ -1960,7 +1963,7 @@ export function buildInviteOnboardingTextDocument(
 
     Hermes Gateway network examples:
     - Local loopback API server: agentDefaultsPayload.apiBaseUrl = "http://127.0.0.1:8642" and agentDefaultsPayload.paperclipApiUrl = "http://127.0.0.1:3100".
-    - Local loopback dashboard root or chat URL: agentDefaultsPayload.apiBaseUrl = "http://127.0.0.1:9119" or "http://127.0.0.1:9119/chat"; Paperclip maps either one to "http://127.0.0.1:9119/api".
+    - Local loopback dashboard root or chat URL: agentDefaultsPayload.apiBaseUrl = "http://127.0.0.1:9119" or "http://127.0.0.1:9119/chat"; ${PRODUCT_NAME} maps either one to "http://127.0.0.1:9119/api".
     - LAN/private network: use reachable private addresses, for example agentDefaultsPayload.apiBaseUrl = "http://192.168.1.25:8642" and agentDefaultsPayload.paperclipApiUrl = "http://192.168.1.10:3100".
     - Private overlay: use overlay DNS names, for example agentDefaultsPayload.apiBaseUrl = "http://hermes-host.tailnet-name.ts.net:8642" and agentDefaultsPayload.paperclipApiUrl = "http://paperclip-host.tailnet-name.ts.net:3100".
     - Docker: if Paperclip runs in Docker and Hermes runs on the host, use agentDefaultsPayload.apiBaseUrl = "http://host.docker.internal:8642"; if both run in Compose, use the Hermes service name.
@@ -2003,7 +2006,7 @@ export function buildInviteOnboardingTextDocument(
     ## Connectivity guidance
     ${
       onboarding.connectivity?.guidance ??
-      "Ensure Paperclip is reachable from your OpenClaw runtime."
+      `Ensure ${PRODUCT_NAME} is reachable from your OpenClaw runtime.`
     }
   `);
 
@@ -2016,7 +2019,7 @@ export function buildInviteOnboardingTextDocument(
     : [];
 
   if (connectionCandidates.length > 0) {
-    lines.push("## Suggested Paperclip base URLs to try");
+    lines.push(`## Suggested ${PRODUCT_NAME} base URLs to try`);
     for (const candidate of connectionCandidates) {
       lines.push(`- ${candidate}`);
     }

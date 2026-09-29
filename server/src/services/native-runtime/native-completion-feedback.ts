@@ -14,6 +14,8 @@ import {
   normalizePrpResultSignals,
   type PrpStructuredRunResult,
 } from "../../vendor/paperclip-runner/index.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../../myrmidon/product.js";
 
 /** Read current constraints before accepting the report, not a premature status commit. */
 export async function nativeCompletionFeedback(
@@ -127,7 +129,7 @@ export async function nativeCompletionFeedback(
     signals.actionableAttentionRequests.length === 0
   ) {
     throw new Error(
-      "needs_review requires a concrete decision and a named reviewer in attentionRequests. Continue unfinished work or checks; report done when complete. Paperclip will not create an automatic completion approval.",
+      `needs_review requires a concrete decision and a named reviewer in attentionRequests. Continue unfinished work or checks; report done when complete. ${PN} will not create an automatic completion approval.`,
     );
   }
   return "Completion report accepted. Task status will be committed after this turn and workspace finalization finish. Describe the completed work and any explicitly requested reviewer action; do not claim an approval is needed unless one was requested.";

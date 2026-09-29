@@ -10,6 +10,8 @@ import {
   principalPermissionGrants,
   type Db,
 } from "@paperclipai/db";
+// myrmidon(B1c): product name in user-facing import errors; see product.ts.
+import { PRODUCT_NAME } from "../myrmidon/product.js";
 import type {
   CompanyPortabilityAgentManifestEntry,
   CompanyPortabilityBlobManifestEntry,
@@ -63,6 +65,8 @@ import {
   normalizeAgentUrlKey,
   PERMISSION_KEYS,
 } from "@paperclipai/shared";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 import { sha256HexOfBytes } from "@paperclipai/shared/portability-hash";
 import {
   readPaperclipSkillSyncPreference,
@@ -1671,7 +1675,7 @@ function buildLegacyRoutineTriggerFromRecurrence(
   }
 
   if (issue.legacyRecurrence.until != null || issue.legacyRecurrence.count != null) {
-    warnings.push(`Recurring task ${issue.slug} uses legacy recurrence end bounds; Paperclip will import the routine trigger without those limits.`);
+    warnings.push(`Recurring task ${issue.slug} uses legacy recurrence end bounds; ${PN} will import the routine trigger without those limits.`);
   }
 
   let cronExpression: string | null = null;
@@ -3110,7 +3114,7 @@ function buildManifestFromPackageFiles(
     ? declaredSchemaVersion
     : UNSTAMPED_BUNDLE_SCHEMA_VERSION;
   if (bundleSchemaVersion > BUNDLE_SCHEMA_VERSION) {
-    throw unprocessable(`Company package declares schemaVersion ${bundleSchemaVersion}, which was produced by a newer Paperclip; this board reads up to schemaVersion ${BUNDLE_SCHEMA_VERSION}.`);
+    throw unprocessable(`Company package declares schemaVersion ${bundleSchemaVersion}, which was produced by a newer ${PN}; this board reads up to schemaVersion ${BUNDLE_SCHEMA_VERSION}.`);
   }
   const paperclipCompany = isPlainRecord(paperclipExtension.company) ? paperclipExtension.company : {};
   const paperclipSidebar = normalizePortableSidebarOrder(paperclipExtension.sidebar);
@@ -5254,7 +5258,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         && (await instanceSettingsService(db).getExperimental()).enableNativeRunner !== true
       ) {
         throw unprocessable(
-          "Paperclip Runner is experimental and disabled on this instance.",
+          `${PRODUCT_NAME} Runner is experimental and disabled on this instance.`,
           { code: "paperclip_runner_rollout_disabled" },
         );
       }

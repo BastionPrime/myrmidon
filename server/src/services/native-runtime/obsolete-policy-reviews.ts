@@ -9,6 +9,8 @@ import { issueService } from "../issues.js";
 import { issueThreadInteractionService } from "../issue-thread-interactions.js";
 import { enqueueTerminalIssueInteractionChatPublications } from "../chat-interaction-publications.js";
 import { persistActivity, publishActivity, type ActivityPublication } from "../activity-log.js";
+// myrmidon(B1c): product name in user-facing texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../../myrmidon/product.js";
 
 const obsoletePrompt = "Review the superseding native policy assessment.";
 
@@ -71,7 +73,7 @@ export async function dismissObsoleteNativePolicyReviews(db: Db, runIds?: string
         const now = new Date();
         const [cancelled] = await tx.update(issueThreadInteractions).set({
           status: "cancelled",
-          result: { version: 1, outcome: "withdrawn", reason: "A Paperclip upgrade does not require completion review." },
+          result: { version: 1, outcome: "withdrawn", reason: `A ${PN} upgrade does not require completion review.` },
           resolvedAt: now,
           updatedAt: now,
         }).where(and(

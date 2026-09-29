@@ -14,6 +14,8 @@ import type {
   StoredSecretVersionMaterial,
 } from "./types.js";
 import { SecretProviderClientError } from "./types.js";
+// myrmidon(B1c): product name in user-facing provider texts; see product.ts.
+import { PRODUCT_NAME as PN } from "../myrmidon/product.js";
 
 const AWS_SECRETS_MANAGER_SCHEME = "aws_secrets_manager_v1";
 const DEFAULT_PREFIX = "paperclip";
@@ -27,9 +29,9 @@ const AWS_CREDENTIAL_EXPIRATION_SKEW_MS = 60_000;
 const PROVIDER_CONFIG_DISCOVERY_SAMPLE_LIMIT = 3;
 const PROVIDER_CONFIG_DISCOVERY_CANDIDATE_LIMIT = 6;
 const AWS_RUNTIME_CREDENTIAL_WARNING =
-  "AWS bootstrap credentials must be available to the Paperclip server runtime through the AWS SDK default credential provider chain: IAM role/workload identity, AWS_PROFILE/SSO/shared credentials, web identity, container/instance metadata, or short-lived shell credentials.";
+  `AWS bootstrap credentials must be available to the ${PN} server runtime through the AWS SDK default credential provider chain: IAM role/workload identity, AWS_PROFILE/SSO/shared credentials, web identity, container/instance metadata, or short-lived shell credentials.`;
 const AWS_CREDENTIAL_CUSTODY_WARNING =
-  "Do not store AWS root credentials or long-lived IAM user access keys in Paperclip company_secrets; the AWS provider bootstrap belongs in deployment infrastructure, the process environment, an AWS profile, or the orchestrator secret store.";
+  `Do not store AWS root credentials or long-lived IAM user access keys in ${PN} company_secrets; the AWS provider bootstrap belongs in deployment infrastructure, the process environment, an AWS profile, or the orchestrator secret store.`;
 
 interface AwsSecretsManagerMaterial extends StoredSecretVersionMaterial {
   scheme: typeof AWS_SECRETS_MANAGER_SCHEME;
@@ -504,7 +506,7 @@ function assertNotManagedNamespaceExternalRef(
 ) {
   if (!isManagedSecretNamespaceRef(config, externalRef)) return;
   throw unprocessable(
-    "AWS Paperclip-managed namespace secrets cannot be imported as external references",
+    `AWS ${PN}-managed namespace secrets cannot be imported as external references`,
   );
 }
 
@@ -720,7 +722,7 @@ function discoverAwsProviderConfigCandidates(input: {
 
   if (skippedForeignPaperclipSampleCount > 0) {
     skippedWarnings.push(
-      `Skipped ${skippedForeignPaperclipSampleCount} Paperclip-managed AWS secret sample(s) that were not tagged for this company.`,
+      `Skipped ${skippedForeignPaperclipSampleCount} ${PN}-managed AWS secret sample(s) that were not tagged for this company.`,
     );
   }
 
@@ -765,7 +767,7 @@ function discoverAwsProviderConfigCandidates(input: {
         candidateWarnings.push("Sampled AWS secrets use multiple KMS keys; choose the intended KMS key before saving.");
       }
       if (group.some((sample) => sample.paperclipManaged && sample.paperclipCompanyId === input.companyId)) {
-        candidateWarnings.push("Sample includes Paperclip-managed secrets for this company; do not import them as external references.");
+        candidateWarnings.push(`Sample includes ${PN}-managed secrets for this company; do not import them as external references.`);
       }
 
       return {
@@ -1064,8 +1066,8 @@ export function createAwsSecretsManagerProvider(
           detectedCredentialSources: readiness.credentialSources,
         },
         backupGuidance: [
-          "Back up Paperclip metadata separately from AWS-managed secrets.",
-          "Restoring access requires the Paperclip database plus the same AWS secret namespace and KMS permissions.",
+          `Back up ${PN} metadata separately from AWS-managed secrets.`,
+          `Restoring access requires the ${PN} database plus the same AWS secret namespace and KMS permissions.`,
         ],
       };
     } catch (error) {
@@ -1131,7 +1133,7 @@ export function createAwsSecretsManagerProvider(
           Name: secretId,
           SecretString: input.value,
           ...(config.kmsKeyId ? { KmsKeyId: config.kmsKeyId } : {}),
-          Description: input.context ? `Paperclip secret ${input.context.secretName}` : undefined,
+          Description: input.context ? `${PN} secret ${input.context.secretName}` : undefined,
           Tags: buildManagedSecretTags(config, input.context),
         };
         const created = await gateway.createSecret({
