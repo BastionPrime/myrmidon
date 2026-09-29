@@ -1,11 +1,12 @@
-// myrmidon(L2, round 1 fix): claim-time regression tests. A queued run's own
-// first claim (`cancelStaleQueuedRun`, run-dispatch/adapters/postgres.ts)
-// must read the "may this wake pass a settled hold" decision its admission
-// recorded on the run — it must not re-derive it from the run row and a
-// context the admission transaction itself has since mutated, and it must
-// never let a run that merely inherited a context (a scheduled retry) or a
-// non-person requester borrow the authorization. See
-// wake-admission-context.ts and docs/myrmidon/DIVERGENCE.md "L2".
+// myrmidon(L2, round 2 fix): claim-time regression tests. A queued run's own
+// first claim (`cancelStaleQueuedRun`, run-dispatch/adapters/postgres.ts) is
+// the plain vendor check: it never re-derives whether the wake was "explicit"
+// and grants no bypass of its own. The only thing that lets an explicit
+// wake's run through is that its admission superseded the hold in the same
+// transaction (supersede-explicit-wake.ts); a hold the admission did not
+// supersede (one that appeared afterwards, one it could not verify) still
+// blocks the claim, so it can never be passed by a decision made earlier.
+// See docs/myrmidon/DIVERGENCE.md "L2".
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -24,23 +25,12 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "../../__tests__/helpers/embedded-postgres.js";
 import { createPostgresRunDispatchAdapter } from "../../modules/run-dispatch/adapters/postgres.js";
-import { recordSettledHoldWakeContext } from "./wake-admission-context.js";
-import type { WakeClassificationInput } from "./wake-classification.js";
+import { supersedeExplicitWakeSettledHold } from "./supersede-explicit-wake.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
-// What a board reassignment wake records at admission: an explicit,
-// person-authorized wake that carries no message of its own.
-const USER_ASSIGNMENT_WAKE: WakeClassificationInput = {
-  source: "assignment",
-  triggerDetail: "system",
-  reason: "issue_assigned",
-  commentId: null,
-  requestedByActorType: "user",
-};
-
-describeEmbeddedPostgres("run claim reads the recorded settled-hold wake decision (L2, round 1)", () => {
+describeEmbeddedPostgres("run claim meets the vendor hold check (L2, round 2)", () => {
   let db!: ReturnType<typeof createDb>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
@@ -113,22 +103,17 @@ describeEmbeddedPostgres("run claim reads the recorded settled-hold wake decisio
     agentId: string;
     issueId: string;
     invocationSource?: string;
-    /** Records this classification on the run, bound to `recordedFor` (default: the run itself). */
-    record?: WakeClassificationInput;
-    recordedFor?: string;
     /** Context keys a same-transaction comment adoption adds after admission decided. */
     adoptedCommentId?: string;
     wakeReason?: string;
+    id?: string;
   }) {
-    const runId = randomUUID();
+    const runId = input.id ?? randomUUID();
     const contextSnapshot: Record<string, unknown> = {
       issueId: input.issueId,
       taskId: input.issueId,
       wakeReason: input.wakeReason ?? "issue_assigned",
     };
-    if (input.record) {
-      recordSettledHoldWakeContext(contextSnapshot, input.record, input.recordedFor ?? runId);
-    }
     if (input.adoptedCommentId) {
       contextSnapshot.wakeCommentId = input.adoptedCommentId;
       contextSnapshot.commentId = input.adoptedCommentId;
@@ -143,6 +128,28 @@ describeEmbeddedPostgres("run claim reads the recorded settled-hold wake decisio
       contextSnapshot,
     });
     return runId;
+  }
+
+  /** The admission step: supersede the holds the wake verified, for this successor run. */
+  async function supersedeAtAdmission(input: { companyId: string; issueId: string; successorRunId: string }) {
+    return supersedeExplicitWakeSettledHold({
+      db, companyId: input.companyId, issueId: input.issueId, successorRunId: input.successorRunId,
+      requestedByActorType: "user", requestedByActorId: "user-a",
+    });
+  }
+
+  /** A settled no-replay hold, optionally naming the run it was written for. */
+  async function seedHold(companyId: string, issueId: string, runId?: string) {
+    await db.insert(issueRecoveryActions).values({
+      companyId,
+      sourceIssueId: issueId,
+      kind: "execution_reconciliation",
+      status: "resolved",
+      cause: "uncertain_provider_action",
+      fingerprint: randomUUID(),
+      evidence: { ...(runId ? { runId } : {}), automaticRecovery: { replay: "blocked" } },
+      nextAction: "Automatic recovery stopped.",
+    });
   }
 
   async function claim(companyId: string, runId: string) {
@@ -162,40 +169,30 @@ describeEmbeddedPostgres("run claim reads the recorded settled-hold wake decisio
       .then((rows) => rows[0]);
   }
 
-  it("keeps a person-authorized run whose admission adopted a deferred comment into its own context", async () => {
-    // The regression: the record says "no comment" (what the wake itself
-    // carried), while the run's context now carries the adopted comment id.
-    // Re-deriving at claim read that comment id, called the wake
-    // "not explicit", and cancelled the run with the wake lost.
+  it("keeps a person-authorized run whose admission superseded the hold and adopted a deferred comment", async () => {
+    // The wake's own admission resolved the hold under its successor run id;
+    // the run's context now also carries a comment the same transaction
+    // adopted. The claim runs the plain vendor check, finds no hold, and the
+    // run starts: nothing about the comment can turn the wake "not explicit"
+    // at claim, because the claim decides nothing about explicitness.
     const { companyId, agentId, issueId } = await seed();
-    const runId = await seedRun({
-      companyId, agentId, issueId,
-      record: USER_ASSIGNMENT_WAKE,
-      adoptedCommentId: randomUUID(),
-    });
+    const runId = randomUUID();
+    expect(await supersedeAtAdmission({ companyId, issueId, successorRunId: runId })).not.toBeNull();
+    await seedRun({ companyId, agentId, issueId, id: runId, adoptedCommentId: randomUUID() });
 
     expect(await claim(companyId, runId)).toMatchObject({ outcome: "not_stale" });
     expect(await runStatus(runId)).toEqual({ status: "queued", errorCode: null });
   });
 
-  it("cancels the same run when nothing was recorded for it, however explicit its shape looks", async () => {
+  it("cancels a run when a hold appeared after its admission superseded the earlier one", async () => {
+    // Admission superseded what it verified at that moment. A hold written
+    // afterwards (a stop reconciled between admission and claim) was never
+    // verified by anyone for this wake and must stop the claim.
     const { companyId, agentId, issueId } = await seed();
-    const runId = await seedRun({ companyId, agentId, issueId });
-
-    expect(await claim(companyId, runId)).toMatchObject({
-      outcome: "cancelled", errorCode: "execution_reconciliation_required",
-    });
-  });
-
-  it("does not let a run inherit the decision recorded for its predecessor", async () => {
-    // A scheduled retry spreads the failed run's context wholesale, record
-    // included; it is a replay of that run and must meet the hold again.
-    const { companyId, agentId, issueId } = await seed();
-    const runId = await seedRun({
-      companyId, agentId, issueId,
-      record: USER_ASSIGNMENT_WAKE,
-      recordedFor: randomUUID(),
-    });
+    const runId = randomUUID();
+    await supersedeAtAdmission({ companyId, issueId, successorRunId: runId });
+    await seedRun({ companyId, agentId, issueId, id: runId });
+    await seedHold(companyId, issueId);
 
     expect(await claim(companyId, runId)).toMatchObject({
       outcome: "cancelled", errorCode: "execution_reconciliation_required",
@@ -203,18 +200,32 @@ describeEmbeddedPostgres("run claim reads the recorded settled-hold wake decisio
     expect((await runStatus(runId))?.status).toBe("cancelled");
   });
 
-  it.each(["system", "agent", null] as const)(
-    "does not pass the hold for a wake requested by %s, whatever its reason",
-    async (requestedByActorType) => {
-      const { companyId, agentId, issueId } = await seed();
-      const runId = await seedRun({
-        companyId, agentId, issueId,
-        record: { ...USER_ASSIGNMENT_WAKE, requestedByActorType },
-      });
+  it("cancels a run when admission left a hold standing that it could not verify", async () => {
+    // A hold naming a run that is still executing is not bypassable, so
+    // admission does not supersede it (the wake is deferred there instead).
+    // Whatever else was superseded beside it, the claim must still meet it.
+    const { companyId, agentId, issueId } = await seed();
+    const stillRunning = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: stillRunning, companyId, agentId, invocationSource: "assignment", triggerDetail: "system",
+      status: "running", contextSnapshot: { issueId },
+    });
+    await seedHold(companyId, issueId, stillRunning);
+    const runId = randomUUID();
+    await supersedeAtAdmission({ companyId, issueId, successorRunId: runId });
+    await seedRun({ companyId, agentId, issueId, id: runId });
 
-      expect(await claim(companyId, runId)).toMatchObject({
-        outcome: "cancelled", errorCode: "execution_reconciliation_required",
-      });
-    },
-  );
+    expect(await claim(companyId, runId)).toMatchObject({
+      outcome: "cancelled", errorCode: "execution_reconciliation_required",
+    });
+  });
+
+  it("cancels a run that nothing superseded a hold for, however explicit its shape looks", async () => {
+    const { companyId, agentId, issueId } = await seed();
+    const runId = await seedRun({ companyId, agentId, issueId });
+
+    expect(await claim(companyId, runId)).toMatchObject({
+      outcome: "cancelled", errorCode: "execution_reconciliation_required",
+    });
+  });
 });

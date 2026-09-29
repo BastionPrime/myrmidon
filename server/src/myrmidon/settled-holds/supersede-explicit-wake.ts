@@ -18,7 +18,7 @@ import { and, eq } from "drizzle-orm";
 import { issueRecoveryActions, type Db } from "@paperclipai/db";
 import { executionBlockerPredicate } from "../../services/execution-blocker.js";
 import { explicitWakeBypassesSettledHold } from "./explicit-wake-bypass.js";
-import { logActivity, type ActivityPublication } from "../../services/activity-log.js";
+import { persistActivity } from "../../services/activity-log.js";
 
 export interface SupersedeExplicitWakeSettledHoldInput {
   db: Db;
@@ -32,11 +32,6 @@ export interface SupersedeExplicitWakeSettledHoldInput {
    * so a future caller cannot pass an unauthorized actor by accident. */
   requestedByActorType: "user";
   requestedByActorId: string;
-  /** Same deferred-publication array the caller's other `logActivity` calls
-   * in this transaction use; when given, the `activity.logged` live event is
-   * queued for the caller to publish once the transaction is known to
-   * commit instead of firing immediately from inside it. */
-  postCommitActivityPublications?: ActivityPublication[];
 }
 
 /**
@@ -49,7 +44,9 @@ export interface SupersedeExplicitWakeSettledHoldInput {
  * bypass in the first place, and the caller's own `getExecutionBlocker`
  * call would have reported it as still blocking, not bypassed. Call only
  * once the caller has confirmed that this exact wake is proceeding past
- * such a hold (`getExecutionBlocker`'s `explicitWake` option returned null).
+ * such a hold (`getExecutionBlocker`'s `explicitWake` option returned null,
+ * which it does only when every matching action is bypassable, so nothing
+ * this leaves standing can meet the successor run at its claim).
  * A no-op (returns null) when nothing here still needs resolving — a wake
  * that bypassed only because there was no hold at all in the first place.
  */
@@ -89,7 +86,11 @@ export async function supersedeExplicitWakeSettledHold(
   }
   if (!supersededIds.length) return null;
 
-  await logActivity(db, {
+  // Row only, no live event: this runs inside the caller's still-uncommitted
+  // admission transaction, so publishing here would announce a hold
+  // resolution that a rollback could still undo. The vendor analog
+  // (explicit-native-continuation.ts) persists the same way.
+  await persistActivity(db, {
     companyId,
     actorType: requestedByActorType,
     actorId: requestedByActorId,
@@ -97,6 +98,6 @@ export async function supersedeExplicitWakeSettledHold(
     entityType: "issue",
     entityId: issueId,
     details: { continuation: "explicit_wake_superseded", successorRunId, recoveryActionIds: supersededIds },
-  }, input.postCommitActivityPublications);
+  });
   return { recoveryActionIds: supersededIds };
 }

@@ -54,9 +54,9 @@ describeEmbeddedPostgres("getExecutionBlocker explicitWake (L2)", () => {
 
   async function seedAction(input: {
     companyId: string; issueId: string; runId?: string | null;
-    status: "active" | "resolved" | "escalated"; replay?: string;
+    status: "active" | "resolved" | "escalated"; replay?: string; updatedAt?: Date;
   }) {
-    await db.insert(issueRecoveryActions).values({
+    const [action] = await db.insert(issueRecoveryActions).values({
       companyId: input.companyId, sourceIssueId: input.issueId, kind: "execution_reconciliation",
       status: input.status, cause: "uncertain_provider_action", fingerprint: randomUUID(),
       evidence: {
@@ -64,7 +64,9 @@ describeEmbeddedPostgres("getExecutionBlocker explicitWake (L2)", () => {
         ...(input.replay ? { automaticRecovery: { replay: input.replay } } : {}),
       },
       nextAction: "Automatic recovery stopped.",
-    });
+      ...(input.updatedAt ? { updatedAt: input.updatedAt } : {}),
+    }).returning();
+    return action!;
   }
 
   async function seedCoordinator(input: {
@@ -171,6 +173,39 @@ describeEmbeddedPostgres("getExecutionBlocker explicitWake (L2)", () => {
     await seedCoordinator({ companyId, issueId, runId });
 
     expect(await getExecutionBlocker(db, companyId, issueId, { explicitWake: true })).not.toBeNull();
+  });
+
+  it("passes an explicit wake only when every matching hold is bypassable, not just the newest", async () => {
+    const { companyId, issueId } = await seed();
+    await seedAction({ companyId, issueId, status: "resolved", replay: "blocked", updatedAt: new Date("2026-01-01T00:00:00Z") });
+    await seedAction({ companyId, issueId, status: "resolved", replay: "blocked", updatedAt: new Date("2026-01-02T00:00:00Z") });
+
+    expect(await getExecutionBlocker(db, companyId, issueId, { explicitWake: true })).toBeNull();
+  });
+
+  it("keeps blocking an explicit wake on an older hold that is not safe to bypass, even when the newest one is", async () => {
+    // The wake's admission supersedes only the holds it verified, and the
+    // run's own claim then meets the vendor check: a hold left standing here
+    // would cancel the run there and lose the wake. Reporting it at
+    // admission defers the wake instead.
+    const { companyId, issueId, runId } = await seed("running");
+    const older = await seedAction({
+      companyId, issueId, runId, status: "resolved", replay: "blocked",
+      updatedAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    const newer = await seedAction({
+      companyId, issueId, status: "resolved", replay: "blocked",
+      updatedAt: new Date("2026-01-02T00:00:00Z"),
+    });
+
+    // Only the newest, alone, would have passed.
+    expect(newer.updatedAt.getTime()).toBeGreaterThan(older.updatedAt.getTime());
+    const blocked = await getExecutionBlocker(db, companyId, issueId, { explicitWake: true });
+    expect(blocked).not.toBeNull();
+    expect(blocked!.recoveryActionId).toBe(older.id);
+    expect(blocked!.runId).toBe(runId);
+    // Without the option the newest is what the vendor check reports.
+    expect((await getExecutionBlocker(db, companyId, issueId))!.recoveryActionId).toBe(newer.id);
   });
 
   it("does not block anything once the recovery action is settled without a no-replay disposition", async () => {

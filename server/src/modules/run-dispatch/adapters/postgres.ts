@@ -1,12 +1,5 @@
 import { hasConversationContinuationPolicy } from "../../../services/conversation-continuation.js";
 import { getExecutionBlocker } from "../../../services/execution-blocker.js";
-// myrmidon(L2): a queued run created by an explicitly authorized wake
-// ignores a settled "do not replay" hold; see docs/myrmidon/DIVERGENCE.md "L2".
-import { bypassesSettledHold } from "../../../myrmidon/settled-holds/explicit-wake-gate.js";
-// myrmidon(L2, round 1 fix): read the wake decision this run's own admission
-// recorded, instead of re-deriving it from mutable run/context fields; see
-// docs/myrmidon/DIVERGENCE.md "L2".
-import { readSettledHoldWakeContext } from "../../../myrmidon/settled-holds/wake-admission-context.js";
 import { and, asc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -927,22 +920,7 @@ export function createPostgresRunDispatchAdapter(
     const contextSnapshot = parseObject(run.contextSnapshot);
     const issueId = readNonEmptyString(contextSnapshot.issueId);
     if (!issueId) return { issueId: null, facts: null, decision: { stale: false as const } };
-    // myrmidon(L2, round 1 fix): the "explicit wake" decision is the one this
-    // run's own admission (enqueueWakeup, heartbeat.ts) recorded on the run,
-    // read back here, never re-derived from `run.invocationSource`/
-    // `triggerDetail` or this context's commentId: the admission transaction
-    // itself may have adopted a deferred message into this very context
-    // after it decided, which would flip a re-derived answer to "not
-    // explicit". A run with no record of its own — created by another path,
-    // or a scheduled retry that merely inherited its predecessor's context —
-    // is not explicit, so a settled hold keeps blocking it.
-    const recordedWakeContext = readSettledHoldWakeContext(contextSnapshot, run.id);
-    const recovery = await getExecutionBlocker(tx, run.companyId, issueId, {
-      conversationResetCommentId: deriveCommentId(contextSnapshot),
-      // myrmidon(L2): an explicitly authorized wake ignores a settled "do
-      // not replay" hold.
-      explicitWake: recordedWakeContext ? bypassesSettledHold(recordedWakeContext) : false,
-    });
+    const recovery = await getExecutionBlocker(tx, run.companyId, issueId, { conversationResetCommentId: deriveCommentId(contextSnapshot) });
     if (recovery) return { issueId, facts: null, decision: { stale: true as const,
       errorCode: "execution_reconciliation_required" as const, reason: recovery.nextAction,
       details: { issueId, recoveryActionId: recovery.recoveryActionId },

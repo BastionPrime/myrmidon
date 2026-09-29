@@ -10,8 +10,12 @@
 //    successor (a scheduled retry here), so the hold is now superseded
 //    atomically with the successor;
 //  - a wake requested by anything but a person never bypasses a hold, even
-//    when its reason/source shape is an explicit wake's.
-// See supersede-explicit-wake.ts and wake-admission-context.ts.
+//    when its reason/source shape is an explicit wake's;
+//  - round 2: a wake admitted only by the bypass is never merged into a run
+//    of the same agent still waiting in the queue (here: a scheduled
+//    retry). That run's claim would meet the hold and cancel it, taking the
+//    merged wake along, so the wake is deferred as it was before the bypass.
+// See supersede-explicit-wake.ts.
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -54,7 +58,7 @@ const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : 
 const RUN_WAIT_MS = 60_000;
 const TEST_TIMEOUT_MS = 120_000;
 
-describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred comment (L2, round 1)", () => {
+describeEmbeddedPostgres("explicit wake past a settled hold (L2, rounds 1 and 2)", () => {
   let db!: ReturnType<typeof createDb>;
   let heartbeat!: ReturnType<typeof heartbeatService>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
@@ -201,6 +205,29 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
     });
   }
 
+  // A run of the same agent waiting for its retry: it holds the issue's
+  // execution lock and is not claimable until `scheduledRetryAt`, which is
+  // far enough out that nothing picks it up while the test looks.
+  async function seedScheduledRetry(companyId: string, agentId: string, issueId: string) {
+    const [run] = await db.insert(heartbeatRuns).values({
+      companyId, agentId, invocationSource: "automation", triggerDetail: "system",
+      status: "scheduled_retry", scheduledRetryAttempt: 1, scheduledRetryReason: "transient_failure",
+      scheduledRetryAt: new Date(Date.now() + 60 * 60_000),
+      contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_assigned" },
+    }).returning();
+    await db.update(issues).set({
+      executionRunId: run!.id, executionAgentNameKey: "agent-a", executionLockedAt: new Date(),
+    }).where(eq(issues.id, issueId));
+    return run!.id;
+  }
+
+  // The afterEach hook waits for every run to leave queued/running/
+  // scheduled_retry; a seeded retry never would on its own.
+  async function cancelRun(runId: string) {
+    await db.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date(), updatedAt: new Date() })
+      .where(eq(heartbeatRuns.id, runId));
+  }
+
   async function holdOf(actionId: string) {
     const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId));
     return action!;
@@ -280,6 +307,55 @@ describeEmbeddedPostgres("explicit wake past a settled hold recovers a deferred 
     const state = await describeState(companyId, issueId);
     expect(retry?.errorCode, state).not.toBe("execution_reconciliation_required");
     expect(retry?.status, state).toBe("succeeded");
+  }, TEST_TIMEOUT_MS);
+
+  it("defers, instead of merging it into the same agent's scheduled retry, a wake admitted only by the bypass", async () => {
+    // Merged into that retry, the wake would ride on a run whose own claim
+    // meets the hold (nothing superseded it: only the run this admission
+    // creates is covered) and is cancelled as `execution_reconciliation_required`,
+    // taking the wake with it. Deferring is what happened before the bypass.
+    const { companyId, agentId, issueId, actionId } = await seed();
+    const retryRunId = await seedScheduledRetry(companyId, agentId, issueId);
+    try {
+      expect(await assignmentWake(agentId, issueId)).toBeNull();
+
+      const state = await describeState(companyId, issueId);
+      const receipts = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentId));
+      const waits = receipts.filter((receipt) => receipt.reason === "execution_reconciliation_required");
+      expect(waits, state).toHaveLength(1);
+      expect(waits[0], state).toMatchObject({ runId: null });
+      expect((waits[0]!.payload as Record<string, unknown>).executionWait, state)
+        .toMatchObject({ recoveryActionId: actionId });
+      expect(receipts.filter((receipt) => receipt.status === "coalesced")).toHaveLength(0);
+
+      // No successor was created, the retry is untouched and the hold stands.
+      const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId));
+      expect(runs.map((run) => [run.id, run.status]), state).toEqual([[retryRunId, "scheduled_retry"]]);
+      const hold = await holdOf(actionId);
+      expect(hold.status).toBe("resolved");
+      expect((hold.evidence.automaticRecovery as Record<string, unknown>).replay).toBe("blocked");
+      expect(mockAdapterExecute).not.toHaveBeenCalled();
+    } finally {
+      await cancelRun(retryRunId);
+    }
+  }, TEST_TIMEOUT_MS);
+
+  it("does not defer the same wake for the scheduled retry once the hold is cleared", async () => {
+    // Control for the test above: with no hold in the way, the deferral seen
+    // there is the hold's doing, not the retry's.
+    const { companyId, agentId, issueId, actionId } = await seed();
+    await db.update(issueRecoveryActions).set({ evidence: { automaticRecovery: { replay: "cleared" } } })
+      .where(eq(issueRecoveryActions.id, actionId));
+    const retryRunId = await seedScheduledRetry(companyId, agentId, issueId);
+    try {
+      await assignmentWake(agentId, issueId);
+
+      const receipts = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentId));
+      expect(receipts.map((receipt) => receipt.reason), await describeState(companyId, issueId))
+        .not.toContain("execution_reconciliation_required");
+    } finally {
+      await cancelRun(retryRunId);
+    }
   }, TEST_TIMEOUT_MS);
 
   it.each([
