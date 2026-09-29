@@ -1,8 +1,13 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { agents, heartbeatRuns, issues, type Db } from "@paperclipai/db";
 import { HttpError } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { parseObject, readNonEmptyString } from "../modules/wake-queue/domain/values.js";
+import {
+  infraInterruptAttemptCount,
+  INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY,
+  isInfraInterruptErrorCode,
+} from "./infra-interrupts.js";
 
 /**
  * Operator pause drains instead of cancelling (L3).
@@ -171,6 +176,39 @@ export async function resumeAgentAfterPause(
   for (const issue of assigned) {
     if (liveIssueIds.has(issue.id)) continue;
     const idempotencyKey = `${RESUME_WAKE_IDEMPOTENCY_PREFIX}:${issue.id}`;
+    // myrmidon(L1): carries the shared infra-interrupt retry budget forward
+    // across this pause/resume cycle. This wake creates a brand-new
+    // heartbeat run rather than a scheduled retry of the run the pause
+    // cancelled, so heartbeat_runs.scheduledRetryAttempt (which defaults to
+    // 0 on the new row) cannot carry the budget on its own -- read it off
+    // the stranded run this issue is actually resuming from instead, and
+    // carry it into the new run's contextSnapshot (infra-interrupts.ts's
+    // infraInterruptAttemptCount reads it back from there). Once enough
+    // cycles have gone by, the carried count reaches the shared budget and
+    // shouldSkipReconciliationForInfraInterrupt stops suppressing the
+    // vendor's hold.
+    const priorRun = await deps.db
+      .select({
+        errorCode: heartbeatRuns.errorCode,
+        scheduledRetryAttempt: heartbeatRuns.scheduledRetryAttempt,
+        scheduledRetryReason: heartbeatRuns.scheduledRetryReason,
+        contextSnapshot: heartbeatRuns.contextSnapshot,
+      })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, companyId),
+          eq(heartbeatRuns.agentId, agentId),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+        ),
+      )
+      .orderBy(desc(heartbeatRuns.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    const infraInterruptAttempt =
+      priorRun && isInfraInterruptErrorCode(priorRun.errorCode)
+        ? infraInterruptAttemptCount(priorRun) + 1
+        : null;
     try {
       await deps.enqueueWakeup(agentId, {
         source: "automation",
@@ -179,7 +217,14 @@ export async function resumeAgentAfterPause(
         idempotencyKey,
         requestedByActorType: "system",
         requestedByActorId: "pause_resume",
-        contextSnapshot: { issueId: issue.id, taskKey: issue.id, resumeIntent: true },
+        contextSnapshot: {
+          issueId: issue.id,
+          taskKey: issue.id,
+          resumeIntent: true,
+          ...(infraInterruptAttempt !== null
+            ? { [INFRA_INTERRUPT_CONTEXT_ATTEMPT_KEY]: infraInterruptAttempt }
+            : {}),
+        },
       });
       strandedIssuesWoken += 1;
     } catch (err) {
