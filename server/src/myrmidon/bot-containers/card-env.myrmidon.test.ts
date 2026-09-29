@@ -128,6 +128,7 @@ describe("myrmidon(W2a) card env — what a card may bind", () => {
     const settings: BotProfileSettings = {
       hindsightApiUrl: "https://example.com/hindsight",
       hindsightBank: "fleet-default",
+      hindsightAllowedBanks: null,
       llmBaseUrl: "https://example.com/llm/v1",
       llmApiKeyEnv: "FLEET_LLM_API_KEY",
       llmApiKeySecret: "FLEET_LLM_API_KEY",

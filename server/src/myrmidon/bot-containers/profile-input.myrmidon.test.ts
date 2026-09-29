@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { compileHermesProfile } from "./profile-compiler.js";
 import {
   BOT_BOARD_URL_ENV,
+  BOT_HINDSIGHT_ALLOWED_BANKS_ENV,
   BOT_HINDSIGHT_API_URL_ENV,
   BOT_HINDSIGHT_BANK_ENV,
   BOT_LLM_API_KEY_ENV_ENV,
@@ -17,6 +18,8 @@ import {
   buildHermesProfileInput,
   cardUsesLlmGateway,
   parseBotMcpServers,
+  parseBotHindsightAllowedBanks,
+  parseObservationScopes,
   readBotProfileSettings,
   readMaxConcurrentRuns,
   rewriteMcpServerUrl,
@@ -31,6 +34,7 @@ function settings(overrides: Partial<BotProfileSettings> = {}): BotProfileSettin
   return {
     hindsightApiUrl: "https://example.com/hindsight",
     hindsightBank: "fleet-default",
+    hindsightAllowedBanks: null,
     llmBaseUrl: "https://example.com/llm/v1",
     llmApiKeyEnv: "FLEET_LLM_API_KEY",
     llmApiKeySecret: "FLEET_LLM_API_KEY",
@@ -70,6 +74,7 @@ describe("myrmidon(W2a) readBotProfileSettings", () => {
       readBotProfileSettings({
         [BOT_HINDSIGHT_API_URL_ENV]: "  https://example.com/hindsight  ",
         [BOT_HINDSIGHT_BANK_ENV]: "fleet",
+        [BOT_HINDSIGHT_ALLOWED_BANKS_ENV]: "fleet, shared ",
         [BOT_LLM_BASE_URL_ENV]: "https://example.com/llm/v1",
         [BOT_LLM_API_KEY_ENV_ENV]: "FLEET_LLM_API_KEY",
         [BOT_BOARD_URL_ENV]: "http://board.example.com:3100",
@@ -78,6 +83,7 @@ describe("myrmidon(W2a) readBotProfileSettings", () => {
     ).toEqual({
       hindsightApiUrl: "https://example.com/hindsight",
       hindsightBank: "fleet",
+      hindsightAllowedBanks: ["fleet", "shared"],
       llmBaseUrl: "https://example.com/llm/v1",
       llmApiKeyEnv: "FLEET_LLM_API_KEY",
       llmApiKeySecret: "FLEET_LLM_API_KEY",
@@ -97,6 +103,19 @@ describe("myrmidon(W2a) readBotProfileSettings", () => {
     });
     expect(read.llmApiKeyEnv).toBe("FLEET_LLM_API_KEY");
     expect(read.llmApiKeySecret).toBe("fleet-llm-gateway-key");
+  });
+});
+
+describe("myrmidon(MEMORY-ISOLATION) MYRMIDON_BOT_HINDSIGHT_ALLOWED_BANKS parsing", () => {
+  it("splits on commas, trims, drops empties and duplicates, keeps order", () => {
+    expect(parseBotHindsightAllowedBanks(" bank-a , bank-c ,bank-a,, shared ")).toEqual(["bank-a", "bank-c", "shared"]);
+    expect(parseBotHindsightAllowedBanks("bank-c")).toEqual(["bank-c"]);
+  });
+
+  it("is null (no check) when unset, blank or commas only", () => {
+    expect(parseBotHindsightAllowedBanks(null)).toBeNull();
+    expect(parseBotHindsightAllowedBanks("   ")).toBeNull();
+    expect(parseBotHindsightAllowedBanks(" , , ")).toBeNull();
   });
 });
 
@@ -301,6 +320,58 @@ describe("myrmidon(W2a) buildHermesProfileInput — hindsight", () => {
       autoRetain: true,
     });
     expect(input.hindsight.memoryMode).toBeUndefined();
+  });
+
+  it("myrmidon(MEMORY-ISOLATION) passes the card's observationScopes into the input", () => {
+    const { input } = buildHermesProfileInput(
+      source({
+        adapterConfig: {
+          hindsight: { observationScopes: [["channel:board"], ["channel:telegram", "team:core"]] },
+        },
+      }),
+      settings(),
+    );
+    expect(input.hindsight.observationScopes).toEqual([["channel:board"], ["channel:telegram", "team:core"]]);
+  });
+
+  it("myrmidon(MEMORY-ISOLATION) observationScopes: a bare string is one scope, wrong shapes fold away", () => {
+    expect(parseObservationScopes(["channel:board", "channel:telegram"])).toEqual([["channel:board"], ["channel:telegram"]]);
+    expect(parseObservationScopes([["channel:board"], [] as string[], [""]])).toEqual([["channel:board"]]);
+    expect(parseObservationScopes([["channel:board"], ["channel:board"]])).toEqual([["channel:board"]]);
+    expect(parseObservationScopes([42, {}, ""])).toBeUndefined();
+    expect(parseObservationScopes(undefined)).toBeUndefined();
+    expect(parseObservationScopes("channel:board")).toBeUndefined();
+  });
+
+  it("myrmidon(MEMORY-ISOLATION) rejects a bank outside the allowlist, naming the bank and the setting", () => {
+    const build = () =>
+      buildHermesProfileInput(source({ adapterConfig: { hindsight: { bankId: "bank-typo" } } }), settings({
+        hindsightAllowedBanks: ["bank-c", "bank-a"],
+      }));
+    expect(build).toThrow(BotProfileInputError);
+    expect(build).toThrow(BOT_HINDSIGHT_ALLOWED_BANKS_ENV);
+    expect(build).toThrow("bank-typo");
+  });
+
+  it("myrmidon(MEMORY-ISOLATION) accepts a bank on the allowlist, from the card or from the fallback", () => {
+    const fromCard = buildHermesProfileInput(
+      source({ adapterConfig: { hindsight: { bankId: "bank-a" } } }),
+      settings({ hindsightAllowedBanks: ["bank-c", "bank-a"] }),
+    );
+    expect(fromCard.input.hindsight.bankId).toBe("bank-a");
+    const fromFallback = buildHermesProfileInput(source(), settings({
+      hindsightBank: "bank-c",
+      hindsightAllowedBanks: ["bank-c", "bank-a"],
+    }));
+    expect(fromFallback.input.hindsight.bankId).toBe("bank-c");
+  });
+
+  it("myrmidon(MEMORY-ISOLATION) no allowlist set means no check (the previous behavior)", () => {
+    const { input } = buildHermesProfileInput(
+      source({ adapterConfig: { hindsight: { bankId: "anything-at-all" } } }),
+      settings(),
+    );
+    expect(input.hindsight.bankId).toBe("anything-at-all");
   });
 });
 

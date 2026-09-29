@@ -25,6 +25,7 @@ import {
   buildHermesProfileInput,
   BotProfileInputError,
   BOT_MCP_SERVERS_ENV,
+  assertBotHindsightBankForCard,
   assertBotLlmSettingsForCard,
   assertBotProfileSettings,
   cardUsesLlmGateway,
@@ -187,6 +188,10 @@ export function createBotProfileCompile(
     // A card that needs the LLM gateway (provider empty/auto/custom) fails here, by
     // the missing setting's name, before the ports below create any key for the bot.
     assertBotLlmSettingsForCard(settings, agent.adapterConfig);
+    // myrmidon(MEMORY-ISOLATION): a bank outside the allowlist fails here too,
+    // same fail-fast slot — no secret is created for a bot whose profile would
+    // have been wrong anyway.
+    assertBotHindsightBankForCard(settings, agent.adapterConfig);
 
     // Read-only lookups first: a missing MCP token secret fails here, before the
     // ports below create the bot's keys, so a broken instance setting leaves nothing behind.

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BOT_BOARD_URL_ENV,
+  BOT_HINDSIGHT_ALLOWED_BANKS_ENV,
   BOT_HINDSIGHT_API_URL_ENV,
   BOT_HINDSIGHT_BANK_ENV,
   BOT_LLM_API_KEY_ENV_ENV,
@@ -196,6 +197,52 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
     const second = await compile("agent-a", "agent-a");
     expect(fileContent(second, "hermes/hindsight/config.json")).toContain("fleet-other");
     expect(second.restartHash).not.toBe(first.restartHash);
+  });
+
+  describe("myrmidon(MEMORY-ISOLATION) hindsight bank allowlist and observation scopes", () => {
+    const CARD_HINDSIGHT = { model: "some-model", provider: "custom", hindsight: { bankId: "bank-a", observationScopes: [["channel:board"], ["channel:telegram"]] } };
+
+    it("writes the card's observationScopes into hermes/hindsight/config.json", async () => {
+      const board = fakeBoard();
+      board.agent.current = agentRecord({ adapterConfig: CARD_HINDSIGHT });
+      const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+      const json = JSON.parse(fileContent(profile, "hermes/hindsight/config.json")) as Record<string, unknown>;
+      expect(json.observation_scopes).toEqual([["channel:board"], ["channel:telegram"]]);
+      expect(json.bank_id).toBe("bank-a");
+    });
+
+    it("fails the compile, creating no secret, when the card's bank is outside the allowlist", async () => {
+      const board = fakeBoard();
+      board.agent.current = agentRecord({ adapterConfig: CARD_HINDSIGHT });
+      const compile = createBotProfileCompile(board.ports, {
+        env: { ...INSTANCE_ENV, [BOT_HINDSIGHT_ALLOWED_BANKS_ENV]: "bank-c,bank-b" },
+      });
+      await expect(compile("agent-a", "agent-a")).rejects.toThrow(BotProfileInputError);
+      await expect(compile("agent-a", "agent-a")).rejects.toThrow(BOT_HINDSIGHT_ALLOWED_BANKS_ENV);
+      await expect(compile("agent-a", "agent-a")).rejects.toThrow("bank-a");
+      expect(board.calls).not.toContain("ensureApiServerKey");
+      expect(board.calls).not.toContain("ensureAgentApiKey");
+    });
+
+    it("compiles the same card once the bank is on the allowlist, and a card without scopes stays without", async () => {
+      const board = fakeBoard();
+      board.agent.current = agentRecord({ adapterConfig: CARD_HINDSIGHT });
+      const profile = await createBotProfileCompile(board.ports, {
+        env: { ...INSTANCE_ENV, [BOT_HINDSIGHT_ALLOWED_BANKS_ENV]: "bank-c,bank-a" },
+      })("agent-a", "agent-a");
+      expect(JSON.parse(fileContent(profile, "hermes/hindsight/config.json")).bank_id).toBe("bank-a");
+
+      const plain = fakeBoard();
+      const plainProfile = await createBotProfileCompile(plain.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+      expect(JSON.parse(fileContent(plainProfile, "hermes/hindsight/config.json")).observation_scopes).toBeUndefined();
+    });
+
+    it("no allowlist set: the previous behavior, any bank compiles", async () => {
+      const board = fakeBoard();
+      board.agent.current = agentRecord({ adapterConfig: CARD_HINDSIGHT });
+      const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+      expect(JSON.parse(fileContent(profile, "hermes/hindsight/config.json")).bank_id).toBe("bank-a");
+    });
   });
 
   describe("instance-wide MCP servers (MYRMIDON_BOT_MCP_SERVERS)", () => {

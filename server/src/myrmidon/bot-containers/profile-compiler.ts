@@ -133,6 +133,14 @@ export interface HermesProfileHindsightSettings {
   memoryMode?: "hybrid" | "context" | "tools";
   /** hindsight's `auto_retain`. Defaults to `false` here — the fleet's own convention — not the vendor's own default of `true`. */
   autoRetain?: boolean;
+  /**
+   * hindsight's `observation_scopes`: which tag conjunctions the bot observes
+   * (e.g. `[["channel:board"],["channel:telegram"]]`). Currently only the live
+   * hermes_local profiles carry it; MEMORY-ISOLATION carries it through the
+   * card so it survives the move to containers. Serialized as-is (array of
+   * arrays); omitted when unset.
+   */
+  observationScopes?: readonly (readonly string[])[];
 }
 
 /**
@@ -616,6 +624,21 @@ function buildHindsightConfigJson(hindsight: HermesProfileHindsightSettings, war
 
   const memoryMode = hindsight.memoryMode ?? "tools";
   const autoRetain = hindsight.autoRetain ?? false;
+  // myrmidon(MEMORY-ISOLATION): observation scopes from the card. Empty scopes
+  // and duplicates fold away, so a card cannot smuggle in a scope that is
+  // blank or a copy of another; the compiled file stays deterministic.
+  const observationScopes: string[][] = [];
+  {
+    const seen = new Set<string>();
+    for (const scope of hindsight.observationScopes ?? []) {
+      const tags = scope.map((tag) => tag.trim()).filter((tag) => tag.length > 0);
+      if (tags.length === 0) continue;
+      const key = JSON.stringify(tags);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      observationScopes.push(tags);
+    }
+  }
 
   // Key order fixed and sorted for the same determinism reason as the YAML.
   // Key names match what the vendor's hindsight plugin actually reads from
@@ -632,6 +655,10 @@ function buildHindsightConfigJson(hindsight: HermesProfileHindsightSettings, war
   if (mission) ordered.bank_mission = mission;
   ordered.memory_mode = memoryMode;
   ordered.mode = mode;
+  // myrmidon(MEMORY-ISOLATION): observation_scopes from the card, written
+  // between memory_mode and mode in the sorted key order. Same shape the live
+  // hermes_local profiles carry: an array of tag conjunctions.
+  if (observationScopes.length > 0) ordered.observation_scopes = observationScopes;
   if (recallBudget) ordered.recall_budget = recallBudget;
   if (tags.length > 0) ordered.retain_tags = tags;
   return `${JSON.stringify(ordered, null, 2)}\n`;
