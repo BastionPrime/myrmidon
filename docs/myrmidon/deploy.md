@@ -100,8 +100,11 @@ scripts/myrmidon/deploy/deploy.sh --config /path/to/deploy.env --digest sha256:<
    - `hook` — свои команды `MAINTENANCE_ENTER_COMMAND` / `MAINTENANCE_EXIT_COMMAND`;
    - `pause` — пока API режима нет: пауза `MAINTENANCE_PAUSE_SEC` секунд.
 5. Ожидание, пока идущих прогонов не станет 0: `RUNNING_RUNS_COMMAND` или, в режиме `api`,
-   `instance.runningRuns` из API. Таймаут `RUNS_WAIT_TIMEOUT_SEC` — выкат прерывается до смены
-   образа. Счётчик не сработал — тоже прерывается (кроме `ALLOW_UNKNOWN_RUNS=1`).
+   `instance.runningRuns` из API. Таймаут `RUNS_WAIT_TIMEOUT_SEC` (или сломанный счётчик) — выкат
+   прерывается до смены образа, **режим обслуживания снимается перед аварийным выходом**: доска не
+   остаётся в обслуживании до ручного снятия. Не сработавшее снятие (обслуживание уже выключено)
+   — предупреждение, не двойной отказ; причина выхода остаётся «слив не завершился». Счётчик не
+   сработал — тоже прерывается (кроме `ALLOW_UNKNOWN_RUNS=1`).
 6. Новая строка `image:` в override и `docker compose up -d --no-deps <сервис>`: пересоздаётся
    только сервис сервера.
 7. Проверка `/api/health` (`verify-health.sh`): `status` = `ok`, версия и коммит совпадают.

@@ -15,7 +15,8 @@
 #
 # Steps: pull the image by digest; remember the current digest as "previous";
 # dump the database (DUMP_COMMAND, refuses an empty dump); enter maintenance;
-# wait until no runs are in progress; switch the image line in the compose
+# wait until no runs are in progress (a drain timeout lifts maintenance again
+# and aborts before the image changes); switch the image line in the compose
 # override file and recreate only the server service; verify /api/health
 # (status, version, commit); leave maintenance.
 #
@@ -70,7 +71,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   plan "2. remember previous image: ${previous_image:-<none>} -> $PREVIOUS_IMAGE_FILE"
   plan "3. dump database with DUMP_COMMAND into $DUMP_DIR (refuse if smaller than $DUMP_MIN_BYTES bytes)"
   plan "4. enter maintenance (MAINTENANCE_MODE=$MAINTENANCE_MODE)"
-  plan "5. wait for zero running runs (timeout ${RUNS_WAIT_TIMEOUT_SEC}s)"
+  plan "5. wait for zero running runs (timeout ${RUNS_WAIT_TIMEOUT_SEC}s); on a drain timeout maintenance is lifted and the deploy aborts before the image changes"
   plan "6. set image in $OVERRIDE_PATH to $ref; docker compose up -d --no-deps $COMPOSE_SERVICE"
   plan "7. verify $HEALTH_URL: status ok, version ${expect_version:-<from image label>}, commit ${expect_commit:-<from image label>}"
   plan "8. leave maintenance"
@@ -102,7 +103,24 @@ log "4/8 enter maintenance"
 maintenance_enter "deploy $MYRMIDON_IMAGE@${digest:0:19}"
 
 log "5/8 wait for running runs"
-wait_for_idle_runs
+# myrmidon(DEPLOY-TIMEOUT-EXIT): the drain happens with maintenance already on,
+# so a failed wait must not die inside wait_for_idle_runs and leave the board in
+# maintenance until someone lifts it by hand. The wait returns 1 instead of
+# dying; here we lift maintenance, then die, so the board serves traffic again
+# and the image has not changed (nothing after this point ran). The state flag
+# keeps the final message true when the lift itself fails (maintenance may
+# already be off): then the reason stays "the drain did not finish", and the
+# operator is told maintenance is still on, not that it was lifted.
+if ! wait_for_idle_runs; then
+  log "drain failed; lifting maintenance before aborting (image not changed)"
+  lift_ok=1
+  maintenance_exit || lift_ok=0
+  if ((lift_ok == 0)); then
+    log "WARNING: could not lift maintenance (it may already be off); check $MAINTENANCE_MODE manually"
+    die "runs: deploy aborted before changing the image; maintenance lift failed (see WARNING above)"
+  fi
+  die "runs: deploy aborted before changing the image; maintenance was lifted"
+fi
 
 log "6/8 switch image and recreate $COMPOSE_SERVICE"
 write_override "$digest"

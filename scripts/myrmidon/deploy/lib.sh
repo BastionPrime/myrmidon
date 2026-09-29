@@ -314,6 +314,9 @@ running_runs() {
 }
 
 wait_for_idle_runs() {
+  # myrmidon(DEPLOY-TIMEOUT-EXIT): returns 1 instead of dying, so the caller
+  # (deploy.sh) can lift maintenance before it aborts. Dying here would strand
+  # the board in maintenance mode, because maintenance_enter already ran.
   local deadline=$((SECONDS + RUNS_WAIT_TIMEOUT_SEC)) count rc
   while :; do
     # myrmidon(R4): a broken counter must not let the image switch cut live runs.
@@ -325,14 +328,15 @@ wait_for_idle_runs() {
         log "runs: cannot count running runs (exit $rc); ALLOW_UNKNOWN_RUNS=1, not waiting"
         return 0
       fi
-      die "runs: cannot count running runs (exit $rc, output '${count}'); fix RUNNING_RUNS_COMMAND / MAINTENANCE_MODE=api or set ALLOW_UNKNOWN_RUNS=1; image not changed"
+      log "ERROR: runs: cannot count running runs (exit $rc, output '${count}'); fix RUNNING_RUNS_COMMAND / MAINTENANCE_MODE=api or set ALLOW_UNKNOWN_RUNS=1; image not changed"
+      return 1
     fi
-    [[ "$count" =~ ^[0-9]+$ ]] || die "running runs count is not a number: $count"
+    [[ "$count" =~ ^[0-9]+$ ]] || { log "ERROR: running runs count is not a number: $count"; return 1; }
     if ((count == 0)); then
       log "runs: no runs in progress"
       return 0
     fi
-    ((SECONDS < deadline)) || die "runs: $count run(s) still in progress after ${RUNS_WAIT_TIMEOUT_SEC}s; deploy aborted before changing the image"
+    ((SECONDS < deadline)) || { log "ERROR: runs: $count run(s) still in progress after ${RUNS_WAIT_TIMEOUT_SEC}s; deploy aborted before changing the image"; return 1; }
     log "runs: waiting for $count run(s) to finish"
     sleep "$POLL_INTERVAL_SEC"
   done
