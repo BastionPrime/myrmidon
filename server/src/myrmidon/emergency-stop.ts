@@ -25,6 +25,12 @@
 //   an active agent stays active. Emergency stop is "stop the runs", not
 //   "pause the agent"; combining the two is what the pause route is for.
 //
+// Accepted race: the route does not touch agent status, so it can interleave
+// with an unpause or a fresh wakeup that lands at the same moment. Runs that
+// start after the cancel snapshot are simply not cancelled (the operator can
+// press the button again), and runs cancelled just before an unpause are
+// resumed by the normal L3 path. Neither outcome loses work or corrupts state.
+//
 // The route lives under /api/myrmidon (CONVENTIONS.md #8) and applies the
 // same permission path as the vendor's pause route (getAccessibleAgent →
 // assertBoardCanManageAgentsForCompany): board actor, company access and the
