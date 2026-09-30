@@ -2118,6 +2118,10 @@ describe("realizeExecutionWorkspace", () => {
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           PAPERCLIP_WORKSPACE_BASE_CWD: baseRoot,
           PAPERCLIP_WORKSPACE_CWD: worktreeRoot,
+          // myrmidon(WORKSPACE-HYGIENE): this fixture asserts the exact vendor
+          // install argv; the shared-store flags are covered by the dedicated
+          // node:test suite under scripts/myrmidon/.
+          MYRMIDON_WORKSPACE_PNPM_STORE: "0",
         },
       });
 
@@ -2358,6 +2362,9 @@ describe("realizeExecutionWorkspace", () => {
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           PAPERCLIP_WORKSPACE_BASE_CWD: baseRoot,
           PAPERCLIP_WORKSPACE_CWD: worktreeRoot,
+          // myrmidon(WORKSPACE-HYGIENE): exact vendor install argv fixture,
+          // see the shared-store suite under scripts/myrmidon/.
+          MYRMIDON_WORKSPACE_PNPM_STORE: "0",
         },
       });
 
