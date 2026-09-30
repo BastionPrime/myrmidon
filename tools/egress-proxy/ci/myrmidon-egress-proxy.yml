@@ -1,0 +1,167 @@
+# Не рабочий файл CI: это workflow службы, который надо положить в .github/workflows/.
+# Пуш файлов под .github/workflows/ требует у токена права `workflow`; у инженерного токена его нет
+# (GitHub отвечает: "refusing to allow a Personal Access Token to create or update workflow … without
+# `workflow` scope"), поэтому файл лежит здесь и переносится в .github/workflows/ тем, у кого это
+# право есть (сопровождающий/оператор). Содержимое переносится как есть, без правок.
+# Раздел 12 CONVENTIONS.md: .github/workflows/** — файл трека 1, о новой проверке CI трек пишет в отчёте.
+
+name: Myrmidon egress proxy
+
+# myrmidon(EGRESS-A): the outbound proxy for container bots (tools/egress-proxy,
+# docs/myrmidon/egress.md):
+#   ghcr.io/itkadr-git/myrmidon-egress-proxy
+# Log-only: the proxy records every destination and refuses none, so the items it serves are the
+# network the bots sit on and the profile variables the driver writes. On a pull request this runs
+# the unit tests and checks that the image builds (no registry credentials); push happens on main
+# and on myr-v* tags, by the pattern in myrmidon-cloud-files.yml. A manual run from any other
+# branch only runs the unit tests.
+
+on:
+  push:
+    branches: [main]
+    tags: ["myr-v*"]
+    paths:
+      - "tools/egress-proxy/**"
+      - ".github/workflows/myrmidon-egress-proxy.yml"
+  pull_request:
+    paths:
+      - "tools/egress-proxy/**"
+      - ".github/workflows/myrmidon-egress-proxy.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: myrmidon-egress-proxy-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build egress-proxy
+    if: ${{ github.repository == 'itkadr-git/myrmidon' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/itkadr-git/myrmidon-egress-proxy
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/myr-v* ]]; then
+            tag="${GITHUB_REF#refs/tags/myr-}"
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::release tag must look like myr-vX.Y.Z, got ${GITHUB_REF#refs/tags/}"
+              exit 1
+            fi
+            echo "image_tag=${tag#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      # Unit tests of the journal and of the proxy over a real socket, inside the build.
+      - name: Unit tests
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: tools/egress-proxy
+          file: tools/egress-proxy/Dockerfile
+          target: test
+          push: false
+
+      - name: Login to GitHub Container Registry
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/myr-v')) }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ghcr.io/itkadr-git/myrmidon-egress-proxy
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.version.outputs.image_tag }},enable=${{ startsWith(github.ref, 'refs/tags/myr-v') }}
+          labels: |
+            org.opencontainers.image.title=Myrmidon egress proxy (log-only)
+            org.opencontainers.image.description=Forward proxy for container bots that records every destination and refuses none
+            org.opencontainers.image.source=https://github.com/itkadr-git/myrmidon
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build (pull request, no push)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: tools/egress-proxy
+          file: tools/egress-proxy/Dockerfile
+          target: service
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: egress-proxy:pr-check
+          push: false
+          load: true
+          cache-from: type=registry,ref=ghcr.io/itkadr-git/myrmidon-egress-proxy:buildcache
+
+      # Check the finished image, not the sources.
+      - name: Check the built image
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python egress-proxy:pr-check -c "import egress_proxy.server; print('import ok')"
+
+      - name: Build and push by digest
+        id: build
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/myr-v')) }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: tools/egress-proxy
+          file: tools/egress-proxy/Dockerfile
+          target: service
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=ghcr.io/itkadr-git/myrmidon-egress-proxy,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=registry,ref=ghcr.io/itkadr-git/myrmidon-egress-proxy:buildcache
+          cache-to: type=registry,ref=ghcr.io/itkadr-git/myrmidon-egress-proxy:buildcache,mode=max
+
+      - name: Tag the built digest
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/myr-v')) }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ghcr.io/itkadr-git/myrmidon-egress-proxy
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=(-t "$tag")
+          done < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools create "${args[@]}" "$IMAGE@$DIGEST"
+          docker buildx imagetools inspect "$IMAGE@$DIGEST"
+
+      - name: Summary
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/myr-v')) }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ghcr.io/itkadr-git/myrmidon-egress-proxy
+        run: |
+          {
+            echo "### Myrmidon egress proxy (log-only)"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Digest | \`$IMAGE@$DIGEST\` |"
+            echo "| Tags | $(jq -r '.tags | map("`" + . + "`") | join(", ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") |"
+          } >> "$GITHUB_STEP_SUMMARY"
