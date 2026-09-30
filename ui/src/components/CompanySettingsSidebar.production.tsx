@@ -160,6 +160,15 @@ export function CompanySettingsSidebar() {
               end
             />
           )}
+          {/* myrmidon(ROLE-SCOPED-TOKENS): scoped board API key management */}
+          {showPage("instance.access") && (
+            <SidebarNavItem
+              to={`${INSTANCE_SETTINGS_PATH_PREFIX}/board-api-keys`}
+              label="Board API keys"
+              icon={KeyRound}
+              end
+            />
+          )}
           {showPage("instance.heartbeats") && (
             <SidebarNavItem
               to={`${INSTANCE_SETTINGS_PATH_PREFIX}/heartbeats`}

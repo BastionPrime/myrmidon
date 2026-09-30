@@ -14,6 +14,8 @@ const items = [
   { value: "instance-profile", label: "Profile", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/profile` },
   { value: "instance-environments", label: "Environments", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/environments` },
   { value: "instance-access", label: "Access", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/access` },
+  // myrmidon(ROLE-SCOPED-TOKENS): scoped board API key management
+  { value: "instance-board-api-keys", label: "Board API keys", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/board-api-keys` },
   { value: "instance-experimental", label: "Experimental", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/experimental` },
   { value: "instance-plugins", label: "Plugins", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/plugins` },
   { value: "instance-adapters", label: "Adapters", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/adapters` },
@@ -30,6 +32,7 @@ const hiddenSettingKeyByTab: Partial<Record<CompanySettingsTab, string>> = {
   "instance-profile": "instance.profile",
   "instance-environments": "instance.environments",
   "instance-access": "instance.access",
+  "instance-board-api-keys": "instance.access",
   "instance-experimental": "instance.experimental",
   "instance-plugins": "instance.plugins",
   "instance-adapters": "instance.adapters",
@@ -46,6 +49,12 @@ export function getCompanySettingsTab(pathname: string): CompanySettingsTab {
 
   if (pathname.includes(`${INSTANCE_SETTINGS_PATH_PREFIX}/access`)) {
     return "instance-access";
+  }
+
+  // myrmidon(ROLE-SCOPED-TOKENS): must run before the /access prefix check
+  // would not collide — explicit check for the nested page.
+  if (pathname.includes(`${INSTANCE_SETTINGS_PATH_PREFIX}/board-api-keys`)) {
+    return "instance-board-api-keys";
   }
 
   if (pathname.includes(`${INSTANCE_SETTINGS_PATH_PREFIX}/experimental`)) {
