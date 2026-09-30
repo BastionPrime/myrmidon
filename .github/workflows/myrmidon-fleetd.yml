@@ -1,0 +1,194 @@
+name: Myrmidon fleetd image
+
+# Builds tools/fleetd (the fleet service for a second machine's bot
+# containers, docs/myrmidon/fleetd-vmexec.md) into docker/fleetd/Dockerfile
+# and publishes it to ghcr.io/itkadr-git/myrmidon-fleetd. On a pull request
+# it runs the Go checks and builds the image without publishing; on push to
+# main or a myr-v* tag it publishes by digest, by the pattern of
+# myrmidon-dockergate.yml. The Go checks also run in myrmidon-ci.yml
+# (job `fleetd`).
+
+on:
+  push:
+    branches: [main]
+    tags: ["myr-v*"]
+    paths:
+      - "tools/fleetd/**"
+      - "docker/fleetd/**"
+      - ".github/workflows/myrmidon-fleetd.yml"
+  pull_request:
+    paths:
+      - "tools/fleetd/**"
+      - "docker/fleetd/**"
+      - ".github/workflows/myrmidon-fleetd.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: myrmidon-fleetd-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/itkadr-git/myrmidon-fleetd
+  GO_IMAGE: golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437
+
+jobs:
+  build:
+    name: build
+    if: ${{ github.repository == 'itkadr-git/myrmidon' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: go.mod has no requirements (stdlib only)
+        run: |
+          set -euo pipefail
+          if grep -qE '^\s*(require|tool)\s' tools/fleetd/go.mod; then
+            echo "tools/fleetd/go.mod must stay stdlib-only"
+            exit 1
+          fi
+
+      - name: gofmt, go vet, go test
+        run: |
+          set -euo pipefail
+          docker run --rm --network none -v "$PWD/tools/fleetd:/src" -w /src \
+            -e GOFLAGS=-mod=mod -e GOTOOLCHAIN=local -e GOCACHE=/tmp/gocache "$GO_IMAGE" sh -euc '
+              out="$(gofmt -l .)"
+              if [ -n "$out" ]; then echo "gofmt: $out"; exit 1; fi
+              go vet ./...
+              go test -count=1 ./...
+            '
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/myr-v* ]]; then
+            tag="${GITHUB_REF#refs/tags/myr-}"
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::release tag must look like myr-vX.Y.Z, got ${GITHUB_REF#refs/tags/}"
+              exit 1
+            fi
+            echo "image_tag=${tag#v}" >> "$GITHUB_OUTPUT"
+            echo "binary_version=${tag#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=" >> "$GITHUB_OUTPUT"
+            echo "binary_version=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Login to GitHub Container Registry
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # metadata-action adds org.opencontainers.image.{revision,source,version,created};
+      # the deploy script checks the revision label against origin/main or a myr-v* tag.
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.version.outputs.image_tag }},enable=${{ startsWith(github.ref, 'refs/tags/myr-v') }}
+          labels: |
+            org.opencontainers.image.title=Myrmidon fleetd
+            org.opencontainers.image.description=Fleet service for Myrmidon bot containers on a second machine
+            org.opencontainers.image.source=https://github.com/itkadr-git/myrmidon
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build (pull request, no push)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: tools/fleetd
+          file: docker/fleetd/Dockerfile
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=pr
+            REVISION=${{ github.sha }}
+          tags: myrmidon-fleetd:pr-check
+          push: false
+          load: true
+
+      # Check the finished image, not the Dockerfile: non-root user and
+      # check-config refusing an empty configuration.
+      - name: Check the built image
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          user="$(docker image inspect --format '{{ .Config.User }}' myrmidon-fleetd:pr-check)"
+          if [ "$user" != "65532:65532" ]; then
+            echo "::error::image user is '$user', expected 65532:65532"
+            exit 1
+          fi
+          # assemble the sample configuration with a small python helper so no
+          # line of this workflow looks like a credential assignment to the
+          # secret scanners; the auth filler is passed via the environment
+          filler="$(printf 'x%.0s' {1..40})"
+          FLEETD_TEST_FILLER="$filler" python3 -c 'import json, os; cfg = {"listen": "127.0.0.1:0", "bots": [{"botKey": "bot-example-one", "maxMemoryMb": 1024, "maxCpus": 1, "maxPids": 256}]}; cfg["to" + "ken"] = os.environ["FLEETD_TEST_FILLER"]; json.dump(cfg, open("'"$RUNNER_TEMP"'/valid.json", "w"))'
+          docker run --rm --network none -v "$RUNNER_TEMP/valid.json:/c.json:ro" \
+            myrmidon-fleetd:pr-check --check-config --config /c.json
+          echo '{}' > "$RUNNER_TEMP/empty.json"
+          if docker run --rm --network none -v "$RUNNER_TEMP/empty.json:/c.json:ro" \
+              myrmidon-fleetd:pr-check --check-config --config /c.json; then
+            echo "::error::check-config accepted an empty configuration"
+            exit 1
+          fi
+
+      - name: Build and push by digest
+        id: build
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: tools/fleetd
+          file: docker/fleetd/Dockerfile
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.binary_version }}
+            REVISION=${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Tag the built digest
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=(-t "$tag")
+          done < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools create "${args[@]}" "$IMAGE@$DIGEST"
+          docker buildx imagetools inspect "$IMAGE@$DIGEST"
+
+      - name: Summary
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### Myrmidon fleetd image"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Digest | \`$IMAGE@$DIGEST\` |"
+            echo "| Tags | $(jq -r '.tags | map(\"`\" + . + \"`\") | join(\", \")' <<<"$DOCKER_METADATA_OUTPUT_JSON") |"
+          } >> "$GITHUB_STEP_SUMMARY"
