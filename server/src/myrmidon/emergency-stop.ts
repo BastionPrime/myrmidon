@@ -25,15 +25,20 @@
 //   an active agent stays active. Emergency stop is "stop the runs", not
 //   "pause the agent"; combining the two is what the pause route is for.
 //
-// The route lives under /api/myrmidon (CONVENTIONS.md #8), is board-only and
-// checks company access, like the vendor's pause route.
+// The route lives under /api/myrmidon (CONVENTIONS.md #8) and applies the
+// same permission path as the vendor's pause route (getAccessibleAgent →
+// assertBoardCanManageAgentsForCompany): board actor, company access and the
+// `agents:create` grant, so a board member with only read access cannot stop
+// an agent's runs.
 
 import { Router } from "express";
+import type { Request } from "express";
 import { eq } from "drizzle-orm";
 import { agents, type Db } from "@paperclipai/db";
-import { notFound } from "../errors.js";
-import { heartbeatService } from "../services/index.js";
+import { forbidden, notFound } from "../errors.js";
+import { heartbeatService, accessService } from "../services/index.js";
 import { logActivity } from "../services/activity-log.js";
+import { authorizationDeniedDetails } from "../services/authorization.js";
 import { assertBoard, assertCompanyAccess, hasCompanyAccess } from "../routes/authz.js";
 
 /** Error code the cancelled runs carry. Same code an explicit pause-cancel uses. */
@@ -49,6 +54,10 @@ export interface EmergencyStopResult {
 export interface EmergencyStopDeps {
   /** Cancels every cancellable run of the agent with the agent_paused code. */
   cancelActiveForAgent: (agentId: string, reason?: string) => Promise<number>;
+  /** Same permission decision the pause route applies (agents:create on the company). */
+  assertCanManageAgents: (req: Request, companyId: string) => Promise<void>;
+  /** Resolves the agent row; null for unknown or malformed ids. */
+  getAgent: (id: string) => Promise<{ id: string; companyId: string } | null>;
 }
 
 /**
@@ -77,31 +86,58 @@ export async function emergencyStopAgent(
   return { agentId: input.agentId, runsCancelled };
 }
 
-/** Production wiring: the shared heartbeat service, same as the pause route. */
+/** Production wiring: the shared services, same as the pause route. */
 export function emergencyStopDeps(db: Db): EmergencyStopDeps {
   // heartbeat.cancelActiveForAgent cancels with errorCode "agent_paused"
   // unconditionally (its original caller was the pause route); emergency
   // stop wants exactly that code, see EMERGENCY_STOP_ERROR_CODE.
-  return { cancelActiveForAgent: heartbeatService(db).cancelActiveForAgent };
+  const heartbeat = heartbeatService(db);
+  // The pause route's assertBoardCanManageAgentsForCompany (agents.ts):
+  // board actor + company access + the agents:create grant.
+  const access = accessService(db);
+  const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return {
+    cancelActiveForAgent: heartbeat.cancelActiveForAgent,
+    async assertCanManageAgents(req: Request, companyId: string) {
+      const decision = await access.decide({
+        actor: req.actor,
+        action: "agents:create",
+        resource: { type: "company", companyId },
+      });
+      if (!decision.allowed) {
+        throw forbidden(decision.explanation, authorizationDeniedDetails(decision));
+      }
+    },
+    async getAgent(id: string) {
+      // A malformed id is "no such agent", not a database error.
+      if (!UUID_PATTERN.test(id)) return null;
+      return db
+        .select({ id: agents.id, companyId: agents.companyId })
+        .from(agents)
+        .where(eq(agents.id, id))
+        .then((rows) => rows[0] ?? null);
+    },
+  };
 }
 
 /** POST /api/myrmidon/agents/:id/emergency-stop — board only. */
-export function myrmidonEmergencyStopRoutes(db: Db) {
+export function myrmidonEmergencyStopRoutes(db: Db, deps: EmergencyStopDeps = emergencyStopDeps(db)) {
   const router = Router();
   router.post("/myrmidon/agents/:id/emergency-stop", async (req, res) => {
     assertBoard(req);
-    const id = req.params.id as string;
     // 404 for both "no such agent" and "someone else's agent" (hasCompanyAccess),
-    // so agent ids cannot be probed across companies; same shape as the W2b routes.
-    const agent = await db
-      .select({ id: agents.id, companyId: agents.companyId })
-      .from(agents)
-      .where(eq(agents.id, id))
-      .then((rows) => rows[0] ?? null);
+    // so agent ids cannot be probed across companies; same shape as the pause
+    // route's getAccessibleAgent.
+    const agent = await deps.getAgent(req.params.id as string);
     if (!agent || !hasCompanyAccess(req, agent.companyId)) throw notFound("Agent not found");
     assertCompanyAccess(req, agent.companyId);
+    // myrmidon(EMERGENCY-STOP): the same permission path the pause route applies
+    // (getAccessibleAgent → assertBoardCanManageAgentsForCompany, agents.ts):
+    // board actor + company access + the agents:create grant, so a board
+    // member with only read access cannot stop an agent's runs.
+    await deps.assertCanManageAgents(req, agent.companyId);
     const result = await emergencyStopAgent(
-      emergencyStopDeps(db),
+      deps,
       db,
       { agentId: agent.id, companyId: agent.companyId },
       { actorType: "user", actorId: req.actor.userId ?? "board" },
