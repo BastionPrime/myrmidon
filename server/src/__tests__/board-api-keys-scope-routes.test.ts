@@ -42,6 +42,8 @@ async function createApp(actor: any) {
 
 const companyUuid = "11111111-1111-4111-8111-111111111111";
 
+  // Cold import of routes/access.ts dominates the first test in slow
+  // containers (18s observed); keep the per-test ceiling above it.
 describe("POST /api/board-api-keys scope plumbing (myrmidon ROLE-SCOPED-TOKENS)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -84,7 +86,7 @@ describe("POST /api/board-api-keys scope plumbing (myrmidon ROLE-SCOPED-TOKENS)"
         details: expect.objectContaining({ scope: "release" }),
       }),
     );
-  });
+  }, 60000);
 
   it("defaults the scope to full when not requested", async () => {
     mockBoardAuthService.createNamedBoardApiKey.mockResolvedValue({
@@ -113,7 +115,7 @@ describe("POST /api/board-api-keys scope plumbing (myrmidon ROLE-SCOPED-TOKENS)"
     expect(mockBoardAuthService.createNamedBoardApiKey).toHaveBeenCalledWith(
       expect.objectContaining({ scope: { kind: "full" } }),
     );
-  });
+  }, 60000);
 
   it("rejects an unknown scope kind with 422 before touching the service", async () => {
     const app = await createApp({

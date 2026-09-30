@@ -27,21 +27,15 @@ const MUTATION_ALLOWLIST: Record<
     "/tool-profile-entries",
     "/tool-applications",
     "/secret-provider-configs",
-    "/plugins",
-    "/_plugins",
   ],
   agents_manage: [
     "/agents",
-    "/invites",
     "/join-requests",
-    "/board",
-    "/board-claim",
     "/chat-endpoints",
   ],
   secrets_manage: [
     "/secrets",
     "/secret-provider-configs",
-    "/companies",
   ],
   release: [
     "/health",
@@ -59,16 +53,12 @@ const COMPANY_NESTED_MUTATIONS: Record<
   string[]
 > = {
   ops: ["/tool-connections", "/tool-gateway", "/chat-endpoints"],
-  agents_manage: ["/agents", "/invites", "/join-requests", "/chat-endpoints"],
+  agents_manage: ["/agents", "/join-requests", "/chat-endpoints"],
   secrets_manage: ["/secrets", "/secret-provider-configs"],
   release: ["/issues", "/work-products", "/attachments"],
 };
 
 function matchPrefix(pathBelowApi: string, prefix: string) {
-  if (prefix === "/companies") {
-    // Bare /companies mutations (create/list companies) stay full-only.
-    return false;
-  }
   return (
     pathBelowApi === prefix ||
     pathBelowApi.startsWith(prefix + "/") ||
@@ -111,7 +101,11 @@ export function boardKeyScopeMiddleware() {
       next();
       return;
     }
-    const pathBelowApi = req.path.replace(/^\/api\/?/, "");
+    // myrmidon(ROLE-SCOPED-TOKENS): the middleware is mounted at the app root
+    // (app.ts), so req.path starts with /api. Strip only the /api prefix and
+    // keep the leading slash of the route below it: the allowlist entries all
+    // start with "/". A bare "/api" (empty remainder) maps to "/".
+    const pathBelowApi = req.path.replace(/^\/api(?=\/|$)/, "") || "/";
     if (boardApiKeyScopeAllows(scope, req.method, pathBelowApi)) {
       next();
       return;

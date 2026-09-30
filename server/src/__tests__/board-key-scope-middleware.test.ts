@@ -10,7 +10,10 @@ function appFor(actor: any) {
     req.actor = actor;
     next();
   });
-  app.use("/api", boardKeyScopeMiddleware());
+  // Mounted at the app root exactly like app.ts does — req.path starts
+  // with /api here, which is the production wiring the scope check must
+  // survive (review round 1 caught the prefix-strip bug this guards).
+  app.use(boardKeyScopeMiddleware());
   app.use("/api", (req, res) => {
     res.json({ ok: true, path: req.path, method: req.method });
   });
@@ -83,11 +86,24 @@ describe("boardKeyScopeMiddleware (myrmidon ROLE-SCOPED-TOKENS)", () => {
     expect(agent.status).toBe(403);
   });
 
-  it("ops board key can enter maintenance but cannot mutate issues", async () => {
+  it("ops board key can enter maintenance but cannot mutate issues or plugins", async () => {
     const app = appFor(boardKeyActor({ kind: "ops" }));
     const maint = await request(app).post("/api/health/maintenance");
     expect(maint.status).toBe(200);
     const issue = await request(app).post("/api/companies/1/issues");
     expect(issue.status).toBe(403);
+    // Plugin install/upgrade/config is code execution — full-only (review).
+    const install = await request(app).post("/api/plugins/install");
+    expect(install.status).toBe(403);
+    const upgrade = await request(app).post("/api/plugins/some-id/upgrade");
+    expect(upgrade.status).toBe(403);
+  });
+
+  it("agents_manage board key cannot mint invites or claim the board", async () => {
+    const app = appFor(boardKeyActor({ kind: "agents_manage" }));
+    const invite = await request(app).post("/api/companies/1/invites");
+    expect(invite.status).toBe(403);
+    const claim = await request(app).post("/api/board-claim/token-x/claim");
+    expect(claim.status).toBe(403);
   });
 });
