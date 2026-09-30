@@ -103,6 +103,8 @@ import { myrmidonRuntimeLimitsRoutes } from "./myrmidon/runtime-limits/index.js"
 import { myrmidonReplayBlockedRoutes } from "./myrmidon/replay-blocked/index.js"; // myrmidon(N1)
 import { myrmidonBotContainerRoutes } from "./myrmidon/bot-containers/routes-wiring.js"; // myrmidon(W2b)
 import { myrmidonWorkspaceHygieneRoutes } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
+// myrmidon(EMERGENCY-STOP): immediate stop of the runs a draining pause left running
+import { myrmidonEmergencyStopRoutes } from "./myrmidon/emergency-stop.js";
 import { instanceSettingsService } from "./services/instance-settings.js";
 import { openApiRoutes } from "./routes/openapi.js";
 import {
@@ -808,6 +810,7 @@ export async function createApp(
   api.use(myrmidonReplayBlockedRoutes(db)); // myrmidon(N1)
   api.use(myrmidonBotContainerRoutes(db)); // myrmidon(W2b)
   api.use(myrmidonWorkspaceHygieneRoutes(db)); // myrmidon(WORKSPACE-HYGIENE)
+  api.use(myrmidonEmergencyStopRoutes(db)); // myrmidon(EMERGENCY-STOP)
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }

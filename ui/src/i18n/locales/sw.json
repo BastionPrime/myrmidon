@@ -6,6 +6,17 @@
       "newCompany": "Kampuni Mpya"
     }
   },
+  "emergencyStopBanner": {
+    "banner": "{{agent}} is paused, but {{count}} run(s) are still finishing. They keep running until they finish on their own.",
+    "action": "Emergency stop",
+    "confirmTitle": "Stop {{count}} run(s) of {{agent}} now?",
+    "confirmDescription": "The run(s) are cancelled immediately with the same code a pause-cancellation uses, so no recovery hold appears. Work resumes when the agent is resumed. This cannot be undone.",
+    "cancel": "Cancel",
+    "confirmAction": "Stop runs now",
+    "toastTitle": "Emergency stop applied",
+    "toastBody": "{{count}} run(s) of {{agent}} were cancelled.",
+    "toastErrorTitle": "Emergency stop failed"
+  },
   "maintenanceBanner": {
     "title": "Maintenance mode",
     "window": "Maintenance for {{scope}} ({{state}}) since {{since}}: {{reason}}. New agent runs are paused; wakes are queued ({{queued}}) and will be delivered when maintenance ends.",
