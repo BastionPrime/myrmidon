@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itkadr-git/myrmidon/tools/dockergate/internal/config"
 	"github.com/itkadr-git/myrmidon/tools/dockergate/internal/fakedocker"
 	"github.com/itkadr-git/myrmidon/tools/dockergate/internal/fixture"
 	"github.com/itkadr-git/myrmidon/tools/dockergate/internal/policy"
@@ -306,6 +307,44 @@ func TestAllow_A4_PrepareByImageIdIsDenied(t *testing.T) {
 	res := r.send("POST", "/v1.45/containers/create?name="+r.name(".helper"), jsonHdr, body)
 	wantDeny(t, res, "image_not_allowed")
 	r.wantNoCalls()
+}
+
+// A4 with an extra mount: a source from mountSources reaches the daemon as the
+// driver sent it (read-only), and a source outside the list never reaches it.
+func TestAllow_A4_ExtraMounts(t *testing.T) {
+	shared := "/srv/shared/sources"
+	addExtra := func(t *testing.T, r *rig) []byte {
+		t.Helper()
+		_, body := r.m.FindBody(t, "bot-plain", "")
+		last := `"` + r.m.VolumeRoot + "/" + r.m.BotKey + `/scratch:/scratch"]`
+		if !bytes.Contains(body, []byte(last)) {
+			t.Fatalf("the recorded body has no %q", last)
+		}
+		return bytes.Replace(body, []byte(last), []byte(`"`+r.m.VolumeRoot+"/"+r.m.BotKey+`/scratch:/scratch","`+shared+`:`+shared+`:ro"]`), 1)
+	}
+
+	t.Run("an allowlisted source is forwarded to the daemon", func(t *testing.T) {
+		r := newRig(t, withConfig(func(c *config.Config) { c.MountSources = []string{shared} }))
+		body := addExtra(t, r)
+		res := r.send("POST", "/v1.45/containers/create?name="+r.name(""), jsonHdr, body)
+		wantStatus(t, res, 201)
+		wantNoCanary(t, res)
+		c, ok := r.d.Get(r.name(""))
+		if !ok {
+			t.Fatal("the container was not created")
+		}
+		if !bytes.Equal(c.Create, body) {
+			t.Errorf("the daemon got another body than the request:\n got  %s\n want %s", c.Create, body)
+		}
+	})
+
+	t.Run("a source outside mountSources is denied and nothing reaches the daemon", func(t *testing.T) {
+		r := newRig(t)
+		body := addExtra(t, r)
+		res := r.send("POST", "/v1.45/containers/create?name="+r.name(""), jsonHdr, body)
+		wantDeny(t, res, "mount_source_not_allowed")
+		r.wantNoCalls()
+	})
 }
 
 // --- A5 ---------------------------------------------------------------------------

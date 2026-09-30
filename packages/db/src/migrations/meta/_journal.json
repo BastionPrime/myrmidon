@@ -1963,10 +1963,17 @@
       "breakpoints": true
     },
     {
-      "idx": 282,
+      "idx": 283,
       "version": "7",
-      "when": 1790752033660,
-      "tag": "0282_litellm_costs",
+      "when": 1789700002000,
+      "tag": "0283_board_api_key_scope_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 285,
+      "version": "7",
+      "when": 1790767639973,
+      "tag": "0285_litellm_costs",
       "breakpoints": true
     }
   ]

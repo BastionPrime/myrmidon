@@ -30,6 +30,8 @@ import { queryKeys } from "../lib/queryKeys";
 import { copyTextToClipboard } from "../lib/clipboard";
 import { AgentSkillsTab } from "./agent-skills/AgentSkillsTab";
 import { AgentConfigForm } from "../components/AgentConfigForm";
+// myrmidon(EMERGENCY-STOP): banner with an immediate stop for runs a draining pause left running
+import { EmergencyStopBannerView } from "../components/myrmidon/EmergencyStopBanner";
 import { PageTabBar } from "../components/PageTabBar";
 import { adapterLabels, roleLabels, help } from "../components/agent-config-primitives";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
@@ -1197,6 +1199,11 @@ export function AgentDetail() {
   const isPendingApproval = agent.status === "pending_approval";
   const hasInvalidOrgChain = agent.orgChainHealth?.status === "invalid_org_chain";
   const pausedEscalationWarning = !hasInvalidOrgChain ? agent.orgChainHealth?.escalationWarning ?? null : null;
+  // myrmidon(EMERGENCY-STOP): runs a draining pause (L3) left finishing on a
+  // paused agent. EmergencyStopBanner turns these into a one-click stop.
+  const liveRunCount = (heartbeats ?? []).filter((run) =>
+    run.status === "running" || run.status === "queued" || run.status === "scheduled_retry",
+  ).length;
   const showConfigActionBar = (
     activeView === "configuration" || activeView === "instructions" || activeView === "secrets"
   ) && (configDirty || configSaving);
@@ -1259,6 +1266,14 @@ export function AgentDetail() {
           </div>
         </div>
       ) : null}
+      {/* myrmidon(EMERGENCY-STOP): immediate stop for the runs a draining pause left running */}
+      <EmergencyStopBannerView
+        agentId={agent.id}
+        agentName={agent.name}
+        companyId={agent.companyId}
+        liveRunCount={liveRunCount}
+        isPaused={agent.status === "paused"}
+      />
       {hasInvalidOrgChain ? (
         <div className="flex items-start gap-3 border border-amber-300/35 bg-amber-300/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
