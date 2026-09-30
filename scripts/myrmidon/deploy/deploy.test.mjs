@@ -24,9 +24,34 @@ echo "docker $*" >> "$SANDBOX/calls.log"
 case "$1" in
   pull) exit "\${FAKE_PULL_EXIT:-0}" ;;
   image)
-    case "$*" in
-      *org.opencontainers.image.version*) cat "$SANDBOX/label-version" ;;
-      *org.opencontainers.image.revision*) cat "$SANDBOX/label-revision" ;;
+    case "$2" in
+      inspect)
+        case "$*" in
+          *org.opencontainers.image.version*)
+            # image_label: the label comes from the sandbox file, as before.
+            cat "$SANDBOX/label-version"; exit 0 ;;
+          *org.opencontainers.image.revision*)
+            cat "$SANDBOX/label-revision"; exit 0 ;;
+        esac
+        # ROLLBACK-LOCAL: a plain inspect asks whether the image is on the
+        # daemon: yes when its reference is listed in $SANDBOX/local-images
+        # (one per line). The reference is the first argument that is not a
+        # flag or a --format value.
+        ref=""
+        for a in "\${@:3}"; do
+          case "$a" in --*) continue ;; esac
+          case "$a" in \{*|*\}*) continue ;; esac
+          ref="$a"; break
+        done
+        if [ -n "$ref" ] && [ -f "$SANDBOX/local-images" ] && grep -qxF "$ref" "$SANDBOX/local-images"; then
+          exit 0
+        fi
+        echo "Error: No such image: \${ref:-<none>}" >&2; exit 1 ;;
+      ls)
+        case "$*" in
+          *--format*{{.Tag}}*) cat "$SANDBOX/local-tags" 2>/dev/null ;;
+          *--format*{{.ID}}*) cat "$SANDBOX/local-ids" 2>/dev/null ;;
+        esac ;;
     esac ;;
   buildx)
     if [ -e "$SANDBOX/registry-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
@@ -72,6 +97,11 @@ function sandbox({
   onMain = true,
   tags = "",
   noGit = false,
+  // ROLLBACK-LOCAL: image references present on the local docker daemon, and
+  // what `docker image ls <repo>` lists for the error message.
+  localImages = [],
+  localTags = "",
+  localIds = "",
 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myrmidon-deploy-"));
   const bin = path.join(dir, "bin");
@@ -102,6 +132,9 @@ function sandbox({
   if (fetchFails) fs.writeFileSync(path.join(dir, "git-fetch-fails"), "");
   fs.writeFileSync(path.join(dir, "label-version"), `${labelVersion}\n`);
   fs.writeFileSync(path.join(dir, "label-revision"), `${labelRevision}\n`);
+  if (localImages.length > 0) fs.writeFileSync(path.join(dir, "local-images"), localImages.join("\n") + "\n");
+  if (localTags) fs.writeFileSync(path.join(dir, "local-tags"), localTags);
+  if (localIds) fs.writeFileSync(path.join(dir, "local-ids"), localIds);
   fs.writeFileSync(
     path.join(dir, "health.json"),
     JSON.stringify(health ?? { status: "ok", version: VERSION, commit: COMMIT }),
@@ -648,6 +681,159 @@ describe("rollback.sh", () => {
     assert.equal(code, 0, out);
     assert.equal(read(path.join(sb.dir, "restore.log")).trim(), dump);
     assert.match(calls(sb), /compose .* stop server/);
+  });
+});
+
+// myrmidon(ROLLBACK-LOCAL): rollback to an image that is already on the deploy
+// host, without pulling — pre-1.1.0 builds are not in the registry.
+describe("rollback.sh --local (ROLLBACK-LOCAL)", () => {
+  const LOCAL_TAG = "myrmidon-local:hotfix";
+
+  it("rolls back to a local tag without pulling and without the registry check", () => {
+    const sb = sandbox({ current: NEW, localImages: [LOCAL_TAG] });
+    const { code, out } = run(sb, "rollback.sh", ["--local", LOCAL_TAG]);
+    assert.equal(code, 0, out);
+    assert.match(out, /local rollback: using myrmidon-local:hotfix as found on the docker daemon \(no pull\)/);
+    assert.match(read(sb.override), new RegExp(`image: ${LOCAL_TAG.replace(/[:]/g, "\\$&")}\\n`));
+    // No pull and no registry read: only the local daemon was asked.
+    assert.doesNotMatch(calls(sb), /docker pull/);
+    assert.doesNotMatch(calls(sb), /buildx imagetools inspect/);
+    // The image was verified on the daemon before anything changed.
+    assert.match(calls(sb), new RegExp(`docker image inspect ${LOCAL_TAG.replace(/[:]/g, "\\$&")}`));
+    // The rest of the rollback ran as usual.
+    assert.match(calls(sb), /compose .* up -d --no-deps server/);
+    assert.equal(maintenance(sb), "enter\nexit\n");
+    assert.match(out, /rolled back to myrmidon-local:hotfix/);
+  });
+
+  it("refuses a local tag that is not on the daemon, listing the tags that are", () => {
+    const sb = sandbox({ current: NEW, localImages: ["myrmidon-local:other"], localTags: "other\nolder\n" });
+    const before = read(sb.override);
+    const { code, out } = run(sb, "rollback.sh", ["--local", LOCAL_TAG]);
+    assert.notEqual(code, 0);
+    assert.match(out, /image is not on the local docker daemon: myrmidon-local:hotfix/);
+    assert.match(out, /Available local tags of myrmidon-local: other,older/);
+    assert.match(out, /docker image ls myrmidon-local/);
+    // Nothing changed: no pull, no maintenance, no compose.
+    assert.equal(read(sb.override), before);
+    assert.equal(maintenance(sb), "");
+    assert.doesNotMatch(calls(sb), /docker (pull|compose)/);
+  });
+
+  it("rolls back to a local digest-pinned reference without pulling", () => {
+    const ref = `${CI_IMAGE}@${OLD}`;
+    const sb = sandbox({ current: NEW, localImages: [ref] });
+    const { code, out } = run(sb, "rollback.sh", ["--local", ref]);
+    assert.equal(code, 0, out);
+    assert.match(read(sb.override), new RegExp(`image: ${CI_IMAGE.replace(/[.]/g, "\\.")}@${OLD}\n`));
+    assert.doesNotMatch(calls(sb), /docker pull/);
+    assert.doesNotMatch(calls(sb), /buildx imagetools inspect/);
+    assert.match(calls(sb), new RegExp(`docker image inspect ${CI_IMAGE.replace(/[.]/g, "\\.")}@${OLD}`));
+  });
+
+  it("rolls back to a bare local digest (no repository) without pulling", () => {
+    // A bare digest is pinned to the CI repository, as in the normal path.
+    const sb = sandbox({ current: NEW, localImages: [`${CI_IMAGE}@${OLD}`] });
+    const { code, out } = run(sb, "rollback.sh", ["--local", OLD]);
+    assert.equal(code, 0, out);
+    assert.match(read(sb.override), new RegExp(`image: ${CI_IMAGE.replace(/[.]/g, "\\.")}@${OLD}\n`));
+    assert.doesNotMatch(calls(sb), /docker pull/);
+  });
+
+  it("refuses a local digest that is not on the daemon, listing the digests that are", () => {
+    const sb = sandbox({ current: NEW, localImages: [`${CI_IMAGE}@${NEW}`], localIds: `${NEW}\n` });
+    const { code, out } = run(sb, "rollback.sh", ["--local", OLD]);
+    assert.notEqual(code, 0);
+    assert.match(out, new RegExp(`image is not on the local docker daemon: ${CI_IMAGE.replace(/[.]/g, "\\.")}@${OLD}`));
+    assert.match(out, /Available local digests of ghcr\.io\/itkadr-git\/myrmidon/);
+    assert.match(out, new RegExp(`digests of .*:\\n${NEW}`));
+    assert.doesNotMatch(calls(sb), /docker (pull|compose)/);
+    assert.equal(maintenance(sb), "");
+  });
+
+  it("bare --local takes the reference from --to-image and does not pull", () => {
+    const sb = sandbox({ current: NEW, localImages: [VENDOR] });
+    const { code, out } = run(sb, "rollback.sh", ["--to-image", VENDOR, "--local"]);
+    assert.equal(code, 0, out);
+    assert.match(read(sb.override), new RegExp(`image: ${VENDOR.replace(/[.]/g, "\\.")}\\n`));
+    assert.doesNotMatch(calls(sb), /docker pull/);
+    assert.doesNotMatch(calls(sb), /buildx imagetools inspect/);
+  });
+
+  it("MYRMIDON_ROLLBACK_LOCAL from the settings file works like --local", () => {
+    const sb = sandbox({ current: NEW, localImages: [LOCAL_TAG] });
+    fs.appendFileSync(sb.config, `MYRMIDON_ROLLBACK_LOCAL='${LOCAL_TAG}'\n`);
+    const { code, out } = run(sb, "rollback.sh", []);
+    assert.equal(code, 0, out);
+    assert.match(read(sb.override), new RegExp(`image: ${LOCAL_TAG.replace(/[:]/g, "\\$&")}\\n`));
+    assert.doesNotMatch(calls(sb), /docker pull/);
+  });
+
+  it("an explicit --local wins over MYRMIDON_ROLLBACK_LOCAL", () => {
+    const sb = sandbox({ current: NEW, localImages: [LOCAL_TAG, "myrmidon-local:arg"] });
+    fs.appendFileSync(sb.config, `MYRMIDON_ROLLBACK_LOCAL='${LOCAL_TAG}'\n`);
+    const { code, out } = run(sb, "rollback.sh", ["--local", "myrmidon-local:arg"]);
+    assert.equal(code, 0, out);
+    assert.match(read(sb.override), /image: myrmidon-local:arg\n/);
+  });
+
+  it("--local=<ref> works like --local <ref>", () => {
+    const sb = sandbox({ current: NEW, localImages: [LOCAL_TAG] });
+    const { code, out } = run(sb, "rollback.sh", [`--local=${LOCAL_TAG}`]);
+    assert.equal(code, 0, out);
+    assert.match(read(sb.override), new RegExp(`image: ${LOCAL_TAG.replace(/[:]/g, "\\$&")}\\n`));
+    assert.match(out, /local rollback: using myrmidon-local:hotfix/);
+    assert.doesNotMatch(calls(sb), /docker pull/);
+    assert.doesNotMatch(calls(sb), /buildx imagetools inspect/);
+  });
+
+  it("--local= with an empty value acts as bare --local", () => {
+    const sb = sandbox({ current: NEW, localImages: [VENDOR] });
+    const { code, out } = run(sb, "rollback.sh", ["--to-image", VENDOR, "--local="]);
+    assert.equal(code, 0, out);
+    assert.match(read(sb.override), new RegExp(`image: ${VENDOR.replace(/[.]/g, "\\.")}\\n`));
+    assert.doesNotMatch(calls(sb), /docker pull/);
+  });
+
+  it("bare --local without --to/--to-image and without the setting is an error", () => {
+    const sb = sandbox({ current: NEW });
+    const { code, out } = run(sb, "rollback.sh", ["--local"]);
+    assert.notEqual(code, 0);
+    assert.match(out, /--local without a value needs --to sha256:\.\.\. or --to-image <ref>/);
+    assert.equal(maintenance(sb), "");
+  });
+
+  it("a --local value together with --to is an error", () => {
+    const sb = sandbox({ current: NEW });
+    const { code, out } = run(sb, "rollback.sh", ["--local", LOCAL_TAG, "--to", OLD]);
+    assert.notEqual(code, 0);
+    assert.match(out, /give the local reference with --local, not together with --to\/--to-image/);
+  });
+
+  it("an unset MYRMIDON_ROLLBACK_LOCAL keeps the normal pull path", () => {
+    const sb = sandbox({ current: NEW });
+    const { code, out } = run(sb, "rollback.sh", ["--to", OLD]);
+    assert.equal(code, 0, out);
+    assert.match(calls(sb), new RegExp(`docker pull --quiet ghcr\\.io/itkadr-git/myrmidon@${OLD}`));
+  });
+
+  it("dry run prints the local plan and pulls nothing", () => {
+    const sb = sandbox({ current: NEW, localImages: [LOCAL_TAG] });
+    const { code, out } = run(sb, "rollback.sh", ["--local", LOCAL_TAG, "--dry-run"]);
+    assert.equal(code, 0, out);
+    assert.match(out, /use myrmidon-local:hotfix from the local docker daemon \(no pull; verified with docker image inspect\)/);
+    assert.doesNotMatch(out, /docker pull/);
+    assert.match(calls(sb), /docker image inspect myrmidon-local:hotfix/);
+    assert.doesNotMatch(calls(sb), /docker (pull|compose)/);
+    assert.equal(maintenance(sb), "");
+  });
+
+  it("local mode does not read the registry even when it is unreachable", () => {
+    const sb = sandbox({ current: NEW, localImages: [LOCAL_TAG], registryMissing: true });
+    const { code, out } = run(sb, "rollback.sh", ["--local", LOCAL_TAG]);
+    assert.equal(code, 0, out);
+    assert.doesNotMatch(out, /WARNING/);
+    assert.match(read(sb.override), new RegExp(`image: ${LOCAL_TAG.replace(/[:]/g, "\\$&")}\\n`));
   });
 });
 

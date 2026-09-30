@@ -271,6 +271,47 @@ image_label() {
   docker image inspect --format "{{ index .Config.Labels \"$label\" }}" "$ref"
 }
 
+# --- local images (ROLLBACK-LOCAL) -------------------------------------------
+# myrmidon(ROLLBACK-LOCAL): rollback support for images that only exist on the
+# deploy host (pre-1.1.0 builds are not in the registry). Nothing here pulls:
+# the checks read the local docker daemon only.
+
+# Is the reference present on the local docker daemon? Prints nothing; rc 0/1.
+local_image_exists() {
+  docker image inspect "$1" >/dev/null 2>&1
+}
+
+# Local tags of one repository (e.g. ghcr.io/itkadr-git/myrmidon), newest
+# first, without duplicates. May print nothing when there are none.
+local_image_tags() {
+  local repo="$1"
+  docker image ls "$repo" --format '{{.Tag}}' 2>/dev/null | grep -v '^<none>$' || true
+}
+
+# Dies with a readable message listing what is actually on the host, so a typo
+# in a tag does not turn into a bare "No such image". Succeeds (rc 0) when the
+# reference is on the daemon.
+require_local_image() {
+  local ref="$1" repo tags
+  if [[ "$ref" == *@sha256:* ]]; then
+    repo="${ref%@*}"
+  else
+    repo="${ref%%:*}"
+  fi
+  if ! local_image_exists "$ref"; then
+    if [[ "$ref" == *@sha256:* ]]; then
+      die "image is not on the local docker daemon: $ref
+Available local digests of $repo:
+$(docker image ls "$repo" --format '{{.ID}}' 2>/dev/null | grep . | sort -u || true)
+Rollback to an image that is on the host (docker image ls $repo), or drop --local to pull from the registry"
+    fi
+    tags="$(local_image_tags "$repo" | paste -sd, -)"
+    die "image is not on the local docker daemon: $ref
+Available local tags of $repo: ${tags:-<none>}
+Rollback to a tag that is on the host (docker image ls $repo), or drop --local to pull from the registry"
+  fi
+}
+
 maintenance_enter() {
   local reason="$1"
   case "$MAINTENANCE_MODE" in
