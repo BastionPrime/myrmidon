@@ -7,7 +7,8 @@
 агрегирует окна отдельных агентов, — поведение, добавленное в выпуске 1.3.
 
 Что такое окно обслуживания и как его открыть, см.
-[../design/maintenance-mode.md](../design/maintenance-mode.md).
+[../design/maintenance-mode.md](../design/maintenance-mode.md). Управление — на
+странице Instance → General.
 
 ## Что показывает баннер
 

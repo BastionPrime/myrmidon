@@ -7,7 +7,8 @@ what is under maintenance and what it means for runs. This page describes how
 the banner aggregates per-agent windows, a behaviour added in release 1.3.
 
 For what a maintenance window is and how to open one, see
-[../design/maintenance-mode.md](../design/maintenance-mode.md).
+[../design/maintenance-mode.md](../design/maintenance-mode.md). The controls
+live under Instance → General.
 
 ## What the banner shows
 
