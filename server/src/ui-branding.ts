@@ -142,7 +142,7 @@ function escapeHtmlAttribute(value: string): string {
 // The Myrmidon ant mark (same geometry as ui/public/brand/myrmidon/myrmidon-favicon.svg),
 // on a transparent background, stroked in the worktree colour: the only difference
 // from the regular favicon is the colour.
-const ANT_VIEW_BOX = "66.8511 226.851 638.298 638.298";
+const ANT_VIEW_BOX = "140 238 492 610";
 const ANT_STROKE_PATHS = [
   "M346,516 L246,470 L263,392 L227,361 M426,516 L526,470 L509,392 L545,361 M351,564 L254,531 L204,622 L170,622 M421,564 L518,531 L568,622 L602,622 M360,603 L264,634 L208,818 L170,818 M412,603 L508,634 L564,818 L602,818",
   "M287,268 L386,414 L485,268",

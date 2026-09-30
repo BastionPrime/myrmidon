@@ -58,6 +58,16 @@ describe("one ant mark", () => {
     expect(paths).toEqual(reference);
   });
 
+  it("favicon SVGs are mark-small: stroke 30, round caps and joins, cropped viewBox", () => {
+    for (const file of [path.join(BRAND, "myrmidon-favicon.svg"), path.join(PUBLIC, "favicon.svg"), path.join(PUBLIC, "worktree-favicon.svg")]) {
+      const svg = read(file);
+      expect(svg, file).toContain('viewBox="140 238 492 610"');
+      expect(svg, file).toContain('stroke-width="30"');
+      expect(svg, file).toContain('stroke-linecap="round"');
+      expect(svg, file).toContain('stroke-linejoin="round"');
+    }
+  });
+
   it("favicons are the bare mark on a transparent background, adaptive to the colour scheme", () => {
     for (const file of [path.join(BRAND, "myrmidon-favicon.svg"), path.join(PUBLIC, "favicon.svg"), path.join(PUBLIC, "worktree-favicon.svg")]) {
       const svg = read(file);
