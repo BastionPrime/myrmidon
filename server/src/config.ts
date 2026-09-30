@@ -8,6 +8,10 @@ import { resolvePaperclipEnvPath } from "./paths.js";
 import { maybeRepairLegacyWorktreeConfigAndEnvFiles } from "./worktree-config.js";
 import { shouldLoadWorkingDirectoryEnv } from "./env-file-policy.js";
 import {
+  readMergedWorkspaceCooldownMs,
+  readStuckWorkspaceSignalAfterMs,
+} from "./myrmidon/workspace-hygiene/merged-cleanup.js";
+import {
   AUTH_BASE_URL_MODES,
   BIND_MODES,
   DEPLOYMENT_EXPOSURES,
@@ -77,6 +81,10 @@ export interface Config {
   databaseBackupRetentionDays: number;
   databaseBackupDir: string;
   workspaceReaperCooldownDays: number;
+  // myrmidon(WORKSPACE-HYGIENE): short reaper cooldown for merged copies and
+  // the wait before a stuck, undeletable copy is signalled.
+  myrmidonWorkspaceMergedCooldownMs: number;
+  myrmidonWorkspaceStuckSignalAfterMs: number;
   serveUi: boolean;
   uiDevMiddleware: boolean;
   secretsProvider: SecretProvider;
@@ -294,6 +302,15 @@ export function loadConfig(): Config {
       && workspaceReaperCooldownDaysRaw >= 0
       ? workspaceReaperCooldownDaysRaw
       : 7;
+  // myrmidon(WORKSPACE-HYGIENE): the reaper archives a copy whose branch is
+  // already merged after this much shorter cooldown, so a merged copy leaves
+  // the disk within the hour instead of waiting the full terminal cooldown.
+  // 0 reaps on the next sweep. Invalid values fall back to 30 minutes.
+  const myrmidonWorkspaceMergedCooldownMs = readMergedWorkspaceCooldownMs(process.env);
+  // myrmidon(WORKSPACE-HYGIENE): a terminal copy that cannot be archived stays
+  // visible only in the sweep counters. Past this wait the reaper writes one
+  // activity-log signal per copy per day. Invalid values fall back to 24 hours.
+  const myrmidonWorkspaceStuckSignalAfterMs = readStuckWorkspaceSignalAfterMs(process.env);
   const bindValidationErrors = validateConfiguredBindMode({
     deploymentMode,
     deploymentExposure,
@@ -340,6 +357,8 @@ export function loadConfig(): Config {
     databaseBackupRetentionDays,
     databaseBackupDir,
     workspaceReaperCooldownDays,
+    myrmidonWorkspaceMergedCooldownMs,
+    myrmidonWorkspaceStuckSignalAfterMs,
     serveUi:
       process.env.SERVE_UI !== undefined
         ? process.env.SERVE_UI === "true"
