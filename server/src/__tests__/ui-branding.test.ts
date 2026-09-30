@@ -96,6 +96,10 @@ describe("ui branding", () => {
     const svg = decodeURIComponent((branding.faviconHref ?? "").replace("data:image/svg+xml,", ""));
     expect(svg).toContain("M386,330 C421,330"); // ant head
     expect(svg).not.toContain("m16 6-8.414 8.586"); // paperclip glyph
+    expect(svg).not.toContain("<rect"); // bare mark, no plate
+    expect(svg).toContain('viewBox="140 238 492 610"');
+    expect(svg).toContain('stroke-width="30"');
+    expect(svg).toContain('stroke="#4f86f7"'); // the worktree colour is the only difference
   });
 
   it("renders runtime branding metadata for the ui", () => {
