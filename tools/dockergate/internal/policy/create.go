@@ -3,6 +3,7 @@ package policy
 import (
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/itkadr-git/myrmidon/tools/dockergate/internal/deny"
 	"github.com/itkadr-git/myrmidon/tools/dockergate/internal/jsonx"
@@ -41,6 +42,10 @@ type Env struct {
 	Network    string
 	// Images is the set of allowed image references (repo@sha256:...).
 	Images map[string]struct{}
+	// MountSources are the host directories a bot may mount read-only on top of
+	// its three volumes (configuration key "mountSources"). An empty list allows
+	// no extra mount at all.
+	MountSources []string
 	// Ceilings of the bot the request is for.
 	MaxMemoryMB int64
 	MaxCPUs     float64
@@ -67,6 +72,77 @@ func Binds(volumeRoot, botKey string) []string {
 		base + "/workspace:/workspace",
 		base + "/scratch:/scratch",
 	}
+}
+
+// reservedTargets are the mount points a bot container owns: an extra mount may
+// neither take one of them over nor shadow a path under it.
+var reservedTargets = []string{"/data/hermes", "/workspace", "/scratch", "/tmp"}
+
+// safeContainerTarget reports whether p may be the destination of an extra mount:
+// a plain absolute path outside the reserved mount points.
+func safeContainerTarget(p string) bool {
+	if !strings.HasPrefix(p, "/") || p == "/" || strings.Contains(p, "..") ||
+		strings.Contains(p, "//") || strings.HasSuffix(p, "/") || strings.Contains(p, "\x00") {
+		return false
+	}
+	for _, r := range reservedTargets {
+		if p == r || strings.HasPrefix(p, r+"/") {
+			return false
+		}
+	}
+	return true
+}
+
+// parseExtraBind splits "source:target:ro" — the only form an extra mount may
+// take. Read-only is not optional: a shared directory is never mounted writable.
+func parseExtraBind(bind string) (source, target string, ok bool) {
+	parts := strings.Split(bind, ":")
+	if len(parts) != 3 || parts[2] != "ro" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+// parseBotBinds checks HostConfig.Binds: the three fixed binds first and in
+// order, then the bot's extra read-only mounts. Every extra source must be one
+// of env.MountSources (exact match, no prefix rule — a card cannot reach a
+// sibling directory the operator did not name) and every extra target must be a
+// safe path used once. The returned list is what the daemon gets.
+func parseBotBinds(v *jsonx.Value, path string, env *Env, botKey string) ([]string, *deny.Error) {
+	got, err := strList(v, path)
+	if err != nil {
+		return nil, err
+	}
+	base := Binds(env.VolumeRoot, botKey)
+	if len(got) < len(base) {
+		return nil, deny.FieldOnly(deny.BindsMismatch, path)
+	}
+	for i := range base {
+		if got[i] != base[i] {
+			return nil, deny.Field(deny.BindsMismatch, path, []byte(got[i]))
+		}
+	}
+	allowed := make(map[string]bool, len(env.MountSources))
+	for _, src := range env.MountSources {
+		allowed[src] = true
+	}
+	seen := make(map[string]bool, len(got)-len(base))
+	extras := make([]string, 0, len(got)-len(base))
+	for _, bind := range got[len(base):] {
+		source, target, ok := parseExtraBind(bind)
+		if !ok {
+			return nil, deny.Field(deny.BindsMismatch, path, []byte(bind))
+		}
+		if !allowed[source] {
+			return nil, deny.Field(deny.MountSourceNotAllowed, path, []byte(source))
+		}
+		if !safeContainerTarget(target) || seen[target] {
+			return nil, deny.Field(deny.BindsMismatch, path, []byte(target))
+		}
+		seen[target] = true
+		extras = append(extras, bind)
+	}
+	return append(base, extras...), nil
 }
 
 // ParseCreate checks a create body against the schema of the form that the
@@ -295,8 +371,8 @@ func parseBot(root *jsonx.Value, r *route.Route, env *Env) (*Create, *deny.Error
 	if err := wantStr(hc["NetworkMode"], "HostConfig.NetworkMode", env.Network, deny.NetworkMismatch); err != nil {
 		return nil, err
 	}
-	binds := Binds(env.VolumeRoot, r.BotKey)
-	if err := wantList(hc["Binds"], "HostConfig.Binds", binds, deny.BindsMismatch); err != nil {
+	binds, err := parseBotBinds(hc["Binds"], "HostConfig.Binds", env, r.BotKey)
+	if err != nil {
 		return nil, err
 	}
 

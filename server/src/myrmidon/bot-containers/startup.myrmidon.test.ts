@@ -28,6 +28,7 @@ const DRIVER_CONFIG: DockerDriverConfig = {
   volumeRoot: "/var/lib/test-bots",
   network: "test-bots-net",
   allowlist: [],
+  mountSources: [],
 };
 
 function driver(): BotContainerDriver {

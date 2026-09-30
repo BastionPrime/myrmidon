@@ -10,7 +10,7 @@
 // volume or the driver's reserved bookkeeping paths — only what these functions
 // accept ever reaches the Docker API.
 
-import type { BotContainerSpec } from "./driver.js";
+import type { BotContainerSpec, BotExtraMount } from "./driver.js";
 import type { CompiledProfileFile } from "./types.js";
 
 // DNS label rules (RFC 1123) plus the same character set as the tar/exec paths
@@ -53,6 +53,20 @@ export function parseImageAllowlist(raw: string | undefined): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+/** MYRMIDON_BOT_MOUNT_SOURCES: comma-separated absolute host directories a
+ *  card's `container.extraMounts` may name as a `source`. Instance-wide and
+ *  operator-controlled: a card can only pick from this list, never invent a
+ *  path. An entry that is not a plain absolute directory (see
+ *  `unsafeAbsolutePathReason`) can never match a mount and is dropped. */
+export const BOT_MOUNT_SOURCES_ENV = "MYRMIDON_BOT_MOUNT_SOURCES";
+
+export function parseMountSourceAllowlist(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
 function escapeRegExpLiteral(chunk: string): string {
   return chunk.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -85,11 +99,91 @@ export const BOT_VOLUME_MOUNTS: readonly BotVolumeMount[] = [
   { hostSuffix: "scratch", containerPath: "/scratch" },
 ];
 
-/** The fixed bind list for a bot. There is no way to add another bind: callers
- *  supply a botKey, never a path. */
-export function buildBinds(volumeRoot: string, botKey: string): string[] {
+/** The fixed bind list for a bot, plus the extra read-only mounts its card asked
+ *  for. Callers supply a botKey and (optionally) mount entries whose `source`
+ *  already comes from the instance allowlist — never a raw path — so a card
+ *  cannot smuggle in an arbitrary bind. A mount whose source is not in
+ *  `MYRMIDON_BOT_MOUNT_SOURCES`, or whose container path would take over one of
+ *  the driver's own mount points, throws before anything reaches the Docker API. */
+export function buildBinds(
+  volumeRoot: string,
+  botKey: string,
+  extra: { mounts?: readonly BotExtraMount[]; allowedSources?: readonly string[] } = {},
+): string[] {
   validateBotKey(botKey);
-  return BOT_VOLUME_MOUNTS.map((mount) => `${volumeRoot}/${botKey}/${mount.hostSuffix}:${mount.containerPath}`);
+  const mounts = extra.mounts ?? [];
+  validateExtraMounts(mounts, extra.allowedSources ?? []);
+  return [
+    ...BOT_VOLUME_MOUNTS.map((mount) => `${volumeRoot}/${botKey}/${mount.hostSuffix}:${mount.containerPath}`),
+    ...mounts.map((mount) => `${mount.source}:${mount.containerPath}:ro`),
+  ];
+}
+
+/** Mount points and paths the driver itself owns inside every bot container: an
+ *  extra mount may neither take one of them over nor shadow a path under them
+ *  (the profile lands in the three volumes, and `/tmp` is the image's tmpfs). */
+const RESERVED_CONTAINER_PATHS: readonly string[] = [...BOT_VOLUME_MOUNTS.map((mount) => mount.containerPath), "/tmp"];
+
+/** Why `value` is not usable as an absolute host directory or container mount
+ *  point, or null when it is. Deliberately strict: no relative form, no "..",
+ *  no empty segment, no trailing slash, no backslash or control character, and
+ *  not the filesystem root — so two spellings of the same directory can never
+ *  compare unequal. */
+function unsafeAbsolutePathReason(value: string): string | null {
+  if (!value.startsWith("/")) return "is not an absolute path";
+  if (value.length === 1) return "is the filesystem root";
+  if (hasControlCharacter(value)) return "contains a control character";
+  if (value.includes("\\")) return "contains a backslash";
+  if (value.includes("//")) return "has an empty path segment";
+  if (value.endsWith("/")) return "has a trailing slash";
+  for (const segment of value.split("/")) {
+    if (segment === "." || segment === "..") return `has a "${segment}" path segment`;
+  }
+  return null;
+}
+
+/**
+ * Throws unless every extra mount may be mounted into a bot container:
+ *  - `source` is a plain absolute directory and is listed in
+ *    `MYRMIDON_BOT_MOUNT_SOURCES` (exact match — no prefix rule, so a card
+ *    cannot reach a sibling directory the operator did not name);
+ *  - `containerPath` is a plain absolute path that is not one of the driver's
+ *    own mount points (or a path under one) and is not used twice;
+ *  - `readOnly` is true: a shared directory is never mounted writable.
+ * The check is the enforcement boundary, so it does not trust the card reader
+ * (`agent-config.ts`) to have validated the list first.
+ */
+export function validateExtraMounts(mounts: readonly BotExtraMount[], allowedSources: readonly string[]): void {
+  const allowed = new Set(allowedSources.filter((source) => unsafeAbsolutePathReason(source) === null));
+  const taken = new Set<string>(RESERVED_CONTAINER_PATHS);
+  for (const [index, mount] of mounts.entries()) {
+    const where = `extra mount #${index + 1}`;
+    const sourceReason = unsafeAbsolutePathReason(mount.source);
+    if (sourceReason) {
+      throw new BotContainerTemplateError(`${where} source ${JSON.stringify(mount.source)} ${sourceReason}`);
+    }
+    if (!allowed.has(mount.source)) {
+      throw new BotContainerTemplateError(
+        `${where} source ${JSON.stringify(mount.source)} is not listed in ${BOT_MOUNT_SOURCES_ENV}`,
+      );
+    }
+    if (mount.readOnly !== true) {
+      throw new BotContainerTemplateError(`${where} of ${JSON.stringify(mount.source)} must be read-only`);
+    }
+    const pathReason = unsafeAbsolutePathReason(mount.containerPath);
+    if (pathReason) {
+      throw new BotContainerTemplateError(`${where} path ${JSON.stringify(mount.containerPath)} ${pathReason}`);
+    }
+    const clashes = RESERVED_CONTAINER_PATHS.some(
+      (reserved) => mount.containerPath === reserved || mount.containerPath.startsWith(`${reserved}/`),
+    );
+    if (clashes || taken.has(mount.containerPath)) {
+      throw new BotContainerTemplateError(
+        `${where} path ${JSON.stringify(mount.containerPath)} is reserved by the driver or used twice`,
+      );
+    }
+    taken.add(mount.containerPath);
+  }
 }
 
 /** `mount.containerPath` without its leading "/", e.g. "data/hermes". This is the
