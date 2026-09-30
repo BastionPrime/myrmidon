@@ -137,9 +137,13 @@ type Config struct {
 	VolumeRoot string   `json:"volumeRoot"`
 	Network    string   `json:"network"`
 	Images     []string `json:"images"`
-	Bots       []Bot    `json:"bots"`
-	Limits     Limits   `json:"limits"`
-	StatsFile  string   `json:"statsFile"`
+	// MountSources are the host directories a bot container may mount read-only
+	// on top of its three volumes (an empty list allows none). A bind naming any
+	// other source is refused.
+	MountSources []string `json:"mountSources"`
+	Bots         []Bot    `json:"bots"`
+	Limits       Limits   `json:"limits"`
+	StatsFile    string   `json:"statsFile"`
 }
 
 var (
@@ -230,6 +234,17 @@ func (c *Config) Validate() error {
 	}
 	if !networkRe.MatchString(c.Network) {
 		return errors.New("config: network is not a valid network name")
+	}
+	seenSources := map[string]bool{}
+	for _, src := range c.MountSources {
+		if !strings.HasPrefix(src, "/") || src == "/" || strings.Contains(src, "..") ||
+			strings.Contains(src, "//") || strings.HasSuffix(src, "/") || strings.Contains(src, "\x00") {
+			return errors.New("config: mountSources entries must be absolute directories without .., // and a trailing /")
+		}
+		if seenSources[src] {
+			return errors.New("config: duplicate entry in mountSources")
+		}
+		seenSources[src] = true
 	}
 	if len(c.Images) == 0 {
 		return errors.New("config: images must not be empty")
