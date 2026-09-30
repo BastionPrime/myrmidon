@@ -10,6 +10,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { WORKSPACE_QUOTA_EXCEEDED_ACTION, type WorkspaceHygieneLimits } from "@paperclipai/shared";
+import type { LogActivityInput } from "../../services/activity-log.js";
 import { resolveSweepLimits } from "./index.js";
 import { createWorkspaceHygieneSweep } from "./sweep.js";
 import type { WorkspaceHygieneStore, WorkspaceHygieneWorkspaceRow } from "./store.js";
@@ -98,7 +99,7 @@ describe("myrmidon(WORKSPACE-HYGIENE): a sweep through the real wiring", () => {
       getGeneral: async () => ({ workspaceHygiene: { workspaceQuotaMb: 4000, totalQuotaMb: null } }),
     };
     const row = makeRow({ id: "aaaaaaaa-1111-4111-8111-111111111111" });
-    const logActivity = vi.fn(async () => ({}));
+    const logActivity = vi.fn(async (_entry: LogActivityInput) => ({}));
     const sweep = createWorkspaceHygieneSweep({
       store: fakeStore([row]),
       resolveLimits: () => resolveSweepLimits(settings, {}),
@@ -126,7 +127,7 @@ describe("myrmidon(WORKSPACE-HYGIENE): a sweep through the real wiring", () => {
     const settings = {
       getGeneral: async () => ({ workspaceHygiene: { workspaceQuotaMb: 4000, totalQuotaMb: null } }),
     };
-    const logActivity = vi.fn(async () => ({}));
+    const logActivity = vi.fn(async (_entry: LogActivityInput) => ({}));
     const sweep = createWorkspaceHygieneSweep({
       store: fakeStore([makeRow({ id: "bbbbbbbb-1111-4111-8111-111111111111" })]),
       resolveLimits: () => resolveSweepLimits(settings, {}),
