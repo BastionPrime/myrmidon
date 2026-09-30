@@ -22,9 +22,14 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({
 const mockToggleTheme = vi.hoisted(() => vi.fn());
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
 const mockNavigateTopLevel = vi.hoisted(() => vi.fn());
+const mockHealthApi = vi.hoisted(() => ({ get: vi.fn() }));
 
 vi.mock("@/api/auth", () => ({
   authApi: mockAuthApi,
+}));
+
+vi.mock("@/api/health", () => ({
+  healthApi: mockHealthApi,
 }));
 
 vi.mock("@/lib/browserNavigation", () => ({
@@ -94,6 +99,7 @@ describe("SidebarAccountMenu", () => {
       enableIsolatedWorkspaces: false,
     });
     mockAuthApi.signOut.mockResolvedValue({ success: true, redirectTo: "/cloud/logout" });
+    mockHealthApi.get.mockResolvedValue({ status: "ok", version: "1.2.1" });
   });
 
   afterEach(() => {
@@ -345,6 +351,69 @@ describe("SidebarAccountMenu", () => {
     await flushReact();
 
     expect(document.body.textContent).not.toContain("Sign out");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  // myrmidon(ABOUT): the release version rides the sidebar footer and opens
+  // the About section in settings; both menu variants render it.
+  it.each([SidebarAccountMenu, ProductionSidebarAccountMenu])(
+    "shows the release version in the sidebar footer linking to About (%#)",
+    async (AccountMenu) => {
+      const root = createRoot(container);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      queryClient.setQueryData(queryKeys.health, { status: "ok", version: "1.2.1" });
+
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+              <AccountMenu deploymentMode="authenticated" />
+            </TooltipProvider>
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+
+      const versionLink = container.querySelector<HTMLAnchorElement>(
+        '[data-testid="myrmidon-sidebar-version"]',
+      );
+      expect(versionLink).not.toBeNull();
+      expect(versionLink?.textContent).toContain("Myrmidon 1.2.1");
+      expect(versionLink?.getAttribute("href")).toBe("/company/settings");
+      expect(versionLink?.getAttribute("aria-label")).toBe("About Myrmidon");
+
+      await act(async () => {
+        root.unmount();
+      });
+    },
+  );
+
+  it("hides the footer version line when health has no version", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(queryKeys.health, { status: "ok" });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <SidebarAccountMenu deploymentMode="authenticated" />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.querySelector('[data-testid="myrmidon-sidebar-version"]')).toBeNull();
 
     await act(async () => {
       root.unmount();

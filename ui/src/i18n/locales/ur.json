@@ -24,5 +24,25 @@
     "group": "Agent maintenance ({{state}}) since {{since}}: {{reason}} — agents: {{count}}, queued wakeups: {{queued}}. New agent runs are paused; wakes are delivered when maintenance ends.",
     "ending": "Agent maintenance ending — agents: {{count}}",
     "idsSummary": "Agent ids"
+  },
+  "about": {
+    "title": "About Myrmidon",
+    "version": "Version",
+    "commit": "Commit",
+    "imageDigest": "Image digest",
+    "base": "Upstream base: Paperclip {{version}} (MIT)",
+    "license": "License: {{license}}",
+    "attribution": "Based on Paperclip (MIT)",
+    "links": {
+      "repo": "Source code",
+      "changelog": "Changelog",
+      "docs": "Docs"
+    },
+    "unavailable": "Version information is unavailable right now.",
+    "loading": "Loading version information...",
+    "unknown": "unknown"
+  },
+  "sidebar": {
+    "version": "Myrmidon {{version}}"
   }
 }

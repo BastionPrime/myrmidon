@@ -99,6 +99,7 @@ import { instanceSettingsRoutes } from "./routes/instance-settings.js";
 import { myrmidonMaintenanceRoutes } from "./myrmidon/maintenance/index.js"; // myrmidon(R3)
 import { myrmidonRuntimeLimitsRoutes } from "./myrmidon/runtime-limits/index.js"; // myrmidon(C0)
 import { myrmidonReplayBlockedRoutes } from "./myrmidon/replay-blocked/index.js"; // myrmidon(N1)
+import { aboutRoutes } from "./myrmidon/about/routes.js"; // myrmidon(ABOUT)
 import { myrmidonBotContainerRoutes } from "./myrmidon/bot-containers/routes-wiring.js"; // myrmidon(W2b)
 import { instanceSettingsService } from "./services/instance-settings.js";
 import { openApiRoutes } from "./routes/openapi.js";
@@ -799,6 +800,7 @@ export async function createApp(
   api.use(myrmidonMaintenanceRoutes(db)); // myrmidon(R3)
   api.use(myrmidonRuntimeLimitsRoutes(db)); // myrmidon(C0)
   api.use(myrmidonReplayBlockedRoutes(db)); // myrmidon(N1)
+  api.use(aboutRoutes()); // myrmidon(ABOUT)
   api.use(myrmidonBotContainerRoutes(db)); // myrmidon(W2b)
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
