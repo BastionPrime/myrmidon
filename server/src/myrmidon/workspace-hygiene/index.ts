@@ -1,5 +1,5 @@
 import type { Db } from "@paperclipai/db";
-import { resolveWorkspaceHygieneLimits } from "@paperclipai/shared";
+import { resolveWorkspaceHygieneLimits, type WorkspaceHygieneLimits } from "@paperclipai/shared";
 import { logger } from "../../middleware/logger.js";
 import { instanceSettingsService, logActivity } from "../../services/index.js";
 import { workspaceHygieneRoutes } from "./routes.js";
@@ -36,14 +36,34 @@ export interface WorkspaceHygieneRuntimeOptions {
   env?: Record<string, string | undefined>;
 }
 
+/**
+ * The quotas the sweep will use, from the stored settings row with the
+ * environment as the default.
+ *
+ * `resolveWorkspaceHygieneLimits` returns a wrapper — `{ limits, sources }` —
+ * because the API reports where each value came from. The sweep takes only the
+ * limits: handing it the wrapper would read `limits.workspaceQuotaMb` as
+ * `undefined`, turn the quota comparison into `NaN > quota` and switch every
+ * quota off while the tests stay green (they construct the sweep with their
+ * own `resolveLimits`). This helper is the single place that unwraps it, and
+ * `wiring.myrmidon.test.ts` pins it: it builds a sweep through this function
+ * and fails if a stored quota stops producing a signal.
+ */
+export async function resolveSweepLimits(
+  settings: { getGeneral(): Promise<{ workspaceHygiene?: unknown }> },
+  env: Record<string, string | undefined>,
+): Promise<WorkspaceHygieneLimits> {
+  const general = await settings.getGeneral();
+  return resolveWorkspaceHygieneLimits({ stored: general.workspaceHygiene, env }).limits;
+}
+
 function createRuntime(db: Db, options: WorkspaceHygieneRuntimeOptions = {}): WorkspaceHygieneRuntime {
   const env = options.env ?? process.env;
   const store = createDbWorkspaceHygieneStore(db);
   const settings = instanceSettingsService(db);
   const sweep = createWorkspaceHygieneSweep({
     store,
-    resolveLimits: async () =>
-      resolveWorkspaceHygieneLimits({ stored: (await settings.getGeneral()).workspaceHygiene, env }),
+    resolveLimits: () => resolveSweepLimits(settings, env),
     logActivity: (entry) => logActivity(db, entry),
     logger,
   });

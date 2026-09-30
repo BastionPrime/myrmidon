@@ -48,28 +48,30 @@ export interface WorkspaceHygieneStore {
   lastActivityAt(companyId: string, action: string): Promise<Date | null>;
 }
 
-const ROW_COLUMNS = {
-  id: executionWorkspaces.id,
-  companyId: executionWorkspaces.companyId,
-  name: executionWorkspaces.name,
-  status: executionWorkspaces.status,
-  providerType: executionWorkspaces.providerType,
-  cwd: executionWorkspaces.cwd,
-  metadata: executionWorkspaces.metadata,
-  updatedAt: executionWorkspaces.updatedAt,
-};
+/**
+ * The selected columns, built per call rather than once at import time: a test
+ * that mocks `@paperclipai/db` with only the exports it needs (the server
+ * startup test does) must be able to import this module without the mock
+ * failing on a missing table. Reading `executionWorkspaces` at module scope
+ * made that import throw.
+ */
+function rowColumns() {
+  return {
+    id: executionWorkspaces.id,
+    companyId: executionWorkspaces.companyId,
+    name: executionWorkspaces.name,
+    status: executionWorkspaces.status,
+    providerType: executionWorkspaces.providerType,
+    cwd: executionWorkspaces.cwd,
+    metadata: executionWorkspaces.metadata,
+    updatedAt: executionWorkspaces.updatedAt,
+  };
+}
 
-function toRow(row: {
-  id: string;
-  companyId: string;
-  name: string;
-  status: string;
-  providerType: string;
-  cwd: string | null;
-  metadata: Record<string, unknown> | null;
-  updatedAt: Date;
-}): WorkspaceHygieneWorkspaceRow {
-  return row;
+type WorkspaceHygieneRowSelection = ReturnType<typeof rowColumns>;
+
+function toRow(row: WorkspaceHygieneRowSelection): WorkspaceHygieneWorkspaceRow {
+  return row as WorkspaceHygieneWorkspaceRow;
 }
 
 export function createDbWorkspaceHygieneStore(db: Db): WorkspaceHygieneStore {
@@ -85,7 +87,7 @@ export function createDbWorkspaceHygieneStore(db: Db): WorkspaceHygieneStore {
           )
         : undefined;
       const rows = await db
-        .select(ROW_COLUMNS)
+        .select(rowColumns())
         .from(executionWorkspaces)
         .where(
           and(
@@ -103,7 +105,7 @@ export function createDbWorkspaceHygieneStore(db: Db): WorkspaceHygieneStore {
 
     listMeasured: async (limit) => {
       const rows = await db
-        .select(ROW_COLUMNS)
+        .select(rowColumns())
         .from(executionWorkspaces)
         .where(
           sql`${executionWorkspaces.metadata} -> ${WORKSPACE_HYGIENE_METADATA_KEY} IS NOT NULL`,

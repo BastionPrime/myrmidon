@@ -59,6 +59,17 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [tracks/](tracks/) | Задания шести треков V1.0 |
 | [SESSION-PROMPTS.md](SESSION-PROMPTS.md) | Промпты для запуска сессий по трекам |
 
+### Руководства (guides/)
+
+Руководства пользователя и администратора; у каждого файла есть русская версия `*.ru.md`.
+
+| Файл | О чём |
+|---|---|
+| [guides/run-limits.md](guides/run-limits.md) | Лимиты допуска прогонов: четыре лимита, источники значений, изменение из UI и API |
+| [guides/workspace-cleanup.md](guides/workspace-cleanup.md) | Очистка рабочих копий после слияния и сигнал о застрявшей копии |
+| [guides/cloud-files-connector.md](guides/cloud-files-connector.md) | Коннектор Microsoft 365 для ботов-контейнеров: настройка и журнал |
+| [guides/maintenance-banner.md](guides/maintenance-banner.md) | Как баннер обслуживания группирует окна агентов |
+
 ## Сборка и запуск
 
 Пока всё как у вендора: [doc/DEVELOPING.md](../../doc/DEVELOPING.md),

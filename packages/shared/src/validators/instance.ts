@@ -10,6 +10,8 @@ import { feedbackDataSharingPreferenceSchema } from "./feedback.js";
 import { shapeWithoutDefaults } from "./partial.js";
 // myrmidon(WORKSPACE-HYGIENE): workspace disk quotas that can be changed while the server runs
 import { workspaceHygieneLimitsSchema } from "../myrmidon-workspace-hygiene.js";
+// myrmidon(C0): run admission limits that can be changed while the server runs
+import { runLimitsSchema } from "../myrmidon-runtime-limits.js";
 
 function presetSchema<T extends readonly number[]>(presets: T, label: string) {
   return z.number().refine(
@@ -38,6 +40,10 @@ export const instanceGeneralSettingsSchema = z.object({
   // from /api/myrmidon/workspace-hygiene; absent means "use the environment
   // variable, then the default (both quotas off)".
   workspaceHygiene: workspaceHygieneLimitsSchema.optional(),
+  // myrmidon(C0): run admission limits changed from the instance settings
+  // page and /api/myrmidon/runtime-limits; absent means "use the environment
+  // variable, then the default" (see packages/shared/src/myrmidon-runtime-limits.ts).
+  runLimits: runLimitsSchema.optional(),
 }).strict();
 
 export const patchInstanceGeneralSettingsSchema = z

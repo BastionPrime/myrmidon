@@ -213,6 +213,8 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       ...(parsed.data.executionMode ? { executionMode: parsed.data.executionMode } : {}),
       // myrmidon(WORKSPACE-HYGIENE): the stored workspace quotas survive every general write
       ...(parsed.data.workspaceHygiene ? { workspaceHygiene: parsed.data.workspaceHygiene } : {}),
+      // myrmidon(C0): the stored run admission limits survive every general write
+      ...(parsed.data.runLimits ? { runLimits: parsed.data.runLimits } : {}),
     };
   }
   return {

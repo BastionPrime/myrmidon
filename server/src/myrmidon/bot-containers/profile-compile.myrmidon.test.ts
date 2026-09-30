@@ -20,6 +20,7 @@ import {
   type BotProfileAgentRecord,
   type BotProfilePorts,
 } from "./profile-compile.js";
+import { BOT_EGRESS_MODE_ENV, BOT_EGRESS_PROXY_ENV } from "./egress.js";
 import { classifyProfileChange, type CompiledProfile } from "./types.js";
 
 // Placeholder data only: fake ids, example.com URLs, obviously-fake secrets.
@@ -199,6 +200,64 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
     expect(second.restartHash).not.toBe(first.restartHash);
   });
 
+  describe("myrmidon(EGRESS-A) proxied egress", () => {
+    const EGRESS_ENV: NodeJS.ProcessEnv = {
+      ...INSTANCE_ENV,
+      [BOT_EGRESS_MODE_ENV]: "log",
+      [BOT_EGRESS_PROXY_ENV]: "http://egress.example.com:3128",
+    };
+
+    it("writes the instance's proxy into the bot's .env with the bot's key as the proxy user", async () => {
+      const board = fakeBoard();
+      const profile = await createBotProfileCompile(board.ports, { env: EGRESS_ENV })("agent-a", "agent-a");
+      const env = fileContent(profile, "hermes/.env");
+      const url = 'http://agent-a:egress@egress.example.com:3128/';
+      expect(env).toContain(`HTTP_PROXY="${url}"`);
+      expect(env).toContain(`HTTPS_PROXY="${url}"`);
+      expect(env).toContain(`ALL_PROXY="${url}"`);
+      expect(env).toContain('NODE_USE_ENV_PROXY="1"');
+      // The board stays direct: every bot calls it constantly, and it is on the bots' own network.
+      expect(env).toMatch(/NO_PROXY="[^"]*board\.example\.com/);
+    });
+
+    it("changes nothing about the profile while the mode is off (the fleet default)", async () => {
+      const board = fakeBoard();
+      const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+      expect(fileContent(profile, "hermes/.env")).not.toContain("HTTP_PROXY");
+      expect(fileContent(profile, "hermes/.env")).not.toContain("NODE_USE_ENV_PROXY");
+    });
+
+    it("gives the instance's proxy precedence over the card's own, and says so", async () => {
+      const warnings: string[][] = [];
+      const board = fakeBoard({
+        async resolveCardEnv() {
+          return {
+            env: { HTTP_PROXY: { value: "http://card.example.com:8080", secret: false } },
+            warnings: [],
+          };
+        },
+      });
+      const profile = await createBotProfileCompile(board.ports, {
+        env: EGRESS_ENV,
+        onWarnings: (_botKey, list) => {
+          warnings.push([...list]);
+        },
+      })("agent-a", "agent-a");
+      const env = fileContent(profile, "hermes/.env");
+      expect(env).toContain('HTTP_PROXY="http://agent-a:egress@egress.example.com:3128/"');
+      expect(env).not.toContain("card.example.com");
+      expect(warnings.flat().join("\n")).toContain('"HTTP_PROXY" is set by MYRMIDON_BOT_EGRESS_MODE');
+    });
+
+    it("refuses a log-mode profile with no address before reading the card at all", async () => {
+      const board = fakeBoard();
+      await expect(
+        createBotProfileCompile(board.ports, { env: { ...INSTANCE_ENV, [BOT_EGRESS_MODE_ENV]: "log" } })("agent-a", "agent-a"),
+      ).rejects.toThrow(/MYRMIDON_BOT_EGRESS_PROXY must be set/);
+      expect(board.calls).toEqual([]);
+    });
+  });
+
   describe("myrmidon(MEMORY-ISOLATION) hindsight bank allowlist and observation scopes", () => {
     const CARD_HINDSIGHT = { model: "some-model", provider: "custom", hindsight: { bankId: "bank-a", observationScopes: [["channel:board"], ["channel:telegram"]] } };
 
@@ -348,6 +407,20 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
       expect(config).not.toContain("https://example.com/other/mcp");
       expect(config).toContain("board:");
       expect(reported.flat().some((warning) => warning.includes("ragflow") && warning.includes("duplicate"))).toBe(true);
+    });
+
+    it("does not rewrite the board gateway URL with the runtime MCP URL base", async () => {
+      const board = fakeBoard({
+        async listMcpServers() {
+          return [{ name: "paperclip-assigned", url: "http://paperclip-server-1:3100/mcp/gateways/gw_x", token: "fake-mcp-token-0001" }];
+        },
+      });
+      const profile = await createBotProfileCompile(board.ports, {
+        env: { ...INSTANCE_ENV, [BOT_RUNTIME_MCP_URL_BASE_ENV]: "http://127.0.0.1:3100" },
+      })("agent-a", "agent-a");
+      const config = fileContent(profile, "hermes/config.yaml");
+      expect(config).toContain("http://paperclip-server-1:3100/mcp/gateways/gw_x");
+      expect(config).not.toContain("127.0.0.1");
     });
 
     it("is stable across ticks", async () => {
