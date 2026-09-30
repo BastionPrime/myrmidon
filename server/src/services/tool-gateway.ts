@@ -126,6 +126,9 @@ import {
   remoteUrlCredentialMatchesPublicUrl,
 } from "./remote-url-credentials.js";
 import { toolAccessPolicyService } from "./tool-access-policy.js";
+// myrmidon(S6): the per-agent tool/connection permission and its gate.
+import { agentToolPermissionAllows } from "@paperclipai/shared";
+import { loadAgentToolPermissions } from "../myrmidon/agent-tool-permissions.js";
 import { commitToolActionReview } from "./tool-action-review.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import {
@@ -1083,6 +1086,36 @@ export function createToolGatewayService(
   const pluginToolDispatcher = options.pluginToolDispatcher;
   const interactions = issueThreadInteractionService(db);
   const policyService = toolAccessPolicyService(db);
+  // myrmidon(S6): one channel for every tool decision. The agent's own tool and
+  // connection permission is checked first and, in "listed" mode, refuses a tool it
+  // does not name. The check runs once the session carries its agent — for a
+  // run-bound call that is after the run was bound (A2) — so it applies to the tool
+  // list, a direct call, a run-scoped call and a resumed approved call alike, and a
+  // refusal travels the same journal path as any other denied call (`tool_gateway.call_denied`
+  // plus the `deny_agent_permission` reason code).
+  async function decideToolAccess(input: ToolAccessDecisionInput): Promise<ToolAccessDecision> {
+    const agentId = input.actor.agentId;
+    if (agentId) {
+      const permissions = await loadAgentToolPermissions(db, input.companyId, agentId);
+      if (
+        !agentToolPermissionAllows(permissions, {
+          toolName: input.request.toolName,
+          catalogEntryId: input.request.catalogEntryId ?? null,
+          connectionId: input.request.connectionId ?? null,
+        })
+      ) {
+        return {
+          decision: "deny",
+          allowed: false,
+          reasonCode: "deny_agent_permission",
+          explanation: "Tool access denied by the agent's tool permissions.",
+          effectiveProfileIds: [],
+          matchedPolicyIds: [],
+        };
+      }
+    }
+    return policyService.decide(input);
+  }
   const secrets = secretService(db);
   // Authentication produces a new session object for every operation. Keep
   // credential acquisition scoped to that object and out of persisted inputs.
@@ -2787,7 +2820,7 @@ export function createToolGatewayService(
     const decisions = await Promise.all(
       tools.map(async (tool) => ({
         tool,
-        decision: await policyService.decide(
+        decision: await decideToolAccess(
           policyInputForTool({ session, tool }),
         ),
       })),
@@ -2861,7 +2894,7 @@ export function createToolGatewayService(
     );
     const decisions = await Promise.all(
       tools.map(async (tool) => {
-        const decision = await policyService.decide(
+        const decision = await decideToolAccess(
           policyInputForTool({ session, tool }),
         );
         return { tool, decision };
@@ -2888,7 +2921,7 @@ export function createToolGatewayService(
     if (onDemandTargets.length > 0) {
       const targetDecisions = await Promise.all(
         onDemandTargets.map(async (tool) => {
-          const decision = await policyService.decide(
+          const decision = await decideToolAccess(
             policyInputForTool({ session, tool }),
           );
           return { tool, decision };
@@ -7859,7 +7892,7 @@ export function createToolGatewayService(
         session,
         tool,
       );
-      const currentAccess = await policyService.decide(
+      const currentAccess = await decideToolAccess(
         policyInputForTool({
           session,
           tool,
@@ -8887,7 +8920,7 @@ export function createToolGatewayService(
       await assertAgentInCompany(input.companyId, input.agentId);
       const decisions = await Promise.all(
         pluginTools().map(async (tool) => {
-          const decision = await policyService.decide(
+          const decision = await decideToolAccess(
             policyInputForAgentTool({
               companyId: input.companyId,
               agentId: input.agentId,
@@ -8924,7 +8957,7 @@ export function createToolGatewayService(
       );
       const decisions = await Promise.all(
         tools.map(async (tool) => {
-          const decision = await policyService.decide(
+          const decision = await decideToolAccess(
             policyInputForAgentTool({
               companyId: input.companyId,
               agentId: input.agentId,
@@ -9043,7 +9076,7 @@ export function createToolGatewayService(
         idempotencyKey: `test-call:${randomUUID()}`,
         consumeRateLimit: true,
       });
-      const accessDecision = await policyService.decide(decisionInput);
+      const accessDecision = await decideToolAccess(decisionInput);
       const recorded = await policyService.recordInvocation(
         decisionInput,
         accessDecision,
@@ -9615,7 +9648,7 @@ export function createToolGatewayService(
             "Tool definition or connection changed; request a new review",
             "approved_tool_target_changed",
           );
-        const access = await policyService.decide(
+        const access = await decideToolAccess(
           policyInputForTool({
             session,
             tool,
@@ -10283,7 +10316,7 @@ export function createToolGatewayService(
           idempotencyKey: input.idempotencyKey,
           consumeRateLimit: true,
         });
-        const accessDecision = await policyService.decide(decisionInput);
+        const accessDecision = await decideToolAccess(decisionInput);
         // myrmidon(P9): a paused remote tool fails fast here: after replay and
         // policy (a denied call keeps its 403) and before the invocation is
         // recorded (a refused call leaves no idempotency key behind).
@@ -10751,7 +10784,7 @@ export function createToolGatewayService(
         parameters: requestedParameters,
         consumeRateLimit: true,
       });
-      const accessDecision = await policyService.decide(decisionInput);
+      const accessDecision = await decideToolAccess(decisionInput);
       const recorded = await policyService.recordInvocation(
         decisionInput,
         accessDecision,

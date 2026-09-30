@@ -1,4 +1,9 @@
-import { LOW_TRUST_REVIEW_PRESET } from "@paperclipai/shared";
+import {
+  AGENT_TOOL_PERMISSIONS_KEY,
+  ALLOW_ALL_AGENT_TOOL_PERMISSIONS,
+  LOW_TRUST_REVIEW_PRESET,
+  normalizeAgentToolPermissions,
+} from "@paperclipai/shared";
 
 export type NormalizedAgentPermissions = Record<string, unknown> & {
   canCreateAgents: boolean;
@@ -45,6 +50,11 @@ export function defaultAgentPermissions(
   return {
     canCreateAgents: options?.context === "create" && options?.lowTrust !== true,
     canCreateSkills: true,
+    // myrmidon(S6): the agent's tool/connection permission carries an explicit
+    // all-allowed default. It is part of the written record, never an absent field
+    // that enforcement would have to interpret, and it keeps the behaviour an agent
+    // had before this permission existed.
+    [AGENT_TOOL_PERMISSIONS_KEY]: { ...ALLOW_ALL_AGENT_TOOL_PERMISSIONS },
   };
 }
 
@@ -63,6 +73,9 @@ export function normalizeAgentPermissions(
 
   return {
     ...record,
+    // myrmidon(S6): normalise the tool/connection permission on every write, so the
+    // stored record always carries an explicit value (all-allowed when unset).
+    [AGENT_TOOL_PERMISSIONS_KEY]: normalizeAgentToolPermissions(record[AGENT_TOOL_PERMISSIONS_KEY]),
     canCreateAgents:
       typeof record.canCreateAgents === "boolean"
         ? record.canCreateAgents

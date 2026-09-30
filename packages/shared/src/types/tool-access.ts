@@ -1405,6 +1405,8 @@ export type ToolAccessReasonCode =
   | "deny_policy_block"
   | "deny_run_context_mismatch"
   | "deny_missing_agent"
+  // myrmidon(S6): the agent's own tool/connection permission does not name this tool.
+  | "deny_agent_permission"
   | "rate_limited";
 
 export interface ToolAccessSelector {
