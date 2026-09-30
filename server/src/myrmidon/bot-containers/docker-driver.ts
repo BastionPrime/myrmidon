@@ -50,6 +50,7 @@ import {
   BOT_LABEL_KEYS,
   BOT_MANAGED_DIRS,
   BOT_KEY_PATTERN,
+  BOT_MOUNT_SOURCES_ENV,
   BOT_VOLUME_MOUNTS,
   BotContainerTemplateError,
   buildBinds,
@@ -60,6 +61,7 @@ import {
   isUnderManagedDir,
   mountRootSegment,
   parseImageAllowlist,
+  parseMountSourceAllowlist,
   replacementContainerNameFor,
   resolveProfileFileTarget,
   validateBotKey,
@@ -97,6 +99,9 @@ export interface DockerDriverConfig {
   volumeRoot: string;
   network: string;
   allowlist: readonly string[];
+  /** Host directories a card may mount into a bot container, read-only
+   *  (MYRMIDON_BOT_MOUNT_SOURCES). Empty means "nothing extra may be mounted". */
+  mountSources: readonly string[];
 }
 
 export function readDockerDriverConfig(env: NodeJS.ProcessEnv = process.env): DockerDriverConfig {
@@ -109,6 +114,7 @@ export function readDockerDriverConfig(env: NodeJS.ProcessEnv = process.env): Do
     volumeRoot,
     network: env[BOT_NETWORK_ENV]?.trim() || DEFAULT_BOT_NETWORK,
     allowlist: parseImageAllowlist(env[BOT_IMAGE_ALLOWLIST_ENV]),
+    mountSources: parseMountSourceAllowlist(env[BOT_MOUNT_SOURCES_ENV]),
   };
 }
 
@@ -145,12 +151,13 @@ export interface DockerCreateContainerBody {
  * template" enforcement. Never adds anything a caller passed beyond `spec`'s
  * fields: no arbitrary binds, no host network, no privileged mode, and no
  * `Env` (secrets travel only in the profile's hermes/.env). Throws on an
- * image outside the allowlist or a network other than the one configured for
- * this driver.
+ * image outside the allowlist, a network other than the one configured for
+ * this driver, or an extra mount whose source is not in
+ * MYRMIDON_BOT_MOUNT_SOURCES (template.ts buildBinds).
  */
 export function buildCreateContainerRequestBody(
   spec: BotContainerSpec,
-  config: Pick<DockerDriverConfig, "volumeRoot" | "network" | "allowlist">,
+  config: Pick<DockerDriverConfig, "volumeRoot" | "network" | "allowlist" | "mountSources">,
 ): DockerCreateContainerBody {
   validateBotKey(spec.botKey);
   if (!isImageAllowed(spec.image, config.allowlist)) {
@@ -178,7 +185,10 @@ export function buildCreateContainerRequestBody(
       Init: true,
       RestartPolicy: { Name: "on-failure" },
       NetworkMode: config.network,
-      Binds: buildBinds(config.volumeRoot, spec.botKey),
+      Binds: buildBinds(config.volumeRoot, spec.botKey, {
+        mounts: spec.extraMounts,
+        allowedSources: config.mountSources,
+      }),
       Privileged: false,
     },
   };
@@ -530,13 +540,22 @@ interface DockerInspect {
   Image: string;
   Config?: { Image?: string; Labels?: Record<string, string> };
   State?: { Status?: string; ExitCode?: number; Health?: { Status?: string } };
-  HostConfig?: { Memory?: number; NanoCpus?: number; PidsLimit?: number; NetworkMode?: string };
+  HostConfig?: { Memory?: number; NanoCpus?: number; PidsLimit?: number; NetworkMode?: string; Binds?: string[] };
+}
+
+/** True when the container's live bind list is not exactly `wanted`, in order.
+ *  Docker returns the binds as they were created, so a card that added, removed
+ *  or reordered an extra mount shows up here as a template drift. */
+function bindsDrifted(existing: string[] | undefined, wanted: readonly string[]): boolean {
+  if (!existing || existing.length !== wanted.length) return true;
+  return existing.some((bind, index) => bind !== wanted[index]);
 }
 
 /**
  * Pure drift check: does `existing` (a container's live inspect) still match
  * `body` (a freshly built create-request) on every field that identifies the
- * container's *template* — image, the three resource limits and the network?
+ * container's *template* — image, the three resource limits, the network and
+ * the bind list (which carries the card's extra mounts)?
  */
 export function containerTemplateDrifted(
   existing: Pick<DockerInspect, "Config" | "HostConfig">,
@@ -547,7 +566,8 @@ export function containerTemplateDrifted(
     existing.HostConfig?.Memory !== body.HostConfig.Memory ||
     existing.HostConfig?.NanoCpus !== body.HostConfig.NanoCpus ||
     existing.HostConfig?.PidsLimit !== body.HostConfig.PidsLimit ||
-    existing.HostConfig?.NetworkMode !== body.HostConfig.NetworkMode
+    existing.HostConfig?.NetworkMode !== body.HostConfig.NetworkMode ||
+    bindsDrifted(existing.HostConfig?.Binds, body.HostConfig.Binds)
   );
 }
 

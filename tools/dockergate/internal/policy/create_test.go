@@ -228,6 +228,96 @@ func TestBotBindsMismatch(t *testing.T) {
 	})
 }
 
+// The bot's extra read-only mounts: the three fixed binds stay first and in
+// order, and every extra one is checked against the instance allowlist.
+func TestBotExtraMounts(t *testing.T) {
+	m := fixture.Load(t)
+	k, root := m.BotKey, m.VolumeRoot
+	scratch := root + "/" + k + "/scratch:/scratch"
+	tail := `"` + scratch + `"]`
+	shared := "/srv/shared/sources"
+
+	withEnv := func(sources ...string) *policy.Env {
+		e := env(m)
+		e.MountSources = sources
+		return e
+	}
+	// bodyWith returns the recorded bot body carrying one extra bind.
+	bodyWith := func(t *testing.T, bind string) []byte {
+		t.Helper()
+		_, body := m.FindBody(t, "bot-plain", "")
+		return replace(t, body, tail, `"`+scratch+`","`+bind+`"]`)
+	}
+
+	t.Run("an allowlisted read-only mount is accepted and kept canonical", func(t *testing.T) {
+		body := bodyWith(t, shared+":"+shared+":ro")
+		c, err := policy.ParseCreate(body, createRoute(t, "myrmidon-bot-"+k), withEnv(shared, "/srv/shared/tools"))
+		if err != nil {
+			t.Fatalf("denied: %s (field %q, detail %q)", err.Code, err.Field, err.Detail)
+		}
+		if string(c.Body) != string(body) {
+			t.Fatal("the canonical body differs from the request")
+		}
+		if !strings.Contains(string(c.Body), shared+":"+shared+`:ro`) {
+			t.Fatalf("the extra mount is missing from the canonical body: %s", c.Body)
+		}
+	})
+
+	t.Run("a source outside mountSources is denied", func(t *testing.T) {
+		body := bodyWith(t, "/srv/elsewhere/x:/srv/elsewhere/x:ro")
+		c, err := policy.ParseCreate(body, createRoute(t, "myrmidon-bot-"+k), withEnv(shared))
+		wantDeny(t, c, err, deny.MountSourceNotAllowed)
+	})
+
+	t.Run("a sibling of an allowlisted source is denied (no prefix rule)", func(t *testing.T) {
+		body := bodyWith(t, shared+"/deeper:"+shared+"/deeper:ro")
+		c, err := policy.ParseCreate(body, createRoute(t, "myrmidon-bot-"+k), withEnv(shared))
+		wantDeny(t, c, err, deny.MountSourceNotAllowed)
+	})
+
+	t.Run("with no mountSources every extra mount is denied", func(t *testing.T) {
+		body := bodyWith(t, shared+":"+shared+":ro")
+		c, err := policy.ParseCreate(body, createRoute(t, "myrmidon-bot-"+k), withEnv())
+		wantDeny(t, c, err, deny.MountSourceNotAllowed)
+	})
+
+	t.Run("a writable extra mount is denied", func(t *testing.T) {
+		body := bodyWith(t, shared+":"+shared)
+		c, err := policy.ParseCreate(body, createRoute(t, "myrmidon-bot-"+k), withEnv(shared))
+		wantDeny(t, c, err, deny.BindsMismatch)
+	})
+
+	t.Run("an extra mount over a reserved path is denied", func(t *testing.T) {
+		for _, target := range []string{"/workspace", "/workspace/shared", "/data/hermes", "/scratch", "/tmp", "/tmp/x", "relative", "/", "/x/../y"} {
+			body := bodyWith(t, shared+":"+target+":ro")
+			c, err := policy.ParseCreate(body, createRoute(t, "myrmidon-bot-"+k), withEnv(shared))
+			wantDeny(t, c, err, deny.BindsMismatch)
+		}
+	})
+
+	t.Run("the same target twice is denied", func(t *testing.T) {
+		_, body := m.FindBody(t, "bot-plain", "")
+		body = replace(t, body, tail, `"`+scratch+`","`+shared+`:`+shared+`:ro","/srv/shared/tools:`+shared+`:ro"]`)
+		c, err := policy.ParseCreate(body, createRoute(t, "myrmidon-bot-"+k), withEnv(shared, "/srv/shared/tools"))
+		wantDeny(t, c, err, deny.BindsMismatch)
+	})
+
+	t.Run("a helper may not carry an extra mount", func(t *testing.T) {
+		hb, hbody := m.FindBody(t, "helper-apply-0123456789abcdef", ".helper")
+		c, err := policy.ParseCreate(hbody, createRoute(t, hb.Name), withEnv(shared))
+		if err != nil {
+			t.Fatalf("the recorded helper body was denied: %s", err.Code)
+		}
+		if strings.Count(string(c.Body), shared) != 0 {
+			t.Fatal("a helper body must not carry an extra mount")
+		}
+		helperScratch := root + "/" + k + "/scratch:/scratch"
+		mut := replace(t, hbody, `"`+helperScratch+`"]`, `"`+helperScratch+`","`+shared+`:`+shared+`:ro"]`)
+		c, err = policy.ParseCreate(mut, createRoute(t, hb.Name), withEnv(shared))
+		wantDeny(t, c, err, deny.BindsMismatch)
+	})
+}
+
 // RT1_5: the body is read strictly, and unknown fields are refused, whatever
 // they are.
 func TestRedTeam_RT1_5_UnknownKeys(t *testing.T) {
