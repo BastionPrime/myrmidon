@@ -71,7 +71,7 @@ Docker socket, no host mounts, and no media tools. (The optional Node.js variant
   `HERMES_BUNDLED_SKILLS` explicitly to the same path as a second,
   independent way to find it, in case some other bundled-asset lookup
   turns out not to route through that one call site.
-- `tini` as PID 1 (`ENTRYPOINT`), `git`, `ripgrep`, `openssh-client` (ssh with `-i` and
+- `tini` as PID 1 (`ENTRYPOINT`), `git`, `jq`, `ripgrep`, `openssh-client` (ssh with `-i` and
   `-o UserKnownHostsFile=` under `/scratch`; the root is read-only), `curl`
   (health check only), `ca-certificates`. No `ffmpeg`, no media tools — forbidden by
   `docs/myrmidon/CONVENTIONS.md` §8; media handling is a separate service

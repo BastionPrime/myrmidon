@@ -92,6 +92,10 @@ describe("docker/bot-runtime/Dockerfile", () => {
     assert.match(dockerfileInstructions, /--no-install-recommends[\s\S]*?\bopenssh-client\b/);
   });
 
+  it("installs jq in the runtime stage without recommended packages", () => {
+    assert.match(dockerfileInstructions, /--no-install-recommends[\s\S]*?\bjq\b/);
+  });
+
   it("declares a HEALTHCHECK against a real gateway endpoint", () => {
     assert.match(dockerfile, /^HEALTHCHECK /m);
     // gateway/platforms/api_server.py: GET /health needs no auth; GET
