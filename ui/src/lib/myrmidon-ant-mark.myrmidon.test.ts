@@ -58,6 +58,21 @@ describe("one ant mark", () => {
     expect(paths).toEqual(reference);
   });
 
+  it("favicons are the bare mark on a transparent background, adaptive to the colour scheme", () => {
+    for (const file of [path.join(BRAND, "myrmidon-favicon.svg"), path.join(PUBLIC, "favicon.svg"), path.join(PUBLIC, "worktree-favicon.svg")]) {
+      const svg = read(file);
+      expect(svg, file).not.toContain("<rect");
+      expect(svg, file).toContain("prefers-color-scheme:dark");
+    }
+  });
+
+  it("only the phone home-screen icon has a plate (white ant on navy)", () => {
+    const appIcon = read(path.join(BRAND, "myrmidon-app-icon.svg"));
+    expect(appIcon).toContain('<rect');
+    expect(appIcon).toContain('fill="#13294B"');
+    expect(appIcon).toContain('stroke="#FFFFFF"');
+  });
+
   it("favicon.ico carries 16, 32 and 48 px layers", () => {
     for (const file of [path.join(PUBLIC, "favicon.ico"), path.join(BRAND, "favicon.ico")]) {
       const buf = readFileSync(file);
