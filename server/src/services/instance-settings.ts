@@ -35,6 +35,8 @@ import {
 import { eq } from "drizzle-orm";
 // myrmidon(R3): keep maintenance mode state across vendor writes of `general`
 import { preserveMaintenanceGeneralKey } from "../myrmidon/maintenance/store.js";
+// myrmidon(R5-A): keep deploy job state across vendor writes of `general`
+import { preserveDeployJobsGeneralKey } from "../myrmidon/deploy-jobs/store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -544,7 +546,12 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          general: { ...nextGeneral, ...preserveMaintenanceGeneralKey(current.general) }, // myrmidon(R3)
+          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state
+          general: {
+            ...nextGeneral,
+            ...preserveMaintenanceGeneralKey(current.general),
+            ...preserveDeployJobsGeneralKey(current.general),
+          },
           updatedAt: now,
         })
         .where(eq(instanceSettings.id, current.id))

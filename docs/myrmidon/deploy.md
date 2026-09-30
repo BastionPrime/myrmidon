@@ -156,6 +156,54 @@ scripts/myrmidon/deploy/rollback.sh --config /path/to/deploy.env --to sha256:<ol
 The script asks to type `RESTORE` (or takes `--yes-restore-database`), stops the server
 service, runs `RESTORE_COMMAND`, then brings the old image up.
 
+## Deploy from the interface
+
+The board can start its own deploy: the instance settings ("Board update") verify a digest,
+open a maintenance window, hand the switch to a host executor and follow it to health. The
+rules are the script's rules, not a second policy:
+
+- the same CI-image check (reference, registry, labels, commit on main or a myr-v* tag) runs
+  BEFORE the maintenance window opens — a refused image changes nothing, not even run
+  admission; there is no flag that skips it;
+- one deploy at a time: while a job is open, a second one is a 409;
+- the maintenance window is instance-wide, reason `deploy <digest prefix>`, and it is left
+  when the job ends; on a failed health check it STAYS ON for the rollback (the same
+  contract as step 7 of the script);
+- the board never runs docker itself. The host half is
+  `scripts/myrmidon/deploy/deploy-from-job.sh`, which polls the board API, waits for the
+  window to be `on`, runs the same `deploy.sh` (dump, drain, health) and writes a small JSON
+  report per job (`$STATE_DIR/job-<id>.json`). Mount that directory read-only into the board
+  container as `MYRMIDON_DEPLOY_REPORTS_DIR`; the board reads it, it never writes there;
+- the job is marked succeeded only when the board's own `/api/health` agrees with the
+  reported version and commit — a lying report cannot close a failed deploy;
+- a job stuck in one step longer than `MYRMIDON_DEPLOY_STEP_TIMEOUT_SEC` aborts itself and
+  leaves the window.
+
+### Enabling it
+
+Everything is off by default (`MYRMIDON_DEPLOY_ENABLED` unset). To switch it on:
+
+1. `MYRMIDON_DEPLOY_ENABLED=1` in the board environment;
+2. `MYRMIDON_DEPLOY_HEALTH_URL` — the board's own health endpoint as the board container
+   reaches it (for example `http://127.0.0.1:3100/api/health`);
+3. `MYRMIDON_DEPLOY_REPORTS_DIR` — the mounted reports directory (the host's `$STATE_DIR`);
+4. on the host: the executor (`deploy-from-job.sh --config <deploy.env>`), a timer or a
+   terminal session. It needs `BOARD_API_URL` (and `BOARD_TOKEN_FILE` in `authenticated`
+   mode — a board API key file, mode 0600, the same one `HEALTH_TOKEN_FILE` uses).
+
+The board reads the registry and GitHub itself for the digest check. When the board
+container cannot reach them, `MYRMIDON_DEPLOY_REGISTRY_INSPECT_URL` points at a read-only
+inspect endpoint answering `?ref=<reference>` with the `imagetools inspect` JSON, and
+`MYRMIDON_DEPLOY_GITHUB_HEADERS_JSON` adds headers to the GitHub calls (never a token
+value in the environment of a public deployment file).
+
+### When the button, when the script
+
+The interface is for routine deploys: the digest comes from a green CI run on `main` or a
+`myr-v*` tag, the board is reachable, the executor runs. The script stays the path for the
+first deploy of an installation, for a broken board (it cannot deploy itself), and for every
+case the interface refuses — which is exactly the case the script would refuse too.
+
 ## What to check after a deploy
 
 - `/api/health`: `status: ok`, the version and commit as in the image summary; `maintenance`
