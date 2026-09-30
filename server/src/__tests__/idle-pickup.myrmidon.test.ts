@@ -5,7 +5,10 @@ import {
   agents,
   companies,
   createDb,
+  documentRevisions,
+  documents,
   heartbeatRuns,
+  issuePlanDecompositions,
   issueRelations,
   issues,
 } from "@paperclipai/db";
@@ -86,8 +89,11 @@ describeEmbeddedPostgres("idlePickupForAgent (IDLE-PICKUP)", () => {
 
   afterEach(async () => {
     await db.update(issues).set({ executionRunId: null, checkoutRunId: null });
+    await db.delete(issuePlanDecompositions);
     await db.delete(issueRelations);
     await db.delete(agentWakeupRequests);
+    await db.delete(documentRevisions);
+    await db.delete(documents);
     await db.delete(issues);
     await db.delete(heartbeatRuns);
     await db.delete(agents);
@@ -141,6 +147,50 @@ describeEmbeddedPostgres("idlePickupForAgent (IDLE-PICKUP)", () => {
     return id;
   }
 
+  /** Seeds an accepted-plan decomposition row (documents + revision + claim) for one issue. */
+  async function seedDecomposition(input: {
+    companyId: string;
+    planningId: string;
+    agentId: string;
+    status: "in_flight" | "completed";
+  }) {
+    const documentId = randomUUID();
+    const revisionId = randomUUID();
+    await db.insert(documents).values({
+      id: documentId,
+      companyId: input.companyId,
+      title: "Plan",
+      format: "markdown",
+      latestBody: "Plan body",
+      latestRevisionId: revisionId,
+      latestRevisionNumber: 1,
+      createdByAgentId: input.agentId,
+      updatedByAgentId: input.agentId,
+    });
+    await db.insert(documentRevisions).values({
+      id: revisionId,
+      companyId: input.companyId,
+      documentId,
+      revisionNumber: 1,
+      title: "Plan",
+      format: "markdown",
+      body: "Plan body",
+      createdByAgentId: input.agentId,
+    });
+    await db.insert(issuePlanDecompositions).values({
+      companyId: input.companyId,
+      sourceIssueId: input.planningId,
+      acceptedPlanRevisionId: revisionId,
+      status: input.status,
+      ...(input.status === "completed" ? { completedAt: new Date() } : {}),
+      requestFingerprint: `claim:${input.planningId}`,
+      requestedChildCount: 1,
+      requestedChildren: [{ title: "child-1" }],
+      childIssueIds: [],
+      ownerAgentId: input.agentId,
+    });
+  }
+
   async function seedLiveRun(input: {
     companyId: string;
     agentId: string;
@@ -154,6 +204,25 @@ describeEmbeddedPostgres("idlePickupForAgent (IDLE-PICKUP)", () => {
       status: input.status,
       invocationSource: "automation",
       contextSnapshot: { issueId: input.issueId },
+    });
+  }
+
+  /** A succeeded run that finished at the given time (for the recent-success suppression). */
+  async function seedSucceededRun(input: {
+    companyId: string;
+    agentId: string;
+    issueId: string;
+    finishedAt: Date;
+  }) {
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(),
+      companyId: input.companyId,
+      agentId: input.agentId,
+      status: "succeeded",
+      invocationSource: "automation",
+      contextSnapshot: { issueId: input.issueId },
+      startedAt: input.finishedAt,
+      finishedAt: input.finishedAt,
     });
   }
 
@@ -344,6 +413,32 @@ describeEmbeddedPostgres("idlePickupForAgent (IDLE-PICKUP)", () => {
     expect(result.issueIds).toEqual([parentId]);
   });
 
+  it("does not wake an issue with an in-flight accepted-plan decomposition (the claim machinery owns the next step)", async () => {
+    const { companyId, agentId } = await seedAgent();
+    const planningId = await seedIssue({ companyId, agentId });
+    await seedDecomposition({ companyId, planningId, agentId, status: "in_flight" });
+    const deps = fakeDeps();
+
+    const result = await idlePickupForAgent(deps, { id: agentId, companyId });
+
+    expect(result.considered).toBe(0);
+    expect(result.woken).toBe(0);
+    expect(deps.enqueueWakeup).not.toHaveBeenCalled();
+  });
+
+  it("wakes an issue whose accepted-plan decomposition completed (children created, claim settled)", async () => {
+    const { companyId, agentId } = await seedAgent();
+    const planningId = await seedIssue({ companyId, agentId });
+    await seedDecomposition({ companyId, planningId, agentId, status: "completed" });
+    const deps = fakeDeps();
+
+    const result = await idlePickupForAgent(deps, { id: agentId, companyId });
+
+    expect(result.woken).toBe(1);
+    expect(result.issueIds).toEqual([planningId]);
+    expect(deps.enqueueWakeup).toHaveBeenCalledTimes(1);
+  });
+
   it("counts a suppressed admission (null wake) and does not treat it as an error", async () => {
     const { companyId, agentId } = await seedAgent();
     await seedIssue({ companyId, agentId });
@@ -448,6 +543,65 @@ describeEmbeddedPostgres("idlePickupForAgent (IDLE-PICKUP)", () => {
     expect(deps.enqueueWakeup).not.toHaveBeenCalled();
   });
 
+  it("does not wake an issue whose own run succeeded recently (the handoff/recovery paths own the next step)", async () => {
+    const { companyId, agentId } = await seedAgent();
+    const issueId = await seedIssue({ companyId, agentId, status: "in_progress" });
+    await seedSucceededRun({ companyId, agentId, issueId, finishedAt: new Date() });
+    const deps = fakeDeps();
+
+    const result = await idlePickupForAgent(deps, { id: agentId, companyId });
+
+    expect(result.woken).toBe(0);
+    expect(result.alreadyActive).toBe(1);
+    expect(deps.enqueueWakeup).not.toHaveBeenCalled();
+  });
+
+  it("wakes an issue whose only succeeded run is older than the recent-success window", async () => {
+    const { companyId, agentId } = await seedAgent();
+    const issueId = await seedIssue({ companyId, agentId, status: "in_progress" });
+    await seedSucceededRun({
+      companyId,
+      agentId,
+      issueId,
+      // 20 minutes ago: past the 15-minute default window.
+      finishedAt: new Date(Date.now() - 20 * 60 * 1000),
+    });
+    const deps = fakeDeps();
+
+    const result = await idlePickupForAgent(deps, { id: agentId, companyId });
+
+    expect(result.woken).toBe(1);
+    expect(result.issueIds).toEqual([issueId]);
+  });
+
+  it("recent-success suppression does not block a different, never-run issue of the same agent", async () => {
+    const { companyId, agentId } = await seedAgent();
+    // The acceptance path: one issue finished, another todo never ran.
+    const finishedId = await seedIssue({ companyId, agentId, status: "done" });
+    await seedSucceededRun({ companyId, agentId, issueId: finishedId, finishedAt: new Date() });
+    const neverRunId = await seedIssue({ companyId, agentId });
+    const deps = fakeDeps();
+
+    const result = await idlePickupForAgent(deps, { id: agentId, companyId });
+
+    expect(result.woken).toBe(1);
+    expect(result.issueIds).toEqual([neverRunId]);
+  });
+
+  it("recent-success suppression is off when MYRMIDON_IDLE_PICKUP_RECENT_SUCCESS_WINDOW_MS=0", async () => {
+    const { companyId, agentId } = await seedAgent();
+    const issueId = await seedIssue({ companyId, agentId, status: "in_progress" });
+    await seedSucceededRun({ companyId, agentId, issueId, finishedAt: new Date() });
+    const deps = fakeDeps({
+      env: { MYRMIDON_IDLE_PICKUP_RECENT_SUCCESS_WINDOW_MS: "0" },
+    });
+
+    const result = await idlePickupForAgent(deps, { id: agentId, companyId });
+
+    expect(result.woken).toBe(1);
+    expect(result.issueIds).toEqual([issueId]);
+  });
+
   it("does nothing when the feature is disabled by setting", async () => {
     const { companyId, agentId } = await seedAgent();
     await seedIssue({ companyId, agentId });
@@ -487,6 +641,7 @@ describeEmbeddedPostgres("createIdlePickupSweeper (IDLE-PICKUP tick)", () => {
 
   afterEach(async () => {
     await db.update(issues).set({ executionRunId: null, checkoutRunId: null });
+    await db.delete(issuePlanDecompositions);
     await db.delete(issueRelations);
     await db.delete(agentWakeupRequests);
     await db.delete(issues);

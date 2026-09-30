@@ -36,12 +36,15 @@ import { logger } from "../middleware/logger.js";
 
 export const IDLE_PICKUP_INTERVAL_SEC_ENV = "MYRMIDON_IDLE_PICKUP_INTERVAL_SEC";
 export const IDLE_PICKUP_ENABLED_ENV = "MYRMIDON_IDLE_PICKUP_ENABLED";
+export const IDLE_PICKUP_RECENT_SUCCESS_WINDOW_MS_ENV = "MYRMIDON_IDLE_PICKUP_RECENT_SUCCESS_WINDOW_MS";
 export const IDLE_WAKE_REASON = "idle_pickup";
 export const IDLE_WAKE_IDEMPOTENCY_PREFIX = "idle_pickup";
 
 /** Default: the sweep runs on every scheduler tick (about 30 s), like the other recovery passes. */
 export const DEFAULT_IDLE_PICKUP_INTERVAL_SEC = 30;
 export const MIN_IDLE_PICKUP_INTERVAL_SEC = 5;
+/** Default: an issue whose own run succeeded this recently is left to the handoff/recovery paths. */
+export const DEFAULT_IDLE_PICKUP_RECENT_SUCCESS_WINDOW_MS = 15 * 60 * 1000;
 
 const WAKEABLE_ISSUE_STATUSES = ["todo", "in_progress"] as const;
 const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
@@ -63,6 +66,21 @@ export function readIdlePickupIntervalSec(env: NodeJS.ProcessEnv = process.env):
 export function readIdlePickupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[IDLE_PICKUP_ENABLED_ENV]?.trim().toLowerCase();
   return raw !== "0" && raw !== "false" && raw !== "off" && raw !== "no";
+}
+
+/**
+ * Window in ms during which a successful run on an issue suppresses an
+ * idle-pickup wake for that same issue (the successful-run-handoff and
+ * stranded-recovery paths own the next step there). `0` disables the
+ * suppression; invalid values fall back to the default.
+ */
+export function readIdlePickupRecentSuccessWindowMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[IDLE_PICKUP_RECENT_SUCCESS_WINDOW_MS_ENV]?.trim();
+  if (!raw) return DEFAULT_IDLE_PICKUP_RECENT_SUCCESS_WINDOW_MS;
+  if (!/^\d+$/.test(raw)) return DEFAULT_IDLE_PICKUP_RECENT_SUCCESS_WINDOW_MS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) return DEFAULT_IDLE_PICKUP_RECENT_SUCCESS_WINDOW_MS;
+  return value;
 }
 
 export interface IdlePickupIssueCandidate {
@@ -192,6 +210,20 @@ function idlePickupCandidateRows(db: Db, companyId: string, agentId: string) {
             and child.parent_id = ${issues.id}
             and child.status not in ('done', 'cancelled')
         )`,
+        // Not mid-decomposition: an issue with an in-flight accepted-plan
+        // claim (`issue_plan_decompositions.status = 'in_flight'`) is waiting
+        // for the claim mechanism (child creation on acceptance, corrective
+        // continuation on failure), not for a fresh generic wake. Waking it
+        // here races that machinery — CI on the first push showed a test wake
+        // followed by an idle-pickup wake on the other planning issue and a
+        // third corrective run, tripling adapter executions.
+        sql`not exists (
+          select 1
+          from issue_plan_decompositions decomp
+          where decomp.company_id = ${issues.companyId}
+            and decomp.source_issue_id = ${issues.id}
+            and decomp.status = 'in_flight'
+        )`,
       ),
     )
     .orderBy(asc(issues.createdAt))
@@ -216,13 +248,22 @@ export async function idlePickupForAgent(
   const [candidates, liveRuns] = await Promise.all([
     idlePickupCandidateRows(deps.db, agent.companyId, agent.id),
     deps.db
-      .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
+      .select({
+        contextSnapshot: heartbeatRuns.contextSnapshot,
+        status: heartbeatRuns.status,
+        finishedAt: heartbeatRuns.finishedAt,
+        startedAt: heartbeatRuns.startedAt,
+        createdAt: heartbeatRuns.createdAt,
+      })
       .from(heartbeatRuns)
       .where(
         and(
           eq(heartbeatRuns.companyId, agent.companyId),
           eq(heartbeatRuns.agentId, agent.id),
-          inArray(heartbeatRuns.status, [...LIVE_HEARTBEAT_RUN_STATUSES]),
+          inArray(heartbeatRuns.status, [
+            ...LIVE_HEARTBEAT_RUN_STATUSES,
+            "succeeded",
+          ]),
         ),
       ),
   ]);
@@ -232,8 +273,30 @@ export async function idlePickupForAgent(
 
   const liveIssueIds = new Set(
     liveRuns
+      .filter((run) => (LIVE_HEARTBEAT_RUN_STATUSES as readonly string[]).includes(run.status))
       .map((run) => readNonEmptyString(run.contextSnapshot?.issueId))
       .filter((id): id is string => Boolean(id)),
+  );
+
+  // A succeeded run that ended recently on an open issue is not idle work: the
+  // vendor's successful-run-handoff / stranded-recovery machinery owns the next
+  // step for exactly that shape (a disposition is missing, and those paths send
+  // the instructive wake). Waking it again here only races them — and in tests
+  // it turns one background run into a chain that leaks into the next suite.
+  const recentSuccessWindowMs = readIdlePickupRecentSuccessWindowMs(env);
+  const recentlySucceededIssueIds = new Set(
+    liveRuns
+      .filter((run) => run.status === "succeeded")
+      .map((run) => ({
+        issueId: readNonEmptyString(run.contextSnapshot?.issueId),
+        endedAt: run.finishedAt ?? run.startedAt ?? run.createdAt,
+      }))
+      .filter(
+        (run): run is { issueId: string; endedAt: Date } =>
+          Boolean(run.issueId) &&
+          Date.now() - run.endedAt.getTime() < recentSuccessWindowMs,
+      )
+      .map((run) => run.issueId),
   );
 
   // Highest priority first, oldest blocked-transition breaks ties: the same
@@ -259,6 +322,12 @@ export async function idlePickupForAgent(
       continue;
     }
     if (liveIssueIds.has(candidate.id)) {
+      result.alreadyActive += 1;
+      continue;
+    }
+    if (recentlySucceededIssueIds.has(candidate.id)) {
+      // The issue just had a successful run without a disposition; the
+      // successful-run-handoff / stranded-recovery paths own that next step.
       result.alreadyActive += 1;
       continue;
     }
