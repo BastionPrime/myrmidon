@@ -223,7 +223,13 @@ export function createBotProfileCompile(
         ports.instanceDefaults ? ports.instanceDefaults() : Promise.resolve(undefined),
       ]);
 
-    const gatewayMcpServers = Array.isArray(gatewayResult) ? gatewayResult : gatewayResult.servers;
+    // The gateway URL is already built from MYRMIDON_BOT_BOARD_URL (the board as the container reaches it).
+    // MYRMIDON_HERMES_RUNTIME_MCP_URL_BASE is the host-side base (usually loopback), so it must not
+    // rewrite this URL: inside a container that would point the bot at its own loopback.
+    const gatewayMcpServers = (Array.isArray(gatewayResult) ? gatewayResult : gatewayResult.servers).map((server) => ({
+      ...server,
+      rewriteUrl: false,
+    }));
     const gatewayWarnings = Array.isArray(gatewayResult) ? [] : gatewayResult.warnings;
 
     // The gateway key is only fetched for a card that goes through the gateway, and only

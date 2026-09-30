@@ -350,6 +350,20 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
       expect(reported.flat().some((warning) => warning.includes("ragflow") && warning.includes("duplicate"))).toBe(true);
     });
 
+    it("does not rewrite the board gateway URL with the runtime MCP URL base", async () => {
+      const board = fakeBoard({
+        async listMcpServers() {
+          return [{ name: "paperclip-assigned", url: "http://paperclip-server-1:3100/mcp/gateways/gw_x", token: "fake-mcp-token-0001" }];
+        },
+      });
+      const profile = await createBotProfileCompile(board.ports, {
+        env: { ...INSTANCE_ENV, [BOT_RUNTIME_MCP_URL_BASE_ENV]: "http://127.0.0.1:3100" },
+      })("agent-a", "agent-a");
+      const config = fileContent(profile, "hermes/config.yaml");
+      expect(config).toContain("http://paperclip-server-1:3100/mcp/gateways/gw_x");
+      expect(config).not.toContain("127.0.0.1");
+    });
+
     it("is stable across ticks", async () => {
       const board = fakeBoard();
       board.secrets.set("fleet-ragflow-token", "fake-ragflow-token-0001");
