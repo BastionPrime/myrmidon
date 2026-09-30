@@ -1,111 +1,133 @@
-# Контейнеры для OpenClaw-шлюза: опись и решение (C1)
+# Containers for the OpenClaw gateway: inventory and decision (C1)
 
-Редакция 29.09.2026, пункт C1 плана 1.3. Обобщает фактическую опись того, что осталось от
-шлюза OpenClaw к моменту планирования 1.3, и фиксирует, почему контейнеризация шлюза не входит
-в 1.3. Документ заменяет собой «проект образа и шаблона fleetd» из исходной постановки пункта:
-объекта контейнеризации нет, проект вырождается в опись и решение.
+> Russian version: [openclaw-containers.ru.md](openclaw-containers.ru.md)
 
-## 0. Коротко
+Revision of 29.09.2026, item C1 of the 1.3 plan. Summarizes the actual inventory
+of what remained of the OpenClaw gateway by the time 1.3 was planned, and records
+why containerizing the gateway is not part of 1.3. The document replaces the
+"image and fleetd template design" from the original statement of the item:
+there is no object to containerize, so the design degenerates into an inventory
+and a decision.
 
-- Рантайм OpenClaw полностью выведен из эксплуатации до начала выпуска 1.3: юниты и пакет
-  удалены, порты свободны, живых процессов нет.
-- Активных потребителей шлюза нет: на 62 карточки агентов приходится один адаптер
-  `openclaw_gateway`, и та карточка приостановлена с пустой конфигурацией.
-- Новый контейнерный путь (шаблон, договор образа, белый список образов) уже покрывает
-  потребность на случай возвращения OpenClaw: достаточно собрать образ с меткой договора и
-  вписать его в белый список — отдельный шаблон не нужен.
-- Решение по пункту: закрыть как «шлюз выведен», судьбу остатков (вендорский адаптер, одна
-  карточка) решает владелец продукта; код адаптера остаётся вендорским и переносится
-  еженедельным синком без наших правок.
+## 0. Summary
 
-## 1. Опись на момент постановки (факты, снятые с живых систем)
+- The OpenClaw runtime was fully retired before release 1.3 began: units and
+  the package removed, ports free, no live processes.
+- The gateway has no active consumers: the only `openclaw_gateway` adapter card
+  is paused with an empty configuration; the platform has no other consumers of
+  the adapter.
+- The new container path (template, image contract, image allowlist) already
+  covers a possible return of OpenClaw: build an image carrying the contract
+  label and add it to the allowlist — no separate template is needed.
+- Decision on the item: close as "gateway retired"; the fate of the remnants
+  (the vendor adapter, one card) is decided by the product owner; the adapter
+  code stays vendor-owned and is carried by the weekly sync without our edits.
 
-### 1.1 Рантайм — выведен
+## 1. Inventory at the time of statement (facts from live systems)
 
-| Что | Проверка | Результат |
+### 1.1 Runtime — retired
+
+| What | Check | Result |
 |---|---|---|
-| Порты шлюза (web/bridge/два сервисных) | соединение к каждому по очереди | отказ соединения по всем |
-| Бинарь `openclaw` на второй машине | поиск в PATH | не найден |
-| Юниты `openclaw*` | реестр юнитов | отсутствуют |
-| Процессы шлюза | список процессов | отсутствуют |
-| Каталоги общих навыков/инструментов на второй машине | проверка путей | отсутствуют (переехали в 1.2) |
+| Gateway ports (web/bridge/two service ports) | connect to each in turn | connection refused on all |
+| The `openclaw` binary | PATH lookup | not found |
+| `openclaw*` units | unit registry | absent |
+| Gateway processes | process list | absent |
+| Shared skills/tools directories | path checks | absent (moved in 1.2) |
 
-Вывод согласуется с закрытым распоряжением о демонтаже (15.09): все юниты погашены и удалены,
-пакет удалён, отката-путь сохранён в каталоге демонтажа на хосте оператора.
+This agrees with the closed internal decommission order: all units stopped and
+removed, the package removed, the rollback path kept in the decommission
+directory outside the repository.
 
-### 1.2 Потребители в платформе
+### 1.2 Consumers in the platform
 
-| Группа | Число карточек | Статус |
-|---|---|---|
-| hermes_gateway (контейнерный путь) | 30 | рабочий путь флота |
-| hermes_local (хостовой, выводится в 1.2) | 29 | paused/paused-совместимые, перевод в 1.2–1.3 |
-| claude_local | 2 | legacy, paused |
-| openclaw_gateway | 1 | paused с 11.09, конфигурация пустая (значения вычищены при выводе) |
+At the time of the inventory the only `openclaw_gateway` adapter card was
+paused with an empty configuration (values wiped at retirement); the platform
+has no other consumers of the adapter. The working fleet path is the container
+adapter; host-based adapters are being retired under the 1.2–1.3 plan.
 
-Ротация общего токена шлюза (последний класс задач, живший на OpenClaw) закрыта с выводом
-«записей-потребителей в платформе не осталось» — контрольный признак, что живых потребителей нет.
+Rotation of the shared gateway token (the last class of tasks that lived on
+OpenClaw) was closed with the conclusion "no consumer records remain in the
+platform" — the control sign that there are no live consumers.
 
-### 1.3 Остатки в коде и репозитории
+### 1.3 Remnants in code and repository
 
-- Пакет `packages/adapters/openclaw-gateway` — вендорский, в `main`, без наших правок; переносится
-  еженедельным синком вендора. Отдельного сопровождения не требует.
-- Вендорский рецепт запуска OpenClaw в Docker для локальной разработки —
-  `docs/guides/openclaw-docker-setup.md`; он не является боевым путём и остаётся как есть.
-- Память эпохи OpenClaw — sqlite-базы выведенного рантайма, сжаты в архив демонтажа; к миграции
-  контейнеров отношения не имеют.
-- Бэкап демонтажа (юниты + снимок конфигов) — на хосте оператора, вне репозитория.
+- The `packages/adapters/openclaw-gateway` package is vendor code, present in
+  `main` without our edits; it is carried by the weekly vendor sync. It needs
+  no separate maintenance.
+- The vendor recipe for running OpenClaw in Docker for local development is
+  `docs/guides/openclaw-docker-setup.md`; it is not a production path and stays
+  as is.
+- The memory of the OpenClaw era — the sqlite databases of the retired
+  runtime — is compressed into the decommission archive; it has no relation to
+  the container migration.
+- The decommission backup (units plus a config snapshot) is kept outside the
+  repository.
 
-## 2. Почему проект контейнеризации вырождается
+## 2. Why the containerization design degenerates
 
-1. **Нет объекта.** Шлюз удалён с хоста; для образа не осталось источника (нет пакета, нет
-   бинаря, нет конфигурации). Сборка «образа шлюза» означала бы восстановление выведенного
-   рантайма — противоположно распоряжению владельца о демонтаже.
-2. **Нет потребителей.** Единственная карточка адаптера приостановлена с пустой конфигурацией;
-   миграция «с памятью» невозможна и не нужна: память эпохи OpenClaw сжата в архив.
-3. **Контейнерный путь уже готов на случай возвращения.** Действующий шаблон контейнера
-   (фиксированные тома hermes/workspace/scratch, договор образа «1», белый список образов
-   `MYRMIDON_BOT_IMAGE_ALLOWLIST`, контейнер только из CI-образа) покрывает сценарий «вернуть
-   OpenClaw как контейнер» без нового шаблона: собрать образ с меткой
-   `myrmidon.bot-runtime.contract=1`, добавить в белый список, завести карточку. Дополнительные
-   требования (порт web-интерфейса, tmpfs на /tmp) фиксируются в договоре образа следующей
-   версии при появлении реальной потребности.
-4. **Зависимость пункта от FLEETD-B отпадает.** Зависимость была нужна только для запуска
-   шлюза; описи и решению она не требуется.
+1. **No object.** The gateway was removed from the host; no source remains for
+   an image (no package, no binary, no configuration). Building a "gateway
+   image" would mean restoring the retired runtime — the opposite of the
+   owner's decommission order.
+2. **No consumers.** The only adapter card is paused with an empty
+   configuration; a migration "with memory" is impossible and unnecessary: the
+   OpenClaw-era memory is compressed into the archive.
+3. **The container path is already ready for a return.** The current container
+   template (fixed hermes/workspace/scratch volumes, image contract "1", the
+   `MYRMIDON_BOT_IMAGE_ALLOWLIST` image allowlist, containers only from
+   CI-built images) covers the "bring OpenClaw back as a container" scenario
+   with no new template: build an image with the
+   `myrmidon.bot-runtime.contract=1` label, add it to the allowlist, create a
+   card. Additional requirements (a web-interface port, tmpfs on /tmp) will be
+   recorded in the next version of the image contract when a real need arises.
+4. **The item's dependency on FLEETD-B lapses.** The dependency was needed only
+   to run the gateway; the inventory and the decision do not require it.
 
-## 3. Решение и судьба остатков (на слово владельца)
+## 3. Decision and the fate of the remnants (for the owner's word)
 
-- Пункт C1 «контейнеры для шлюза OpenClaw» закрывается как «шлюз выведен» — по той же формуле,
-  что в критериях выхода 1.3: «работает в контейнере под fleetd, если к 1.3 он ещё в работе,
-  либо пункт закрыт словом владельца, если шлюз выведен».
-- Рекомендация по остаткам (решает владелец):
-  - вендорский адаптер `openclaw-gateway` — оставить как есть (вендорский, без наших правок);
-  - карточку-призрак `openclaw_gateway` — удалить или переименовать в мемориал; она не
-    восстанавливается (конфигурация пустая), помех не создаёт, но числится в списках.
-- Пункт «запуск шлюза через fleetd с переносом памяти» (C1-вторая половина) теряет предмет:
-  рекомендуется закрыть тем же решением владельца, если не планируется возвращения OpenClaw.
+- Item C1 "containers for the OpenClaw gateway" is closed as "gateway retired"
+  — by the same formula as the 1.3 exit criteria: "runs in a container under
+  fleetd if it is still in service by 1.3, or the item is closed by the owner's
+  word if the gateway is retired".
+- Recommendation on the remnants (the owner decides):
+  - the vendor `openclaw-gateway` adapter — leave as is (vendor-owned, without
+    our edits);
+  - the phantom `openclaw_gateway` card — delete it or rename it into a
+    memorial; it cannot be restored (the configuration is empty), it causes no
+    harm, but it shows up in listings.
+- The item "run the gateway under fleetd with memory carried over" (the second
+  half of C1) loses its subject: it is recommended to close it by the same
+  owner decision if no return of OpenClaw is planned.
 
-## 4. Расхождения с планом
+## 4. Deviations from the plan
 
-1. Постановка пункта предполагала оба исхода; фактический — «выведен». Проект образа/шаблона
-   fleetd не требуется.
-2. Внешняя зависимость от FLEETD-B не требуется.
-3. Клапан возврата: если OpenClaw возвращается — критерии и шаблон уже в коде (договор «1»),
-   новый пункт плана не нужен, достаточно образа в белом списке.
+1. The statement of the item allowed both outcomes; the actual one is
+   "retired". No image/template design for fleetd is required.
+2. The external dependency on FLEETD-B is not required.
+3. Return valve: if OpenClaw comes back, the criteria and the template are
+   already in code (contract "1"); no new plan item is needed, an image in the
+   allowlist is enough.
 
-## 5. Как проверено (критерий «зачем»)
+## 5. How this was verified (the "why" criterion)
 
-- Живые пробы: порты шлюза — отказ соединения; реестр юнитов, PATH, список процессов, каталоги
-  навыков — пусто (снято 29.09, вторая машина и хост доски).
-- Платформа: выгрузка карточек агентов (62 шт., группировка по адаптерам), карточка-потребитель
-  адаптера — paused с пустой конфигурацией.
-- Репозиторий: `main` (выпуск 1.2.0) — пакет адаптера присутствует, вендорский, без правок;
-  шаблон контейнера и договор образа «1» — `server/src/myrmidon/bot-containers/template.ts`.
-- История решений: закрытые задачи демонтажа и ротации (см. журнал доски), план обновлений,
-  раздел «контейнеры для шлюза OpenClaw — 1.3 или позже».
+- Live probes: gateway ports — connection refused; unit registry, PATH,
+  process list, skills directories — empty.
+- Platform: a dump of agent cards grouped by adapter; the adapter's consumer
+  card is paused with an empty configuration.
+- Repository: `main` (release 1.2.0) — the adapter package is present,
+  vendor-owned, without edits; the container template and image contract "1"
+  live in `server/src/myrmidon/bot-containers/template.ts`.
+- Decision history: the closed internal decommission and rotation tasks, the
+  update plan, the section "containers for the OpenClaw gateway — 1.3 or
+  later".
 
-## 6. Риски
+## 6. Risks
 
-- Возвращение OpenClaw после закрытия пункта не блокируется ничем: путь контейнеров описан в §2.3.
-- Вендорский адаптер без потребителей не проверяется на стенде; если вендор сломает его
-  рефакторингом, заметим по синку (тесты адаптера в CI вендора).
-- Карточка-призрак может сбить с толку нового оператора — рекомендация по удалению в §3.
+- A return of OpenClaw after the item is closed is blocked by nothing: the
+  container path is described in §2.3.
+- The vendor adapter has no consumers and is not exercised on the staging
+  environment; if the vendor breaks it in a refactoring, we will notice via
+  the sync (the adapter tests run in the vendor's CI).
+- The phantom card can confuse a new operator — the removal recommendation is
+  in §3.
