@@ -74,6 +74,11 @@ export interface BotContainerStatus {
    *  never "none". */
   restartHash?: string;
   filesHash?: string;
+  /** myrmidon(CONCURRENCY-SYNC): gateway.api_server.max_concurrent_runs the applied
+   *  profile carries, read from the same marker (docker-driver.ts AppliedMarker).
+   *  Absent when nothing is verifiably applied, or when the marker predates the
+   *  field — "not reported", which the card shows as unknown, never as a match. */
+  maxConcurrentRuns?: number;
 }
 
 export interface BotContainerDriver {

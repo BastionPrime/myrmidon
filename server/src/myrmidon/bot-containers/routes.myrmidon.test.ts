@@ -5,9 +5,11 @@
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS } from "@paperclipai/shared";
 import { forbidden } from "../../errors.js";
 import { errorHandler } from "../../middleware/index.js";
 import { BOT_CONTAINERS_ENV, CONTAINER_GROUP_UNSUPPORTED_REASON } from "./agent-config.js";
+import { APPLIED_LIMIT_PENDING_NOTE, EXTERNAL_GATEWAY_NOTE, GATEWAY_RATE_LIMIT_LOOKBACK_MS } from "./concurrency-sync.js";
 import { BOT_IMAGE_ALLOWLIST_ENV } from "./docker-driver.js";
 import type { BotContainerDriver, BotContainerStatus } from "./driver.js";
 import { applyBotContainerNow, type BotContainerRuntimeDeps } from "./index.js";
@@ -32,6 +34,7 @@ function card(container: Record<string, unknown> | undefined, overrides: Partial
     companyId: COMPANY_ID,
     adapterType: "hermes_gateway",
     adapterConfig: container ? { container } : {},
+    runtimeConfig: {},
     ...overrides,
   };
 }
@@ -158,6 +161,15 @@ describe("myrmidon(W2b) bot container routes: status", () => {
       imageAllowed: true,
       container: { state: "running", image: "bot-image:1.1.0" },
       containerError: null,
+      boardMaxConcurrentRuns: AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
+      gatewayConcurrency: {
+        board: AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
+        applied: null,
+        diverged: false,
+        checkedAt: expect.any(String),
+      },
+      gatewayConcurrencyNote: APPLIED_LIMIT_PENDING_NOTE,
+      gatewayConcurrencyWarning: null,
     });
     // No profile hashes leave the server.
     expect(JSON.stringify(res.body)).not.toContain("restartHash");
@@ -207,6 +219,115 @@ describe("myrmidon(W2b) bot container routes: status", () => {
     expect(res.body.container).toBeNull();
     expect(res.body.containerError).toBe("The container runtime did not answer.");
     expect(JSON.stringify(res.body)).not.toContain("docker.sock");
+  });
+});
+
+describe("myrmidon(CONCURRENCY-SYNC) status: the board's limit against the applied one", () => {
+  const board = (limit: number) => ({ heartbeat: { maxConcurrentRuns: limit } });
+  const runningWith = (limit: number | undefined) =>
+    fakeDriver({
+      status: async (botKey): Promise<BotContainerStatus> => ({
+        botKey,
+        state: "running",
+        image: "bot-image:1.1.0",
+        restartHash: "r",
+        filesHash: "f",
+        ...(limit === undefined ? {} : { maxConcurrentRuns: limit }),
+      }),
+    });
+  const noContainer = fakeDriver({ status: async (botKey): Promise<BotContainerStatus> => ({ botKey, state: "missing" }) });
+
+  it("reports both values and no divergence when they agree", async () => {
+    const agent = card(ENABLED_CARD, { runtimeConfig: board(3) });
+    const res = await request(app(member, { agent, getRuntime: () => runtime(runningWith(3)) })).get(statusUrl).expect(200);
+    expect(res.body.gatewayConcurrency).toEqual({ board: 3, applied: 3, diverged: false, checkedAt: expect.any(String) });
+    expect(res.body.gatewayConcurrencyNote).toBeNull();
+  });
+
+  it("flags a divergence for a card change the reconciler has not applied yet", async () => {
+    // The card moved to 3 while the container still runs the profile applied with 2 —
+    // the window between saving the card and the reconciler's next pass.
+    const agent = card(ENABLED_CARD, { runtimeConfig: board(3) });
+    const res = await request(app(member, { agent, getRuntime: () => runtime(runningWith(2)) })).get(statusUrl).expect(200);
+    expect(res.body.gatewayConcurrency).toMatchObject({ board: 3, applied: 2, diverged: true });
+    expect(res.body.gatewayConcurrencyNote).toBeNull();
+  });
+
+  it("clamps the card value exactly as the profile compiler does", async () => {
+    const agent = card(ENABLED_CARD, { runtimeConfig: board(500) });
+    const res = await request(app(member, { agent, getRuntime: () => runtime(runningWith(50)) })).get(statusUrl).expect(200);
+    expect(res.body.boardMaxConcurrentRuns).toBe(50);
+    expect(res.body.gatewayConcurrency).toMatchObject({ board: 50, applied: 50, diverged: false });
+  });
+
+  it("says a container reports no limit yet instead of calling it diverged", async () => {
+    const agent = card(ENABLED_CARD, { runtimeConfig: board(3) });
+    const res = await request(app(member, { agent, getRuntime: () => runtime(runningWith(undefined)) })).get(statusUrl).expect(200);
+    expect(res.body.gatewayConcurrency).toMatchObject({ board: 3, applied: null, diverged: false });
+    expect(res.body.gatewayConcurrencyNote).toBe(APPLIED_LIMIT_PENDING_NOTE);
+  });
+
+  it("has nothing to compare for a container that does not exist", async () => {
+    const res = await request(app(member, { getRuntime: () => runtime(noContainer) })).get(statusUrl).expect(200);
+    expect(res.body.gatewayConcurrency).toBeNull();
+    expect(res.body.gatewayConcurrencyNote).toContain("No applied profile to compare");
+  });
+
+  it("has nothing to compare when the runtime did not answer", async () => {
+    const driver = fakeDriver({
+      status: async () => {
+        throw new Error("connect ENOENT /var/run/docker.sock");
+      },
+    });
+    const res = await request(app(member, { getRuntime: () => runtime(driver) })).get(statusUrl).expect(200);
+    expect(res.body.gatewayConcurrency).toBeNull();
+    expect(res.body.gatewayConcurrencyNote).toBeNull();
+  });
+
+  it("does not treat an agent that is not a gateway as an unmanaged gateway", async () => {
+    const recentGatewayRateLimit = vi.fn(async () => null);
+    const agent = card(ENABLED_CARD, { adapterType: "hermes_local", runtimeConfig: board(3) });
+    const res = await request(app(member, { agent, getRuntime: () => runtime(noContainer), recentGatewayRateLimit }))
+      .get(statusUrl)
+      .expect(200);
+    expect(res.body.boardMaxConcurrentRuns).toBe(3);
+    expect(res.body.gatewayConcurrency).toBeNull();
+    expect(res.body.gatewayConcurrencyNote).toBeNull();
+    expect(recentGatewayRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("says an unmanaged gateway cannot be read or changed, and warns when it limits runs", async () => {
+    const recentGatewayRateLimit = vi.fn(async () => "2026-01-01T00:00:00.000Z");
+    const agent = card({ ...ENABLED_CARD, enabled: false }, { runtimeConfig: board(3) });
+    const res = await request(app(member, { agent, getRuntime: () => runtime(noContainer), recentGatewayRateLimit }))
+      .get(statusUrl)
+      .expect(200);
+    expect(res.body.gatewayConcurrency).toBeNull();
+    expect(res.body.gatewayConcurrencyNote).toBe(EXTERNAL_GATEWAY_NOTE);
+    expect(res.body.gatewayConcurrencyWarning).toContain("2026-01-01T00:00:00.000Z");
+    expect(recentGatewayRateLimit).toHaveBeenCalledTimes(1);
+    const opts = recentGatewayRateLimit.mock.calls[0]![1];
+    const age = Date.now() - Date.parse(opts.sinceIso);
+    expect(age).toBeGreaterThanOrEqual(GATEWAY_RATE_LIMIT_LOOKBACK_MS - 60_000);
+    expect(age).toBeLessThanOrEqual(GATEWAY_RATE_LIMIT_LOOKBACK_MS + 60_000);
+  });
+
+  it("does not ask about rate-limited runs when the board itself asks for one run", async () => {
+    const recentGatewayRateLimit = vi.fn(async () => "2026-01-01T00:00:00.000Z");
+    const agent = card({ ...ENABLED_CARD, enabled: false }, { runtimeConfig: board(1) });
+    const res = await request(app(member, { agent, getRuntime: () => runtime(noContainer), recentGatewayRateLimit }))
+      .get(statusUrl)
+      .expect(200);
+    expect(res.body.gatewayConcurrencyNote).toBe(EXTERNAL_GATEWAY_NOTE);
+    expect(res.body.gatewayConcurrencyWarning).toBeNull();
+    expect(recentGatewayRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("answers an unmanaged gateway without the optional lookup wired", async () => {
+    const agent = card({ ...ENABLED_CARD, enabled: false }, { runtimeConfig: board(3) });
+    const res = await request(app(member, { agent, getRuntime: () => runtime(noContainer) })).get(statusUrl).expect(200);
+    expect(res.body.gatewayConcurrencyNote).toBe(EXTERNAL_GATEWAY_NOTE);
+    expect(res.body.gatewayConcurrencyWarning).toBeNull();
   });
 });
 

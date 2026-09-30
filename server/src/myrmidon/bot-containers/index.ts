@@ -376,6 +376,16 @@ export type {
 export { reconcileBot } from "./reconciler.js";
 export { classifyProfileChange } from "./types.js";
 export type { AppliedProfileState, CompiledProfile, CompiledProfileFile, ProfileChangeClass } from "./types.js";
+export {
+  APPLIED_LIMIT_PENDING_NOTE,
+  compareGatewayConcurrency,
+  EXTERNAL_GATEWAY_NOTE,
+  externalGatewayRateLimitWarning,
+  GATEWAY_RATE_LIMITED_ERROR_CODE,
+  GATEWAY_RATE_LIMIT_LOOKBACK_MS,
+  NO_APPLIED_STATE_NOTE,
+} from "./concurrency-sync.js";
+export type { GatewayConcurrencyStatus } from "./concurrency-sync.js";
 export { dockerBotContainerDriver, readDockerDriverConfig } from "./docker-driver.js";
 export { botProfileWiring } from "./profile-ports.js";
 export { createActivityWarningSink, createBotProfileCompile } from "./profile-compile.js";
