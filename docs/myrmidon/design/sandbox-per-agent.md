@@ -1,118 +1,140 @@
-# Песочница на агента: измерение накладных расходов и вопрос владельцу
+# Per-agent sandbox: overhead measurement and a question for the owner
 
-Редакция 29.09.2026, к выпуску 1.3, пункт S3-A. Это не реализация песочницы: по плану
-выпуска в 1.3 входит только вопрос владельцу, сама реализация (S3-B) отложена в раздел
-«Позже». Документ фиксирует факты для этого вопроса, методику замера и рекомендацию,
-чтобы решение владельца опиралось на цифры, а не на интуицию.
+> Russian version: [sandbox-per-agent.ru.md](sandbox-per-agent.ru.md)
 
-## 0. Коротко
+Revision of 29.09.2026, for release 1.3, item S3-A. This is not the sandbox
+implementation: under the release plan, 1.3 includes only the question to the
+owner; the implementation itself (S3-B) is deferred to "Later". The document
+records the facts behind that question, the measurement method and a
+recommendation, so that the owner's decision rests on numbers rather than
+intuition.
 
-- После переноса флота в контейнеры встал вопрос: нужна ли агенту отдельная песочница
-  и в какой форме. Два кандидата: отдельный uid на профиль внутри контейнера проекта
-  (мультиплекс процессов) или отдельный контейнер на бота.
-- Замер на живом флоте разработки показывает: **накладные расходы на контейнер —
-  ~0,35 МиБ, один простой runtime-процесс узла — ~10,3 МиБ**. Стоимость определяется
-  рантаймом агента, а не количеством контейнеров.
-- Практический вывод для решения: память больше не аргумент против «контейнера на
-  бота». Выбор формы — вопрос изоляции прав и эксплуатации, а не памяти.
-- Рекомендация оператора: UID-изоляция в общем контейнере проекта остаётся рабочей
-  формой на переходный период; контейнер на бота — целевая, когда лимиты хоста
-  позволяют.
-- Решение принимает владелец.
+## 0. Summary
 
-## 1. Контекст
+- Once the fleet moved into containers, a question arose: does an agent need a
+  separate sandbox, and in what form. Two candidates: a separate uid per profile
+  inside the project container (process multiplexing) or a separate container
+  per bot.
+- A measurement on the live development fleet shows: **container overhead is
+  ~0.34 MiB; one idle node runtime process costs ~10.04 MiB** (9.70 MiB on top
+  of the empty-container floor). The cost is driven by the agent runtime, not
+  by the number of containers.
+- Practical conclusion for the decision: memory is no longer an argument
+  against "one container per bot". The choice of form is a question of
+  privilege isolation and operations, not of memory.
+- Operator recommendation: UID isolation inside the shared project container
+  remains the working form for the transition period; one container per bot is
+  the target form once host limits allow it.
+- The owner decides.
 
-До переноса в контейнеры агенты работали как профили на хосте, и изоляция профилей
-друг от друга держалась на правах файловой системы. Перенос в контейнеры меняет
-границу: контейнер — уже граница изоляции ядра (cgroups, namespaces), и вопрос
-«нужна ли вторая граница внутри неё» стал открытым.
+## 1. Context
 
-План выпуска 1.3 фиксирует этот вопрос как отдельный процессный пункт: задать
-владельцу, нужна ли песочница на агента после перехода на контейнеры и в какой
-форме, с замером памяти по каждому варианту. Реализация в выпуск не входит.
+Before the move to containers, agents ran as profiles on the host, and profile
+isolation rested on filesystem permissions. Moving to containers changes the
+boundary: a container is already a kernel isolation boundary (cgroups,
+namespaces), and the question "do we need a second boundary inside it" became
+open.
 
-## 2. Два варианта формы песочницы
+The release 1.3 plan records this question as a separate process item: ask the
+owner whether a per-agent sandbox is needed after the move to containers, and
+in which form, with a memory measurement for each option. Implementation is not
+part of the release.
 
-### Вариант A: отдельный uid на профиль в контейнере проекта
+## 2. Two sandbox forms
 
-Все профили направления живут в одном контейнере проекта; каждому профилю назначается
-свой uid, права на рабочий каталог и `HERMES_HOME` — 0600/0700.
+### Option A: a separate uid per profile in the project container
 
-Плюсы:
+All profiles of a direction live in one project container; each profile gets
+its own uid, with permissions on the working directory and `HERMES_HOME` set to
+0600/0700.
 
-- один образ и один контейнер на направление;
-- суммарная память = сумма рантаймов, без кратного множителя;
-- общий кэш страниц образа для всех профилей направления.
+Advantages:
 
-Минусы:
+- one image and one container per direction;
+- total memory = the sum of runtimes, with no multiplying factor;
+- a shared page cache of the image for all profiles of the direction.
 
-- изоляция только на уровне прав unix: профили видят процессы друг друга, общий
-  PID- namespace не разделяет их;
-- лимиты CPU/памяти общие на контейнер: один тяжёлый профиль влияет на соседей;
-- ошибка в правах каталога даёт бок о бок стоящим профилям доступ к чужим файлам.
+Disadvantages:
 
-### Вариант B: контейнер на бота
+- isolation only at the unix-permissions level: profiles see each other's
+  processes, the shared PID namespace does not separate them;
+- CPU/memory limits are shared across the container: one heavy profile affects
+  its neighbours;
+- a mistake in directory permissions gives side-by-side profiles access to
+  each other's files.
 
-Каждому агенту — свой контейнер из того же образа, лимиты CPU/памяти на контейнера.
+### Option B: one container per bot
 
-Плюсы:
+Each agent gets its own container from the same image, with CPU/memory limits
+per container.
 
-- изоляция ядра между ботами: отдельные cgroups, отдельные PID namespaces,
-  раздельные лимиты, kill/restart одного бота не трогает соседей;
-- прямая телеметрия «память/CPU на агента» без вложения счётчиков;
-- откат и обновление одного бота — независимо от соседей.
+Advantages:
 
-Минусы:
+- kernel isolation between bots: separate cgroups, separate PID namespaces,
+  separate limits; kill/restart of one bot does not touch its neighbours;
+- direct per-agent memory/CPU telemetry with no nested counters;
+- rollback and update of a single bot, independently of its neighbours.
 
-- на каждого бота своя копия runtime-процесса (см. замер: ~10,3 МиБ на простой
-  процесс);
-- больше сущностей в эксплуатации: контейнеров столько же, сколько ботов.
+Disadvantages:
 
-## 3. Методика и результаты замера
+- each bot runs its own copy of the runtime process (see the measurement:
+  ~10.04 MiB per idle process, 9.70 MiB on top of the container floor);
+- more entities to operate: as many containers as there are bots.
 
-Замер выполнен на живом флоте разработки (рабочие контейнеры сессий команды
-разработки, узел node:24-alpine, cgroup v2, `memory.current`). Управляемая часть:
-чистые контейнеры из того же образа с разным числом runtime-процессов, по три
-повтора на точку; между точками контейнеры пересоздавались.
+## 3. Measurement method and results
 
-Формула:
+The measurement was taken on the live development fleet (working containers of
+development team sessions, node:24-alpine image, cgroup v2, `memory.current`).
+The controlled part: clean containers from the same image with different
+numbers of runtime processes, three repeats per point; containers were
+recreated between points.
 
-- один контейнер, 0 процессов: **352 256 байт (~0,35 МиБ)** — floor контейнера
-  (cgroup-структуры, page tables, смонтированные слои);
-- один контейнер, 1 процесс: **10 526 720 байт (~10,0 МиБ)**;
-- один контейнер, 2 процесса: **20 692 992 байт (~19,7 МиБ)**;
-- один контейнер, 3 процесса: **30 851 072 байт (~29,4 МиБ)**;
-- три контейнера по 1 процессу: **10 326 016 байт (~9,85 МиБ) каждый** — одинаково
-  во всех трёх.
+Figures:
 
-Выводы из цифр:
+- one container, 0 processes: **352,256 bytes (~0.34 MiB)** — the container
+  floor (cgroup structures, page tables, mounted layers);
+- one container, 1 process: **10,526,720 bytes (~10.04 MiB)**;
+- one container, 2 processes: **20,692,992 bytes (~19.73 MiB)**;
+- one container, 3 processes: **30,851,072 bytes (~29.42 MiB)**;
+- three containers with 1 process each: **10,326,016 bytes (~9.85 MiB) each** —
+  identical across all three.
 
-1. Накладные расходы на контейнер ≈ 0,35 МиБ — три сотых стоимости одного простого
-   рантайма. На фоне рабочих нагрузок (см. ниже) это шум.
-2. Память в варианте A растёт линейно по числу профилей — и в варианте B тоже
-   линейно по числу ботов; уклона в пользу A нет: **разница между вариантами по
-   памяти на бота ≈ 0,35 МиБ + доля неиспользуемых общих страниц**.
-3. Простои рантайма (~10 МиБ) — нижняя граница; рабочие контейнеры с реальными
-   сессиями показывают 131–771 МиБ в зависимости от нагрузки, то есть реальный
-   потребитель памяти — сама сессия агента, а не форма песочницы.
+Conclusions from the figures:
 
-Живой флот (рабочие контейнеры сессий, тот же образ): простой ~131 МиБ, активная
-сессия 612→771 МиБ за полчаса работы. Производственные волны переноса ещё идут,
-поэтому для решения владельца эта цифра — ориентир масштаба, а не слэм-данк: на
-флотах из десятков ботов она умножается на число ботов независимо от варианта.
+1. Container overhead ≈ 0.34 MiB — three hundredths of the cost of one idle
+   runtime. Against the working loads (see below) this is noise.
+2. Memory in option A grows linearly with the number of profiles — and in
+   option B likewise with the number of bots; there is no skew towards A:
+   **the per-bot memory difference between the options is ≈ 0.34 MiB plus the
+   share of unused shared pages**.
+3. Idle runtimes (~10 MiB) are the lower bound; working containers with real
+   sessions show 131–771 MiB depending on load, so the real memory consumer is
+   the agent session itself, not the sandbox form.
 
-## 4. Рекомендация оператора
+Live fleet (working session containers, same image): idle ~131 MiB, an active
+session 612→771 MiB over half an hour of work. The production migration waves
+are still under way, so for the owner's decision this figure is an order-of-
+magnitude guide: on fleets of dozens of bots it multiplies by the number of
+bots regardless of the option.
 
-Рекомендация (предложение, не решение): **вариант A как рабочий режим на переходный период** (волны переноса ещё идут, пересобирать форму изоляции в их середине — лишний риск), **вариант B как целевую форму** после завершения волн и вывода хостового запуска: изоляция ядра между ботами и раздельные лимиты стоят ~0,35 МиБ на бота — это дешевле любой альтернативы.
+## 4. Operator recommendation
 
-Целевые параметры для B (ориентиры, уточняются после волн): лимит памяти на контейнер — по фактическому рабочему набору бота из телеметрии волн, floor образа в лимите не участвует (страницы образа общие); лимит CPU — 1,0 на контейнер при среднем потреблении ~0,1.
+Recommendation (a proposal, not a decision): **option A as the working mode for the transition period** (the migration waves are still under way; rebuilding the isolation form mid-wave is an unnecessary risk), **option B as the target form** after the waves complete and host-based launches are retired: kernel isolation between bots and separate limits cost ~0.34 MiB per bot — cheaper than any alternative.
 
-## 5. Что не входит в этот документ
+Target parameters for B (guidelines, to be refined after the waves): the per-container memory limit follows the bot's actual working set from wave telemetry; the image floor is not counted in the limit (image pages are shared). The CPU limit guideline is 1.0 per container; the average consumption of an idle container was not measured in this pass (the pass covered memory only), so the concrete value is refined from wave telemetry together with the memory limit.
 
-Реализация песочницы (S3-B): доступ агента только к своему `HERMES_HOME` и рабочему месту. Она остаётся в разделе «Позже» и начинается только после ответа владельца на этот вопрос. Сетевая изоляция и исходящий прокси — отдельный пункт выпуска 1.3 и здесь не рассматриваются.
+## 5. What this document does not cover
 
-## 6. Открытые вопросы к владельцу
+The sandbox implementation (S3-B): agent access only to its own `HERMES_HOME`
+and workspace. It stays in the "Later" section and starts only after the
+owner's answer to this question. Network isolation and the egress proxy are a
+separate release 1.3 item and are not discussed here.
 
-1. Нужна ли песочница на агента после перехода на контейнеры, учитывая, что контейнер сам по себе уже граница изоляции ядра?
-2. Если да — в какой форме: отдельный uid на профиль в контейнере проекта (A) или контейнер на бота (B)?
-3. Если нет сейчас — фиксируем ли переход на B целевым решением после завершения волн переноса?
+## 6. Open questions for the owner
+
+1. Is a per-agent sandbox needed after the move to containers, given that a
+   container is already a kernel isolation boundary by itself?
+2. If yes — in which form: a separate uid per profile in the project container
+   (A) or one container per bot (B)?
+3. If not now — do we record the move to B as the target decision once the
+   migration waves complete?
