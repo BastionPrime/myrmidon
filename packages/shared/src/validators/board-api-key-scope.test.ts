@@ -32,9 +32,11 @@ describe("board API key scope validator (myrmidon ROLE-SCOPED-TOKENS)", () => {
     expect(normalizeBoardApiKeyScope("read_only")).toEqual({ kind: "full" });
   });
 
-  it("createBoardApiKeySchema defaults scope to full and validates kinds", () => {
-    expect(createBoardApiKeySchema.parse({}).scope).toEqual({ kind: "full" });
-    expect(createBoardApiKeySchema.parse({ name: "x" }).scope).toEqual({ kind: "full" });
+  it("createBoardApiKeySchema keeps scope optional and validates kinds", () => {
+    // No default: absent scope must stay absent so client wire contracts
+    // (CLI payloads parsed through this schema) are unchanged.
+    expect(createBoardApiKeySchema.parse({})).not.toHaveProperty("scope");
+    expect(createBoardApiKeySchema.parse({ name: "x" })).not.toHaveProperty("scope");
     expect(createBoardApiKeySchema.parse({ name: "x", scope: { kind: "read_only" } }).scope).toEqual({
       kind: "read_only",
     });

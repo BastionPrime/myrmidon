@@ -113,7 +113,11 @@ export const createBoardApiKeySchema = z.object({
   name: z.string().trim().min(1).max(120).default("paperclipai cli"),
   expiresAt: z.coerce.date().optional().nullable(),
   requestedCompanyId: z.string().guid().optional().nullable(),
-  scope: boardApiKeyScopeSchema.optional().default({ kind: "full" }),
+  // myrmidon(ROLE-SCOPED-TOKENS): optional scope; absent scope means full
+  // access on the server. No zod default here — clients (CLI) parse payloads
+  // through this schema before sending, and a default would silently add a
+  // scope key to their wire contract.
+  scope: boardApiKeyScopeSchema.optional(),
 });
 
 export type CreateBoardApiKey = z.infer<typeof createBoardApiKeySchema>;

@@ -2921,8 +2921,10 @@ export function accessRoutes(
         userId: req.actor.userId,
         name: req.body.name,
         expiresAt: req.body.expiresAt === undefined ? undefined : req.body.expiresAt,
-        // myrmidon(ROLE-SCOPED-TOKENS): optional scope limiting the new key.
-        scope: req.body.scope ?? null,
+        // myrmidon(ROLE-SCOPED-TOKENS): optional scope limiting the new key;
+        // the server (not the client schema) pins the full-access default so
+        // client wire contracts stay unchanged.
+        scope: req.body.scope ?? { kind: "full" },
       });
       const companyIds = await boardAuth.resolveBoardActivityCompanyIds({
         userId: req.actor.userId,
