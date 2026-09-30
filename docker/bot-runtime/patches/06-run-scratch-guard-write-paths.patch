@@ -15,7 +15,7 @@ index 22baf83..390b795 100644
          arithmetic (zsh parses leading-zero constants as decimal), quoted so zsh
          doesn't =word-expand. ``trap ... EXIT`` removes the temp on every failure.
          """
-+        # The folded mkdir -p must not resurrect a removed
++        # myrmidon(G1): The folded mkdir -p must not resurrect a removed
 +        # Paperclip run-scratch dir (unmarked 755 residue in the shared /tmp).
 +        # Guarding this chokepoint covers write_file, both patch paths and V4A
 +        # in one place; existing parents are untouched.
@@ -29,7 +29,7 @@ index 22baf83..390b795 100644
          denied = get_write_denied_error(path)
          if denied:
              return WriteResult(error=denied)
-+        # Refuse to re-create a removed run-scratch parent
++        # myrmidon(G1): Refuse to re-create a removed run-scratch parent
 +        # (the model-facing error carries the live-scratch hint). Placed after
 +        # the deny list and before any probe/write so no bytes touch disk.
 +        resurrected = get_run_scratch_resurrection_error(path)
@@ -42,7 +42,7 @@ index 22baf83..390b795 100644
          denied = get_write_denied_error(path)
          if denied:
              return PatchResult(error=denied)
-+        # Patch on a resurrected run-scratch path must fail
++        # myrmidon(G1): Patch on a resurrected run-scratch path must fail
 +        # exactly like write_file (both write paths refuse, per the write-refusal policy).
 +        resurrected = get_run_scratch_resurrection_error(path, verb="Patch")
 +        if resurrected is not None:

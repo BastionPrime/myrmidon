@@ -14,7 +14,7 @@ index 1ee9236..68730ca 100644
      return [os.path.realpath(p) + os.sep for p in paths]
  
  
-+# --- Paperclip run-scratch resurrection guard -----------------------------------
++# myrmidon(G1): --- Paperclip run-scratch resurrection guard -----------------------------------
 +#
 +# The harness gives each run a scratch dir under /tmp named
 +# ``paperclip-run-<issue>-<run12>-<random>`` and removes it at the run's terminal
