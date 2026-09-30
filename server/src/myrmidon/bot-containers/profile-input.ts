@@ -343,8 +343,9 @@ export interface BotMcpSource {
   scheme?: string;
   /** A server that takes no token: no header and no .env variable are produced. */
   noAuth?: boolean;
-  /** Whether the runtime MCP URL base rewrite applies (default true: it is meant for the board gateway's
-   *  own URLs). Servers declared in MYRMIDON_BOT_MCP_SERVERS are reached at the address given, so they opt out. */
+  /** Whether the runtime MCP URL base rewrite applies (default true). Servers declared in MYRMIDON_BOT_MCP_SERVERS
+   *  and the bot's own board gateway (its URL comes from MYRMIDON_BOT_BOARD_URL, already reachable from the
+   *  container) are used at the address given, so the compiler sets this to false for them. */
   rewriteUrl?: boolean;
 }
 
