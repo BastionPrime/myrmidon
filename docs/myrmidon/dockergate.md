@@ -1,6 +1,6 @@
 # dockergate
 
-> Русская версия: [dockergate.ru.md](dockergate.ru.md)
+> Russian version: [dockergate.ru.md](dockergate.ru.md)
 
 A proxy in front of the Docker socket for the board's bot-container driver
 (`server/src/myrmidon/bot-containers/`). Code: `tools/dockergate/` (Go, standard library
