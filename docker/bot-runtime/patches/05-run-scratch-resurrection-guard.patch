@@ -1,0 +1,174 @@
+diff --git a/agent/file_safety.py b/agent/file_safety.py
+index 1ee9236..68730ca 100644
+--- a/agent/file_safety.py
++++ b/agent/file_safety.py
+@@ -8,6 +8,7 @@
+ from __future__ import annotations
+ 
+ import os
++import re
+ from pathlib import Path
+ from contextlib import suppress
+ from typing import Optional
+@@ -106,6 +107,130 @@
+     return [os.path.realpath(p) + os.sep for p in paths]
+ 
+ 
++# --- Paperclip run-scratch resurrection guard -----------------------------------
++#
++# The harness gives each run a scratch dir under /tmp named
++# ``paperclip-run-<issue>-<run12>-<random>`` and removes it at the run's terminal
++# boundary. A path remembered mid-session then "succeeds" again the moment
++# write_file/patch (via _atomic_write's folded ``mkdir -p``) re-creates the
++# missing parent: mode 755, no ``.paperclip-run-scratch.json`` marker, never
++# reclaimed — permanent unmarked residue in the shared /tmp holding payloads and
++# comment bodies readable to every agent in the container (unmarked 755 residue;
++# see the original incident postmortem for the root-cause analysis).
++#
++# Guard policy: REFUSE the
++# write when the target's PARENT is a Paperclip run-scratch root — basename
++# starting with ``paperclip-run-`` (covers the harness mkdtemp names AND
++# hand-built variants: full run id, truncated segments, ``XXX`` — all one
++# prefix class) or the literal ``/tmp/paperclip-run`` — or equals one of the
++# live scratch env vars (``$PAPERCLIP_SCRATCH_DIR`` / ``$PAPERCLIP_RUN_SCRATCH_DIR``
++# / ``$PAPERCLIP_TMPDIR``), AND that directory does not exist. Writes into an
++# EXISTING (live) scratch dir are unchanged; directories outside the
++# paperclip-run-* class are created as before. The guard never raises: its own
++# failure must not break ordinary writes.
++_RUN_SCRATCH_NAME_PREFIX = "paperclip-run-"
++_RUN_SCRATCH_ENV_VARS = (
++    "PAPERCLIP_SCRATCH_DIR", "PAPERCLIP_RUN_SCRATCH_DIR", "PAPERCLIP_TMPDIR")
++
++
++def _fresh_scratch_env_paths() -> list[str]:
++    """Re-read the scratch env vars NOW: the live value is the only valid one.
++
++    A stale env snapshot or a remembered path is exactly the R2 trigger; the
++    error hint tells the caller what to use instead. Empty values are dropped.
++    """
++    out = []
++    for name in _RUN_SCRATCH_ENV_VARS:
++        try:
++            value = os.environ.get(name, "").strip()
++        except Exception:
++            value = ""
++        if value:
++            out.append(value)
++    return out
++
++
++def _is_run_scratch_parent(parent: str, scratch_envs: list[str]) -> bool:
++    """True when ``parent`` is classified as a Paperclip run-scratch root.
++
++    ``parent`` is an absolute, ``~``-expanded directory string. Matches:
++    * a value of a live scratch env var (the harness-managed run root);
++    * basename starting with ``paperclip-run-`` (mkdtemp shape
++      ``paperclip-run-<issue>-<run12>-<6 rand>`` and hand-built variants);
++    * the literal ``/tmp/paperclip-run`` (empty mkdtemp template edge).
++    Also used per-ancestor: any directory in the target's ancestor chain that
++    matches this classifier is a run-scratch ROOT for that target (a nested
++    target like ``$SCRATCH/sub/f.txt`` has the env root as an ANCESTOR, not as
++    its direct parent, and ``mkdir -p`` re-creates the whole chain).
++    """
++    if not parent:
++        return False
++    parent_norm = parent.rstrip("/") or "/"
++    if parent_norm in scratch_envs:
++        return True
++    base = os.path.basename(parent_norm)
++    if base.startswith(_RUN_SCRATCH_NAME_PREFIX):
++        return True
++    return parent_norm == "/tmp/paperclip-run"
++
++
++def _missing_run_scratch_ancestor(path: str, scratch_envs: list[str]) -> Optional[str]:
++    """First REMOVED run-scratch root in ``path``'s ancestor chain, else None.
++
++    Walks the ancestor directories of the write target from the direct parent
++    up to ``/``. The first ancestor classified as a run-scratch root
++    (env-value, ``paperclip-run-*`` basename, or the ``/tmp/paperclip-run``
++    literal) that does NOT exist is the one ``mkdir -p`` would resurrect —
++    return it. Existing ancestors (a live run scratch dir) are not a
++    resurrection and stop the walk: their subtrees behave exactly as before.
++    """
++    current = os.path.dirname(os.path.abspath(path))
++    seen: set[str] = set()
++    while current and current not in seen:
++        seen.add(current)
++        if _is_run_scratch_parent(current, scratch_envs):
++            if not os.path.isdir(current):
++                return current
++            return None  # live root: ordinary subtree, no resurrection
++        nxt = os.path.dirname(current)
++        if nxt == current:
++            break
++        current = nxt
++
++
++def get_run_scratch_resurrection_error(path: str, *, verb: str = "Write") -> Optional[str]:
++    """Model-facing error when writing ``path`` would RESURRECT a removed
++    Paperclip run-scratch directory, else ``None`` (write proceeds normally).
++
++    Pure-Python check (``os.path`` string logic + one ``isdir`` stat): no shell
++    exec, no side effects, safe to call before every write. Fails OPEN
++    (returns ``None``) on any internal error so a broken guard never breaks
++    writes.
++    """
++    try:
++        expanded = os.path.expanduser(str(path))
++        scratch_envs = _fresh_scratch_env_paths()
++        # Ancestor-chain classification (nested targets re-create the whole chain):
++        # the direct parent covers only flat targets; a nested target
++        # $SCRATCH/sub/f.txt re-creates the removed root via the folded
++        # mkdir -p. Any missing run-scratch ancestor is a resurrection.
++        root = _missing_run_scratch_ancestor(expanded, scratch_envs)
++        if root is None:
++            return None
++        parent = root
++        hint = os.environ.get("PAPERCLIP_SCRATCH_DIR", "").strip() or "unset"
++        return (
++            f"{verb} refused: '{path}' would re-create run-scratch directory "
++            f"'{parent}', which no longer exists (the run's scratch dir was "
++            f"removed at the run boundary; re-creating it leaves unmarked "
++            f"residue in the shared /tmp). Use the live $PAPERCLIP_SCRATCH_DIR "
++            f"(re-read the env var in this same step; currently '{hint}') or a "
++            f"directory under your profile home. Do not reconstruct a "
++            f"paperclip-run-* path by hand and do not resurrect this one.")
++    except Exception:
++        return None
++
++
+ def get_safe_write_roots() -> set[str]:
+     """Resolved HERMES_WRITE_SAFE_ROOT paths (``os.pathsep``-separated list)."""
+     roots: set[str] = set()
+@@ -262,7 +387,7 @@
+ def raise_if_read_blocked(path: str) -> None:
+     """Raise ``ValueError`` if ``path`` is a denied Hermes read (see ``get_read_block_error``).
+ 
+-    Shared chokepoint for provider input-loading sites (e.g. image-gen local
++    Shared chokepoint for provider input-loading sites (e.g. image-gen local-file
+     paths). Best-effort: unexpected internal errors no-op rather than break
+     local-file loading; a real block still propagates.
+     """
+@@ -375,8 +500,8 @@
+     """Classify a write target as cross-profile if it lands in another
+     profile's scoped area (skills/plugins/cron/memories).
+ 
+-    Returns ``None`` when the target is outside Hermes scope, or is inside
+-    the ACTIVE profile, or doesn't hit a profile-scoped area. Otherwise
++    Returns ``None`` when the target is outside Hermes scope, or is inside the
++    ACTIVE profile, or doesn't hit a profile-scoped area. Otherwise
+     returns a dict with:
+ 
+       * ``active_profile``: name of the profile the agent is running as
+@@ -384,8 +509,8 @@
+       * ``area``: which scoped area (``"skills"``, ``"plugins"``, etc.)
+       * ``target_path``: the resolved path string
+ 
+-    The caller decides what to do with the result — surface a warning to
+-    the model, prompt the user, or (with explicit consent /
++    The caller decides what to do with the result — surface a warning to the
++    model, prompt the user, or (with explicit consent /
+     ``cross_profile=True``) proceed anyway.
+     """
+     try:
