@@ -111,6 +111,28 @@ log "API_SERVER_HOST=${API_SERVER_HOST} API_SERVER_PORT=${API_SERVER_PORT}"
 # change.
 log "HERMES_LAZY_INSTALL_TARGET=${HERMES_LAZY_INSTALL_TARGET:-<unset>} HERMES_WRITE_SAFE_ROOT=${HERMES_WRITE_SAFE_ROOT:-<unset>}"
 
+# --- catalog memory provider ---------------------------------------------
+# hermes resolves a memory provider from the bundled tree or ${HERMES_HOME}/plugins; the
+# image ships the vendored catalog plugin read-only under $HERMES_CATALOG_PLUGINS_DIR, and
+# the bot's HERMES_HOME is a mounted volume, so the plugin has to be linked into it here.
+# Idempotent: an existing entry (an operator's own install, or the link from a previous
+# start of the same volume) is left untouched. A missing catalog directory is a warning,
+# not a hard failure — the gateway is useful without memory, and taking the bot down over
+# it would be worse; the line names exactly what is missing.
+catalog_dir="${HERMES_CATALOG_PLUGINS_DIR:-/opt/hermes-plugins}"
+if [ -d "${catalog_dir}/hindsight" ]; then
+  mkdir -p "${HERMES_HOME}/plugins"
+  if [ -e "${HERMES_HOME}/plugins/hindsight" ] || [ -L "${HERMES_HOME}/plugins/hindsight" ]; then
+    log "memory provider hindsight already present at ${HERMES_HOME}/plugins/hindsight — left as is"
+  else
+    ln -s "${catalog_dir}/hindsight" "${HERMES_HOME}/plugins/hindsight" \
+      || fail "cannot link the catalog memory provider into ${HERMES_HOME}/plugins"
+    log "memory provider hindsight linked from ${catalog_dir}/hindsight"
+  fi
+else
+  log "WARNING: no catalog memory provider at ${catalog_dir}/hindsight — a profile with memory.provider=hindsight starts without memory"
+fi
+
 # --replace: a previous instance's lock (from a hard container restart) does
 # not block this one — the fleet manager, not hermes, decides whether two
 # instances should ever coexist. --accept-hooks: no TTY to answer a shell
