@@ -12,6 +12,7 @@ import {
 import { PageTabBar } from "@/components/PageTabBar";
 import { ApiError } from "@/api/client";
 import { agentsApi } from "@/api/agents";
+import { useTranslation } from "@/i18n";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useToastActions } from "@/context/ToastContext";
@@ -24,6 +25,8 @@ import { SshGenerateDialog } from "./SshGenerateDialog";
 import { RotateDialog } from "./RotateDialog";
 import { HostDeployDialog, type HostDeployMode } from "./HostDeployDialog";
 import { AuditTabView } from "./AuditTab";
+import { AccessHubUnavailableView } from "./AccessHubUnavailable";
+import { accessHubQueryRetry, accessHubUnavailable } from "./accessHubAvailability";
 import {
   DEFAULT_AUDIT_LIMIT,
   EMPTY_ACCESS_FILTERS,
@@ -69,6 +72,7 @@ export function AccessHubPage() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
 
   const [activeTab, setActiveTab] = useState<AccessHubTab>("accesses");
   const [filters, setFilters] = useState<AccessListFilters>(EMPTY_ACCESS_FILTERS);
@@ -85,16 +89,25 @@ export function AccessHubPage() {
     queryKey: accessHubQueryKeys.accesses,
     queryFn: accessHubApi.listAccesses,
     enabled: Boolean(selectedCompanyId),
+    retry: accessHubQueryRetry,
   });
+  // An instance without the access-hub API answers 404/501: the screen becomes
+  // one notice and none of the other access-hub endpoints are asked for. The
+  // list itself is also what tells us the API is there, so the other queries
+  // wait for its first successful answer.
+  const accessHubReady = accessesQuery.isSuccess;
+  const unavailable = accessHubUnavailable(accessesQuery.error);
   const hostsQuery = useQuery({
     queryKey: accessHubQueryKeys.hosts,
     queryFn: accessHubApi.listHosts,
-    enabled: Boolean(selectedCompanyId),
+    enabled: Boolean(selectedCompanyId) && accessHubReady,
+    retry: accessHubQueryRetry,
   });
   const auditQuery = useQuery({
     queryKey: accessHubQueryKeys.audit,
     queryFn: accessHubApi.audit,
-    enabled: Boolean(selectedCompanyId) && activeTab === "journal",
+    enabled: Boolean(selectedCompanyId) && accessHubReady && activeTab === "journal",
+    retry: accessHubQueryRetry,
   });
   const agentsQuery = useQuery({
     queryKey: selectedCompanyId ? queryKeys.agents.list(selectedCompanyId) : ["agents", "__disabled__"],
@@ -250,40 +263,47 @@ export function AccessHubPage() {
         <h1 className="text-lg font-semibold">Access hub</h1>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as AccessHubTab)} className="flex flex-col gap-4">
-        <PageTabBar
-          items={[
-            { value: "accesses", label: "Accesses" },
-            { value: "journal", label: "Journal" },
-          ]}
-          align="start"
-          value={activeTab}
-          onValueChange={(value) => setActiveTab(value as AccessHubTab)}
+      {unavailable ? (
+        <AccessHubUnavailableView
+          title={t("accessHub.notAvailable.title")}
+          description={t("accessHub.notAvailable.description")}
         />
-
-        <TabsContent value="accesses" className="flex flex-col gap-3">
-          <AccessListView
-            records={visibleRecords}
-            hosts={hosts}
-            agents={agents}
-            filters={filters}
-            loading={accessesQuery.isPending}
-            error={listError}
-            onFiltersChange={setFilters}
-            onSelect={openRecord}
-            onCreate={() => openDialog({ kind: "create" })}
+      ) : (
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as AccessHubTab)} className="flex flex-col gap-4">
+          <PageTabBar
+            items={[
+              { value: "accesses", label: "Accesses" },
+              { value: "journal", label: "Journal" },
+            ]}
+            align="start"
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as AccessHubTab)}
           />
-        </TabsContent>
 
-        <TabsContent value="journal" className="flex flex-col gap-3">
-          <AuditTabView
-            entries={auditQuery.data ?? []}
-            limit={DEFAULT_AUDIT_LIMIT}
-            loading={auditQuery.isPending}
-            error={auditQuery.isError ? readable(auditQuery.error) : null}
-          />
-        </TabsContent>
-      </Tabs>
+          <TabsContent value="accesses" className="flex flex-col gap-3">
+            <AccessListView
+              records={visibleRecords}
+              hosts={hosts}
+              agents={agents}
+              filters={filters}
+              loading={accessesQuery.isPending}
+              error={listError}
+              onFiltersChange={setFilters}
+              onSelect={openRecord}
+              onCreate={() => openDialog({ kind: "create" })}
+            />
+          </TabsContent>
+
+          <TabsContent value="journal" className="flex flex-col gap-3">
+            <AuditTabView
+              entries={auditQuery.data ?? []}
+              limit={DEFAULT_AUDIT_LIMIT}
+              loading={auditQuery.isPending}
+              error={auditQuery.isError ? readable(auditQuery.error) : null}
+            />
+          </TabsContent>
+        </Tabs>
+      )}
 
       <Sheet open={Boolean(selectedRecord)} onOpenChange={(open) => (open ? undefined : closeRecord())}>
         <SheetContent className="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-xl">
