@@ -1,6 +1,6 @@
 # How we work on Myrmidon
 
-> Русская версия: [CONVENTIONS.ru.md](CONVENTIONS.ru.md)
+> Russian version: [CONVENTIONS.ru.md](CONVENTIONS.ru.md)
 
 These rules apply to every session and every person. If a track contradicts this file, this
 file wins.
