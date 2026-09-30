@@ -6,7 +6,7 @@
 // the same reason server/src/myrmidon/maintenance/index.ts has no direct test file
 // of its own: everything testable in it is pushed down into domain.ts/service.ts.
 
-import type { BotContainerSpec } from "./driver.js";
+import type { BotContainerSpec, BotExtraMount } from "./driver.js";
 import { BOT_KEY_PATTERN } from "./template.js";
 
 export const BOT_CONTAINERS_ENV = "MYRMIDON_BOT_CONTAINERS";
@@ -23,6 +23,10 @@ export interface BotContainerAgentConfig {
   memoryMb: number;
   cpus: number;
   pidsLimit: number;
+  /** `container.extraMounts`: extra read-only directories the bot sees (a shared
+   *  sources directory, templates, common tools). Their sources are checked
+   *  against MYRMIDON_BOT_MOUNT_SOURCES when the container template is built. */
+  extraMounts: BotExtraMount[];
 }
 
 export type BotContainerAgentConfigResult =
@@ -74,7 +78,50 @@ export function readBotContainerAgentConfig(
   if (typeof pidsLimit !== "number" || !Number.isInteger(pidsLimit) || pidsLimit <= 0) {
     return { ok: false, reason: "container.pidsLimit must be a positive integer" };
   }
-  return { ok: true, config: { image, memoryMb, cpus, pidsLimit } };
+  const extraMounts = readExtraMounts(c.extraMounts);
+  if (!extraMounts.ok) return { ok: false, reason: extraMounts.reason };
+  return { ok: true, config: { image, memoryMb, cpus, pidsLimit, extraMounts: extraMounts.mounts } };
+}
+
+/**
+ * Reads `container.extraMounts`. Structural only — a missing field means "no
+ * extra mounts", an entry that is not `{source, path, readOnly?}` is refused
+ * with the field named. Whether the source may be mounted at all (the
+ * instance allowlist) is the driver's decision (template.ts
+ * validateExtraMounts), so a card outside the allowlist is refused where the
+ * container is built, with the security boundary and the card reader kept
+ * apart.
+ */
+function readExtraMounts(
+  raw: unknown,
+): { ok: true; mounts: BotExtraMount[] } | { ok: false; reason: string } {
+  if (raw === undefined || raw === null) return { ok: true, mounts: [] };
+  if (!Array.isArray(raw)) return { ok: false, reason: "container.extraMounts must be an array" };
+  const mounts: BotExtraMount[] = [];
+  for (const [index, entry] of raw.entries()) {
+    const where = `container.extraMounts[${index}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return { ok: false, reason: `${where} must be an object` };
+    }
+    const mount = entry as Record<string, unknown>;
+    if (typeof mount.source !== "string" || mount.source.trim().length === 0) {
+      return { ok: false, reason: `${where}.source must be a non-empty string` };
+    }
+    if (typeof mount.path !== "string" || !mount.path.startsWith("/")) {
+      return { ok: false, reason: `${where}.path must be an absolute container path` };
+    }
+    if (mount.readOnly !== undefined && typeof mount.readOnly !== "boolean") {
+      return { ok: false, reason: `${where}.readOnly must be a boolean` };
+    }
+    if (mount.readOnly === false) {
+      return {
+        ok: false,
+        reason: `${where}.readOnly=false is not supported: a shared directory is only mounted read-only`,
+      };
+    }
+    mounts.push({ source: mount.source, containerPath: mount.path, readOnly: true });
+  }
+  return { ok: true, mounts };
 }
 
 /** One container per bot, keyed by its agent id; null when the id cannot be a
@@ -91,5 +138,6 @@ export function botContainerSpec(botKey: string, config: BotContainerAgentConfig
     cpus: config.cpus,
     pidsLimit: config.pidsLimit,
     network,
+    extraMounts: config.extraMounts,
   };
 }

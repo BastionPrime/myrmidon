@@ -232,8 +232,8 @@ func (g *Gate) onResolve(ev peer.ResolveEvent) {
 }
 
 // reloadable reports whether a new configuration differs from the running one
-// only in what a SIGHUP may change: bots, images, network and volumeRoot.
-// The rest needs a restart.
+// only in what a SIGHUP may change: bots, images, network, volumeRoot and the
+// allowed extra mount sources. The rest needs a restart.
 func reloadable(old, cur *config.Config) bool {
 	return old.Listen == cur.Listen && old.Upstream == cur.Upstream &&
 		old.APIVersion == cur.APIVersion && old.StatsFile == cur.StatsFile &&
