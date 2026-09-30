@@ -116,6 +116,7 @@ describe("CompanySettingsNav", () => {
     });
 
     expect(container.textContent).toContain("members");
+    // myrmidon(RST): the tab list now includes the Board API keys tab.
     expect(pageTabBarMock).toHaveBeenCalledWith(
       expect.objectContaining({
         value: "members",
@@ -128,6 +129,7 @@ describe("CompanySettingsNav", () => {
           { value: "instance-profile", label: "Profile" },
           { value: "instance-environments", label: "Environments" },
           { value: "instance-access", label: "Access" },
+          { value: "instance-board-api-keys", label: "Board API keys" },
           { value: "instance-experimental", label: "Experimental" },
           { value: "instance-plugins", label: "Plugins" },
           { value: "instance-adapters", label: "Adapters" },
@@ -160,6 +162,7 @@ describe("CompanySettingsNav", () => {
     const renderedValues = pageTabBarMock.mock.calls.at(-1)?.[0]?.items?.map(
       (item: { value: string }) => item.value,
     );
+    // myrmidon(RST): the Board API keys tab hides with instance.access.
     expect(renderedValues).toEqual([
       "general",
       "export",
@@ -169,6 +172,7 @@ describe("CompanySettingsNav", () => {
       "instance-profile",
       "instance-environments",
       "instance-access",
+      "instance-board-api-keys",
       "instance-experimental",
       "instance-adapters",
     ]);
