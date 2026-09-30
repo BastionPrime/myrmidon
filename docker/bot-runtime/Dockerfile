@@ -23,27 +23,28 @@
 # number it reports itself); HERMES_GIT_REF is the git tag that ships that
 # version. The two do NOT share a numbering scheme: hermes-agent tags
 # releases by date (vYYYY.M.D) while pyproject.toml's version field is a
-# separate, independently-bumped 0.x.y counter. v2026.9.11 is the tag we
-# confirmed (via the GitHub API, against every recent release tag) carries
-# `version = "0.21.2"` — do not assume a future HERMES_VERSION bump maps to
-# `v<that number>`; look the date tag up the same way and update both.
-ARG HERMES_VERSION=0.21.2
-ARG HERMES_GIT_REF=v2026.9.11
+# separate, independently-bumped 0.x.y counter. v2026.9.24 is the tag we
+# confirmed (via the GitHub API and `git ls-remote --tags`, against every
+# recent release tag) carries `version = "0.21.5"` — do not assume a future
+# HERMES_VERSION bump maps to `v<that number>`; look the date tag up the same
+# way and update both.
+ARG HERMES_VERSION=0.21.5
+ARG HERMES_GIT_REF=v2026.9.24
 # The exact commit `HERMES_GIT_REF` must resolve to (confirmed via the GitHub API:
-# `GET /repos/NousResearch/hermes-agent/commits/v2026.9.11`). A git tag is a mutable
-# ref — upstream (or an MITM on the clone) moving it would otherwise silently ship a
-# different tree under the same version/label check below. The builder stage fails
-# loudly on a mismatch, before the shallow clone's `.git` is ever removed, so this
+# `GET /repos/NousResearch/hermes-agent/commits/v2026.9.24`, and by `git ls-remote --tags`).
+# A git tag is a mutable ref — upstream (or an MITM on the clone) moving it would otherwise
+# silently ship a different tree under the same version/label check below. The builder stage
+# fails loudly on a mismatch, before the shallow clone's `.git` is ever removed, so this
 # check is only meaningful pinned here, not as a comment. Update both together when
 # HERMES_GIT_REF moves to a new tag.
-ARG HERMES_GIT_SHA=939e45c91d751fadd94dcd1b873ac3cb44846213
+ARG HERMES_GIT_SHA=f97608f178d1ffeca59860195ab7da295f7c8e5f
 ARG HERMES_REPO=https://github.com/NousResearch/hermes-agent.git
 # gateway/platforms/api_server.py uses aiohttp.web, but aiohttp is not a core
 # dependency of hermes-agent — it only ships inside optional extras, most of
 # which also pull in Telegram/Discord/Slack client libraries we do not need
 # for an API-server-only bot. "sms" is the smallest extra that resolves to
 # exactly aiohttp + its own transitive deps and nothing else, so installing
-# through it (`uv sync --frozen --extra sms --extra mcp --extra hindsight`, see the
+# through it (`uv sync --frozen --extra sms --extra mcp`, see the
 # builder stage below) gets aiohttp through the same hash-verified lockfile path as
 # every other dependency in this image, instead of a separate unlocked `uv pip
 # install`. See docker/bot-runtime/README.md.
@@ -125,14 +126,15 @@ RUN set -eu; \
       exit 1; \
     fi
 
-# myrmidon(G1): "mcp" and "hindsight" are baked in (not left to hermes' own lazy
-# install) because a G2-compiled bot profile always writes mcp_servers and a
-# memory.provider=hindsight config — without these two extras, hermes silently
-# starts with both features disabled (tools/mcp_tool.py checks importlib.util.
-# find_spec('mcp') and logs at debug on failure; plugins/memory/hindsight/__init__.py
-# similarly no-ops) instead of a build- or start-time error. See README.md
-# "Sealed image: lazy installs and the write-safe root" for why lazy-installing them
-# at runtime instead is not a reliable fallback in this image.
+# myrmidon(G1): "mcp" is baked in (not left to hermes' own lazy install) because a
+# G2-compiled bot profile always writes mcp_servers — without that extra hermes
+# silently starts with MCP tools disabled (tools/mcp_tool.py checks
+# importlib.util.find_spec('mcp') and logs at debug on failure) instead of a build-
+# or start-time error. Hindsight memory is NOT an extra any more: v2026.9.24 moved
+# plugins/memory/hindsight/ out of the hermes tree into its plugin catalog, so the
+# provider is vendored from that catalog pin below. See README.md
+# "Sealed image: lazy installs and the write-safe root" for why lazy-installing
+# them at runtime instead is not a reliable fallback in this image.
 #
 # myrmidon(G1): the venv's `bin/python` is a symlink to whichever interpreter `uv sync`
 # picked, and the runtime stage copies only /opt/hermes-src, so that interpreter must exist
@@ -149,22 +151,76 @@ RUN set -eu; \
 # assertion below checks it. UV_PYTHON_DOWNLOADS=never turns any future mismatch into a
 # build error instead of a dangling link.
 ENV UV_PYTHON_DOWNLOADS=never
-RUN uv sync --frozen --extra sms --extra mcp --extra hindsight --python /usr/local/bin/python3 \
+RUN uv sync --frozen --extra sms --extra mcp --python /usr/local/bin/python3 \
   && find /opt/hermes-src/.venv -name '__pycache__' -type d -prune -exec rm -rf {} +
 
-# Fail the build loudly if any of the three packages this image relies on being
-# preinstalled (never lazily) fails to import from the synced venv, instead of only
-# discovering it the first time a bot profile tries to use MCP tools or hindsight
-# memory at runtime.
+# myrmidon(G1): the Hindsight memory provider now comes from hermes' plugin catalog
+# (plugin-catalog/hindsight.yaml, kept in this image) instead of the two patches we used
+# to carry against plugins/memory/hindsight/. The catalog entry names the repository, the
+# subdirectory and an exact commit; this builder clones exactly that commit (never a
+# branch or tag — the same reasoning as HERMES_GIT_SHA above: a movable ref would let a
+# different tree ship under the label the catalog entry claims), copies the plugin into
+# /opt/hermes-plugins/hindsight, and installs the dependencies the plugin declares through
+# hermes' OWN plugin installer — that path resolves them against hermes' core constraints
+# and is the same one `hermes plugins install` runs, so a hand-rolled `uv pip install` with
+# no constraint check cannot drift from it. The plugin directory is sealed (root-owned)
+# like the rest of /opt/hermes-src; the entrypoint links it into the bot's writable
+# HERMES_HOME at container start, which is where hermes looks for user memory providers.
+# The catalog pin is read from the catalog file (not repeated as a build arg) so there is
+# exactly one place to bump it. See patches/README.md and docs/myrmidon/hermes-deltas.md.
+RUN set -eu; \
+    repo="$(sed -n 's/^repo:[[:space:]]*//p' plugin-catalog/hindsight.yaml)"; \
+    subdir="$(sed -n 's/^subdir:[[:space:]]*//p' plugin-catalog/hindsight.yaml)"; \
+    sha="$(sed -n 's/^sha:[[:space:]]*//p' plugin-catalog/hindsight.yaml)"; \
+    if [ -z "$repo" ] || [ -z "$subdir" ] || [ -z "$sha" ]; then \
+      echo "plugin-catalog/hindsight.yaml must name repo, subdir and sha" >&2; exit 1; \
+    fi; \
+    git init -q /tmp/hindsight-plugin; \
+    git -C /tmp/hindsight-plugin remote add origin "$repo"; \
+    git -C /tmp/hindsight-plugin sparse-checkout init --cone; \
+    git -C /tmp/hindsight-plugin sparse-checkout set "$subdir"; \
+    git -C /tmp/hindsight-plugin fetch --depth 1 --filter=blob:none origin "$sha"; \
+    git -C /tmp/hindsight-plugin checkout -q --detach FETCH_HEAD; \
+    actual="$(git -C /tmp/hindsight-plugin rev-parse HEAD)"; \
+    if [ "$actual" != "$sha" ]; then \
+      echo "$repo $sha resolved to commit $actual, catalog pin disagrees" >&2; exit 1; \
+    fi; \
+    mkdir -p /opt/hermes-plugins/hindsight; \
+    cp -a "/tmp/hindsight-plugin/$subdir/." /opt/hermes-plugins/hindsight/; \
+    rm -rf /tmp/hindsight-plugin
+
+# Fail the build loudly if the plugin's own dependency declaration cannot be installed
+# against hermes' core constraints (or silently installs nothing / the wrong thing) —
+# the provider reports "not available" at runtime otherwise. install_for_plugin_dir never
+# raises; it returns a status, so translate anything but installed/none into a build error.
+RUN HERMES_HOME=/opt/hermes-plugin-deps /opt/hermes-src/.venv/bin/python -c \
+    "from hermes_cli.plugin_python_deps import install_for_plugin_dir as install; \
+o = install('/opt/hermes-plugins/hindsight'); \
+print('hindsight plugin deps:', o.status, o.detail if hasattr(o, 'detail') else ''); \
+raise SystemExit(0 if o.status in ('installed', 'none') else 1)"
+
+# Fail the build loudly if any package this image relies on being preinstalled (never
+# lazily) fails to import from the synced venv, instead of only discovering it the first
+# time a bot profile tries to use MCP tools or hindsight memory at runtime.
 RUN /opt/hermes-src/.venv/bin/python -c 'import aiohttp, mcp, hindsight_client'
 
 # myrmidon(G1): import smoke for every module a patch in patches/ changes
-# (hermes_state: 04; plugins.memory.hindsight, which pulls in its settings
-# module: 01 and 03; tools.environments.base and base_session_env: 02). `git apply`
-# only proves the hunks land; a patch that applies cleanly but breaks a module's
-# imports or top-level code would otherwise surface only when a bot starts.
-# No bytecode is written, so the sealed tree stays as the build left it.
-RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python -c 'import hermes_state, plugins.memory.hindsight, tools.environments.base, tools.environments.base_session_env'
+# (hermes_state: 04; tools.environments.base and base_session_env: 02; gateway.run: 05)
+# plus the vendored memory provider (a relative-import package, so a broken plugin tree
+# fails the build here, not at the first bot start). `git apply` only proves the hunks
+# land; a patch that applies cleanly but breaks a module's imports or top-level code
+# would otherwise surface only when a bot starts. No bytecode is written, so the sealed
+# tree stays as the build left it.
+RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python -c 'import hermes_state, tools.environments.base, tools.environments.base_session_env, gateway.run'
+# The provider itself, through hermes' OWN discovery path (the same one the gateway uses at
+# start): a staging home gets the same symlink the entrypoint will make at run time, and
+# find_provider_dir must resolve it. This catches a broken plugin tree, a missing
+# __init__.py or a relative-import failure at build time instead of at the first bot start.
+RUN set -eu; \
+    mkdir -p /opt/hermes-plugin-deps/plugins; \
+    ln -sfn /opt/hermes-plugins/hindsight /opt/hermes-plugin-deps/plugins/hindsight; \
+    PYTHONDONTWRITEBYTECODE=1 HERMES_HOME=/opt/hermes-plugin-deps /opt/hermes-src/.venv/bin/python -c \
+      "from plugins.memory import find_provider_dir; p = find_provider_dir('hindsight'); print('hindsight provider dir:', p); raise SystemExit(0 if p else 1)"
 
 # myrmidon(G1): the runtime image only needs the installed package plus
 # bundled skills (tools/skills_sync.py resolves skills/ relative to its own
@@ -233,6 +289,13 @@ RUN groupadd --gid 10001 bot \
   && useradd --uid 10001 --gid 10001 --create-home --home-dir /data/hermes --shell /usr/sbin/nologin bot
 
 COPY --from=builder --chown=root:root /opt/hermes-src /opt/hermes-src
+# myrmidon(G1): the catalog memory provider vendored in the builder stage, sealed like the
+# rest of /opt (root-owned, not writable by `bot`). The entrypoint links it into the bot's
+# writable HERMES_HOME at container start — hermes only looks for a memory provider under
+# $HERMES_HOME/plugins (or the bundled tree), and the bot's HERMES_HOME is a mounted volume
+# that does not exist at build time. HERMES_CATALOG_PLUGINS_DIR is the single place both the
+# entrypoint and the docs take that path from.
+COPY --from=builder --chown=root:root /opt/hermes-plugins /opt/hermes-plugins
 # myrmidon(G1): uv is also needed at runtime, not just to build the image — hermes'
 # own lazy-install mechanism (tools/lazy_deps.py, see the ENV block below) shells out
 # to `uv pip install --target <dir>` first and only falls back to `pip`/`ensurepip`
@@ -273,6 +336,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH=/opt/hermes-src/.venv/bin:$PATH \
     HERMES_HOME=/data/hermes \
     HERMES_BUNDLED_SKILLS=/opt/hermes-src/skills \
+    HERMES_CATALOG_PLUGINS_DIR=/opt/hermes-plugins \
     HERMES_WRITE_SAFE_ROOT=/data:/workspace:/scratch \
     HERMES_DISABLE_LAZY_INSTALLS=1 \
     HERMES_LAZY_INSTALL_TARGET=/data/hermes/lazy-packages \

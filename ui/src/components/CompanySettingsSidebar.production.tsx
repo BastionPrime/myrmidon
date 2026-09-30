@@ -10,6 +10,7 @@ import {
   MonitorCog,
   Puzzle,
   Shield,
+  ShieldCheck,
   SlidersHorizontal,
   Upload,
   UserRoundPen,
@@ -134,6 +135,14 @@ export function CompanySettingsSidebar() {
           )}
           {showPage("company.secrets") && (
             <SidebarNavItem to="/company/settings/secrets" label="Secrets" icon={KeyRound} end />
+          )}
+          {showPage("company.secrets") && (
+            <SidebarNavItem
+              to="/company/settings/access-hub"
+              label="Access hub"
+              icon={ShieldCheck}
+              end
+            />
           )}
           {showPage("instance.environments") && (
             <SidebarNavItem
