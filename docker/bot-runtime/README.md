@@ -25,13 +25,14 @@ Docker socket, no host mounts, and no media tools. (The optional Node.js variant
   asserts that `/opt/hermes-src/.venv/bin/python` resolves outside `/root`
   and imports `hermes_state`.
 - `hermes-agent`, pinned to a git tag (`HERMES_VERSION`/`HERMES_GIT_REF`
-  build args, default `0.21.2` / `v2026.9.11`), installed **editable** from
+  build args, default `0.21.5` / `v2026.9.24`), installed **editable** from
   a clean clone of `https://github.com/NousResearch/hermes-agent` — see
   "Why editable, not pip install" below. hermes tags releases by date
-  (`vYYYY.M.D`); `v2026.9.11` is the tag we confirmed (via the GitHub API,
-  checking `pyproject.toml` on every recent release tag) actually carries
-  `version = "0.21.2"` — the two numbers do not share a scheme, so a future
-  version bump needs the same lookup, not an assumed `v<version>`.
+  (`vYYYY.M.D`); `v2026.9.24` is the tag we confirmed (via the GitHub API
+  and `git ls-remote --tags`, checking `pyproject.toml` on every recent
+  release tag) actually carries `version = "0.21.5"` — the two numbers do not
+  share a scheme, so a future version bump needs the same lookup, not an
+  assumed `v<version>`.
 - `aiohttp`, pinned to the exact version hermes' own optional extras use at
   this release (`HERMES_AIOHTTP_VERSION`, default `3.14.3`).
   `gateway/platforms/api_server.py` is built on `aiohttp.web`, but aiohttp
@@ -39,30 +40,45 @@ Docker socket, no host mounts, and no media tools. (The optional Node.js variant
   in also pull in `python-telegram-bot`/`discord.py`/`slack-bolt`, which
   this image does not need. `pyproject.toml`'s `sms` extra resolves to
   exactly `aiohttp==3.14.3` and nothing else, so the build installs through
-  `uv sync --frozen --extra sms --extra mcp --extra hindsight` — the same
+  `uv sync --frozen --extra sms --extra mcp` — the same
   hash-verified `uv.lock` path every other dependency in this image goes
   through, rather than a separate unlocked `uv pip install aiohttp==...`
   that could pull an untampered-looking but unverified wheel. A build-time
   check fails loudly if that extra ever stops being exactly
   `aiohttp==${HERMES_AIOHTTP_VERSION}`.
-- `mcp` and `hindsight-client` (the `mcp` and `hindsight` extras), baked in
+- `mcp` (the `mcp` extra) and the Hindsight memory provider, baked in
   rather than left to hermes' own lazy install
   (`tools/lazy_deps.py`/`HERMES_LAZY_INSTALL_TARGET`, below): every
   G2-compiled bot profile writes both an `mcp_servers` block and a
   `memory.provider=hindsight` config, and this image's sealed venv cannot
   reliably lazy-install into itself at runtime (see "Sealed image" below).
-  Without these two extras hermes does not error — it silently disables
-  MCP tools (`tools/mcp_tool.py`, gated on `importlib.util.find_spec('mcp')`)
-  and hindsight memory (`plugins/memory/hindsight/__init__.py`,
-  `is_available()`) — so the builder also runs
-  `python -c 'import aiohttp, mcp, hindsight_client'` against the synced
-  venv, to fail the build instead of shipping that silent regression. A second
-  smoke imports every module a patch in `patches/` changes (`hermes_state`,
-  `plugins.memory.hindsight`, `tools.environments.base`,
-  `tools.environments.base_session_env`), because `git apply` only proves the
-  hunks land, not that the patched module still imports.
+  Without the extra hermes does not error — it silently disables MCP tools
+  (`tools/mcp_tool.py`, gated on `importlib.util.find_spec('mcp')`) — so the
+  builder also runs `python -c 'import aiohttp, mcp, hindsight_client'`
+  against the synced venv, to fail the build instead of shipping that silent
+  regression. A second smoke imports every module a patch in `patches/`
+  changes (`hermes_state`, `tools.environments.base`,
+  `tools.environments.base_session_env`, `gateway.run`), because `git apply`
+  only proves the hunks land, not that the patched module still imports.
+- **Hindsight from the plugin catalog, not from the hermes tree.** From
+  0.21.5 the memory provider no longer ships inside hermes-agent: it lives in
+  the hermes plugin catalog (`plugin-catalog/hindsight.yaml`, kept in this
+  image) and is maintained by its authors. The builder clones the exact
+  commit the catalog entry pins (verifying it, like `HERMES_GIT_SHA`), copies
+  it to the sealed, root-owned `/opt/hermes-plugins/hindsight`, and installs
+  the dependencies the plugin declares through hermes' own plugin installer
+  (`hermes_cli.plugin_python_deps.install_for_plugin_dir`, the same path
+  `hermes plugins install` runs, so they are resolved against hermes' core
+  constraints). At container start the entrypoint links that directory into
+  the bot's writable `${HERMES_HOME}/plugins/hindsight` — the place hermes
+  resolves a user memory provider from — and leaves any existing entry
+  alone. The catalog pin is read from the catalog file, so bumping it is a
+  one-line change; the two patches this image used to carry against the
+  in-tree provider are gone (`patches/README.md`, and
+  `docs/myrmidon/hermes-deltas.md` for the delta list and its upstream
+  offers).
 - Bundled skills (`skills/` in the hermes source tree — 14 categories at
-  `0.21.2`/`v2026.9.11`), read-only. They are **not** shipped via PyPI package-data
+  `0.21.5`/`v2026.9.24`), read-only. They are **not** shipped via PyPI package-data
   (hermes' `pyproject.toml` package-data list does not include `skills/**`
   at all — see "Why editable, not pip install"); the editable install
   keeps the full source tree in the image, which is what
@@ -71,7 +87,7 @@ Docker socket, no host mounts, and no media tools. (The optional Node.js variant
   `HERMES_BUNDLED_SKILLS` explicitly to the same path as a second,
   independent way to find it, in case some other bundled-asset lookup
   turns out not to route through that one call site.
-- `tini` as PID 1 (`ENTRYPOINT`), `git`, `ripgrep`, `openssh-client` (ssh with `-i` and
+- `tini` as PID 1 (`ENTRYPOINT`), `git`, `jq`, `ripgrep`, `openssh-client` (ssh with `-i` and
   `-o UserKnownHostsFile=` under `/scratch`; the root is read-only), `curl`
   (health check only), `ca-certificates`. No `ffmpeg`, no media tools — forbidden by
   `docs/myrmidon/CONVENTIONS.md` §8; media handling is a separate service
@@ -172,7 +188,7 @@ sdist outside a Nix build:
 > image, or Nix. [...] If you are developing, use an editable install
 > instead: `uv sync` / `uv pip install -e .`.
 
-So `pip install hermes-agent==0.21.2` from PyPI cannot be relied on for
+So `pip install hermes-agent==0.21.5` from PyPI cannot be relied on for
 this hermes release (whether or not PyPI currently happens to serve a
 stale wheel from an older release is not something to depend on).
 `docker/hermes-gateway-smoke/` in this repo does exactly that, pinned to
@@ -211,11 +227,14 @@ runtime by `hermes_cli/plugin_catalog.py`.
 ## Patches
 
 `patches/*.patch` are applied (`git apply`) against the cloned tag before
-`uv sync`. Four are ported: a hindsight `reflect` timeout/retry fix (01), a
-session-snapshot secret redaction (02), the configured `retain_async` in the
-explicit hindsight retain tool (03), and a bounded retry of state-database
-reads that find the database locked (04). See `patches/README.md` for what
-each does and why.
+`uv sync`. Three are carried at `v2026.9.24`: a session-snapshot secret
+redaction (02), a bounded retry of state-database reads that find the database
+locked (04), and the gateway's asyncio default-executor pool size (05). The two
+hindsight patches this image used to carry (01, 03) are gone: 0.21.5 removed
+the provider from the hermes tree, the catalog plugin already carries the
+`retain_async` fix, and what it does not carry yet is tracked as its own delta
+with an upstream offer — see `patches/README.md`,
+`docs/myrmidon/hermes-deltas.md` and `scripts/myrmidon/hermes-upstream/`.
 
 A reference checkout carries further local modifications. A plain tree diff of
 it against the pinned tag (no repository history is needed) gives a closed

@@ -5,5 +5,24 @@
       "description": "Mulakan dengan mencipta syarikat.",
       "newCompany": "Syarikat Baharu"
     }
+  },
+  "maintenanceBanner": {
+    "title": "Maintenance mode",
+    "window": "Maintenance for {{scope}} ({{state}}) since {{since}}: {{reason}}. New agent runs are paused; wakes are queued ({{queued}}) and will be delivered when maintenance ends.",
+    "scope": {
+      "instance": "the whole instance",
+      "company": "this company",
+      "department": "a department",
+      "agent": "an agent"
+    },
+    "state": {
+      "on": "on",
+      "ending": "ending",
+      "draining": "draining, runs still running: {{count}}",
+      "drainingTimedOut": "draining, runs past the timeout: {{count}}"
+    },
+    "group": "Agent maintenance ({{state}}) since {{since}}: {{reason}} — agents: {{count}}, queued wakeups: {{queued}}. New agent runs are paused; wakes are delivered when maintenance ends.",
+    "ending": "Agent maintenance ending — agents: {{count}}",
+    "idsSummary": "Agent ids"
   }
 }

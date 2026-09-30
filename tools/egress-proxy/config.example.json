@@ -1,0 +1,7 @@
+{
+  "bots": {
+    "example-bot": {
+      "project": "example-project"
+    }
+  }
+}

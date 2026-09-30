@@ -3,6 +3,8 @@ const FAVICON_BLOCK_END = "<!-- PAPERCLIP_FAVICON_END -->";
 const RUNTIME_BRANDING_BLOCK_START = "<!-- PAPERCLIP_RUNTIME_BRANDING_START -->";
 const RUNTIME_BRANDING_BLOCK_END = "<!-- PAPERCLIP_RUNTIME_BRANDING_END -->";
 
+import { readBuildVersion } from "./build-version.js";
+
 const DEFAULT_FAVICON_LINKS = [
   '<link rel="icon" href="/favicon.ico" sizes="48x48" />',
   '<link rel="icon" href="/favicon.svg" type="image/svg+xml" />',
@@ -138,8 +140,9 @@ function escapeHtmlAttribute(value: string): string {
 }
 
 // The Myrmidon ant mark (same geometry as ui/public/brand/myrmidon/myrmidon-favicon.svg),
-// recoloured per worktree: plate = worktree colour, strokes = readable text colour.
-const ANT_VIEW_BOX = "-8.73684 151.263 789.474 789.474";
+// on a transparent background, stroked in the worktree colour: the only difference
+// from the regular favicon is the colour.
+const ANT_VIEW_BOX = "140 238 492 610";
 const ANT_STROKE_PATHS = [
   "M346,516 L246,470 L263,392 L227,361 M426,516 L526,470 L509,392 L545,361 M351,564 L254,531 L204,622 L170,622 M421,564 L518,531 L568,622 L602,622 M360,603 L264,634 L208,818 L170,818 M412,603 L508,634 L564,818 L602,818",
   "M287,268 L386,414 L485,268",
@@ -148,11 +151,10 @@ const ANT_STROKE_PATHS = [
   "M386,620 L437,654 C455,666 463,688 459,712 C453,749 426,795 405,817 C399,823 393,826 386,826 C379,826 373,823 367,817 C346,795 319,749 313,712 C309,688 317,666 335,654 Z",
 ];
 
-function createFaviconDataUrl(background: string, foreground: string): string {
+function createFaviconDataUrl(color: string): string {
   const svg = [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${ANT_VIEW_BOX}" width="32" height="32">`,
-    `<rect x="-8.73684" y="151.263" width="789.474" height="789.474" rx="157.895" fill="${background}"/>`,
-    `<g fill="none" stroke="${foreground}" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">`,
+    `<g fill="none" stroke="${color}" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">`,
     ...ANT_STROKE_PATHS.map((d) => `<path d="${d}"/>`),
     "</g>",
     "</svg>",
@@ -185,13 +187,36 @@ export function getWorktreeUiBranding(env: NodeJS.ProcessEnv = process.env): Wor
     name,
     color,
     textColor,
-    faviconHref: createFaviconDataUrl(color, textColor),
+    faviconHref: createFaviconDataUrl(color),
     instanceId: nonEmpty(env.PAPERCLIP_INSTANCE_ID),
   };
 }
 
-export function renderFaviconLinks(branding: WorktreeUiBranding): string {
-  if (!branding.enabled || !branding.faviconHref) return DEFAULT_FAVICON_LINKS;
+/**
+ * Build version used to bust browser icon caches. Some browsers keep favicons
+ * in a separate store keyed by URL and ignore Cache-Control, so the only
+ * reliable refresh is a different URL after every release.
+ */
+export function resolveIconVersion(env: NodeJS.ProcessEnv = process.env): string | null {
+  return readBuildVersion({ environmentVersion: env.PAPERCLIP_BUILD_VERSION ?? null });
+}
+
+const ICON_URL_PATTERN = /^\/(?:favicon[\w.-]*\.(?:ico|svg|png)|apple-touch-icon\.png|android-chrome-[\w-]+\.png|site\.webmanifest)$/;
+
+/** Appends `?v=<version>` to a same-origin icon/manifest URL; other URLs pass through. */
+export function versionIconUrl(url: string, version: string | null): string {
+  if (!version || !ICON_URL_PATTERN.test(url)) return url;
+  return `${url}?v=${encodeURIComponent(version)}`;
+}
+
+/** Versions every icon/manifest href in an HTML document. */
+export function applyIconVersionToHtml(html: string, version: string | null): string {
+  if (!version) return html;
+  return html.replace(/(\bhref=")([^"]+)(")/g, (_m, a: string, url: string, c: string) => `${a}${versionIconUrl(url, version)}${c}`);
+}
+
+export function renderFaviconLinks(branding: WorktreeUiBranding, version: string | null = null): string {
+  if (!branding.enabled || !branding.faviconHref) return applyIconVersionToHtml(DEFAULT_FAVICON_LINKS, version);
 
   const href = escapeHtmlAttribute(branding.faviconHref);
   return [
@@ -233,11 +258,19 @@ function replaceMarkedBlock(html: string, startMarker: string, endMarker: string
 
 export function applyUiBranding(html: string, env: NodeJS.ProcessEnv = process.env): string {
   const branding = getWorktreeUiBranding(env);
-  const withFavicon = replaceMarkedBlock(html, FAVICON_BLOCK_START, FAVICON_BLOCK_END, renderFaviconLinks(branding));
-  return replaceMarkedBlock(
+  const version = resolveIconVersion(env);
+  const withFavicon = replaceMarkedBlock(
+    html,
+    FAVICON_BLOCK_START,
+    FAVICON_BLOCK_END,
+    renderFaviconLinks(branding, version),
+  );
+  const branded = replaceMarkedBlock(
     withFavicon,
     RUNTIME_BRANDING_BLOCK_START,
     RUNTIME_BRANDING_BLOCK_END,
     renderRuntimeBrandingMeta(branding),
   );
+  // Links outside the marked block (apple-touch-icon, manifest) get the same version.
+  return applyIconVersionToHtml(branded, version);
 }

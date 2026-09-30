@@ -33,6 +33,7 @@ import { CHAT_RUN_PRESENTATION_AUTHORIZATION_REASON } from "./heartbeat-run-summ
 import { resolveChatOriginPublicationBindings } from "./issues.js";
 import { authorizeNativeChatReviewPresentation } from "./native-runtime/native-chat-review-presentation.js";
 import { inboundCommentCandidateIds } from "../myrmidon/chat-reconciliation/inbound-comment-candidates.js";
+import { parseTelegramConversationUserId } from "../myrmidon/agent-chat-bridge/identity.js";
 import {
   SAFE_NATIVE_CHAT_PROGRESS_EVENT_TYPES,
   safeNativeChatProgressForEvent,
@@ -107,6 +108,10 @@ type ChatRunMilestoneCandidate = {
   endpointId: string;
   conversationId: string;
   agentName: string;
+  /** `chat_conversations.is_direct_message`, read for the bridged-DM noise rule (myrmidon(X8h)). */
+  isDirectMessage: boolean;
+  /** `issues.conversation_user_id`; a `telegram:` value marks the bridged Telegram DM conversation. */
+  conversationUserId: string | null;
 };
 
 type SafeNativeChatProgressCandidate = {
@@ -660,6 +665,11 @@ export async function enqueueChatRunMilestones(
         endpointId: chatConversations.endpointId,
         conversationId: chatConversations.id,
         agentName: agents.name,
+        // myrmidon(X8h): the bridged Telegram DM is a chat the owner reads on
+        // a phone, not a status board; the vendor's routine progress
+        // milestones are noise there (see the skip in the loop below).
+        isDirectMessage: chatConversations.isDirectMessage,
+        conversationUserId: issues.conversationUserId,
       })
       .from(heartbeatRuns)
       .innerJoin(
@@ -668,6 +678,13 @@ export async function enqueueChatRunMilestones(
           eq(chatConversations.companyId, heartbeatRuns.companyId),
           sql`${issueIdFromContext} = ${chatConversations.issueId}::text`,
           inArray(chatConversations.state, ["active", "waiting"]),
+        ),
+      )
+      .innerJoin(
+        issues,
+        and(
+          eq(issues.companyId, chatConversations.companyId),
+          eq(issues.id, chatConversations.issueId),
         ),
       )
       .innerJoin(
@@ -840,6 +857,23 @@ export async function enqueueChatRunMilestones(
       if (inserted >= limit) break;
       const milestone = milestoneForStatus(row.runStatus, row.runErrorCode);
       if (!milestone) continue;
+      // myrmidon(X8h): the bridged Telegram DM is a conversation, not a status
+      // board — the agent's own answer is what the person waits for. The
+      // vendor's routine progress milestones ("… is queued.", "… is working…")
+      // are pure noise there, and so is the terminal milestone of a turn the
+      // chat owner stopped with `/stop` from the chat itself: that command has
+      // already answered. Failure, admin-attention and completion milestones
+      // keep publishing: they are the only signal a turn ended badly or ended
+      // without a chat-visible answer.
+      if (
+        row.isDirectMessage &&
+        parseTelegramConversationUserId(row.conversationUserId) !== null &&
+        (milestone === "queued" ||
+          milestone === "working" ||
+          row.runErrorCode === "chat_session_stopped")
+      ) {
+        continue;
+      }
       const bindingCacheKey = `${row.companyId}:${row.issueId}:${row.runId}`;
       let bindings = bindingsCache.get(bindingCacheKey);
       if (!bindings) {

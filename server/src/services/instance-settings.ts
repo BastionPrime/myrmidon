@@ -211,6 +211,8 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       backupRetention: parsed.data.backupRetention ?? DEFAULT_BACKUP_RETENTION,
       // Absent => unrestricted; only carry through an explicit policy.
       ...(parsed.data.executionMode ? { executionMode: parsed.data.executionMode } : {}),
+      // myrmidon(C0): the stored run admission limits survive every general write
+      ...(parsed.data.runLimits ? { runLimits: parsed.data.runLimits } : {}),
     };
   }
   return {
