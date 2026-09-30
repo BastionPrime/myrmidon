@@ -57,6 +57,17 @@ import { createGitRemoteAuthProvider } from "./git-credentials.js";
 import { readProjectWorkspaceRuntimeConfig } from "./project-workspace-runtime-config.js";
 import { workspaceGitOperationScheduler } from "./workspace-git-operation-scheduler.js";
 import { isRuntimeOwnedGitBranch } from "./execution-workspace-branch-ownership.js";
+// myrmidon(WORKSPACE-HYGIENE): short cooldown for merged copies and the
+// once-a-day stuck-copy signal.
+import {
+  DEFAULT_MERGED_WORKSPACE_COOLDOWN_MS,
+  DEFAULT_STUCK_WORKSPACE_SIGNAL_AFTER_MS,
+  STUCK_WORKSPACE_SIGNAL_REPEAT_MS,
+  isWorkspaceStuckLongEnough,
+  markWorkspaceStuckSignal,
+  resolveWorkspaceReaperCooldownMs,
+  shouldEmitWorkspaceStuckSignal,
+} from "../myrmidon/workspace-hygiene/merged-cleanup.js";
 import {
   listCurrentRuntimeServicesForExecutionWorkspaces,
   listCurrentRuntimeServicesForProjectWorkspaces,
@@ -232,6 +243,15 @@ export type ExecutionWorkspaceServiceOptions = {
   // becomes terminal before it archives the workspace. A value of 0 disables
   // the cooldown. The default is 7 days.
   workspaceReaperCooldownDays?: number;
+  // myrmidon(WORKSPACE-HYGIENE): the reaper archives a copy whose branch is
+  // already merged (`merged_via_pr` / `merged_by_ancestry`) after this short
+  // cooldown instead of `workspaceReaperCooldownDays`. 0 reaps on the same
+  // sweep. It never relaxes the dirty-tree or undelivered-work guard.
+  myrmidonWorkspaceMergedCooldownMs?: number;
+  // myrmidon(WORKSPACE-HYGIENE): a terminal copy that cannot be archived (dirty
+  // tree or undelivered work) is signalled in the activity log once it has been
+  // stuck for this long, at most once a day per copy. 0 signals immediately.
+  myrmidonWorkspaceStuckSignalAfterMs?: number;
   inspectGitCloseReadiness?: (workspace: ExecutionWorkspace) => Promise<{
     git: ExecutionWorkspaceCloseGitReadiness | null;
     warnings: string[];
@@ -1286,6 +1306,20 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
     0,
     (opts.workspaceReaperCooldownDays ?? 7) * 24 * 60 * 60 * 1000,
   );
+  // myrmidon(WORKSPACE-HYGIENE): a copy whose branch is already merged leaves
+  // the disk after this much shorter cooldown instead of the full terminal one.
+  // A value of 0 reaps it on the next sweep.
+  const myrmidonWorkspaceMergedCooldownMs = Math.max(
+    0,
+    opts.myrmidonWorkspaceMergedCooldownMs ?? DEFAULT_MERGED_WORKSPACE_COOLDOWN_MS,
+  );
+  // myrmidon(WORKSPACE-HYGIENE): a terminal copy that cannot be archived (dirty
+  // tree or undelivered work) is signalled in the activity log once it has been
+  // stuck for this long. The signal repeats at most once a day per copy.
+  const myrmidonWorkspaceStuckSignalAfterMs = Math.max(
+    0,
+    opts.myrmidonWorkspaceStuckSignalAfterMs ?? DEFAULT_STUCK_WORKSPACE_SIGNAL_AFTER_MS,
+  );
   const pullRequestStateCache = new Map<
     string,
     {
@@ -1460,6 +1494,64 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
       workspaceDirty: Boolean(git?.hasDirtyTrackedFiles || git?.hasUntrackedFiles),
       workspaceHeadSha,
     };
+  }
+
+  // myrmidon(WORKSPACE-HYGIENE): a terminal copy that cannot be archived is
+  // otherwise only visible in the sweep counters. Once it has been undeletable
+  // longer than the threshold, write one activity-log signal. The throttle
+  // lives in the workspace metadata, so a later sweep does not repeat it within
+  // a day. The details carry no host path: the workspace id, its source issue,
+  // the delivery state and the blocking reason only.
+  async function signalStuckUndeliverableWorkspace(
+    workspace: ExecutionWorkspaceRow,
+    assessment: { cooldownAnchor: Date | null; deliveryState: ExecutionWorkspaceDeliveryState },
+    reason: "dirty" | "undelivered",
+  ): Promise<void> {
+    const nowMs = now().getTime();
+    const metadata = workspace.metadata as Record<string, unknown> | null;
+    if (
+      !isWorkspaceStuckLongEnough({
+        anchorMs: assessment.cooldownAnchor?.getTime() ?? null,
+        nowMs,
+        stuckAfterMs: myrmidonWorkspaceStuckSignalAfterMs,
+      })
+      || !shouldEmitWorkspaceStuckSignal({
+        metadata,
+        nowMs,
+        repeatAfterMs: STUCK_WORKSPACE_SIGNAL_REPEAT_MS,
+      })
+    ) {
+      return;
+    }
+    // Write the throttle marker before the activity row, so a later sweep sees
+    // the signal and skips it. A cross-process race can still write twice; the
+    // sweep runs under a single-flight guard per process, so this is the
+    // best-effort throttle the ticket asks for (at most once a day).
+    const signalled = await db
+      .update(executionWorkspaces)
+      .set({ metadata: markWorkspaceStuckSignal(metadata, nowMs) })
+      .where(and(
+        eq(executionWorkspaces.id, workspace.id),
+        eq(executionWorkspaces.companyId, workspace.companyId),
+        inArray(executionWorkspaces.status, ["active", "idle", "in_review"]),
+        isNull(executionWorkspaces.closedAt),
+      ))
+      .returning({ id: executionWorkspaces.id })
+      .then((rows) => rows[0] ?? null);
+    if (!signalled) return;
+    await logActivity(db, {
+      companyId: workspace.companyId,
+      actorType: "system",
+      actorId: "workspace_terminality_reaper",
+      action: "execution_workspace.issue_terminal_archive_blocked",
+      entityType: "execution_workspace",
+      entityId: workspace.id,
+      details: {
+        sourceIssueId: workspace.sourceIssueId,
+        deliveryState: assessment.deliveryState,
+        reason,
+      },
+    });
   }
 
   async function assertTerminalCleanupGitStateUnchanged(
@@ -2638,6 +2730,9 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
           continue;
         }
         if (assessment.workspaceDirty) {
+          // myrmidon(WORKSPACE-HYGIENE): a dirty tree can never be archived. If
+          // it stays that way past the threshold, signal it once.
+          await signalStuckUndeliverableWorkspace(workspace, assessment, "dirty");
           result.skippedUndelivered += 1;
           continue;
         }
@@ -2645,6 +2740,9 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
           assessment.deliveryState !== "merged_via_pr"
           && assessment.deliveryState !== "merged_by_ancestry"
         ) {
+          // myrmidon(WORKSPACE-HYGIENE): unpushed or unknown work can never be
+          // archived. If it stays that way past the threshold, signal it once.
+          await signalStuckUndeliverableWorkspace(workspace, assessment, "undelivered");
           result.skippedUndelivered += 1;
           continue;
         }
@@ -2654,8 +2752,15 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
         // reaper archives the workspace on the same sweep. The archive statement
         // below re-checks the same cutoff under the lifecycle lock, so the loop
         // check and the guarded statement agree.
-        const cooldownCutoff = workspaceReaperCooldownMs > 0
-          ? new Date(now().getTime() - workspaceReaperCooldownMs)
+        // myrmidon(WORKSPACE-HYGIENE): a copy whose branch is already merged uses
+        // the short merged cooldown instead of the full terminal one.
+        const workspaceCooldownMs = resolveWorkspaceReaperCooldownMs({
+          deliveryState: assessment.deliveryState,
+          defaultCooldownMs: workspaceReaperCooldownMs,
+          mergedCooldownMs: myrmidonWorkspaceMergedCooldownMs,
+        });
+        const cooldownCutoff = workspaceCooldownMs > 0
+          ? new Date(now().getTime() - workspaceCooldownMs)
           : null;
         if (
           cooldownCutoff

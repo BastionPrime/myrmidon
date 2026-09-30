@@ -1321,6 +1321,10 @@ async function startServerWithDatabaseTeardown(
     });
     const terminalWorkspaces = executionWorkspaceService(db as any, {
       workspaceReaperCooldownDays: config.workspaceReaperCooldownDays,
+      // myrmidon(WORKSPACE-HYGIENE): merged copies use the short cooldown; a
+      // stuck undeletable copy is signalled once a day.
+      myrmidonWorkspaceMergedCooldownMs: config.myrmidonWorkspaceMergedCooldownMs,
+      myrmidonWorkspaceStuckSignalAfterMs: config.myrmidonWorkspaceStuckSignalAfterMs,
     });
     const scheduleMergedPullRequestConfirmationSweep = () => {
       if (heartbeatSchedulerStopped) return;
