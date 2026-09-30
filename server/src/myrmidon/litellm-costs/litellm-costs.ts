@@ -9,7 +9,7 @@
 //    MYRMIDON_LITELLM_KEY_SECRET, both unset by default) turns collection
 //    on; without both the sweep is a no-op, exactly like the other myrmidon
 //    features.
-//  - The gateway is read only through its REST API (/spend/logs,
+//  - The gateway is read only through its REST API (/spend/logs/v2,
 //    /v1/model/info). No gateway schema knowledge ships in this repo.
 //  - Attribution: the gateway's ledger stores the sha256 of the caller's key
 //    (its "api_key" column), and each bot's gateway key value lives in the
@@ -31,7 +31,7 @@
 //    so price history survives; the latest row per model is what reads show).
 
 import { createHash } from "node:crypto";
-import { and, desc, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { heartbeatRuns, litellmCostEvents, litellmModels, type Db } from "@paperclipai/db";
 import { logger } from "../../middleware/logger.js";
 
@@ -47,7 +47,7 @@ const MAX_SWEEP_INTERVAL_SEC = 86400;
 const FIRST_SWEEP_LOOKBACK_MS = 24 * 3_600_000;
 /** /spend/logs page size. */
 const SPEND_LOGS_PAGE_SIZE = 1000;
-/** Page cap so a stuck sweep cannot loop forever. */
+/** Page cap; a window larger than this fails the sweep rather than truncating. */
 const SPEND_LOGS_MAX_PAGES = 50;
 /** Runs are matched with a start before the window; give the match slack. */
 const RUN_MATCH_LOOKBACK_MS = 6 * 3_600_000;
@@ -108,6 +108,46 @@ export interface LitellmGatewayClient {
   listModels(): Promise<GatewayModelRow[]>;
 }
 
+/** The gateway's v2 date parameters are UTC "YYYY-MM-DD HH:MM:SS". */
+export function formatGatewayDate(date: Date): string {
+  return date.toISOString().slice(0, 19).replace("T", " ");
+}
+
+/**
+ * One /spend/logs/v2 page: `{ data: [...rows], total, page, page_size,
+ * total_pages }`. Returns null for any other shape, including the v1 daily
+ * aggregates (a bare array, or `{ startTime, spend, users, models }` items),
+ * so a wrong endpoint surfaces as an error and never as "zero rows".
+ */
+export function parseSpendLogsV2Page(
+  payload: unknown,
+  window: { from: Date; to: Date },
+): { entries: SpendLogEntry[]; totalPages: number } | null {
+  const body = asRecord(payload);
+  if (!body || !Array.isArray(body.data)) return null;
+  const totalPages = Math.max(1, Math.floor(asNumber(body.total_pages)));
+  const entries: SpendLogEntry[] = [];
+  for (const item of body.data) {
+    const row = asRecord(item);
+    if (!row) continue;
+    const startTime = typeof row.startTime === "string" ? row.startTime : "";
+    if (!startTime) continue;
+    const when = new Date(startTime);
+    if (Number.isNaN(when.getTime()) || when < window.from || when >= window.to) continue;
+    entries.push({
+      requestId: typeof row.request_id === "string" && row.request_id ? row.request_id : null,
+      apiKey: typeof row.api_key === "string" && row.api_key.trim() ? row.api_key.trim() : null,
+      spend: asNumber(row.spend),
+      promptTokens: asNumber(row.prompt_tokens),
+      completionTokens: asNumber(row.completion_tokens),
+      startTime,
+      model: typeof row.model === "string" ? row.model : "unknown",
+      provider: typeof row.custom_llm_provider === "string" ? row.custom_llm_provider : null,
+    });
+  }
+  return { entries, totalPages };
+}
+
 export function createLitellmGatewayClient(baseUrl: string, keyValue: string): LitellmGatewayClient {
   const url = (path: string) => `${baseUrl.replace(/\/$/, "")}${path}`;
 
@@ -119,30 +159,29 @@ export function createLitellmGatewayClient(baseUrl: string, keyValue: string): L
 
   return {
     async listSpendLogs(window: { from: Date; to: Date }) {
+      // /spend/logs/v2 is the paged, per-row endpoint. The older /spend/logs
+      // is deprecated, has no paging, and with dates returns daily aggregates
+      // without request_id/api_key, which would attribute nothing.
       const entries: SpendLogEntry[] = [];
-      for (let page = 1; page <= SPEND_LOGS_MAX_PAGES; page += 1) {
-        const rows = await getJson<Array<Record<string, unknown>>>(
-          `/spend/logs?page=${page}&page_size=${SPEND_LOGS_PAGE_SIZE}` +
-            `&start_date=${window.from.toISOString().slice(0, 10)}` +
-            `&end_date=${window.to.toISOString().slice(0, 10)}`,
+      let totalPages = 1;
+      for (let page = 1; page <= totalPages; page += 1) {
+        const payload = await getJson<unknown>(
+          `/spend/logs/v2?page=${page}&page_size=${SPEND_LOGS_PAGE_SIZE}` +
+            `&start_date=${encodeURIComponent(formatGatewayDate(window.from))}` +
+            `&end_date=${encodeURIComponent(formatGatewayDate(window.to))}`,
         );
-        for (const row of rows) {
-          const startTime = typeof row.startTime === "string" ? row.startTime : "";
-          if (!startTime) continue;
-          const when = new Date(startTime);
-          if (when < window.from || when >= window.to) continue;
-          entries.push({
-            requestId: typeof row.request_id === "string" && row.request_id ? row.request_id : null,
-            apiKey: typeof row.api_key === "string" && row.api_key.trim() ? row.api_key.trim() : null,
-            spend: asNumber(row.spend),
-            promptTokens: asNumber(row.prompt_tokens),
-            completionTokens: asNumber(row.completion_tokens),
-            startTime,
-            model: typeof row.model === "string" ? row.model : "unknown",
-            provider: typeof row.custom_llm_provider === "string" ? row.custom_llm_provider : null,
-          });
+        const parsed = parseSpendLogsV2Page(payload, window);
+        if (!parsed) throw new Error("LLM gateway /spend/logs/v2 answered in an unexpected shape");
+        entries.push(...parsed.entries);
+        totalPages = parsed.totalPages;
+        // The collection window advances to the newest collected row, so a
+        // silently truncated read would lose the older rows for good. Fail
+        // loudly instead; the next sweep retries the same window.
+        if (totalPages > SPEND_LOGS_MAX_PAGES) {
+          throw new Error(
+            `LLM gateway spend window is too large (${totalPages} pages of ${SPEND_LOGS_PAGE_SIZE}; cap ${SPEND_LOGS_MAX_PAGES})`,
+          );
         }
-        if (rows.length < SPEND_LOGS_PAGE_SIZE) break;
       }
       return entries;
     },
@@ -372,7 +411,8 @@ async function readCollectedSince(db: Db, companyId: string, now: Date): Promise
   return last;
 }
 
-async function loadRunWindows(
+/** Runs that may own a spend row; a run still in flight (no finishedAt) is included, open-ended. */
+export async function loadRunWindows(
   db: Db,
   companyId: string,
   window: { from: Date; to: Date },
@@ -391,7 +431,6 @@ async function loadRunWindows(
         eq(heartbeatRuns.companyId, companyId),
         gte(heartbeatRuns.startedAt, new Date(window.from.getTime() - RUN_MATCH_LOOKBACK_MS)),
         lt(heartbeatRuns.startedAt, window.to),
-        isNotNull(heartbeatRuns.finishedAt),
       ),
     );
   const windows: RunWindow[] = [];

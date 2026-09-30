@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   botKeyIndex,
   collectRows,
+  createLitellmGatewayClient,
+  formatGatewayDate,
   gatewayKeyHash,
+  parseSpendLogsV2Page,
   readLitellmCostSettings,
   runWindowFor,
   spendUsdToCents,
@@ -156,5 +159,75 @@ describe("myrmidon(M2-A) attribution", () => {
     const when = new Date("2026-09-30T10:05:00Z");
     const open = window({ finishedAt: null });
     expect(runWindowFor(when, "agent-a", [open])?.runId).toBe("run-1");
+  });
+});
+
+describe("myrmidon(M2-A) gateway client (/spend/logs/v2)", () => {
+  const span = { from: new Date("2026-09-30T10:00:00Z"), to: new Date("2026-09-30T11:00:00Z") };
+
+  function v2Row(overrides: Record<string, unknown> = {}) {
+    return {
+      request_id: "req-1",
+      api_key: gatewayKeyHash(KEY_A),
+      spend: 0.02,
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      startTime: "2026-09-30T10:30:00Z",
+      model: "openai/example-model",
+      custom_llm_provider: "openai",
+      ...overrides,
+    };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("formats the v2 date parameters as UTC 'YYYY-MM-DD HH:MM:SS'", () => {
+    expect(formatGatewayDate(new Date("2026-09-30T10:05:07.123Z"))).toBe("2026-09-30 10:05:07");
+  });
+
+  it("parses the v2 page shape into entries and reads total_pages", () => {
+    const parsed = parseSpendLogsV2Page(
+      { data: [v2Row(), v2Row({ request_id: "req-2", startTime: "2026-09-30T12:00:00Z" })], total: 2, page: 1, page_size: 1000, total_pages: 3 },
+      span,
+    );
+    expect(parsed?.totalPages).toBe(3);
+    // The second row starts after the window and is dropped.
+    expect(parsed?.entries).toHaveLength(1);
+    expect(parsed?.entries[0]).toMatchObject({ requestId: "req-1", promptTokens: 10, completionTokens: 5, provider: "openai" });
+  });
+
+  it("does not parse the v1 daily-aggregate shape as rows", () => {
+    const aggregates = [{ startTime: "2026-09-30", spend: 1.5, users: {}, models: { m: 1.5 } }];
+    expect(parseSpendLogsV2Page(aggregates, span)).toBeNull();
+    expect(parseSpendLogsV2Page({ data: "nope" }, span)).toBeNull();
+  });
+
+  it("calls /spend/logs/v2 and follows total_pages", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (input: string) => {
+      urls.push(input);
+      const page = Number(new URL(input).searchParams.get("page"));
+      return new Response(
+        JSON.stringify({ data: [v2Row({ request_id: `req-${page}` })], total: 2, page, page_size: 1000, total_pages: 2 }),
+        { status: 200 },
+      );
+    });
+    const entries = await createLitellmGatewayClient("http://gateway.test/", "sk-test").listSpendLogs(span);
+    expect(entries.map((e) => e.requestId)).toEqual(["req-1", "req-2"]);
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain("/spend/logs/v2?page=1&page_size=1000");
+    expect(new URL(urls[0]!).searchParams.get("start_date")).toBe("2026-09-30 10:00:00");
+  });
+
+  it("fails loudly on an aggregate answer instead of collecting zero rows", async () => {
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify([{ startTime: "2026-09-30", spend: 1, users: {}, models: {} }]), { status: 200 }));
+    await expect(createLitellmGatewayClient("http://gateway.test", "sk-test").listSpendLogs(span)).rejects.toThrow(/unexpected shape/);
+  });
+
+  it("fails rather than truncating a window larger than the page cap", async () => {
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ data: [], total: 0, page: 1, page_size: 1000, total_pages: 5000 }), { status: 200 }));
+    await expect(createLitellmGatewayClient("http://gateway.test", "sk-test").listSpendLogs(span)).rejects.toThrow(/too large/);
   });
 });

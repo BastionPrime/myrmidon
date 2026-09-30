@@ -4,7 +4,7 @@
 //
 // Two lists, one card each. The costs card reads litellm_cost_events through
 // /api/myrmidon/companies/:id/litellm/costs and groups by agent with a
-// per-run breakdown; the models card reads /api/myrmidian/companies/:id/
+// per-run breakdown; the models card reads /api/myrmidon/companies/:id/
 // litellm/models. When the instance switch is off the API answers 503 and
 // both cards say so (the page is still useful for the adapter ledger).
 
