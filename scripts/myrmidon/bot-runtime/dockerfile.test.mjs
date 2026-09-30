@@ -133,28 +133,40 @@ describe("docker/bot-runtime/Dockerfile", () => {
     // aiohttp==...` bypasses uv.lock's hash verification even though the
     // exact same pin already exists there.
     assert.doesNotMatch(dockerfileInstructions, /uv pip install[^\n]*aiohttp/);
-    assert.match(dockerfile, /uv sync --frozen --extra sms --extra mcp --extra hindsight/);
+    assert.match(dockerfile, /uv sync --frozen --extra sms --extra mcp --python/);
+    // The "hindsight" extra is gone from hermes 0.21.5 (the provider moved to the plugin
+    // catalog) — requesting it would silently resolve to nothing.
+    assert.doesNotMatch(dockerfile, /--extra hindsight/);
   });
 
-  it("bakes in mcp and hindsight (every G2-compiled bot profile needs both, not just aiohttp/sms)", () => {
+  it("bakes in mcp, and vendors the Hindsight provider from hermes' plugin catalog", () => {
     assert.match(dockerfile, /--extra mcp\b/);
-    assert.match(dockerfile, /--extra hindsight\b/);
-    // And actually checked, not just requested — a `uv sync` extra silently
-    // no-ops if the package name is ever wrong.
+    // The provider is not a python extra any more: the builder clones the exact commit the
+    // bundled catalog entry names, verifies it, and the plugin's own declared dependencies
+    // are installed through hermes' plugin installer (never a bare `uv pip install`).
+    assert.match(dockerfile, /plugin-catalog\/hindsight\.yaml/);
+    assert.match(dockerfile, /install_for_plugin_dir/);
+    assert.match(dockerfile, /git -C \/tmp\/hindsight-plugin rev-parse HEAD/);
+    // And actually checked, not just requested.
     assert.match(dockerfile, /import aiohttp, mcp, hindsight_client/);
+    assert.match(dockerfile, /find_provider_dir\('hindsight'\)/);
+    // Sealed copy in /opt, linked into the writable HERMES_HOME by the entrypoint.
+    assert.match(dockerfile, /^COPY --from=builder --chown=root:root \/opt\/hermes-plugins \/opt\/hermes-plugins$/m);
+    const entrypoint = fs.readFileSync(path.join(IMAGE_DIR, "entrypoint.sh"), "utf8");
+    assert.match(entrypoint, /ln -s "\$\{catalog_dir\}\/hindsight"/);
   });
 
   it("import-smokes every module a patch changes, so a patch that applies but breaks a module fails the build", () => {
     // `git apply` only proves the hunks land. The smoke must name one module per patched
-    // file: 04 hermes_state, 01/03 the hindsight plugin, 02 the two session-environment files.
+    // file: 04 hermes_state, 02 the two session-environment files, 05 gateway.run.
     const smoke = dockerfileInstructions.match(/^RUN [^\n]*python -c 'import (hermes_state[^']*)'$/m);
     assert.ok(smoke, "expected a build-time import smoke that starts with hermes_state");
     const modules = smoke[1].split(",").map((m) => m.trim());
     for (const module of [
       "hermes_state",
-      "plugins.memory.hindsight",
       "tools.environments.base",
       "tools.environments.base_session_env",
+      "gateway.run",
     ]) {
       assert.ok(modules.includes(module), `import smoke must include ${module}`);
     }
@@ -208,11 +220,16 @@ describe("docker/bot-runtime/patches/", () => {
     assert.ok(fs.existsSync(path.join(IMAGE_DIR, "patches/README.md")));
   });
 
-  it("ships the hindsight reflect-timeout/retry and session-snapshot secret-redaction patches", () => {
+  it("ships the session-snapshot secret-redaction, state-read and gateway-executor patches", () => {
     const patchesDir = path.join(IMAGE_DIR, "patches");
     const files = fs.readdirSync(patchesDir).filter((f) => f.endsWith(".patch"));
-    assert.ok(files.some((f) => f.includes("hindsight")), "expected a hindsight patch");
     assert.ok(files.some((f) => f.includes("secret")), "expected a session-snapshot secret-redaction patch");
+    assert.ok(files.some((f) => f.includes("state-read")), "expected a state-read retry patch");
+    assert.ok(files.some((f) => f.includes("gateway-executor")), "expected a gateway executor pool patch");
+    // The two hindsight patches are gone on purpose: v2026.9.24 removed the in-tree provider
+    // (the plugin catalog owns it now) and the catalog plugin already carries the retain_async
+    // fix. A stray hindsight patch would fail `git apply` at build time.
+    assert.ok(!files.some((f) => f.includes("hindsight")), "no hindsight patch may remain: the provider left the tree");
     for (const file of files) {
       const patch = fs.readFileSync(path.join(patchesDir, file), "utf8");
       // CONVENTIONS.md §9/§10: no internal ticket numbers or company-specific names
@@ -235,19 +252,6 @@ describe("docker/bot-runtime/patches/", () => {
     assert.equal(new Set(numbers).size, numbers.length, "patch numbers must be unique");
   });
 
-  it("passes the configured retain_async from the explicit hindsight retain tool", () => {
-    // The tool path used to omit retain_async, so the client default applied and every
-    // explicit retain ran synchronously (bounded only by the shared client timeout).
-    // With memory_mode "tools" and auto_retain off this tool is the only retain path.
-    const patch = fs.readFileSync(
-      path.join(IMAGE_DIR, "patches/03-hindsight-tool-retain-async.patch"),
-      "utf8",
-    );
-    assert.match(patch, /^\+\+\+ b\/plugins\/memory\/hindsight\/__init__\.py$/m);
-    assert.match(patch, /^-\s+self\._retain_batch\(item, bank_id=self\._bank_id\)$/m);
-    assert.match(patch, /^\+\s+self\._retain_batch\(item, bank_id=self\._bank_id, retain_async=self\._retain_async\)$/m);
-  });
-
   it("retries a state-database read that finds the database locked, with fixed bounds", () => {
     // Two concurrent runs of one agent (a writer and a session-history reader) made the
     // reader fail with "database is locked": the read path replayed only "disk I/O error".
@@ -259,11 +263,28 @@ describe("docker/bot-runtime/patches/", () => {
     assert.match(patch, /^\+_READ_LOCKED_MARKERS = \("database is locked", "database is busy"\)$/m);
     assert.match(patch, /^\+_READ_LOCKED_RETRY_ATTEMPTS = 15$/m);
     assert.match(patch, /^\+_READ_LOCKED_RETRY_CAP_S = 1\.0$/m);
-    // The wait is jittered and bounded, and any other OperationalError is still raised at once.
-    assert.match(patch, /^\+\s+time\.sleep\(delay \* \(0\.5 \+ random\.random\(\)\)\)$/m);
-    assert.match(patch, /^\+\s+raise$/m);
+    // The wait is jittered and bounded, the disk-I/O-error budget is untouched, and any
+    // other OperationalError is still raised at once.
+    assert.match(patch, /^\+.*\(0\.5 \+ random\.random\(\)\)/m);
+    assert.match(patch, /^\+.*_DISK_IO_ERROR_MARKER not in err/m);
+    assert.match(patch, /^\+.*raise$/m);
     // No new environment knobs: every such variable would need its own documented setting.
     assert.doesNotMatch(patch, /^\+.*os\.environ/m);
+  });
+
+  it("sizes the gateway's default executor pool, overridable by one documented variable", () => {
+    // With the stock asyncio pool every live run holds one worker for its whole life, so
+    // create calls on the board's hermes_gateway adapter timed out behind them.
+    const patch = fs.readFileSync(
+      path.join(IMAGE_DIR, "patches/05-gateway-executor-pool.patch"),
+      "utf8",
+    );
+    assert.match(patch, /^\+\+\+ b\/gateway\/run\.py$/m);
+    assert.match(patch, /^\+.*set_default_executor\(/m);
+    assert.match(patch, /^\+.*max_workers=int\(os\.environ\.get\("HERMES_GATEWAY_EXECUTOR_WORKERS", "64"\)\)/m);
+    // It must be the first thing start_gateway does — anything before it could already have
+    // queued work onto the stock pool.
+    assert.match(patch, /^@@ -\d+,\d+ \+5796,\d+ @@/m);
   });
 
   it("documents every patch in patches/README.md and closes the reference-checkout gap", () => {

@@ -1,0 +1,86 @@
+{
+  "$comment": "Machine-readable delta registry for hermes-agent. Every change we carry on top of the pinned upstream tag lives here with the reason and the condition under which it can be dropped; hermes-upstream-check.mjs compares it against upstream and flags the deltas upstream has caught up with. Docs: docs/myrmidon/hermes-deltas.md. Keep pinnedRef/pinnedVersion in sync with docker/bot-runtime/Dockerfile (the checker fails when they disagree).",
+  "component": "hermes-agent",
+  "source": "https://github.com/NousResearch/hermes-agent.git",
+  "pinnedRef": "v2026.9.24",
+  "pinnedVersion": "0.21.5",
+  "tagPattern": "^v[0-9]{4}\\.[0-9]{1,2}\\.[0-9]{1,2}$",
+  "hindsightPlugin": {
+    "$comment": "The memory provider we vendor, recorded here (not read from a file: the hermes catalog entry lives inside the hermes checkout, not in this repository). The image reads plugin-catalog/hindsight.yaml from the pinned hermes tag and fails the build when this pin disagrees; the checker probes the plugin's own default branch.",
+    "repo": "https://github.com/vectorize-io/hindsight",
+    "subdir": "hindsight-integrations/hermes",
+    "pinnedSha": "176f8c2de1369f569c489b831d143b78128b5535",
+    "probeRef": "main"
+  },
+  "deltas": [
+    {
+      "id": "02-session-snapshot-secret-redaction",
+      "kind": "patch",
+      "patch": "docker/bot-runtime/patches/02-session-snapshot-secret-redaction.patch",
+      "files": [
+        "tools/environments/base.py",
+        "tools/environments/base_session_env.py"
+      ],
+      "reason": "The bash session snapshot lives in a shared temp dir and every profile in a container runs as one uid, so credential-shaped env values dumped there were readable by a neighbouring profile.",
+      "dropCondition": "Upstream excludes credential-shaped env names from the session snapshot by itself.",
+      "offer": null,
+      "offerNote": "Not offered yet: publishing to a third-party repository needs the publisher-scan wrapper (plan item PUBLISH-SCAN), which does not exist; the text is prepared in the ticket for the operator to submit.",
+      "probe": {
+        "source": "hermes",
+        "path": "tools/environments/base_session_env.py",
+        "upstreamMarker": "SNAPSHOT_SECRET|credential-shaped"
+      }
+    },
+    {
+      "id": "04-state-read-retry-when-locked",
+      "kind": "patch",
+      "patch": "docker/bot-runtime/patches/04-state-read-retry-when-locked.patch",
+      "files": [
+        "hermes_state.py"
+      ],
+      "reason": "Two concurrent runs of one agent (a writer and a session-history reader) made the reader fail with \"database is locked\": the read path replayed only \"disk I/O error\".",
+      "dropCondition": "Upstream retries a locked read in _read_retrying_ioerr.",
+      "offer": null,
+      "offerNote": "Not offered yet: see the note on delta 02 (publisher-scan wrapper pending).",
+      "probe": {
+        "source": "hermes",
+        "path": "hermes_state.py",
+        "upstreamMarker": "_READ_LOCKED|database is locked"
+      }
+    },
+    {
+      "id": "05-gateway-executor-pool",
+      "kind": "patch",
+      "patch": "docker/bot-runtime/patches/05-gateway-executor-pool.patch",
+      "files": [
+        "gateway/run.py"
+      ],
+      "reason": "The stock asyncio default executor is small and a live run holds one worker for its whole life, so the board's POST /v1/runs create calls timed out behind parallel runs.",
+      "dropCondition": "Upstream sizes the gateway's default executor above the fleet's concurrent runs, or ships an equivalent setting.",
+      "offer": null,
+      "offerNote": "Not offered yet: see the note on delta 02 (publisher-scan wrapper pending).",
+      "probe": {
+        "source": "hermes",
+        "path": "gateway/run.py",
+        "upstreamMarker": "HERMES_GATEWAY_EXECUTOR_WORKERS|set_default_executor"
+      }
+    },
+    {
+      "id": "hindsight-reflect-timeout-and-fact-types",
+      "kind": "upstream-plugin-gap",
+      "files": [
+        "hindsight-integrations/hermes/settings.py",
+        "hindsight-integrations/hermes/__init__.py"
+      ],
+      "reason": "The catalog Hindsight plugin uses one shared client timeout for recall, retain and reflect, and has no way to skip the expensive consolidated-observations layer; a reflect call routinely outlives a recall-sized timeout. The in-tree provider we used to patch had a reflect-specific timeout, a fact-type filter and a bounded retry on the bank's 503 admission refusal.",
+      "dropCondition": "The catalog plugin gains a reflect-specific timeout (or a per-operation timeout), a reflect fact-type filter, or the 503 retry.",
+      "offer": null,
+      "offerNote": "Not offered yet: the change is small and self-contained but publishing to a third-party repository needs the publisher-scan wrapper (plan item PUBLISH-SCAN) first; the offer text is prepared in the ticket for the operator.",
+      "probe": {
+        "source": "hindsight-plugin",
+        "path": "hindsight-integrations/hermes/settings.py",
+        "upstreamMarker": "reflect_timeout|reflect_fact_types"
+      }
+    }
+  ]
+}
