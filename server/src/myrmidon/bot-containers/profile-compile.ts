@@ -16,6 +16,12 @@
 
 import { isBotBoardGatewayEnabled } from "./board-gateway.js";
 import {
+  assertBotEgressSettings,
+  BOT_EGRESS_MODE_ENV,
+  buildBotEgressEnvEntries,
+  readBotEgressSettings,
+} from "./egress.js";
+import {
   compileHermesProfileDetailed,
   type HermesProfileEnvEntry,
   type HermesProfileInstanceDefaults,
@@ -191,6 +197,11 @@ export function createBotProfileCompile(
     // Before any lookup or secret creation: an unconfigured instance fails here
     // and leaves nothing behind.
     assertBotProfileSettings(settings);
+    // myrmidon(EGRESS-A): same fail-fast slot. `log` without a proxy address
+    // would compile a profile that leaves every bot reaching outward directly,
+    // which is the one thing this item exists to stop.
+    const egress = readBotEgressSettings(opts.env);
+    assertBotEgressSettings(egress);
 
     const agent = await ports.loadAgent(agentId);
     if (!agent) throw new BotProfileInputError(`agent ${agentId} no longer exists`);
@@ -240,12 +251,20 @@ export function createBotProfileCompile(
       llmApiKey = await ports.readCompanySecret(agent.companyId, settings.llmApiKeySecret ?? settings.llmApiKeyEnv);
     }
 
+    // myrmidon(EGRESS-A): the instance's proxied-egress variables always win
+    // over the card's — they describe this instance's network, not the bot
+    // (the same rule the compiler applies to its own reserved .env names).
+    const egressEnv = buildBotEgressEnvEntries({ settings: egress, botKey, boardUrl: settings.boardUrl });
+    const egressWarnings = Object.keys(egressEnv)
+      .filter((name) => cardEnv.env[name] !== undefined)
+      .map((name) => `.env: "${name}" is set by ${BOT_EGRESS_MODE_ENV}; the card's value was dropped`);
+
     const built = buildHermesProfileInput(
       {
         botKey,
         adapterConfig: agent.adapterConfig,
         runtimeConfig: agent.runtimeConfig,
-        env: cardEnv.env,
+        env: { ...cardEnv.env, ...egressEnv },
         skills: skills.skills,
         // No workspace/AGENTS.md: the gateway injection-scans it and drops the whole file
         // on a match. The instructions reach the model through the run request instead
@@ -268,6 +287,7 @@ export function createBotProfileCompile(
       ...(ports.listMcpServers ? [] : [NO_BOARD_GATEWAY_WARNING]),
       ...gatewayWarnings,
       ...cardEnv.warnings,
+      ...egressWarnings,
       ...(paperclipApiKey.warnings ?? []),
       ...skills.warnings,
       ...instructions.warnings,

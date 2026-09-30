@@ -1,0 +1,46 @@
+# Outbound proxy for container bots, log-only (EGRESS-A).
+#
+# `bots` — the network the bot containers live on — must already exist and must have no route
+# out (docker `internal: true`). `egress` is an ordinary bridge with a route out; this proxy is
+# the only service on both, so it is the only way off the bots' network. Every request a bot
+# sends outward therefore arrives here and is written to the journal (docker logs), naming the
+# bot, its project and the destination. Nothing is refused: EGRESS-B is what adds the lists.
+#
+# The bot side of the same item is server/src/myrmidon/bot-containers/egress.ts — set
+# MYRMIDON_BOT_EGRESS_MODE=log and MYRMIDON_BOT_EGRESS_PROXY=http://egress-proxy:3128 there, and
+# the bots' profiles carry the proxy variables (docs/myrmidon/egress.md).
+#
+# Before `up`: create ./config/bots.json (bot key -> project; see config.example.json). A bot
+# missing from it is still served and recorded — without a project, which is the gap the
+# observation period exists to close.
+#
+# The published address is the compose service name on the bots' network: `http://egress-proxy:3128`.
+# No ports are published: the proxy is reachable from the bots and from nothing else.
+
+name: egress-proxy
+
+networks:
+  bots:
+    external: true
+    name: myrmidon-bots
+  egress: {}
+
+services:
+  egress-proxy:
+    image: ghcr.io/itkadr-git/myrmidon-egress-proxy@sha256:<digest from the CI run>
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    pids_limit: 256
+    networks: [bots, egress]
+    environment:
+      EGRESS_PROXY_MODE: log
+      EGRESS_PROXY_PORT: "3128"
+      EGRESS_PROXY_BOTS_FILE: /config/bots.json
+    volumes:
+      - ./config:/config:ro
+    tmpfs: ["/tmp:size=16m"]
+    mem_limit: 256m
+    cpus: 1.0
