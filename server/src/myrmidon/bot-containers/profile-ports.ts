@@ -210,14 +210,19 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
   const skills = companySkillService(db);
   const instructions = agentInstructionsService();
   const instanceSettings = instanceSettingsService(db);
-  const resolveCardEnv = createCardEnvResolver({
-    resolveEnvBindings: (companyId, bindings, context) => secrets.resolveEnvBindings(companyId, bindings, context),
-    async readSecretStamp(companyId, secretId) {
-      const secret = await secrets.getById(secretId);
-      if (!secret || secret.companyId !== companyId) return null;
-      return `${secret.latestVersion}:${secret.status}`;
+  const resolveCardEnv = createCardEnvResolver(
+    {
+      resolveEnvBindings: (companyId, bindings, context) => secrets.resolveEnvBindings(companyId, bindings, context),
+      async readSecretStamp(companyId, secretId) {
+        const secret = await secrets.getById(secretId);
+        if (!secret || secret.companyId !== companyId) return null;
+        return `${secret.latestVersion}:${secret.status}`;
+      },
     },
-  });
+    // myrmidon(FLEETD-VMEXEC): the allowlist is re-read per resolve (per tick),
+    // like the other per-tick bot settings; the env source is process.env.
+    { env: process.env },
+  );
 
   return {
     async loadAgent(agentId) {

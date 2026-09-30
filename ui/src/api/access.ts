@@ -1,4 +1,4 @@
-import type { AgentAdapterType, JoinRequest, PermissionKey } from "@paperclipai/shared";
+import type { AgentAdapterType, BoardApiKeyScopeKind, JoinRequest, PermissionKey } from "@paperclipai/shared";
 import { api } from "./client";
 
 export type HumanCompanyRole = "owner" | "admin" | "operator" | "viewer";
@@ -232,6 +232,29 @@ export type UserCompanyAccessResponse = {
   companyAccess: UserCompanyAccessEntry[];
 };
 
+// myrmidon(ROLE-SCOPED-TOKENS): board API key management surface — listing,
+// scoped creation, revocation. The plaintext token is shown exactly once in
+// the creation response and never travels back afterwards.
+export type BoardApiKeyRecord = {
+  id: string;
+  name: string;
+  scope: { kind: BoardApiKeyScopeKind };
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  expiresAt: string | null;
+};
+
+export type CreateBoardApiKeyInput = {
+  name: string;
+  scope: { kind: BoardApiKeyScopeKind };
+  expiresAt?: string | null;
+};
+
+export type CreatedBoardApiKey = BoardApiKeyRecord & {
+  token: string;
+};
+
 export type CurrentBoardAccess = {
   user: { id: string; email: string | null; name: string | null; image: string | null } | null;
   userId: string;
@@ -415,4 +438,16 @@ export const accessApi = {
 
   getCurrentBoardAccess: () =>
     api.get<CurrentBoardAccess>("/cli-auth/me"),
+
+  // myrmidon(ROLE-SCOPED-TOKENS): scoped board API key management.
+  listBoardApiKeys: (options: { includeInactive?: boolean } = {}) =>
+    api.get<BoardApiKeyRecord[]>(
+      `/board-api-keys${options.includeInactive ? "?includeInactive=true" : ""}`,
+    ),
+
+  createBoardApiKey: (input: CreateBoardApiKeyInput) =>
+    api.post<CreatedBoardApiKey>("/board-api-keys", input),
+
+  revokeBoardApiKey: (keyId: string) =>
+    api.delete<{ ok: boolean; keyId: string }>(`/board-api-keys/${keyId}`),
 };
