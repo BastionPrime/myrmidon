@@ -1,6 +1,6 @@
 # Deploying and rolling back Myrmidon
 
-> Русская версия: [deploy.ru.md](deploy.ru.md)
+> Russian version: [deploy.ru.md](deploy.ru.md)
 
 Deploys pin the image digest of `ghcr.io/itkadr-git/myrmidon`, not a tag: a tag can be moved,
 a digest cannot. Only an image built by CI reaches production (the owner's decision): the
