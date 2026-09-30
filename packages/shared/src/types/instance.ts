@@ -1,4 +1,6 @@
 import type { FeedbackDataSharingPreference } from "./feedback.js";
+// myrmidon(C0): the run admission limits stored in instance settings
+import type { RunLimits } from "../myrmidon-runtime-limits.js";
 
 export const DAILY_RETENTION_PRESETS = [3, 7, 14] as const;
 export const WEEKLY_RETENTION_PRESETS = [1, 2, 4] as const;
@@ -38,6 +40,13 @@ export interface InstanceGeneralSettings {
    * Kubernetes sandbox provider and denies local/ssh execution.
    */
   executionMode?: InstanceExecutionMode;
+  /**
+   * myrmidon(C0): run admission limits changed from the instance settings page
+   * and `GET`/`PATCH /api/myrmidon/runtime-limits`. Absent means "use the
+   * environment variable, then the default"; kept in sync with the validator of
+   * the same field (packages/shared/src/validators/instance.ts).
+   */
+  runLimits?: RunLimits;
 }
 
 export interface InstanceExperimentalSettings {

@@ -18,6 +18,7 @@ import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { cn } from "../lib/utils";
 import { useSignOut } from "@/hooks/useSignOut";
 import { MaintenanceSettingsPanel } from "@/components/myrmidon/MaintenanceSettingsPanel"; // myrmidon(R3)
+import { RuntimeLimitsSettingsPanel } from "@/components/myrmidon/RuntimeLimitsSettingsPanel"; // myrmidon(C0)
 import { PRODUCT_NAME, UPSTREAM_ATTRIBUTION } from "@/lib/myrmidon-product"; // myrmidon(B1a)
 
 const FEEDBACK_TERMS_URL = import.meta.env.VITE_FEEDBACK_TERMS_URL?.trim() || "https://paperclip.ing/tos";
@@ -125,6 +126,7 @@ export function InstanceGeneralSettings({ embedded = false }: { embedded?: boole
       )}
 
       <MaintenanceSettingsPanel /> {/* myrmidon(R3) */}
+      <RuntimeLimitsSettingsPanel /> {/* myrmidon(C0) */}
 
       {showDeploymentStatus && (
       <section>
