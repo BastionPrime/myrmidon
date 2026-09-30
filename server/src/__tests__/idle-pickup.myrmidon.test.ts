@@ -373,6 +373,81 @@ describeEmbeddedPostgres("idlePickupForAgent (IDLE-PICKUP)", () => {
     void firstId;
   });
 
+  it("release path: finishing a run on issue A with issue B ready wakes exactly B, never A", async () => {
+    const { companyId, agentId } = await seedAgent();
+    const issueA = await seedIssue({ companyId, agentId, status: "in_progress" });
+    const issueB = await seedIssue({ companyId, agentId, priority: "high" });
+    const deps = fakeDeps();
+
+    // The run on A just released its execution lock; heartbeat passes A's id.
+    const result = await idlePickupForAgent(
+      deps,
+      { id: agentId, companyId },
+      { excludeIssueId: issueA },
+    );
+
+    expect(result.woken).toBe(1);
+    expect(result.issueIds).toEqual([issueB]);
+    expect(deps.enqueueWakeup).toHaveBeenCalledTimes(1);
+    const [call] = vi.mocked(deps.enqueueWakeup).mock.calls;
+    expect((call[1] as { contextSnapshot: { issueId: string } }).contextSnapshot.issueId).toBe(issueB);
+  });
+
+  it("release path: with nothing ready except the just-released issue, no wake at all (no runaway loop)", async () => {
+    const { companyId, agentId } = await seedAgent();
+    // Vendor-fixture shape: the finished issue stays in a wakeable status.
+    const issueA = await seedIssue({ companyId, agentId, status: "in_progress" });
+    const deps = fakeDeps();
+
+    const result = await idlePickupForAgent(
+      deps,
+      { id: agentId, companyId },
+      { excludeIssueId: issueA },
+    );
+
+    expect(result.woken).toBe(0);
+    expect(result.alreadyActive).toBe(1);
+    expect(deps.enqueueWakeup).not.toHaveBeenCalled();
+
+    // After B (the only other ready issue) finished, A — still open, no live
+    // run — IS the next ready task and gets the wake: that is the feature
+    // working (an agent keeps working its open tasks), not a runaway: one wake
+    // per pass, and A's own next release excludes A again. The chain in the
+    // review failed only because the just-released issue was never excluded.
+    const issueB = await seedIssue({ companyId, agentId, status: "in_progress" });
+    const result2 = await idlePickupForAgent(
+      deps,
+      { id: agentId, companyId },
+      { excludeIssueId: issueB },
+    );
+    expect(result2.woken).toBe(1);
+    expect(result2.issueIds).toEqual([issueA]);
+    expect(deps.enqueueWakeup).toHaveBeenCalledTimes(1);
+  });
+
+  it("a deferred or claimed wake also counts as covering (not only queued)", async () => {
+    const { companyId, agentId } = await seedAgent();
+    const issueId = await seedIssue({ companyId, agentId });
+    await db.insert(agentWakeupRequests).values({
+      companyId,
+      agentId,
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_comment_mentioned",
+      payload: { issueId },
+      status: "deferred_issue_execution",
+      requestedByActorType: "system",
+      requestedByActorId: null,
+    });
+    const deps = fakeDeps();
+
+    const result = await idlePickupForAgent(deps, { id: agentId, companyId });
+
+    expect(result.alreadyActive).toBe(1);
+    expect(result.woken).toBe(0);
+    expect(deps.enqueueWakeup).not.toHaveBeenCalled();
+  });
+
   it("does nothing when the feature is disabled by setting", async () => {
     const { companyId, agentId } = await seedAgent();
     await seedIssue({ companyId, agentId });

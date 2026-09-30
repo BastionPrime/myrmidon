@@ -208,6 +208,7 @@ function idlePickupCandidateRows(db: Db, companyId: string, agentId: string) {
 export async function idlePickupForAgent(
   deps: IdlePickupDeps,
   agent: { id: string; companyId: string },
+  options: { excludeIssueId?: string | null } = {},
 ): Promise<IdlePickupResult> {
   const env = deps.env ?? process.env;
   if (!readIdlePickupEnabled(env)) return emptyIdlePickupResult();
@@ -245,26 +246,43 @@ export async function idlePickupForAgent(
   });
 
   for (const candidate of ordered) {
+    // The release path passes the issue whose execution was just released:
+    // that issue is the agent's PAST work, not the next one. Waking it again
+    // turns finish → wake → run → finish into a loop that never settles (the
+    // vendor fixtures keep a finished issue in a wakeable status). Even when
+    // the issue is legitimately still open (a run that ended without closing
+    // it), one more immediate wake is exactly the runaway this guard stops;
+    // the periodic sweep re-evaluates it on its own cadence with the
+    // just-released exclusion no longer applying.
+    if (options.excludeIssueId && candidate.id === options.excludeIssueId) {
+      result.alreadyActive += 1;
+      continue;
+    }
     if (liveIssueIds.has(candidate.id)) {
       result.alreadyActive += 1;
       continue;
     }
-    // A queued wake already covers this issue: the admission path will start
-    // it; a second wake would only coalesce into the first anyway.
-    const queuedWake = await deps.db
+    // A wake already covers this issue in any non-terminal status (queued,
+    // deferred_issue_execution, claimed — not only "queued"): the admission
+    // path owns it; a second wake would only coalesce into the first anyway.
+    const coveringWake = await deps.db
       .select({ id: agentWakeupRequests.id })
       .from(agentWakeupRequests)
       .where(
         and(
           eq(agentWakeupRequests.companyId, agent.companyId),
           eq(agentWakeupRequests.agentId, agent.id),
-          eq(agentWakeupRequests.status, "queued"),
+          inArray(agentWakeupRequests.status, [
+            "queued",
+            "deferred_issue_execution",
+            "claimed",
+          ]),
           sql`${agentWakeupRequests.payload} ->> 'issueId' = ${candidate.id}`,
         ),
       )
       .limit(1)
       .then((rows) => Boolean(rows[0]));
-    if (queuedWake) {
+    if (coveringWake) {
       result.alreadyActive += 1;
       continue;
     }

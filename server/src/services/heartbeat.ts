@@ -25619,6 +25619,9 @@ export function heartbeatService(
       try {
         const releasedRun = await getRun(run.id);
         if (releasedRun) {
+          const releasedIssueId = readNonEmptyString(
+            parseObject(releasedRun.contextSnapshot).issueId,
+          );
           await idlePickupForAgent(
             {
               db,
@@ -25638,6 +25641,9 @@ export function heartbeatService(
               },
             },
             { id: releasedRun.agentId, companyId: releasedRun.companyId },
+            // The just-released issue is the past work: waking it again right
+            // after its run finished is the runaway loop the review caught.
+            { excludeIssueId: releasedIssueId },
           );
         }
       } catch (idlePickupErr) {
