@@ -199,10 +199,12 @@ describe("BrowsersSettingsPageView", () => {
     const button = container.querySelector<HTMLButtonElement>('[data-testid="myrmidon-browser-clear-button-browser-a"]');
     expect(button!.disabled).toBe(true);
     const input = container.querySelector<HTMLInputElement>('[data-testid="myrmidon-browser-clear-domain-browser-a"]');
+    expect(input).not.toBeNull();
+    const domainInput = input!;
     act(() => {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-      setter.call(input, "example.com");
-      input.dispatchEvent(new window.Event("input", { bubbles: true }));
+      setter.call(domainInput, "example.com");
+      domainInput.dispatchEvent(new window.Event("input", { bubbles: true }));
     });
     await flush();
     expect(button!.disabled).toBe(false);
