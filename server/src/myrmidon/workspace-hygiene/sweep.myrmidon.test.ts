@@ -201,7 +201,7 @@ describe("myrmidon(WORKSPACE-HYGIENE): the quota sweep", () => {
 
   it("ranks every signal with the sweep as its author and no host path", async () => {
     const { sweep, logActivity } = harness({
-      rows: [makeRow({ id: "dddddddd-1111-4111-8111-111111111111", cwd: "/srv/dev/ope-3263/wt" })],
+      rows: [makeRow({ id: "dddddddd-1111-4111-8111-111111111111", cwd: "/workspaces/quota-test/wt" })],
       sizes: { wt: 6000 * MB },
     });
 
@@ -214,7 +214,7 @@ describe("myrmidon(WORKSPACE-HYGIENE): the quota sweep", () => {
     expect(entry.entityType).toBe("execution_workspace");
     expect(entry.entityId).toBe("dddddddd-1111-4111-8111-111111111111");
     expect(entry.details).toMatchObject({ sizeMb: 6000, quotaMb: 4000 });
-    expect(JSON.stringify(entry.details)).not.toContain("/srv/dev");
+    expect(JSON.stringify(entry.details)).not.toContain("/workspaces");
   });
 
   it("skips a fresh measurement instead of walking the disk again", async () => {
