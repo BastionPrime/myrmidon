@@ -83,6 +83,7 @@ import { GatewayDetail } from "./pages/apps/gateways/GatewayDetail";
 import { CompanySkills } from "./pages/CompanySkills";
 import { SkillStudio } from "./pages/SkillStudio";
 import { Secrets } from "./pages/Secrets";
+import { AccessHubPage } from "./components/myrmidon/access-hub/AccessHubPage";
 import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
@@ -187,6 +188,11 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
       </Route>
       <Route element={<HiddenSettingsPageGate pageKey="company.secrets" />}>
         <Route path="company/settings/secrets" element={<Secrets />} />
+      </Route>
+      {/* The access hub is the fleet view of the same secrets surface, so it
+          rides the operator visibility key of Secrets. */}
+      <Route element={<HiddenSettingsPageGate pageKey="company.secrets" />}>
+        <Route path="company/settings/access-hub" element={<AccessHubPage />} />
       </Route>
       <Route path="company/settings/tools" element={<LegacyToolsSettingsRedirect />} />
       <Route path="company/settings/tools/:tab" element={<LegacyToolsSettingsRedirect />} />
