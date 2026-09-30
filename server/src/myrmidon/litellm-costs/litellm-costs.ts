@@ -394,13 +394,18 @@ async function loadRunWindows(
         isNotNull(heartbeatRuns.finishedAt),
       ),
     );
-  return rows.map((row) => ({
-    runId: row.runId,
-    agentId: row.agentId,
-    issueId: row.issueId && UUID_PATTERN.test(row.issueId) ? row.issueId : null,
-    startedAt: row.startedAt,
-    finishedAt: row.finishedAt,
-  }));
+  const windows: RunWindow[] = [];
+  for (const row of rows) {
+    if (!row.startedAt) continue; // a run without a start cannot bound a window
+    windows.push({
+      runId: row.runId,
+      agentId: row.agentId,
+      issueId: row.issueId && UUID_PATTERN.test(row.issueId) ? row.issueId : null,
+      startedAt: row.startedAt,
+      finishedAt: row.finishedAt ?? null,
+    });
+  }
+  return windows;
 }
 
 async function insertRows(db: Db, companyId: string, rows: CollectedRow[], collectedAt: Date): Promise<number> {
@@ -514,11 +519,11 @@ export async function listLitellmModels(db: Db): Promise<LitellmModelView[]> {
     .groupBy(litellmModels.modelName)
     .as("latest");
   const rows = await db
-    .select()
+    .select({ model: litellmModels })
     .from(litellmModels)
     .innerJoin(latest, sql`${litellmModels.modelName} = ${latest.modelName} and ${litellmModels.seenAt} = ${latest.seenAt}`)
     .orderBy(litellmModels.modelName);
-  return rows.map(([row]) => toModelView(row));
+  return rows.map((row) => toModelView(row.model));
 }
 
 function toModelView(row: typeof litellmModels.$inferSelect): LitellmModelView {
