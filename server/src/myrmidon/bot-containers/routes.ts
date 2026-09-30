@@ -29,6 +29,16 @@ import {
   readBotContainerAgentConfig,
 } from "./agent-config.js";
 import type { ApplyBotContainerOutcome, BotContainerAgent, BotContainerRuntimeDeps } from "./index.js";
+import {
+  APPLIED_LIMIT_PENDING_NOTE,
+  compareGatewayConcurrency,
+  EXTERNAL_GATEWAY_NOTE,
+  GATEWAY_RATE_LIMIT_LOOKBACK_MS,
+  externalGatewayRateLimitWarning,
+  NO_APPLIED_STATE_NOTE,
+  type GatewayConcurrencyStatus,
+} from "./concurrency-sync.js";
+import { readMaxConcurrentRuns } from "./profile-input.js";
 import { isImageAllowed, parseImageAllowlist } from "./template.js";
 import type { BotContainerState } from "./driver.js";
 
@@ -37,6 +47,8 @@ export interface BotContainerRouteAgent {
   companyId: string;
   adapterType: string;
   adapterConfig: Record<string, unknown>;
+  /** The card's scheduling policy; read for heartbeat.maxConcurrentRuns. */
+  runtimeConfig: Record<string, unknown>;
 }
 
 export interface BotContainerRoutesDeps {
@@ -54,6 +66,17 @@ export interface BotContainerRoutesDeps {
     runtime: BotContainerRuntimeDeps,
     opts: { env?: NodeJS.ProcessEnv },
   ): Promise<ApplyBotContainerOutcome>;
+  /**
+   * myrmidon(CONCURRENCY-SYNC): when this agent's most recent run failed with
+   * GATEWAY_RATE_LIMITED_ERROR_CODE, at or after `sinceIso` — or null. Read only for
+   * an agent whose gateway the board does not manage, where the board has no other
+   * way to see that gateway is holding runs back. Optional: without it the status
+   * simply carries no warning (tests, unwired deployments).
+   */
+  recentGatewayRateLimit?(
+    agent: BotContainerRouteAgent,
+    opts: { sinceIso: string },
+  ): Promise<string | null>;
   /** Read per request; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
 }
@@ -75,6 +98,19 @@ export interface BotContainerStatusResponse {
   container: { state: BotContainerState; image: string | null } | null;
   /** Set when the runtime was asked and did not answer. */
   containerError: string | null;
+  /** myrmidon(CONCURRENCY-SYNC): runtimeConfig.heartbeat.maxConcurrentRuns, normalized
+   *  exactly as the profile compiler normalizes it. Always answered, so the card can
+   *  show the board's value even for a gateway the board does not manage. */
+  boardMaxConcurrentRuns: number;
+  /** Board value against the value the bot's applied profile carries. Null when there
+   *  is no applied state to compare (no container yet, gateway not managed by the
+   *  board, or the runtime did not answer) — see gatewayConcurrencyNote. */
+  gatewayConcurrency: GatewayConcurrencyStatus | null;
+  /** Why gatewayConcurrency is null, or a caveat about the value it carries. */
+  gatewayConcurrencyNote: string | null;
+  /** The gateway is limiting runs below the board's limit (unmanaged gateway with
+   *  recently rate-limited runs). Null when there is nothing to warn about. */
+  gatewayConcurrencyWarning: string | null;
 }
 
 export type BotContainerApplyResponse = { outcome: Exclude<ApplyBotContainerOutcome, { kind: "not_applicable" }> };
@@ -119,6 +155,10 @@ export function botContainerRoutes(deps: BotContainerRoutesDeps) {
           : null,
       container: null,
       containerError: null,
+      boardMaxConcurrentRuns: readMaxConcurrentRuns(agent.runtimeConfig),
+      gatewayConcurrency: null,
+      gatewayConcurrencyNote: null,
+      gatewayConcurrencyWarning: null,
     };
 
     const botKey = botKeyForAgent(agent.id);
@@ -127,11 +167,44 @@ export function botContainerRoutes(deps: BotContainerRoutesDeps) {
       try {
         const status = await runtime.driver.status(botKey);
         body.container = { state: status.state, image: status.image ?? null };
+        // myrmidon(CONCURRENCY-SYNC): the applied limit, as recorded by the last apply's
+        // marker. Only a container that exists can carry one.
+        if (status.state !== "missing") {
+          body.gatewayConcurrency = compareGatewayConcurrency({
+            board: body.boardMaxConcurrentRuns,
+            applied: status.maxConcurrentRuns ?? null,
+            checkedAt: new Date().toISOString(),
+          });
+          if (status.maxConcurrentRuns === undefined) body.gatewayConcurrencyNote = APPLIED_LIMIT_PENDING_NOTE;
+        }
       } catch (err) {
         logger.warn({ err, agentId: agent.id }, "bot container status query failed");
         body.containerError = "The container runtime did not answer.";
       }
     }
+
+    // The board's own value against the gateway's — or why there is nothing to compare.
+    // Applies to hermes_gateway agents only: no other adapter has this gateway limit.
+    if (agent.adapterType === "hermes_gateway" && body.containerError === null && body.gatewayConcurrency === null) {
+      if (!parsed.ok) {
+        // No container is managed here: the gateway runs outside the board, which can
+        // neither read nor apply its limit. The only outward sign is the runs the
+        // gateway itself refused with 429 (see concurrency-sync.ts).
+        body.gatewayConcurrencyNote = EXTERNAL_GATEWAY_NOTE;
+        if (body.boardMaxConcurrentRuns > 1 && deps.recentGatewayRateLimit) {
+          const sinceIso = new Date(Date.now() - GATEWAY_RATE_LIMIT_LOOKBACK_MS).toISOString();
+          body.gatewayConcurrencyWarning = externalGatewayRateLimitWarning({
+            board: body.boardMaxConcurrentRuns,
+            rateLimitedAt: await deps.recentGatewayRateLimit(agent, { sinceIso }),
+          });
+        }
+      } else {
+        // Eligible card, no container yet (first apply pending, or the instance has no
+        // runtime / the flag is off): nothing has been applied, so nothing to compare.
+        body.gatewayConcurrencyNote = NO_APPLIED_STATE_NOTE;
+      }
+    }
+
     res.json(body);
   });
 

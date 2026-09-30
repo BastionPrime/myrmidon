@@ -633,10 +633,13 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
       const compile = createBotProfileCompile(board.ports, { env: INSTANCE_ENV });
       const before = await compile("agent-a", "agent-a");
       const same = await compile("agent-a", "agent-a");
-      expect(classifyProfileChange({ restartHash: before.restartHash, filesHash: before.filesHash }, same)).toBe("none");
+      // The applied state comes from an apply of that same profile, so it reports the
+      // concurrency limit the profile carries (myrmidon(CONCURRENCY-SYNC)).
+      const applied = { restartHash: before.restartHash, filesHash: before.filesHash, maxConcurrentRuns: before.maxConcurrentRuns };
+      expect(classifyProfileChange(applied, same)).toBe("none");
       files = files.filter((file) => file.path !== "docs/style.md");
       const fewer = await compile("agent-a", "agent-a");
-      expect(classifyProfileChange({ restartHash: before.restartHash, filesHash: before.filesHash }, fewer)).toBe("files");
+      expect(classifyProfileChange(applied, fewer)).toBe("files");
     });
   });
 

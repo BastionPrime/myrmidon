@@ -268,6 +268,9 @@ describe("myrmidon(G2) compileHermesProfile — always-set config.yaml fields", 
     const profile = compileHermesProfile(baseInput({ maxConcurrentRuns: 7 }));
     const yaml = fileByPath(profile.files, "hermes/config.yaml").content;
     expect(yaml).toContain("gateway:\n  api_server:\n    max_concurrent_runs: 7");
+    // myrmidon(CONCURRENCY-SYNC): the same number rides along on the profile, which is
+    // what the driver records in the applied-state marker for the card to read back.
+    expect(profile.maxConcurrentRuns).toBe(7);
   });
 
   it.each([0, -1, 1.5, Number.NaN])("rejects a non-positive-integer maxConcurrentRuns (%s)", (value) => {
@@ -976,9 +979,13 @@ describe("myrmidon(G2) classifyProfileChange integration", () => {
 
   it("reports \"none\" once both hashes match the applied state", () => {
     const profile = compileHermesProfile(baseInput());
-    expect(classifyProfileChange({ restartHash: profile.restartHash, filesHash: profile.filesHash }, profile)).toBe(
-      "none",
-    );
+    // The applied marker of a profile compiled by this version reports its limit too.
+    expect(
+      classifyProfileChange(
+        { restartHash: profile.restartHash, filesHash: profile.filesHash, maxConcurrentRuns: profile.maxConcurrentRuns },
+        profile,
+      ),
+    ).toBe("none");
   });
 
   it("reports \"restart\" when a restart-class field changes (the model)", () => {

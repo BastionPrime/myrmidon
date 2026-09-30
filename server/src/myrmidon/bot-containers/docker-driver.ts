@@ -378,6 +378,9 @@ export interface AppliedMarker {
   filesHash: string;
   /** Profile paths (CompiledProfileFile.path) this apply wrote. */
   files: string[];
+  /** myrmidon(CONCURRENCY-SYNC): gateway.api_server.max_concurrent_runs the applied
+   *  profile carries. Absent in markers written before the field existed. */
+  maxConcurrentRuns?: number;
 }
 
 export function serializeAppliedMarker(profile: CompiledProfile): string {
@@ -385,6 +388,9 @@ export function serializeAppliedMarker(profile: CompiledProfile): string {
     restartHash: profile.restartHash,
     filesHash: profile.filesHash,
     files: profile.files.map((file) => file.path).sort(),
+    // Only when the profile carries one: an old-style profile keeps a marker without
+    // the field, which the card reads as "not reported" rather than as a value.
+    ...(profile.maxConcurrentRuns === undefined ? {} : { maxConcurrentRuns: profile.maxConcurrentRuns }),
   };
   return `${JSON.stringify(marker)}\n`;
 }
@@ -399,10 +405,16 @@ export function parseAppliedMarker(raw: string): AppliedMarker | null {
     return null;
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const { restartHash, filesHash, files } = parsed as Record<string, unknown>;
+  const { restartHash, filesHash, files, maxConcurrentRuns } = parsed as Record<string, unknown>;
   if (typeof restartHash !== "string" || typeof filesHash !== "string") return null;
   const fileList = Array.isArray(files) ? files.filter((path): path is string => typeof path === "string") : [];
-  return { restartHash, filesHash, files: fileList };
+  const marker: AppliedMarker = { restartHash, filesHash, files: fileList };
+  // A number the driver cannot trust (a hand-edited volume) is simply not carried:
+  // the card then says "not reported", and classifyProfileChange heals it.
+  if (typeof maxConcurrentRuns === "number" && Number.isInteger(maxConcurrentRuns) && maxConcurrentRuns > 0) {
+    marker.maxConcurrentRuns = maxConcurrentRuns;
+  }
+  return marker;
 }
 
 /**
@@ -810,6 +822,7 @@ export function dockerBotContainerDriver(
       image: info.Config?.Image,
       restartHash: marker?.restartHash,
       filesHash: marker?.filesHash,
+      maxConcurrentRuns: marker?.maxConcurrentRuns,
     };
   }
 
