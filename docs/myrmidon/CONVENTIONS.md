@@ -1,343 +1,360 @@
-# Как мы работаем над Myrmidon
+# How we work on Myrmidon
 
-Правила общие для всех сессий и людей. Если трек противоречит этому файлу, прав этот файл.
-Если что-то не описано ни здесь, ни в треке, прими разумное решение и запиши его в PR в раздел
-«Решения без владельца».
+> Русская версия: [CONVENTIONS.ru.md](CONVENTIONS.ru.md)
 
-## 1. Главное коротко
+These rules apply to every session and every person. If a track contradicts this file, this
+file wins.
+If something is described neither here nor in the track, make a reasonable decision and record
+it in the PR under "Decisions without the owner".
 
-1. В `main` — только через PR. Прямой push и force push в `main` запрещены правилом
-   репозитория.
-2. Одна тема — одна ветка — один маленький PR.
-3. Каждое изменение сопровождается тестом, который краснеет без правки. Перед PR обязательны
-   typecheck и vitest.
-4. Каждое изменение кода вендора — строка в [DIVERGENCE.md](DIVERGENCE.md).
-5. В открытом репозитории нет секретов и наших внутренних адресов (раздел 9).
-6. `itkadr-git/myrmidon-deploy` только читаем. Источник правды по нашим заплаткам —
-   `patches/<каталог>/README.md` (раздел 10).
-7. Трек трогает только свои файлы. Общие файлы — по правилам раздела 12.
-8. Вендору ничего не отправляем: ни PR, ни issue, ни комментариев в `paperclipai/paperclip`.
+## 1. The essentials in short
 
-## 2. Репозитории
+1. Into `main` — only through a PR. Direct push and force push to `main` are forbidden by the
+   repository rule.
+2. One topic — one branch — one small PR.
+3. Every change comes with a test that is red without the change. typecheck and vitest are
+   mandatory before a PR.
+4. Every change to vendor code — a row in [DIVERGENCE.md](DIVERGENCE.md).
+5. The public repository contains no secrets and no internal addresses of ours (section 9).
+6. `itkadr-git/myrmidon-deploy` is read-only. The source of truth about our patches is
+   `patches/<directory>/README.md` (section 10).
+7. A track touches only its own files. Shared files follow the rules of section 12.
+8. We send nothing to the vendor: no PRs, no issues, no comments in `paperclipai/paperclip`.
 
-| Репозиторий | Что в нём | Доступ сессий |
+## 2. Repositories
+
+| Repository | What is in it | Session access |
 |---|---|---|
-| `itkadr-git/myrmidon` (открытый) | Код продукта: история вендора до `v2026.916.1` плюс наши изменения. Документы проекта — в `docs/myrmidon/` | Рабочий: ветки `claude/*`, PR, слияние своих PR |
-| `itkadr-git/myrmidon-deploy` (закрытый) | Наши заплатки с описаниями, материалы для переноса, всё про наше развёртывание | Только чтение |
-| `paperclipai/paperclip` (вендор) | Первоисточник кода | Только чтение (fetch) |
+| `itkadr-git/myrmidon` (public) | The product code: vendor history up to `v2026.916.1` plus our changes. Project documents are in `docs/myrmidon/` | Working: `claude/*` branches, PRs, merging our own PRs |
+| `itkadr-git/myrmidon-deploy` (private) | Our patches with descriptions, transfer materials, everything about our deployment | Read-only |
+| `paperclipai/paperclip` (vendor) | The code origin | Read-only (fetch) |
 
-**Сопровождающий** — тот, кто ведёт развёртывание Myrmidon и решает вопросы проекта вне
-сессий. Он настраивает репозиторий и CI, заводит рутины и токены, проверяет выпуски на стенде и
-выкатывает их.
+**The maintainer** is the one who runs the Myrmidon deployment and decides project questions
+outside sessions. He sets up the repository and CI, creates routines and tokens, verifies
+releases on the staging and rolls them out.
 
-## 3. Ветки
+## 3. Branches
 
-- Имя ветки: `claude/t<N>-<тема>` латиницей через дефис, например `claude/t2-p1-leases`,
-  `claude/t1-ci-base`.
-- Ветка создаётся от свежего `main`. После слияния PR следующая тема — снова от свежего `main`.
-- Если платформа выдала сессии своё имя ветки и не даёт пушить в другую, работай в выданной
-  ветке. Темы тогда идут по очереди: влил PR, пересобрал ветку от свежего `main`, взял
-  следующую тему.
-- Ветки `sync/<тег>` — только для переноса релизов вендора (R2). Сессии треков их не создают.
+- Branch name: `claude/t<N>-<topic>` in Latin letters with hyphens, for example
+  `claude/t2-p1-leases`, `claude/t1-ci-base`.
+- A branch is created from a fresh `main`. After the PR is merged, the next topic branches
+  from a fresh `main` again.
+- If the platform assigned the session its own branch name and does not allow pushing to
+  another one, work in the assigned branch. Topics then go in turn: merge the PR, rebuild the
+  branch from a fresh `main`, take the next topic.
+- `sync/<tag>` branches are only for vendor release transfers (R2). Track sessions do not
+  create them.
 
-## 4. Коммиты
+## 4. Commits
 
-- Сообщения коммитов — на английском, в стиле вендора: `fix(heartbeat): release environment
+- Commit messages are in English, in the vendor style: `fix(heartbeat): release environment
   leases on cancel`.
-- Перенос чужого коммита вендора — только `git cherry-pick -x <sha>`, чтобы в сообщении осталась
-  строка `(cherry picked from commit …)`.
-- В коммитах нет номеров задач нашей доски, имён наших агентов и серверов.
+- Transferring someone else's vendor commit — only `git cherry-pick -x <sha>`, so that the
+  message keeps the line `(cherry picked from commit …)`.
+- Commits contain no numbers of our board tasks, no names of our agents and servers.
 
 ## 5. Pull request
 
-- Маленький, одна тема. Если PR вырос больше ~600 строк изменений без учёта тестов и
-  сгенерированного, раздели его.
-- Заголовок на английском, с номером функции и трека: `P1: release environment leases on
-  cancel and pause (T2)`. При squash-слиянии заголовок становится сообщением коммита.
-- Описание на русском, по шаблону:
+- Small, one topic. If a PR has grown beyond ~600 lines of changes excluding tests and
+  generated files, split it.
+- The title is in English, with the feature number and the track: `P1: release environment
+  leases on cancel and pause (T2)`. On a squash merge the title becomes the commit message.
+- The description is in English, following the template:
 
 ```markdown
-## Что
-Одним-тремя пунктами: что меняется в поведении.
+## What
+One to three bullets: what changes in behavior.
 
-## Зачем
-Какую проблему решает, номер функции (P1…), задача или PR вендора, если есть.
+## Why
+What problem it solves, the feature number (P1…), the board task or the vendor PR, if any.
 
-## Как проверено
-- Тест-сторож: <путь>. Вывод на коде без правки (красный) и с правкой (зелёный) — хвосты логов.
-- typecheck: <команда> — ок.
-- Прочее: <что ещё запускалось>.
+## How it was verified
+- Watchdog test: <path>. Output on the code without the change (red) and with the change (green) — log tails.
+- typecheck: <command> — ok.
+- Other: <what else was run>.
 
-## Реестр отличий
-Строка в DIVERGENCE.md, раздел «Трек N»: добавлена / изменена.
+## Divergence registry
+Row in DIVERGENCE.md, section "Track N": added / changed.
 
-## Настройки
-Новые переменные MYRMIDON_* (или «нет»); строка в SETTINGS.md.
+## Settings
+New MYRMIDON_* variables (or "none"); row in SETTINGS.md.
 
-## Миграции БД
-Только аддитивные: новая таблица, столбец или индекс; номер — следующий свободный после миграций
-вендора. Откат возвращает образ, но не базу — старый образ должен работать на новой схеме.
-Иначе — «нет».
+## DB migrations
+Additive only: a new table, column or index; the number is the next free one after the
+vendor migrations. Rollback restores the image but not the database — the old image must
+work on the new schema.
+Otherwise — "none".
 
-## Риски и что проверить на стенде
-Что может сломаться и что эксплуатации проверить на живой установке.
+## Risks and what to check on the staging
+What can break and what operations should check on a live installation.
 
-## Решения без владельца
-Что решил сам и почему (или «нет»).
+## Decisions without the owner
+What you decided yourself and why (or "none").
 ```
 
-- Шаблон вендора (`.github/PULL_REQUEST_TEMPLATE.md`, раздел 10 `AGENTS.md`) для наших PR не
-  обязателен: используем шаблон выше.
+- Release notes (GitHub Release) are in English.
+- The vendor template (`.github/PULL_REQUEST_TEMPLATE.md`, section 10 of `AGENTS.md`) is not
+  mandatory for our PRs: we use the template above.
 
-## 6. Слияние
+## 6. Merging
 
-Сессия сливает свой PR сама, когда выполнено всё:
+A session merges its own PR when everything is done:
 
-1. Тесты зелёные. Пока нет CI (его делает трек 1), тесты прогоняются в сессии, и их вывод
-   приложен к PR. Когда CI появится, должны быть зелёными все его проверки.
-2. Ветка обновлена от свежего `main` (rebase и `push --force-with-lease` в свою ветку; если
-   платформа не даёт force push — merge `main` в ветку). После обновления тесты прогнаны
-   заново.
-3. Конфликтов нет.
-4. Строки в DIVERGENCE.md и SETTINGS.md на месте.
-5. Самопроверка на секреты и внутренние адреса пройдена (раздел 9).
-6. PR трогает только файлы своего трека или общие файлы по правилам раздела 12.
-7. Миграция БД, если она в PR, аддитивная, а её номер сверен с миграциями вендора. Откат
-   возвращает образ, но не базу: старый образ обязан работать на новой схеме.
+1. Tests are green. Until there is CI (track 1 builds it), tests are run in the session and
+   their output is attached to the PR. Once CI exists, all its checks must be green.
+2. The branch is updated from a fresh `main` (rebase and `push --force-with-lease` to your own
+   branch; if the platform does not allow force push — merge `main` into the branch). After
+   the update, tests are run again.
+3. No conflicts.
+4. The rows in DIVERGENCE.md and SETTINGS.md are in place.
+5. The self-check for secrets and internal addresses has passed (section 9).
+6. The PR touches only its own track's files or shared files under the rules of section 12.
+7. A DB migration, if the PR has one, is additive, and its number is verified against the
+   vendor migrations. Rollback restores the image but not the database: the old image must
+   work on the new schema.
 
-CI в два уровня (подробно — [ci.md](ci.md)):
+CI has two levels (details in [ci.md](ci.md)):
 
-- для слияния обязателен быстрый уровень CI (`CI result` на PR), полный — на `main`. Красный
-  `main` (issue с меткой `main-red`) чинит трек, чей PR его сломал;
-- встроенный postgres не стартует от root: серверные тесты в сессии гонять от обычного
-  пользователя, иначе они молча пропускаются.
+- Merging requires the fast CI level (`CI result` on the PR); the full level runs on `main`.
+  A red `main` (an issue with the label `main-red`) is fixed by the track whose PR broke it;
+- the embedded postgres does not start as root: run the server tests in the session as a
+  regular user, otherwise they are silently skipped.
 
-Способ слияния:
+Merge method:
 
-- наши PR — **squash**. Для PR с перенесёнными коммитами вендора в тексте squash-коммита
-  сохраняются строки `cherry picked from commit …`;
-- PR переноса релиза вендора (`sync/*`) — **только merge commit**. Squash такого PR обрывает
-  связь с историей вендора, и каждый следующий перенос даст сплошные конфликты.
+- our PRs — **squash**. For a PR with transferred vendor commits, the squash commit message
+  keeps the lines `cherry picked from commit …`;
+- a vendor release transfer PR (`sync/*`) — **only a merge commit**. Squashing such a PR
+  severs the link to the vendor history, and every next transfer turns into solid conflicts.
 
-Чужие PR не сливать. Свой PR, который упёрся в чужую незавершённую работу, оставить открытым и
-отметить в отчёте.
+Do not merge other people's PRs. Leave your own PR that is blocked by someone's unfinished
+work open and note it in the report.
 
-### Ревью ключевых файлов (решение владельца 28.09.2026)
+### Review of key files (owner decision of 28.09.2026)
 
-PR, который трогает ключевые файлы ядра, сливается только после ревью. Список файлов — в
-`.github/workflows/myrmidon-hot-files-review.yml` (побудки и продолжения, шлюз инструментов,
-маскирование, контекст прогона, задачи, чаты, адаптер hermes, БД, скрипты выката, Dockerfile,
-workflow). Все действия в репозитории идут от одной учётки, одобрение GitHub тут не работает,
-поэтому ревью фиксируется меткой `review-approved`: её ставит роль ревьюера (adm-dev-review,
-модель другого семейства, чем у автора) или сопровождающий — после чтения диффа и проверки,
-что тест краснеет без правки. Новый push снимает метку, ревью — заново. Обязательная проверка
-`hot files review`.
+A PR that touches key files of the core is merged only after a review. The list of files is in
+`.github/workflows/myrmidon-hot-files-review.yml` (wakes and continuations, the tool gateway,
+masking, the run context, tasks, chats, the hermes adapter, the DB, the deploy scripts, the
+Dockerfile, workflows). All actions in the repository come from one account, GitHub approval
+does not work here, so the review is recorded with the `review-approved` label: it is set by
+the reviewer role (a model of a different family than the author's) or by the maintainer —
+after reading the diff and checking that the test is red without the change. A new push drops
+the label, the review is done again. The `hot files review` check is mandatory.
 
-## 7. Тесты
+## 7. Tests
 
-- **На каждую правку кода — vitest-тест, который краснеет без неё.** Доказательство — в PR:
-  прогон теста на коде без правки (например, `git stash` непротестированной части или
-  исходники из `main`) и с правкой. Для наших скриптов вместо vitest — `node:test` (ниже). Для
-  правок CI доказательство — ссылка на красный прогон в черновом PR с нарочной ошибкой.
-- **typecheck обязателен:** `pnpm -r typecheck` или уже — `pnpm --filter <пакет> typecheck` по
-  затронутым пакетам.
-- Узкий прогон: `pnpm exec vitest run <путь к тесту>`. Полный `pnpm test:run` — перед
-  последним PR шага, если позволяет время.
-- Наши тесты — в отдельных файлах `<модуль>.myrmidon.test.ts` рядом с вендорскими. Вендорские
-  тест-файлы правим, только когда меняем поведение, которое они проверяют. Тогда правка
-  минимальная и указана в DIVERGENCE.md.
-- Тесты наших скриптов (`scripts/myrmidon/**`) — на встроенном `node:test`, файлы
-  `*.test.mjs`. CI трека 1 запускает их отдельной проверкой: `node --test` по
+- **For every code change — a vitest test that is red without it.** The proof is in the PR:
+  a run of the test on the code without the change (for example, `git stash` of the untested
+  part or the sources from `main`) and with the change. For our scripts, `node:test` instead
+  of vitest (below). For CI changes, the proof is a link to a red run in a draft PR with a
+  deliberate error.
+- **typecheck is mandatory:** `pnpm -r typecheck` or, better, `pnpm --filter <package>
+  typecheck` for the affected packages.
+- Narrow run: `pnpm exec vitest run <test path>`. A full `pnpm test:run` — before the last PR
+  of the step, if time allows.
+- Our tests live in separate files `<module>.myrmidon.test.ts` next to the vendor ones. We
+  edit vendor test files only when we change the behavior they check. The change is minimal
+  and listed in DIVERGENCE.md.
+- Tests of our scripts (`scripts/myrmidon/**`) use the built-in `node:test`, files
+  `*.test.mjs`. Track 1 CI runs them as a separate check: `node --test` over
   `scripts/myrmidon/`.
-- В тестах нет живой сети и ключей. Встроенный postgres (как у вендора) можно.
-- Имена тестов и данные в них — на английском и нейтральные: `agent-a`, `company-a`,
-  `example.com`, адреса из `192.0.2.0/24`.
+- No live network and no keys in tests. Embedded postgres (as the vendor has) is allowed.
+- Test names and data are in English and neutral: `agent-a`, `company-a`, `example.com`,
+  addresses from `192.0.2.0/24`.
 
-## 8. Как мы меняем код вендора
+## 8. How we change vendor code
 
-Цель — чтобы еженедельный перенос вендора проходил с минимумом конфликтов.
+The goal is for the weekly vendor transfer to pass with a minimum of conflicts.
 
-- **Минимальный след.** Новая логика — в новых файлах: `server/src/myrmidon/<тема>/…`,
-  `packages/<пакет>/src/myrmidon-<тема>.ts`, `ui/src/components/myrmidon/…`. В файле вендора —
-  только точка вызова.
-- **Метка на каждой правке в файле вендора** — комментарий `// myrmidon(<ID>): <зачем, по-английски>`,
-  например `// myrmidon(P1): release leases before promotion`. По этой метке бот переноса
-  находит наши куски.
-- **Комментарии, логи и тексты ошибок — на английском.** Без номеров задач нашей доски, имён
-  агентов, компаний и серверов.
-- **Настройки** — переменные окружения `MYRMIDON_<ОБЛАСТЬ>_<ИМЯ>`, читаются в модуле функции.
-  `server/src/config.ts` не трогаем (исключение — трек 1, телеметрия). Значения по умолчанию:
-  - исправление дефекта включено;
-  - значения под наше развёртывание (окна, лимиты, адреса) выключены или нейтральны.
-  
-  Наши боевые значения живут в `myrmidon-deploy`. Каждая настройка — строка в
+- **Minimal footprint.** New logic lives in new files: `server/src/myrmidon/<topic>/…`,
+  `packages/<package>/src/myrmidon-<topic>.ts`, `ui/src/components/myrmidon/…`. In a vendor
+  file — only the call site.
+- **A mark on every change in a vendor file** — a comment `// myrmidon(<ID>): <why, in
+  English>`, for example `// myrmidon(P1): release leases before promotion`. The transfer bot
+  finds our pieces by this mark.
+- **Comments, logs and error texts are in English.** No numbers of our board tasks, no names
+  of agents, companies and servers.
+- **Settings** are environment variables `MYRMIDON_<AREA>_<NAME>`, read in the feature module.
+  We do not touch `server/src/config.ts` (the exception is track 1, telemetry). Default
+  values:
+  - a defect fix is enabled;
+  - values tailored to our deployment (windows, limits, addresses) are disabled or neutral.
+
+  Our production values live in `myrmidon-deploy`. Every setting is a row in
   [SETTINGS.md](SETTINGS.md).
-- **Новые API** — под `/api/myrmidon/…`, чтобы не столкнуться с будущими путями вендора.
-- **Миграции БД — только аддитивные.** Добавляем таблицу, столбец или индекс; удаление,
-  переименование, смена типа и переписывание данных запрещены. Причина — откат: `rollback.sh`
-  возвращает образ, но не базу, поэтому старый образ обязан работать на новой схеме. Номера
-  миграций вендора растут каждую неделю: номер берём следующим свободным и сверяем ещё раз перед
-  слиянием, дубли номеров ловит `check:migrations`. Миграцию генерируем штатным
-  `pnpm --filter @paperclipai/db generate`: рукописный снимок схемы ломает следующую миграцию.
-  Состояние по-прежнему предпочитаем хранить в существующих JSON-полях:
-  `instance_settings.general`, `adapterConfig`, `metadata`. Не аддитивная миграция — остановить
-  шаг, описать в PR и в отчёте, решение за сопровождающим.
-- **Зависимости** без нужды не добавляем. Если без новой зависимости никак — обоснование в PR,
-  лицензия из разрешённых (трек 1), `pnpm-lock.yaml` обновляется только `pnpm install`.
-- Имена пакетов, CLI и переменных `PAPERCLIP_*` не меняем.
-- Правку вендорского пакета из `node_modules` делаем через вендорский механизм
-  `pnpm.patchedDependencies` (`patches/*.patch`). Подмена файлов недопустима.
-- В образ не добавляем медиа-инструменты: ffmpeg, yt-dlp, генераторы. Это отдельный сервис вне
-  форка.
+- **New APIs** go under `/api/myrmidon/…`, so as not to collide with future vendor paths.
+- **DB migrations are additive only.** We add a table, a column or an index; deletion,
+  renaming, type change and data rewriting are forbidden. The reason is rollback:
+  `rollback.sh` restores the image but not the database, so the old image must work on the new
+  schema. Vendor migration numbers grow every week: we take the next free number and check it
+  again before merging; duplicate numbers are caught by `check:migrations`. We generate a
+  migration with the stock `pnpm --filter @paperclipai/db generate`: a handwritten schema
+  snapshot breaks the next migration. We still prefer to store state in the existing JSON
+  fields: `instance_settings.general`, `adapterConfig`, `metadata`. A non-additive migration —
+  stop the step, describe it in the PR and in the report; the decision is the maintainer's.
+- **Dependencies** are not added without need. If a new dependency is unavoidable — a
+  justification in the PR, a license from the allowed list (track 1), `pnpm-lock.yaml` is
+  updated only by `pnpm install`.
+- We do not change the names of packages, the CLI and the `PAPERCLIP_*` variables.
+- A change to a vendor package from `node_modules` is made through the vendor mechanism
+  `pnpm.patchedDependencies` (`patches/*.patch`). Substituting files is unacceptable.
+- We do not add media tools to the image: ffmpeg, yt-dlp, generators. That is a separate
+  service outside the fork.
 
-## 9. Открытость: чего не должно быть в открытом репозитории
+## 9. Openness: what must not be in the public repository
 
-**Запрещено** в коде, тестах, документах, коммитах и описаниях PR:
+**Forbidden** in code, tests, documents, commits and PR descriptions:
 
-- секреты: токены, ключи, пароли, строки подключения, сертификаты и приватные ключи;
-- наши адреса: домены, IP (включая частные сети), порты наших сервисов;
-- имена наших хостов и пути на наших серверах;
-- имена наших компаний, агентов, ботов и людей;
-- номера задач нашей доски, идентификаторы прогонов, агентов и компаний, id чатов;
-- наш список моделей шлюза.
+- secrets: tokens, keys, passwords, connection strings, certificates and private keys;
+- our addresses: domains, IPs (including private networks), ports of our services;
+- names of our hosts and paths on our servers;
+- names of our companies, agents, bots and people;
+- numbers of our board tasks, run, agent and company identifiers, chat ids;
+- our gateway model list.
 
-**Можно:**
+**Allowed:**
 
-- плейсхолдеры `example.com`, `192.0.2.0/24`, `198.51.100.0/24`, `localhost`, `127.0.0.1`;
-- имена каталогов и файлов заплаток из `myrmidon-deploy` в документах `docs/myrmidon/`
-  (например, `P1-ope2544-heartbeat-lease`). В коде, тестах и коммитах их быть не должно.
+- the placeholders `example.com`, `192.0.2.0/24`, `198.51.100.0/24`, `localhost`, `127.0.0.1`;
+- names of patch directories and files from `myrmidon-deploy` in the `docs/myrmidon/`
+  documents (for example, `P1-ope2544-heartbeat-lease`). They must not appear in code, tests
+  and commits.
 
-**Самопроверка перед PR** — просмотреть свой дифф на совпадения:
+**Self-check before a PR** — review your diff for matches:
 
 ```sh
 git diff origin/main...HEAD | grep -nEi \
   '(password|passwd|secret|token|api[_-]?key)\s*[:=]|BEGIN [A-Z ]*PRIVATE KEY|\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b'
 ```
 
-Каждое совпадение разобрать. Если в `myrmidon-deploy` есть файл со списком запрещённых шаблонов,
-прогнать дифф и по нему. В CI такую проверку добавит трек 1.
+Examine every match. If `myrmidon-deploy` has a file with a list of forbidden patterns, run
+the diff through it as well. Track 1 will add such a check to CI.
 
-Если в открытом репозитории уже есть секрет или внутренний адрес, не исправлять это тихим
-коммитом: из истории он не исчезнет. Сразу написать в отчёте с пометкой «срочно».
+If a secret or an internal address is already in the public repository, do not fix it with a
+quiet commit: it will not disappear from the history. Immediately write about it in the report
+marked "urgent".
 
-## 10. Закрытый репозиторий `myrmidon-deploy`
+## 10. The private repository `myrmidon-deploy`
 
-- Только читать. Не пушить, не открывать там PR. Если README заплатки неверен или неполон,
-  написать об этом в отчёте.
-- `patches/<каталог>/README.md` — **источник правды** по заплатке: что делает, зачем, как
-  проверялась, когда снимать. Рядом лежат:
-  - дифф против вендорского 2026.916.1: собранный JS (`*-dist.patch`) и, где есть, исходник TS
-    (`*-src.patch`);
-  - наши файлы (`ours/`) и вендорские оригиналы (`vendor/`);
-  - тесты (`tests/`) и справочные материалы (`ref/`).
-- Файлы оттуда **не копировать как есть**: в них русские комментарии, номера наших задач,
-  внутренние адреса. Логику переносим, код пишем на TypeScript поверх текущего `main`, с
-  английскими комментариями и нейтральными тестовыми данными.
-- Правка, которая есть только в собранном JS, переписывается в исходнике `*.ts`. Файлы `dist`
-  в репозиторий не кладём.
-- Если чего-то, что обещает трек, в `myrmidon-deploy` нет, не выдумывать. Сделать по описанию
-  в треке и отметить в отчёте.
+- Read only. Do not push, do not open PRs there. If a patch README is wrong or incomplete,
+  write about it in the report.
+- `patches/<directory>/README.md` is the **source of truth** about the patch: what it does,
+  why, how it was verified, when to remove it. Next to it are:
+  - the diff against vendor 2026.916.1: the built JS (`*-dist.patch`) and, where present, the
+    TS source (`*-src.patch`);
+  - our files (`ours/`) and the vendor originals (`vendor/`);
+  - tests (`tests/`) and reference materials (`ref/`).
+- Files from there are **not copied as is**: they contain Russian comments, our task numbers,
+  internal addresses. We transfer the logic, write the code in TypeScript on top of the
+  current `main`, with English comments and neutral test data.
+- A change that exists only in the built JS is rewritten in the `*.ts` source. We do not put
+  `dist` files into the repository.
+- If something the track promises is missing in `myrmidon-deploy`, do not invent it. Build it
+  from the track description and note it in the report.
 
-Каталоги заплаток на 27.09.2026 (точный список — `ls patches/`):
+Patch directories as of 27.09.2026 (the exact list is `ls patches/`):
 
-| Функция | Каталог в `myrmidon-deploy/patches/` | Трек |
+| Feature | Directory in `myrmidon-deploy/patches/` | Track |
 |---|---|---|
 | P1 | `P1-ope2544-heartbeat-lease` | 2 |
 | P2 | `P2-ope2365-card-addressee-wake` | 2 |
-| P3 | `P3-ope2313-continuation-cap` | 2 (hermes-часть — 3) |
+| P3 | `P3-ope2313-continuation-cap` | 2 (the hermes part — 3) |
 | P4 | `P4-ope2469-hermes-execute` | 3 |
 | P5 | `P5-ope2317-checkout-fail-fast` | 3 |
 | P6 | `P6-ope2422-github-broker` | 3 |
 | P7 | `P7-ope2583-telegram-omission` | 4 |
-| P7b | `P7b-chat-synthetic-id` (в том числе вендорский коммит #13654) | 4 |
+| P7b | `P7b-chat-synthetic-id` (including vendor commit #13654) | 4 |
 | P8 | `P8-ope2579-telegram-2gb` | 4 |
-| P9 | `P9-ope2732-tool-gateway` (`v1` — живая версия, `v2` — кандидат «не ронять подключение») | 3 |
+| P9 | `P9-ope2732-tool-gateway` (`v1` — the live version, `v2` — the "do not drop the connection" candidate) | 3 |
 | P10 | `P10-ope310-sse-405` | 3 |
 | P11 | `P11-ope2847-db-backup-catchup` | 2 |
-| Телеметрия | `T1-telemetry-off` | 1 |
+| Telemetry | `T1-telemetry-off` | 1 |
 
-У S2, S4, S5, M1, H1, H4, X2, R1–R4 заплаток нет: это новая работа по описанию в треке.
+S2, S4, S5, M1, H1, H4, X2, R1–R4 have no patches: that is new work per the track description.
 
-## 11. Коммиты вендора, которых нет в нашей базе
+## 11. Vendor commits that are not in our base
 
-1. Взять из публичного репозитория вендора:
-   `git fetch https://github.com/paperclipai/paperclip.git <sha или refs/pull/<N>/head>`.
-2. Если сеть сессии это не пускает, использовать файл `*.patch` из `myrmidon-deploy` через
-   `git am`: для коммитов, которые на `v2026.916.1` не ложатся как есть, там лежат версии,
-   перенесённые на тег (`*-rebased-on-916.1.patch`, в них уже есть строка
-   `(cherry picked from commit …)`). `git am -3` здесь не помогает: в истории форка нет
-   исходных объектов master вендора. Если в сообщении коммита после `git am` нет строки
-   `(cherry picked from commit <полный sha>)` — допиши её (`git commit --amend`).
-3. Если нет ни того, ни другого, отметить в отчёте и перейти к следующему шагу.
-4. Перенос — `git cherry-pick -x`. В DIVERGENCE.md ID — `vendor:<короткий sha>`, в поле «Как
-   снимать»: «уходит сам при переносе тега вендора, который содержит этот коммит».
+1. Take them from the vendor's public repository:
+   `git fetch https://github.com/paperclipai/paperclip.git <sha or refs/pull/<N>/head>`.
+2. If the session network does not allow that, use the `*.patch` file from `myrmidon-deploy`
+   via `git am`: for commits that do not apply to `v2026.916.1` as is, there are versions
+   transferred onto the tag (`*-rebased-on-916.1.patch`, they already contain the line
+   `(cherry picked from commit …)`). `git am -3` does not help here: the fork history has no
+   original vendor master objects. If after `git am` the commit message has no line
+   `(cherry picked from commit <full sha>)` — add it (`git commit --amend`).
+3. If neither is available, note it in the report and move to the next step.
+4. The transfer is `git cherry-pick -x`. In DIVERGENCE.md the ID is `vendor:<short sha>`, in
+   the "How to remove" field: "goes away by itself on the transfer of the vendor tag that
+   contains this commit".
 
-## 12. Карта файлов и пересечения треков
+## 12. File map and track intersections
 
-Трек меняет только файлы своего списка (раздел «Файлы трека» в `tracks/N.md`). Если нужна
-правка в чужом файле, сначала найти способ обойтись новым файлом. Если не получается — правка
-минимальная (одна точка вызова с меткой `myrmidon(<ID>)`), и она описана в PR.
+A track changes only the files of its list (the "Track files" section in `tracks/N.md`). If a
+change in someone else's file is needed, first find a way to get by with a new file. If that
+fails — the change is minimal (one call site with the `myrmidon(<ID>)` mark), and it is
+described in the PR.
 
-**Неизбежные пересечения:**
+**Unavoidable intersections:**
 
-| Файл | Треки | Кто первый |
+| File | Tracks | Who is first |
 |---|---|---|
-| `packages/adapters/hermes/src/server/execute.ts` | 2 (вендорский #13891, 4 строки; X2 — только если понадобится), 3 (P4, основной перенос), 4 (H1 — только если нужна точка вызова), 6 (S2, M1) | 2 → 3 → 4 и 6 (и 2 для X2). После слияния P4 другие треки вносят сюда только точки вызова |
-| `packages/adapters/{claude,codex,cursor,gemini,grok,kimi,opencode,pi}-local/src/server/execute.ts` | 2 (вендорский #13891), 4 (H4, stdin), 6 (S2, окружение) | 2 первым, потом 4 и 6 в любом порядке |
-| `packages/adapter-utils/src/server-utils.ts` | 2 (вендорский #13891). 4 и 6 — только если без этого никак | 2 первым; 4 и 6 кладут свой код в новые файлы |
-| `packages/adapters/hermes/src/server/config-schema.ts` | 3 (P4 — только если выносит поля заплатки в форму), 6 (M1, поля моделей) | 3 → 6 |
-| `packages/adapter-utils/src/execution-target.ts` | 2 (вендорский #13793), 6 (S2, точки вызова) | 2 → 6 |
-| `server/src/routes/openapi.ts` | 2 (P11, схема ответа health), 4 (вендорский #13654), 5 (если регистрирует свой API) | 4 → 5; 2 — в любом порядке с ними, перебазируйся |
-| `server/src/services/heartbeat.ts` | 2 (P1), 3 (P9, отбор подключений прогона), 5 (R3, точки вызова), 6 (S5, точка вызова) | 2 и 3 в любом порядке; 5 и 6 — по возможности после них |
-| `server/src/modules/run-dispatch/**` | 2 (P2), 5 (R3, точка вызова) | 2 → 5 |
-| `server/src/index.ts`, `server/src/routes/health.ts` | 2 (P11), 5 (R3) | В любом порядке |
-| `server/src/services/issues.ts`, `server/src/routes/issues.ts` | 3 (P5), 6 (S5, точка вызова) | 3 → 6 |
-| `server/src/services/chat-channels.ts` | 4 (P7), 6 (S5, точка вызова) | 4 → 6 |
-| `pnpm-lock.yaml` | 4 (P8). Другие — только при вынужденной новой зависимости | 4 |
-| `package.json` в корне | 1 (скрипты) | 1. Другие треки его не трогают: свои скрипты запускают напрямую (`node scripts/myrmidon/…`) |
-| `.github/workflows/**` | 1 | 1. Если треку нужна новая проверка в CI, он пишет об этом в отчёте |
-| `docs/myrmidon/DIVERGENCE.md`, `docs/myrmidon/SETTINGS.md` | Все | Каждый трек пишет только в свой раздел |
-| `docs/myrmidon/tracks/N.md` | Только трек N, раздел «Состояние» | — |
+| `packages/adapters/hermes/src/server/execute.ts` | 2 (vendor #13891, 4 lines; X2 — only if needed), 3 (P4, the main transfer), 4 (H1 — only if a call site is needed), 6 (S2, M1) | 2 → 3 → 4 and 6 (and 2 for X2). After P4 is merged, other tracks only add call sites here |
+| `packages/adapters/{claude,codex,cursor,gemini,grok,kimi,opencode,pi}-local/src/server/execute.ts` | 2 (vendor #13891), 4 (H4, stdin), 6 (S2, environment) | 2 first, then 4 and 6 in any order |
+| `packages/adapter-utils/src/server-utils.ts` | 2 (vendor #13891). 4 and 6 — only if there is no other way | 2 first; 4 and 6 put their code into new files |
+| `packages/adapters/hermes/src/server/config-schema.ts` | 3 (P4 — only if it moves the patch fields into the form), 6 (M1, model fields) | 3 → 6 |
+| `packages/adapter-utils/src/execution-target.ts` | 2 (vendor #13793), 6 (S2, call sites) | 2 → 6 |
+| `server/src/routes/openapi.ts` | 2 (P11, the health response schema), 4 (vendor #13654), 5 (if it registers its API) | 4 → 5; 2 — in any order with them, rebase |
+| `server/src/services/heartbeat.ts` | 2 (P1), 3 (P9, run connection selection), 5 (R3, call sites), 6 (S5, a call site) | 2 and 3 in any order; 5 and 6 — after them where possible |
+| `server/src/modules/run-dispatch/**` | 2 (P2), 5 (R3, a call site) | 2 → 5 |
+| `server/src/index.ts`, `server/src/routes/health.ts` | 2 (P11), 5 (R3) | In any order |
+| `server/src/services/issues.ts`, `server/src/routes/issues.ts` | 3 (P5), 6 (S5, a call site) | 3 → 6 |
+| `server/src/services/chat-channels.ts` | 4 (P7), 6 (S5, a call site) | 4 → 6 |
+| `pnpm-lock.yaml` | 4 (P8). Others — only for a forced new dependency | 4 |
+| `package.json` at the root | 1 (scripts) | 1. Other tracks do not touch it: they run their scripts directly (`node scripts/myrmidon/…`) |
+| `.github/workflows/**` | 1 | 1. If a track needs a new CI check, it writes about it in the report |
+| `docs/myrmidon/DIVERGENCE.md`, `docs/myrmidon/SETTINGS.md` | All | Each track writes only in its own section |
+| `docs/myrmidon/tracks/N.md` | Only track N, the "State" section | — |
 
-**Правило:** кто первым влил, тот прав. Остальные обновляют ветку от свежего `main` и разрешают
-конфликт у себя, сохраняя чужую правку. Чужой код при разрешении конфликта не выбрасывать.
-Если непонятно, как совместить, остановить этот шаг, описать в PR и в отчёте, перейти к
-следующему.
+**The rule:** whoever merged first is right. The rest update their branch from a fresh `main`
+and resolve the conflict on their side, keeping the other change. Do not throw away someone
+else's code while resolving a conflict. If it is unclear how to combine them, stop this step,
+describe it in the PR and in the report, move to the next one.
 
-`README.md`, `ROADMAP.md`, `CONVENTIONS.md` и `SESSION-PROMPTS.md` в `docs/myrmidon/` сессии
-не правят. Предложения по ним пишут в отчёт.
+Sessions do not edit `README.md`, `ROADMAP.md`, `CONVENTIONS.md` and `SESSION-PROMPTS.md` in
+`docs/myrmidon/`. Proposals for them go into the report.
 
-## 13. Работа в облачной сессии
+## 13. Working in a cloud session
 
-- **Начало:** `node -v` (нужна 24.x, не ниже 24.11). Если pnpm не той версии:
-  `corepack enable && corepack prepare pnpm@9.15.4 --activate`. Затем
+- **Start:** `node -v` (24.x required, not lower than 24.11). If pnpm is the wrong version:
+  `corepack enable && corepack prepare pnpm@9.15.4 --activate`. Then
   `pnpm install --frozen-lockfile`.
-- **Долгие команды** (больше 2 минут) запускать в фоне с выводом в файл и проверять файл.
-  Полный набор тестов без нужды не гонять: лимит расхода общий на все сессии.
-- **Образ локально не собирать:** диска сессии не хватит. Образ собирает CI.
-- **Секретов в сессии нет,** и просить их не нужно. Тесты не должны требовать живых ключей.
-- **Вопросы.** Ответа не ждать. Реши сам в рамках этих документов и запиши решение в PR. Если
-  решение необратимо или выходит за рамки трека, пропусти шаг, перейди к следующему, а вопрос
-  вынеси в отчёт.
-- **Отчёт:**
-  - в каждом PR — описание по шаблону;
-  - в последнем PR каждого шага — обновлённый раздел «Состояние» в своём `tracks/N.md`;
-  - в конце работы — итоговое сообщение в сессии: список PR (влит / открыт), какие критерии
-    готовности выполнены, что отложено и почему, что проверить эксплуатации на живой
-    установке, открытые вопросы.
+- **Long commands** (over 2 minutes) are run in the background with output to a file, and the
+  file is checked. Do not run the full test suite without need: the spend limit is shared
+  across all sessions.
+- **Do not build the image locally:** the session disk is not enough. CI builds the image.
+- **There are no secrets in the session,** and there is no need to ask for them. Tests must
+  not require live keys.
+- **Questions.** Do not wait for an answer. Decide yourself within these documents and record
+  the decision in the PR. If the decision is irreversible or goes beyond the track, skip the
+  step, move to the next one, and put the question in the report.
+- **Report:**
+  - in every PR — the description per the template;
+  - in the last PR of each step — an updated "State" section in your `tracks/N.md`;
+  - at the end of the work — a final message in the session: the list of PRs (merged / open),
+    which readiness criteria are met, what is postponed and why, what operations should check
+    on a live installation, open questions.
 
-## 14. `AGENTS.md` вендора
+## 14. The vendor's `AGENTS.md`
 
-Правила кода из `AGENTS.md` действуют:
+The code rules from `AGENTS.md` apply:
 
-- раздел 5, пункты 1–4 и 7;
-- раздел 6 — порядок правки схемы и генерация миграции, с нашим ограничением «только аддитивные
-  миграции» (раздел 8 этого файла);
-- разделы 7–9;
-- раздел 11, кроме требования шаблона PR;
-- дизайн-система `DESIGN.md` и `pnpm check:token-gates` для правок в `ui/`.
+- section 5, items 1–4 and 7;
+- section 6 — the schema change procedure and the migration generation, with our restriction
+  "additive migrations only" (section 8 of this file);
+- sections 7–9;
+- section 11, except the PR template requirement;
+- the `DESIGN.md` design system and `pnpm check:token-gates` for changes in `ui/`.
 
-Не действуют:
+Do not apply:
 
-- раздел 5, пункты 5–6 — планы и артефакты в задачах Paperclip;
-- раздел 10 — шаблон PR вендора, у нас свой (раздел 5 этого файла).
+- section 5, items 5–6 — plans and artifacts in Paperclip tasks;
+- section 10 — the vendor PR template, we have our own (section 5 of this file).
