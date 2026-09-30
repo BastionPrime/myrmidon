@@ -21,6 +21,7 @@ import type { InspectDatabaseBackupHealthOptions } from "./services/database-bac
 import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
+import { boardKeyScopeMiddleware } from "./middleware/board-key-scope.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import {
   privateHostnameGuard,
@@ -575,6 +576,9 @@ export async function createApp(
       resolveSession: opts.resolveSession,
     }),
   );
+  // myrmidon(ROLE-SCOPED-TOKENS): enforce board API key scopes right after the
+  // actor is resolved, before any /api route runs.
+  app.use(boardKeyScopeMiddleware());
   // After the actor middleware on purpose: a valid Cloud control assertion
   // REPLACES whatever actor the request otherwise resolved to, and only on
   // the one endpoint it authorizes (see the middleware for the contract).

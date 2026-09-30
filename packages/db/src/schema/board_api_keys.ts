@@ -1,4 +1,5 @@
-import { pgTable, uuid, text, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import type { BoardApiKeyScope } from "@paperclipai/shared";
 import { authUsers } from "./auth.js";
 
 export const boardApiKeys = pgTable(
@@ -8,6 +9,9 @@ export const boardApiKeys = pgTable(
     userId: text("user_id").notNull().references(() => authUsers.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     keyHash: text("key_hash").notNull(),
+    // myrmidon(ROLE-SCOPED-TOKENS): optional scope limiting which admin actions
+    // this key may perform; NULL keeps pre-existing full-access behaviour.
+    scopeConfig: jsonb("scope_config").$type<BoardApiKeyScope | null>(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),

@@ -9,6 +9,7 @@ import {
   companyMemberships,
   instanceUserRoles,
 } from "@paperclipai/db";
+import { normalizeBoardApiKeyScope } from "@paperclipai/shared";
 import { conflict, forbidden, notFound } from "../errors.js";
 
 export const BOARD_API_KEY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -201,6 +202,7 @@ export function boardAuthService(db: Db) {
     userId: string;
     name: string;
     expiresAt?: Date | null;
+    scope?: import("@paperclipai/shared").BoardApiKeyScope | null;
   }) {
     const token = createBoardApiToken();
     const created = await db
@@ -210,6 +212,9 @@ export function boardAuthService(db: Db) {
         name: input.name.trim(),
         keyHash: hashBearerToken(token),
         expiresAt: input.expiresAt === undefined ? boardApiKeyExpiresAt() : input.expiresAt,
+        // myrmidon(ROLE-SCOPED-TOKENS): persist the requested scope; absent
+        // scope keeps NULL (full access) for backwards compatibility.
+        scopeConfig: input.scope ?? null,
       })
       .returning()
       .then((rows) => rows[0]);
@@ -218,6 +223,7 @@ export function boardAuthService(db: Db) {
       id: created.id,
       name: created.name,
       token,
+      scope: created.scopeConfig ?? { kind: "full" },
       createdAt: created.createdAt,
       lastUsedAt: created.lastUsedAt,
       revokedAt: created.revokedAt,
@@ -244,6 +250,9 @@ export function boardAuthService(db: Db) {
       .select({
         id: boardApiKeys.id,
         name: boardApiKeys.name,
+        // myrmidon(ROLE-SCOPED-TOKENS): expose the stored scope (normalized to
+        // a full-access default when absent/invalid).
+        scope: sql`coalesce(${boardApiKeys.scopeConfig}, '{"kind":"full"}'::jsonb)`,
         createdAt: boardApiKeys.createdAt,
         lastUsedAt: boardApiKeys.lastUsedAt,
         revokedAt: boardApiKeys.revokedAt,
