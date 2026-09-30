@@ -7,6 +7,7 @@ import type {
   QueuedCommentIssueLockWriter,
   QueuedCommentQueueSnapshot,
   QueuedCommentQueueTransaction,
+  QueuedCommentWakeRow,
 } from "../modules/wake-queue/application/queued-comment-ports.js";
 import { registerSecretValues, resetSecretMasking } from "./secret-masking.js";
 
@@ -32,30 +33,51 @@ function fakeTransaction(
   overrides: Partial<QueuedCommentQueueTransaction> = {},
 ): QueuedCommentQueueTransaction {
   return {
-    updateCommentBody: vi.fn(async () => true),
-    touchIssueUpdatedAt: vi.fn(async () => {}),
-    updateWakeQueuedCommentIds: vi.fn(async () => ({
-      id: "wake-1",
-      agentId: "agent-1",
-      status: "deferred_issue_execution",
-      runId: null,
-      payload: {},
-    })),
-    updateQueueRunCommentIds: vi.fn(async (input: { queueRunId: string }) => ({
-      id: input.queueRunId,
-      status: "queued",
-      runtimeMode: null,
-      contextSnapshot: {},
-    })),
+    updateCommentBody: vi.fn(
+      async (input: { issueId: string; commentId: string; body: string; updatedAt: Date }) => {
+        void input;
+        return true;
+      },
+    ),
+    touchIssueUpdatedAt: vi.fn(async (input: { issueId: string; updatedAt: Date }) => {
+      void input;
+    }),
+    updateWakeQueuedCommentIds: vi.fn(
+      async (): Promise<QueuedCommentWakeRow> => ({
+        id: "wake-1",
+        agentId: "agent-1",
+        status: "deferred_issue_execution",
+        runId: null,
+        payload: {},
+      }),
+    ),
+    updateQueueRunCommentIds: vi.fn(
+      async (
+        input: Parameters<QueuedCommentQueueTransaction["updateQueueRunCommentIds"]>[0],
+      ): ReturnType<QueuedCommentQueueTransaction["updateQueueRunCommentIds"]> => ({
+        id: input.queueRunId,
+        status: "queued",
+        runtimeMode: null,
+        contextSnapshot: {},
+      }),
+    ),
     deleteComment: vi.fn(async () => null),
     cancelWake: vi.fn(async () => {}),
-    cancelQueueRun: vi.fn(async () => ({ id: "run-1" })),
+    cancelQueueRun: vi.fn(
+      async (): ReturnType<QueuedCommentQueueTransaction["cancelQueueRun"]> => ({ id: "run-1" }),
+    ),
     clearExecutionLockAndTouchIssue: vi.fn(async () => {}),
     buildQueueSnapshot: vi.fn(async () => fakeQueueSnapshot()),
     syncCommentReferences: vi.fn(async () => {}),
     deleteCommentReferenceSource: vi.fn(async () => {}),
     syncCommentExternalObjectsSafely: vi.fn(async () => {}),
-    logActivity: vi.fn(async () => ({ companyId: "company-1", payload: {}, pluginEvent: null })),
+    logActivity: vi.fn(
+      async (): ReturnType<QueuedCommentQueueTransaction["logActivity"]> => ({
+        companyId: "company-1",
+        payload: {},
+        pluginEvent: null,
+      }),
+    ),
     ...overrides,
   };
 }
@@ -108,11 +130,12 @@ describe("myrmidon(S5) masked fields without a database", () => {
   it("editQueuedComment stores the masked body", async () => {
     resetSecretMasking();
     registerSecretValues({ TOOL_TOKEN: TOOL_TOKEN }, ["TOOL_TOKEN"]);
-    const updateCommentBody = vi.fn(async () => true);
+    const updateCommentBody = vi.fn<
+      (input: { issueId: string; commentId: string; body: string; updatedAt: Date }) => Promise<boolean>
+    >(async () => true);
     const lock: QueuedCommentIssueLockWriter = {
-      withLockedQueue: vi.fn(async (_input, fn) =>
+      withLockedQueue: async (_input, fn) =>
         fn(fakeLockedState(), fakeTransaction({ updateCommentBody })),
-      ),
     };
     await createEditQueuedComment({ issueLock: lock })({
       issue: ISSUE,
@@ -123,17 +146,18 @@ describe("myrmidon(S5) masked fields without a database", () => {
       body: `edited: ${TOOL_TOKEN}`,
       now: new Date(),
     });
-    const body = updateCommentBody.mock.calls[0]![0]!.body as string;
+    const body = updateCommentBody.mock.calls[0]![0]!.body;
     expect(body).toBe("edited: [secret:TOOL_TOKEN]");
     expect(body).not.toContain(TOOL_TOKEN);
   });
 
   it("editQueuedComment keeps ordinary text unchanged", async () => {
-    const updateCommentBody = vi.fn(async () => true);
+    const updateCommentBody = vi.fn<
+      (input: { issueId: string; commentId: string; body: string; updatedAt: Date }) => Promise<boolean>
+    >(async () => true);
     const lock: QueuedCommentIssueLockWriter = {
-      withLockedQueue: vi.fn(async (_input, fn) =>
+      withLockedQueue: async (_input, fn) =>
         fn(fakeLockedState(), fakeTransaction({ updateCommentBody })),
-      ),
     };
     await createEditQueuedComment({ issueLock: lock })({
       issue: ISSUE,

@@ -5,7 +5,7 @@ import { documentRevisions, documents, issueDocuments, issues } from "@paperclip
 import { isSystemIssueDocumentKey, issueDocumentKeySchema } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation } from "../db-errors.js";
-// myrmidon(S5): document bodies are stored with secret values masked
+// myrmidon(S5): mask secret values in document bodies at the single write point
 import { maskSecretsInText } from "../myrmidon/secret-masking.js";
 import { insertRowsInChunks } from "./batch-insert.js";
 import type { ImportIssueDocumentRow } from "./import-write-types.js";
@@ -211,11 +211,8 @@ export function documentService(db: Db) {
       lockedDocumentStrategy?: "conflict" | "create_new_document";
     }) => {
       const key = normalizeDocumentKey(input.key);
-      // myrmidon(S5): document bodies are stored with secret values masked. One
-      // write point here covers every caller of upsertIssueDocument (PUT route,
-      // initial plan, agent document writes): documents.created/issues rows and
-      // document_revisions below all persist this masked body.
-      const body = maskSecretsInText(input.body);
+      // myrmidon(S5): mask secret values in document bodies at the single write point
+      input = { ...input, body: maskSecretsInText(input.body) };
       const issue = await db
         .select({ id: issues.id, companyId: issues.companyId })
         .from(issues)
@@ -270,7 +267,7 @@ export function documentService(db: Db) {
                     companyId: issue.companyId,
                     title: input.title ?? null,
                     format: input.format,
-                    latestBody: body,
+                    latestBody: input.body,
                     latestRevisionId: null,
                     latestRevisionNumber: 1,
                     createdByAgentId: input.createdByAgentId ?? null,
@@ -294,7 +291,7 @@ export function documentService(db: Db) {
                     revisionNumber: 1,
                     title: input.title ?? null,
                     format: input.format,
-                    body,
+                    body: input.body,
                     changeSummary: input.changeSummary ?? null,
                     createdByAgentId: input.createdByAgentId ?? null,
                     createdByUserId: input.createdByUserId ?? null,
@@ -330,7 +327,7 @@ export function documentService(db: Db) {
                     key: fallbackKey,
                     title: document.title,
                     format: document.format,
-                    body,
+                    body: document.latestBody,
                     latestRevisionId: revision.id,
                     latestRevisionNumber: 1,
                     createdByAgentId: document.createdByAgentId,
@@ -374,7 +371,7 @@ export function documentService(db: Db) {
                 revisionNumber: nextRevisionNumber,
                 title: input.title ?? null,
                 format: input.format,
-                body,
+                body: input.body,
                 changeSummary: input.changeSummary ?? null,
                 createdByAgentId: input.createdByAgentId ?? null,
                 createdByUserId: input.createdByUserId ?? null,
@@ -388,7 +385,7 @@ export function documentService(db: Db) {
               .set({
                 title: input.title ?? null,
                 format: input.format,
-                latestBody: body,
+                latestBody: input.body,
                 latestRevisionId: revision.id,
                 latestRevisionNumber: nextRevisionNumber,
                 updatedByAgentId: input.createdByAgentId ?? null,
@@ -409,7 +406,7 @@ export function documentService(db: Db) {
                 ...existing,
                 title: input.title ?? null,
                 format: input.format,
-                body,
+                body: input.body,
                 latestRevisionId: revision.id,
                 latestRevisionNumber: nextRevisionNumber,
                 updatedByAgentId: input.createdByAgentId ?? null,
@@ -433,7 +430,7 @@ export function documentService(db: Db) {
               companyId: issue.companyId,
               title: input.title ?? null,
               format: input.format,
-              latestBody: body,
+              latestBody: input.body,
               latestRevisionId: null,
               latestRevisionNumber: 1,
               createdByAgentId: input.createdByAgentId ?? null,
@@ -457,7 +454,7 @@ export function documentService(db: Db) {
               revisionNumber: 1,
               title: input.title ?? null,
               format: input.format,
-              body,
+              body: input.body,
               changeSummary: input.changeSummary ?? null,
               createdByAgentId: input.createdByAgentId ?? null,
               createdByUserId: input.createdByUserId ?? null,
@@ -489,7 +486,7 @@ export function documentService(db: Db) {
               key,
               title: document.title,
               format: document.format,
-              body,
+              body: document.latestBody,
               latestRevisionId: revision.id,
               latestRevisionNumber: 1,
               createdByAgentId: document.createdByAgentId,
