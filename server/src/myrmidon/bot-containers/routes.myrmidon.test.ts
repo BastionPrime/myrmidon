@@ -230,6 +230,7 @@ describe("myrmidon(W2b) bot container routes: apply", () => {
       cpus: 1,
       pidsLimit: 512,
       network: "myrmidon-bots",
+      extraMounts: [],
     });
     expect(writeProfile).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledWith(AGENT_ID);

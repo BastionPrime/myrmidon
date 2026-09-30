@@ -175,6 +175,12 @@ export const agentsApi = {
       agentPath(id, companyId, `/instructions-bundle/file?path=${encodeURIComponent(relativePath)}`),
     ),
   pause: (id: string, companyId?: string) => api.post<Agent>(agentPath(id, companyId, "/pause"), {}),
+  // myrmidon(EMERGENCY-STOP): immediately cancel the runs a draining pause left running
+  emergencyStop: (id: string, companyId?: string) =>
+    api.post<{ agentId: string; runsCancelled: number }>(
+      withCompanyScope(`/myrmidon/agents/${encodeURIComponent(id)}/emergency-stop`, companyId),
+      {},
+    ),
   resume: (id: string, companyId?: string) => api.post<Agent>(agentPath(id, companyId, "/resume"), {}),
   clearError: (id: string, companyId?: string) =>
     api.post<ClearAgentErrorResponse>(agentPath(id, companyId, "/clear-error"), {}),

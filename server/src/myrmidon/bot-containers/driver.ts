@@ -13,6 +13,19 @@
 
 import type { CompiledProfile } from "./types.js";
 
+/** One extra read-only mount a bot gets from the instance-level allowlist
+ *  (`MYRMIDON_BOT_MOUNT_SOURCES`, template.ts). Read-only only: a shared
+ *  directory is never mounted writable, and the driver refuses a mount whose
+ *  source the operator did not list. */
+export interface BotExtraMount {
+  /** Absolute host directory, listed in MYRMIDON_BOT_MOUNT_SOURCES. */
+  source: string;
+  /** Absolute mount point inside the container, outside the three fixed ones. */
+  containerPath: string;
+  /** Always true: a writable extra mount is not supported. */
+  readOnly: true;
+}
+
 /** Desired shape of a bot's container. Immutable for the life of the container:
  *  a change is a template drift (`templateDrift`), applied by `recreate`. */
 export interface BotContainerSpec {
@@ -27,6 +40,10 @@ export interface BotContainerSpec {
   /** Docker network the container joins. The local driver requires this to equal
    *  its own MYRMIDON_BOT_NETWORK; a caller cannot put a bot on an arbitrary network. */
   network: string;
+  /** Extra read-only mounts (the card's `container.extraMounts`). Their sources
+   *  are checked against MYRMIDON_BOT_MOUNT_SOURCES when the create body is
+   *  built; a mount outside that list is refused, not silently dropped. */
+  extraMounts?: readonly BotExtraMount[];
   /** Extra, non-authoritative labels (e.g. a project grouping). The driver's own
    *  identification labels (see template.ts BOT_LABEL_KEYS) always win on
    *  conflict and cannot be overridden through this field. */

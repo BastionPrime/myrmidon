@@ -739,6 +739,78 @@ if [[ -f "$worktree_cwd/package.json" && -f "$worktree_cwd/pnpm-lock.yaml" ]]; t
   fi
 
   if [[ "$needs_install" -eq 1 ]]; then
+    # myrmidon(WORKSPACE-HYGIENE): resolve a shared pnpm store that lives
+    # outside this worktree. Every execution worktree used to import its own
+    # full node_modules copy (gigabytes per branch); with the store below all
+    # worktrees of the same repository import packages by hardlink instead.
+    # MYRMIDON_WORKSPACE_PNPM_STORE=0 restores the vendor behavior.
+    workspace_pnpm_store_dir=""
+    workspace_pnpm_store_output="$(WORKTREE_CWD="$worktree_cwd" \
+      REPO_ROOT="${PAPERCLIP_WORKSPACE_REPO_ROOT:-}" \
+      BASE_CWD="$base_cwd" \
+      STORE_DIR_ENV="${MYRMIDON_WORKSPACE_PNPM_STORE_DIR:-}" \
+      STORE_ENABLED_ENV="${MYRMIDON_WORKSPACE_PNPM_STORE:-}" node <<'EOF'
+const fs = require("node:fs");
+const path = require("node:path");
+
+function disable(reason) {
+  console.error(`${reason}; falling back to the default pnpm store behavior.`);
+  process.exit(0);
+}
+
+const enabledRaw = (process.env.STORE_ENABLED_ENV ?? "").trim().toLowerCase();
+if (enabledRaw === "0" || enabledRaw === "false" || enabledRaw === "no" || enabledRaw === "off") {
+  process.exit(0);
+}
+
+const worktreeCwd = path.resolve(process.env.WORKTREE_CWD ?? process.cwd());
+const repoRoot = (process.env.REPO_ROOT ?? "").trim();
+const baseCwd = (process.env.BASE_CWD ?? "").trim();
+const configured = (process.env.STORE_DIR_ENV ?? "").trim();
+
+if (configured && !path.isAbsolute(configured) && !repoRoot) {
+  console.error(
+    "MYRMIDON_WORKSPACE_PNPM_STORE_DIR is relative but the repository root is unknown",
+  );
+}
+
+let storeDir;
+if (configured && path.isAbsolute(configured)) {
+  storeDir = path.resolve(configured);
+} else {
+  // Default anchor order: the repository owner root (vendored env), then the
+  // registered base workspace. Both sit on the same volume as the worktrees
+  // in the standard layout, which is what hardlink imports require.
+  const anchor = repoRoot || baseCwd || path.dirname(worktreeCwd);
+  storeDir = path.resolve(anchor, configured || path.join(".paperclip", "pnpm-store"));
+}
+
+try {
+  fs.mkdirSync(storeDir, { recursive: true });
+} catch (error) {
+  disable(`Shared pnpm store ${storeDir} cannot be created (${error.message})`);
+}
+
+try {
+  const storeDevice = fs.statSync(storeDir).dev;
+  const worktreeDevice = fs.statSync(worktreeCwd).dev;
+  if (storeDevice !== worktreeDevice) {
+    disable(`Shared pnpm store ${storeDir} is on a different filesystem than the worktree; hardlink imports would fail`);
+  }
+} catch (error) {
+  disable(`Shared pnpm store ${storeDir} cannot be verified (${error.message})`);
+}
+
+process.stdout.write(`store_dir=${storeDir}\n`);
+EOF
+)"
+    case "$workspace_pnpm_store_output" in
+      store_dir=*)
+        workspace_pnpm_store_dir="${workspace_pnpm_store_output#store_dir=}"
+        echo "Execution workspace pnpm install uses shared store: $workspace_pnpm_store_dir" >&2
+        ;;
+    esac
+
     backup_suffix=".paperclip-backup-${BASHPID:-$$}"
     moved_symlink_paths=()
 
@@ -780,12 +852,22 @@ if [[ -f "$worktree_cwd/package.json" && -f "$worktree_cwd/pnpm-lock.yaml" ]]; t
       stdout_path="$(mktemp)"
       stderr_path="$(mktemp)"
 
+      # myrmidon(WORKSPACE-HYGIENE): install into the shared store and import
+      # packages into node_modules as hardlinks instead of full copies.
+      local workspace_pnpm_store_args=()
+      if [[ -n "$workspace_pnpm_store_dir" ]]; then
+        workspace_pnpm_store_args=(
+          "--store-dir=$workspace_pnpm_store_dir"
+          "--config.package-import-method=hardlink"
+        )
+      fi
+
       if (
         cd "$worktree_cwd"
         # pnpm 9.15.4 calls the deprecated url.parse() in toNerfDart on every
         # install. Node 24 reports that call as DEP0169. Remove this flag
         # when the pinned pnpm no longer calls url.parse() in that path.
-        NODE_OPTIONS="${NODE_OPTIONS:-} --disable-warning=DEP0169" pnpm install --prod=false "$@"
+        NODE_OPTIONS="${NODE_OPTIONS:-} --disable-warning=DEP0169" pnpm install --prod=false "$@" ${workspace_pnpm_store_args[@]+"${workspace_pnpm_store_args[@]}"}
       ) >"$stdout_path" 2>"$stderr_path"; then
         cat "$stdout_path"
         cat "$stderr_path" >&2
