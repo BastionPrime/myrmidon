@@ -183,14 +183,14 @@ describe("myrmidon(WORKSPACE-HYGIENE): the over-quota rule", () => {
   it("builds signal details without host paths", () => {
     const details = workspaceQuotaSignalDetails({
       workspaceId: "11111111-1111-4111-8111-111111111111",
-      workspaceName: "ope-3263-quotas",
+      workspaceName: "workspace-a-quotas",
       sizeBytes: 4600 * BYTES_PER_MB,
       quotaMb: 4000,
       measuredAt: "2026-09-30T12:00:00.000Z",
     });
     expect(details).toMatchObject({
       workspaceId: "11111111-1111-4111-8111-111111111111",
-      workspaceName: "ope-3263-quotas",
+      workspaceName: "workspace-a-quotas",
       sizeMb: 4600,
       quotaMb: 4000,
       measuredAt: "2026-09-30T12:00:00.000Z",
