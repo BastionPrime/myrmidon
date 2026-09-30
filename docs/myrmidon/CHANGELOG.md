@@ -1,6 +1,6 @@
 # Myrmidon changelog
 
-> Русская версия: [CHANGELOG.ru.md](CHANGELOG.ru.md)
+> Russian version: [CHANGELOG.ru.md](CHANGELOG.ru.md)
 
 Release notes for Myrmidon, newest first. The version comes from the git tag
 `myr-v<major>.<minor>.<patch>` (CI stamps it into the image and `/api/health`); there is no
