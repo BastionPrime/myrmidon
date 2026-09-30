@@ -629,6 +629,11 @@ import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/main
 import { createStaleActiveLeaseSweep } from "../myrmidon/leases-stale-sweep.js";
 // myrmidon(M3): skip idle timer heartbeats
 import { hasOtherActionableWork, skipIdleHeartbeatsEnabled } from "../myrmidon/heartbeat-idle-skip.js";
+// myrmidon(IDLE-PICKUP): the board wakes an idle agent on its next ready task
+import {
+  createIdlePickupSweeper,
+  idlePickupForAgent,
+} from "../myrmidon/idle-pickup.js";
 import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
 // myrmidon(L3): pause drains instead of cancelling; resume wakes stranded work
 import {
@@ -17951,6 +17956,39 @@ export function heartbeatService(
     },
   });
 
+  // myrmidon(IDLE-PICKUP): the periodic safety net. The release path below
+  // wakes the finishing agent directly; this sweeper catches everything the
+  // release path cannot see (a missed release, a server restart, a
+  // reassignment) once per MYRMIDON_IDLE_PICKUP_INTERVAL_SEC for every
+  // invokable agent. All admission gates (pause, maintenance, limits,
+  // concurrency, budget) are enforced by enqueueWakeup itself.
+  const idlePickupSweeper = createIdlePickupSweeper({
+    db,
+    enqueueWakeup: (agentId, opts) => enqueueWakeup(agentId, opts),
+    logActivity: async (input) => {
+      await logActivity(db, {
+        companyId: input.companyId,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        agentId: input.agentId,
+        runId: input.runId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        details: input.details,
+      });
+    },
+    isAgentInvokable: async (agent) => {
+      // The sweeper passes a narrow org row; resolve the full agent row the
+      // invokability evaluator reads (status, reportsTo chain) by id.
+      const full = await getAgent(agent.id);
+      if (!full || full.companyId !== agent.companyId) return false;
+      const invokability = await getAgentInvokability(full);
+      return invokability.invokable;
+    },
+    isAgentUnderMaintenance: (agentId) => isAgentUnderMaintenance(db, agentId),
+  });
+
   async function sweepPendingCleanupLeases(opts?: {
     backoffMs?: number;
     /** One cleanup attempt per explicit user Retry, for this failed run only.
@@ -25571,6 +25609,44 @@ export function heartbeatService(
       }
       throw error;
     }
+    // myrmidon(IDLE-PICKUP): the release path is the primary trigger. The
+    // finishing agent gets a chance at its next ready task immediately, so
+    // the acceptance window ("the next run starts within N minutes") does
+    // not wait for the periodic sweep. Best-effort: the periodic sweeper
+    // catches anything this pass misses, and every admission gate still
+    // applies inside enqueueWakeup.
+    if (options.suppressImmediateRecovery !== true) {
+      try {
+        const releasedRun = await getRun(run.id);
+        if (releasedRun) {
+          await idlePickupForAgent(
+            {
+              db,
+              enqueueWakeup: (agentId, opts) => enqueueWakeup(agentId, opts),
+              logActivity: async (input) => {
+                await logActivity(db, {
+                  companyId: input.companyId,
+                  actorType: input.actorType,
+                  actorId: input.actorId,
+                  agentId: input.agentId,
+                  runId: input.runId,
+                  action: input.action,
+                  entityType: input.entityType,
+                  entityId: input.entityId,
+                  details: input.details,
+                });
+              },
+            },
+            { id: releasedRun.agentId, companyId: releasedRun.companyId },
+          );
+        }
+      } catch (idlePickupErr) {
+        logger.warn(
+          { err: idlePickupErr, runId: run.id },
+          "idle pickup after issue execution release failed",
+        );
+      }
+    }
   }
 
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}, executionWaitRequestId?: string) {
@@ -29043,6 +29119,9 @@ export function heartbeatService(
     sweepPendingCleanupLeases,
     // myrmidon(P1): exposed for tests and operators
     sweepStaleActiveEnvironmentLeases,
+    // myrmidon(IDLE-PICKUP): periodic idle-pickup pass, exposed for the
+    // scheduler tick in index.ts and for tests and operators
+    sweepIdlePickup: (now?: Date) => idlePickupSweeper.sweep(now),
     // Override-aware scheduling-suppression check (honors the worktree
     // run-execution experimental setting). Callers outside the service that
     // gate on suppression should prefer this over the env-only resolver.

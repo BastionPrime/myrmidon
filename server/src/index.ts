@@ -1871,6 +1871,18 @@ async function startServerWithDatabaseTeardown(
                 logger.warn({ ...swept }, "periodic stale-lock sweeper cleared issue locks");
               }
             })
+            // myrmidon(IDLE-PICKUP): the periodic safety net that wakes an
+            // idle agent with ready assigned tasks; the interval itself is
+            // enforced inside the sweeper (MYRMIDON_IDLE_PICKUP_INTERVAL_SEC).
+            .then(async () => {
+              const pickedUp = await heartbeat.sweepIdlePickup(new Date());
+              if (pickedUp.woken > 0) {
+                logger.warn(
+                  { ...pickedUp },
+                  "periodic idle pickup woke ready assigned issues",
+                );
+              }
+            })
             .catch((err) => {
               logger.error({ err }, "periodic heartbeat recovery failed");
             }));
