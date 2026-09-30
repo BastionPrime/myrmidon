@@ -35,6 +35,8 @@ import {
 import { eq } from "drizzle-orm";
 // myrmidon(R3): keep maintenance mode state across vendor writes of `general`
 import { preserveMaintenanceGeneralKey } from "../myrmidon/maintenance/store.js";
+// myrmidon(R5-A): keep deploy job state across vendor writes of `general`
+import { preserveDeployJobsGeneralKey } from "../myrmidon/deploy-jobs/store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -211,6 +213,8 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       backupRetention: parsed.data.backupRetention ?? DEFAULT_BACKUP_RETENTION,
       // Absent => unrestricted; only carry through an explicit policy.
       ...(parsed.data.executionMode ? { executionMode: parsed.data.executionMode } : {}),
+      // myrmidon(WORKSPACE-HYGIENE): the stored workspace quotas survive every general write
+      ...(parsed.data.workspaceHygiene ? { workspaceHygiene: parsed.data.workspaceHygiene } : {}),
       // myrmidon(C0): the stored run admission limits survive every general write
       ...(parsed.data.runLimits ? { runLimits: parsed.data.runLimits } : {}),
     };
@@ -544,7 +548,12 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          general: { ...nextGeneral, ...preserveMaintenanceGeneralKey(current.general) }, // myrmidon(R3)
+          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state
+          general: {
+            ...nextGeneral,
+            ...preserveMaintenanceGeneralKey(current.general),
+            ...preserveDeployJobsGeneralKey(current.general),
+          },
           updatedAt: now,
         })
         .where(eq(instanceSettings.id, current.id))

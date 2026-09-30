@@ -24,6 +24,7 @@
 // through BotEgressRoutesDeps, so it is testable with plain fakes (see
 // egress-routes.myrmidon.test.ts; the real wiring is egress-wiring.ts).
 
+import { createHash, timingSafeEqual } from "node:crypto";
 import { Router, type Request } from "express";
 import { badRequest, conflict, notFound, unauthorized } from "../../errors.js";
 import { logger } from "../../middleware/logger.js";
@@ -232,7 +233,7 @@ export function botEgressRoutes(deps: BotEgressRoutesDeps) {
     }
     const header = req.headers.authorization ?? "";
     const presented = header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";
-    if (presented.length === 0 || presented !== token) {
+    if (presented.length === 0 || !tokensEqual(presented, token)) {
       throw unauthorized("The egress policy endpoint needs the instance token");
     }
     const rows = await deps.store.listAll();
@@ -240,4 +241,11 @@ export function botEgressRoutes(deps: BotEgressRoutesDeps) {
   });
 
   return router;
+}
+
+/** Constant-time comparison: both sides are hashed so lengths never leak. */
+function tokensEqual(presented: string, expected: string): boolean {
+  const a = createHash("sha256").update(presented).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
 }
