@@ -34,7 +34,7 @@ import {
 } from "@paperclipai/shared";
 import { eq } from "drizzle-orm";
 // myrmidon(R3): keep maintenance mode state across vendor writes of `general`
-import { preserveMaintenanceGeneralKey } from "../myrmidon/maintenance/store.js";
+import { preserveMaintenanceGeneralKey, preserveBrowserConsoleGeneralKey } from "../myrmidon/maintenance/store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -544,7 +544,9 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          general: { ...nextGeneral, ...preserveMaintenanceGeneralKey(current.general) }, // myrmidon(R3)
+          // myrmidon(R3): keep the maintenance key across vendor writes of `general`
+          // myrmidon(BROWSER-CONSOLE): same for the browser console sessions/journal key
+          general: { ...nextGeneral, ...preserveMaintenanceGeneralKey(current.general), ...preserveBrowserConsoleGeneralKey(current.general) },
           updatedAt: now,
         })
         .where(eq(instanceSettings.id, current.id))
