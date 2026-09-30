@@ -340,10 +340,12 @@ describe.sequential("cli auth routes", () => {
       token: "pcp_board_plaintext",
       expiresAt: "2026-06-23T12:00:00.000Z",
     });
+    // myrmidon(RST): scope now flows through key creation (default full).
     expect(mockBoardAuthService.createNamedBoardApiKey).toHaveBeenCalledWith({
       userId: "user-1",
       name: "external-admin",
       expiresAt: new Date("2026-06-23T12:00:00.000Z"),
+      scope: { kind: "full" },
     });
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
