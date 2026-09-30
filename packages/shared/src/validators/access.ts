@@ -85,10 +85,39 @@ export const resolveCliAuthChallengeSchema = z.object({
 
 export type ResolveCliAuthChallenge = z.infer<typeof resolveCliAuthChallengeSchema>;
 
+// myrmidon(ROLE-SCOPED-TOKENS): board API keys carry a scope that limits what
+// admin actions the key can perform, mirroring agent key scopes. Existing keys
+// without a stored scope keep full access (backwards compatible default).
+export const BOARD_API_KEY_SCOPE_KINDS = [
+  "full",
+  "read_only",
+  "ops",
+  "agents_manage",
+  "secrets_manage",
+  "release",
+] as const;
+
+export const boardApiKeyScopeSchema = z.object({
+  kind: z.enum(BOARD_API_KEY_SCOPE_KINDS),
+});
+
+export type BoardApiKeyScope = z.infer<typeof boardApiKeyScopeSchema>;
+export type BoardApiKeyScopeKind = BoardApiKeyScope["kind"];
+
+export function normalizeBoardApiKeyScope(value: unknown): BoardApiKeyScope {
+  const parsed = boardApiKeyScopeSchema.safeParse(value);
+  return parsed.success ? parsed.data : { kind: "full" };
+}
+
 export const createBoardApiKeySchema = z.object({
   name: z.string().trim().min(1).max(120).default("paperclipai cli"),
   expiresAt: z.coerce.date().optional().nullable(),
   requestedCompanyId: z.string().guid().optional().nullable(),
+  // myrmidon(ROLE-SCOPED-TOKENS): optional scope; absent scope means full
+  // access on the server. No zod default here — clients (CLI) parse payloads
+  // through this schema before sending, and a default would silently add a
+  // scope key to their wire contract.
+  scope: boardApiKeyScopeSchema.optional(),
 });
 
 export type CreateBoardApiKey = z.infer<typeof createBoardApiKeySchema>;
