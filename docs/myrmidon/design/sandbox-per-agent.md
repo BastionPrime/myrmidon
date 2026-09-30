@@ -1,13 +1,12 @@
-# Per-agent sandbox: overhead measurement and a question for the owner
+# Per-agent sandbox: overhead measurement and the decision record
 
 > Russian version: [sandbox-per-agent.ru.md](sandbox-per-agent.ru.md)
 
-Revision of 29.09.2026, for release 1.3, item S3-A. This is not the sandbox
-implementation: under the release plan, 1.3 includes only the question to the
-owner; the implementation itself (S3-B) is deferred to "Later". The document
-records the facts behind that question, the measurement method and a
-recommendation, so that the owner's decision rests on numbers rather than
-intuition.
+Revision of 30.09.2026, for release 1.3, item S3-A. This document records the
+facts behind the per-agent sandbox question, the measurement method, and the
+decision that the owner issued. It is not the sandbox implementation: the
+implementation item (S3-B) is superseded by this decision and stays in the
+"Later" section as a marker.
 
 ## 0. Summary
 
@@ -19,13 +18,12 @@ intuition.
   ~0.34 MiB; one idle node runtime process costs ~10.04 MiB** (9.70 MiB on top
   of the empty-container floor). The cost is driven by the agent runtime, not
   by the number of containers.
-- Practical conclusion for the decision: memory is no longer an argument
+- Practical conclusion behind the decision: memory is no longer an argument
   against "one container per bot". The choice of form is a question of
   privilege isolation and operations, not of memory.
-- Operator recommendation: UID isolation inside the shared project container
-  remains the working form for the transition period; one container per bot is
-  the target form once host limits allow it.
-- The owner decides.
+- Decision: a separate per-agent sandbox is not needed — the container itself
+  is a sufficient isolation boundary. The target form is one container per
+  bot (option B). The topic returns after 1.4.
 
 ## 1. Context
 
@@ -113,28 +111,26 @@ Conclusions from the figures:
 
 Live fleet (working session containers, same image): idle ~131 MiB, an active
 session 612→771 MiB over half an hour of work. The production migration waves
-are still under way, so for the owner's decision this figure is an order-of-
-magnitude guide: on fleets of dozens of bots it multiplies by the number of
-bots regardless of the option.
+are still under way, so this figure is an order-of-magnitude guide: on fleets
+of dozens of bots it multiplies by the number of bots regardless of the option.
 
-## 4. Operator recommendation
+## 4. Decision
 
-Recommendation (a proposal, not a decision): **option A as the working mode for the transition period** (the migration waves are still under way; rebuilding the isolation form mid-wave is an unnecessary risk), **option B as the target form** after the waves complete and host-based launches are retired: kernel isolation between bots and separate limits cost ~0.34 MiB per bot — cheaper than any alternative.
+Decision (issued by the owner): **a separate per-agent sandbox is not needed —
+the container is a sufficient isolation boundary. The target form is one
+container per bot (option B). The topic returns after 1.4.**
 
-Target parameters for B (guidelines, to be refined after the waves): the per-container memory limit follows the bot's actual working set from wave telemetry; the image floor is not counted in the limit (image pages are shared). The CPU limit guideline is 1.0 per container; the average consumption of an idle container was not measured in this pass (the pass covered memory only), so the concrete value is refined from wave telemetry together with the memory limit.
+Target parameters for B (guidelines, to be refined after the migration waves):
+the per-container memory limit follows the bot's actual working set from wave
+telemetry; the image floor is not counted in the limit (image pages are
+shared). The CPU limit guideline is 1.0 per container; the average consumption
+of an idle container was not measured in this pass (the pass covered memory
+only), so the concrete value is refined from wave telemetry together with the
+memory limit.
 
 ## 5. What this document does not cover
 
-The sandbox implementation (S3-B): agent access only to its own `HERMES_HOME`
-and workspace. It stays in the "Later" section and starts only after the
-owner's answer to this question. Network isolation and the egress proxy are a
+The sandbox implementation item (S3-B) — agent access only to its own
+`HERMES_HOME` and workspace — is **superseded by this decision** and stays in
+the "Later" section as a marker. Network isolation and the egress proxy are a
 separate release 1.3 item and are not discussed here.
-
-## 6. Open questions for the owner
-
-1. Is a per-agent sandbox needed after the move to containers, given that a
-   container is already a kernel isolation boundary by itself?
-2. If yes — in which form: a separate uid per profile in the project container
-   (A) or one container per bot (B)?
-3. If not now — do we record the move to B as the target decision once the
-   migration waves complete?
