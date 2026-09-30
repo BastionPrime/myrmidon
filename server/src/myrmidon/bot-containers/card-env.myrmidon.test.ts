@@ -5,8 +5,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   FORBIDDEN_CARD_ENV_KEYS,
+  GITHUB_ENV_ALLOWLIST_ENV,
   MANAGED_GITHUB_CARD_ENV_KEYS,
   createCardEnvResolver,
+  parseGithubEnvAllowlist,
   type CardEnvBindingContext,
   type CardEnvPorts,
 } from "./card-env.js";
@@ -17,6 +19,8 @@ import { buildHermesProfileInput, type BotProfileSettings } from "./profile-inpu
 
 const COMPANY = "company-1";
 const AGENT = { id: "agent-a", companyId: COMPANY };
+// myrmidon(FLEETD-VMEXEC): the allowlist matches agent names.
+const DEV_AGENT = { id: "agent-dev", companyId: COMPANY, name: "dev-vmexec" };
 
 interface FakeState {
   /** secret id -> [stamp, value]; a missing entry is a secret that does not exist. */
@@ -328,5 +332,64 @@ describe("myrmidon(W2a) card env — resolved again only when something it depen
     await resolve(card({ TOKEN: ref("s1") }));
     state.secrets.delete("s1");
     await expect(resolve(card({ TOKEN: ref("s1") }))).rejects.toThrow("Secret not found");
+  });
+});
+
+describe("myrmidon(FLEETD-VMEXEC) card env — the GitHub env allowlist", () => {
+  it("keeps a managed GitHub token binding for a named agent, resolved as a secret", async () => {
+    const { ports, state } = fakePorts({ s1: { stamp: "1:active", value: "fake-github-pat" } });
+    const resolve = createCardEnvResolver(ports, { env: { [GITHUB_ENV_ALLOWLIST_ENV]: "dev-vmexec" } });
+    const result = await resolve({ ...DEV_AGENT, adapterConfig: { env: { GITHUB_TOKEN: ref("s1") } } });
+    expect(result.env.GITHUB_TOKEN).toEqual({ value: "fake-github-pat", secret: true });
+    expect(result.warnings).toEqual([]);
+    expect(state.resolveCalls).toEqual([
+      {
+        companyId: COMPANY,
+        bindings: { GITHUB_TOKEN: ref("s1") },
+        context: { consumerType: "agent", consumerId: "agent-dev", actorType: "system" },
+      },
+    ]);
+  });
+
+  it("still drops the token for an agent not in the list, and for an unnamed agent", async () => {
+    const { ports } = fakePorts({ s1: { stamp: "1:active", value: "fake-github-pat" } });
+    const resolve = createCardEnvResolver(ports, { env: { [GITHUB_ENV_ALLOWLIST_ENV]: "dev-vmexec,dev-other" } });
+    const notListed = await resolve({ id: "agent-b", companyId: COMPANY, name: "dev-elsewhere", adapterConfig: { env: { GITHUB_TOKEN: ref("s1"), KEEP: plain("kept") } } });
+    expect(notListed.env.GITHUB_TOKEN).toBeUndefined();
+    expect(notListed.env.KEEP).toEqual({ value: "kept", secret: false });
+    expect(notListed.warnings).toEqual([expect.stringContaining("env.GITHUB_TOKEN")]);
+    const unnamed = await resolve({ id: "agent-c", companyId: COMPANY, adapterConfig: { env: { GITHUB_TOKEN: ref("s1"), KEEP: plain("kept") } } });
+    expect(unnamed.env.GITHUB_TOKEN).toBeUndefined();
+    expect(unnamed.env.KEEP).toEqual({ value: "kept", secret: false });
+    expect(unnamed.warnings).toEqual([expect.stringContaining("env.GITHUB_TOKEN")]);
+  });
+
+  it("an empty or unset allowlist changes nothing (the fork's default)", async () => {
+    const { ports } = fakePorts({ s1: { stamp: "1:active", value: "fake-github-pat" } });
+    for (const raw of [undefined, "", "   ", ","]) {
+      const resolve = createCardEnvResolver(ports, { env: raw === undefined ? {} : { [GITHUB_ENV_ALLOWLIST_ENV]: raw } });
+      const result = await resolve({ ...DEV_AGENT, adapterConfig: { env: { GITHUB_TOKEN: ref("s1") } } });
+      expect(result.env.GITHUB_TOKEN).toBeUndefined();
+      expect(result.warnings).toEqual([expect.stringContaining("env.GITHUB_TOKEN")]);
+    }
+  });
+
+  it("the allowlist is read per resolve, so emptying it takes effect on the next call", async () => {
+    const { ports, state } = fakePorts({ s1: { stamp: "1:active", value: "fake-github-pat" } });
+    const env: Record<string, string | undefined> = { [GITHUB_ENV_ALLOWLIST_ENV]: "dev-vmexec" };
+    const resolve = createCardEnvResolver(ports, { env: env as NodeJS.ProcessEnv });
+    const first = await resolve({ ...DEV_AGENT, adapterConfig: { env: { GITHUB_TOKEN: ref("s1") } } });
+    expect(first.env.GITHUB_TOKEN).toEqual({ value: "fake-github-pat", secret: true });
+    env[GITHUB_ENV_ALLOWLIST_ENV] = "";
+    const second = await resolve({ ...DEV_AGENT, adapterConfig: { env: { GITHUB_TOKEN: ref("s1") } } });
+    expect(second.env.GITHUB_TOKEN).toBeUndefined();
+    expect(second.warnings).toEqual([expect.stringContaining("env.GITHUB_TOKEN")]);
+    expect(state.resolveCalls).toHaveLength(1);
+  });
+
+  it("parses the list as trimmed, comma-separated agent names", () => {
+    expect([...parseGithubEnvAllowlist(" a , b ,, c ")]).toEqual(["a", "b", "c"]);
+    expect(parseGithubEnvAllowlist(undefined).size).toBe(0);
+    expect(parseGithubEnvAllowlist("").size).toBe(0);
   });
 });
