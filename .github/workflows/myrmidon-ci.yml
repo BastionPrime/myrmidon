@@ -590,6 +590,41 @@ jobs:
           node scripts/myrmidon/plugin-compat/install.mjs --work "$RUNNER_TEMP/plugin-compat"
           pnpm --filter @paperclipai/server exec tsx ../scripts/myrmidon/plugin-compat/check.ts --work "$RUNNER_TEMP/plugin-compat"
 
+  fleetd:
+    # tools/fleetd (the fleet service for a second machine's bot containers,
+    # FLEETD-VMEXEC): gofmt, go vet and the unit tests, in the same pinned Go
+    # image the fleetd image workflow builds from. The image itself is built
+    # by myrmidon-fleetd.yml. See docs/myrmidon/fleetd-vmexec.md.
+    name: fleetd
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GO_IMAGE: golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: go.mod has no requirements (stdlib only)
+        run: |
+          set -euo pipefail
+          if grep -qE '^\s*(require|tool)\s' tools/fleetd/go.mod; then
+            echo "tools/fleetd/go.mod must stay stdlib-only"
+            exit 1
+          fi
+
+      - name: gofmt, go vet, go test
+        run: |
+          set -euo pipefail
+          docker run --rm --network none -v "$PWD/tools/fleetd:/src" -w /src \
+            -e GOFLAGS=-mod=mod -e GOTOOLCHAIN=local -e GOCACHE=/tmp/gocache "$GO_IMAGE" sh -euc '
+              out="$(gofmt -l .)"
+              if [ -n "$out" ]; then echo "gofmt: $out"; exit 1; fi
+              go vet ./...
+              go test -count=1 ./...
+            '
+
   dockergate:
     # tools/dockergate (the allowlisting Docker proxy for the bot-container
     # driver): gofmt, go vet, the unit tests, and the contract with the driver
@@ -671,7 +706,7 @@ jobs:
     # skipped; any failure, or a skip without a successful plan, fails it.
     name: CI result
     if: ${{ !cancelled() }}
-    needs: [plan, typecheck, build, tests-affected, tests, tests-other, tests-runner, checks, dockergate]
+    needs: [plan, typecheck, build, tests-affected, tests, tests-other, tests-runner, checks, dockergate, fleetd]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
