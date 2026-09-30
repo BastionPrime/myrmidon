@@ -48,14 +48,28 @@ export interface WorkspaceHygieneStore {
   lastActivityAt(companyId: string, action: string): Promise<Date | null>;
 }
 
+type WorkspaceHygieneColumnSelection = {
+  id: typeof executionWorkspaces.id;
+  companyId: typeof executionWorkspaces.companyId;
+  name: typeof executionWorkspaces.name;
+  status: typeof executionWorkspaces.status;
+  providerType: typeof executionWorkspaces.providerType;
+  cwd: typeof executionWorkspaces.cwd;
+  metadata: typeof executionWorkspaces.metadata;
+  updatedAt: typeof executionWorkspaces.updatedAt;
+};
+
 /**
  * The selected columns, built per call rather than once at import time: a test
  * that mocks `@paperclipai/db` with only the exports it needs (the server
  * startup test does) must be able to import this module without the mock
  * failing on a missing table. Reading `executionWorkspaces` at module scope
  * made that import throw.
+ *
+ * The return type is pinned because a bare `return { ... }` widens the column
+ * types, and the row the query resolves to then no longer matches `toRow`.
  */
-function rowColumns() {
+function rowColumns(): WorkspaceHygieneColumnSelection {
   return {
     id: executionWorkspaces.id,
     companyId: executionWorkspaces.companyId,
@@ -68,10 +82,17 @@ function rowColumns() {
   };
 }
 
-type WorkspaceHygieneRowSelection = ReturnType<typeof rowColumns>;
-
-function toRow(row: WorkspaceHygieneRowSelection): WorkspaceHygieneWorkspaceRow {
-  return row as WorkspaceHygieneWorkspaceRow;
+function toRow(row: {
+  id: string;
+  companyId: string;
+  name: string;
+  status: string;
+  providerType: string;
+  cwd: string | null;
+  metadata: Record<string, unknown> | null;
+  updatedAt: Date;
+}): WorkspaceHygieneWorkspaceRow {
+  return row;
 }
 
 export function createDbWorkspaceHygieneStore(db: Db): WorkspaceHygieneStore {
