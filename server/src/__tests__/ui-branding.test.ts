@@ -5,6 +5,8 @@ import {
   isWorktreeUiBrandingEnabled,
   renderFaviconLinks,
   renderRuntimeBrandingMeta,
+  resolveIconVersion,
+  versionIconUrl,
 } from "../ui-branding.js";
 
 const TEMPLATE = `<!doctype html>
@@ -18,6 +20,40 @@ const TEMPLATE = `<!doctype html>
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <!-- PAPERCLIP_FAVICON_END -->
 </head>`;
+
+describe("icon URL versioning", () => {
+  const TEMPLATE_WITH_OUTSIDE = TEMPLATE.replace(
+    "</head>",
+    '<link rel="apple-touch-icon" href="/apple-touch-icon.png" />\n<link rel="manifest" href="/site.webmanifest" />\n<link rel="stylesheet" href="/assets/app.css" />\n</head>',
+  );
+
+  it("adds the build version to icon and manifest links", () => {
+    const html = applyUiBranding(TEMPLATE_WITH_OUTSIDE, { PAPERCLIP_BUILD_VERSION: "1.2.2" });
+    expect(html).toContain('href="/favicon.ico?v=1.2.2"');
+    expect(html).toContain('href="/favicon.svg?v=1.2.2"');
+    expect(html).toContain('href="/favicon-32x32.png?v=1.2.2"');
+    expect(html).toContain('href="/apple-touch-icon.png?v=1.2.2"');
+    expect(html).toContain('href="/site.webmanifest?v=1.2.2"');
+    expect(html).toContain('href="/assets/app.css"');
+  });
+
+  it("changes the URLs when the version changes", () => {
+    const a = applyUiBranding(TEMPLATE, { PAPERCLIP_BUILD_VERSION: "1.2.2" });
+    const b = applyUiBranding(TEMPLATE, { PAPERCLIP_BUILD_VERSION: "1.2.3" });
+    expect(a).not.toEqual(b);
+    expect(b).toContain("/favicon.svg?v=1.2.3");
+  });
+
+  it("leaves links untouched without a version", () => {
+    expect(resolveIconVersion({})).toBeNull();
+    expect(applyUiBranding(TEMPLATE, {})).toContain('href="/favicon.svg" type');
+  });
+
+  it("only versions same-origin icon paths", () => {
+    expect(versionIconUrl("https://example.com/favicon.svg", "1")).toBe("https://example.com/favicon.svg");
+    expect(versionIconUrl("/favicon.svg", "1")).toBe("/favicon.svg?v=1");
+  });
+});
 
 describe("ui branding", () => {
   it("detects worktree mode from PAPERCLIP_IN_WORKTREE", () => {

@@ -123,7 +123,7 @@ import { managedAgentProfileRoutes } from "./routes/managed-agent-profiles.js";
 import { remoteAgentProfileRoutes } from "./routes/remote-agent-profiles.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { injectCloudUiSnippet } from "./cloud-ui-snippet.js";
-import { readBrandedStaticIndexHtml } from "./static-index-html.js";
+import { readBrandedStaticIndexHtml, readVersionedWebManifest } from "./static-index-html.js";
 import { staticUiCacheControl } from "./static-ui-cache.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
@@ -982,6 +982,14 @@ export async function createApp(
       // Serve root/index through the same runtime HTML transform as SPA routes.
       app.get(["/", "/index.html"], (_req, res) => {
         res.type("html").set("Cache-Control", "no-cache").send(readBrandedStaticIndexHtml(uiDist));
+      });
+      // The manifest lists icon URLs; version them so a release refreshes them.
+      app.get("/site.webmanifest", (_req, res, next) => {
+        try {
+          res.type("application/manifest+json").set("Cache-Control", "no-cache").send(readVersionedWebManifest(uiDist));
+        } catch {
+          next();
+        }
       });
       // Non-hashed static files (favicon.ico, manifest, robots.txt, etc.):
       // short cache so operators who swap them out see the new version

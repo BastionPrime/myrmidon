@@ -3,6 +3,8 @@ const FAVICON_BLOCK_END = "<!-- PAPERCLIP_FAVICON_END -->";
 const RUNTIME_BRANDING_BLOCK_START = "<!-- PAPERCLIP_RUNTIME_BRANDING_START -->";
 const RUNTIME_BRANDING_BLOCK_END = "<!-- PAPERCLIP_RUNTIME_BRANDING_END -->";
 
+import { readBuildVersion } from "./build-version.js";
+
 const DEFAULT_FAVICON_LINKS = [
   '<link rel="icon" href="/favicon.ico" sizes="48x48" />',
   '<link rel="icon" href="/favicon.svg" type="image/svg+xml" />',
@@ -190,8 +192,31 @@ export function getWorktreeUiBranding(env: NodeJS.ProcessEnv = process.env): Wor
   };
 }
 
-export function renderFaviconLinks(branding: WorktreeUiBranding): string {
-  if (!branding.enabled || !branding.faviconHref) return DEFAULT_FAVICON_LINKS;
+/**
+ * Build version used to bust browser icon caches. Some browsers keep favicons
+ * in a separate store keyed by URL and ignore Cache-Control, so the only
+ * reliable refresh is a different URL after every release.
+ */
+export function resolveIconVersion(env: NodeJS.ProcessEnv = process.env): string | null {
+  return readBuildVersion({ environmentVersion: env.PAPERCLIP_BUILD_VERSION ?? null });
+}
+
+const ICON_URL_PATTERN = /^\/(?:favicon[\w.-]*\.(?:ico|svg|png)|apple-touch-icon\.png|android-chrome-[\w-]+\.png|site\.webmanifest)$/;
+
+/** Appends `?v=<version>` to a same-origin icon/manifest URL; other URLs pass through. */
+export function versionIconUrl(url: string, version: string | null): string {
+  if (!version || !ICON_URL_PATTERN.test(url)) return url;
+  return `${url}?v=${encodeURIComponent(version)}`;
+}
+
+/** Versions every icon/manifest href in an HTML document. */
+export function applyIconVersionToHtml(html: string, version: string | null): string {
+  if (!version) return html;
+  return html.replace(/(\bhref=")([^"]+)(")/g, (_m, a: string, url: string, c: string) => `${a}${versionIconUrl(url, version)}${c}`);
+}
+
+export function renderFaviconLinks(branding: WorktreeUiBranding, version: string | null = null): string {
+  if (!branding.enabled || !branding.faviconHref) return applyIconVersionToHtml(DEFAULT_FAVICON_LINKS, version);
 
   const href = escapeHtmlAttribute(branding.faviconHref);
   return [
@@ -233,11 +258,19 @@ function replaceMarkedBlock(html: string, startMarker: string, endMarker: string
 
 export function applyUiBranding(html: string, env: NodeJS.ProcessEnv = process.env): string {
   const branding = getWorktreeUiBranding(env);
-  const withFavicon = replaceMarkedBlock(html, FAVICON_BLOCK_START, FAVICON_BLOCK_END, renderFaviconLinks(branding));
-  return replaceMarkedBlock(
+  const version = resolveIconVersion(env);
+  const withFavicon = replaceMarkedBlock(
+    html,
+    FAVICON_BLOCK_START,
+    FAVICON_BLOCK_END,
+    renderFaviconLinks(branding, version),
+  );
+  const branded = replaceMarkedBlock(
     withFavicon,
     RUNTIME_BRANDING_BLOCK_START,
     RUNTIME_BRANDING_BLOCK_END,
     renderRuntimeBrandingMeta(branding),
   );
+  // Links outside the marked block (apple-touch-icon, manifest) get the same version.
+  return applyIconVersionToHtml(branded, version);
 }
