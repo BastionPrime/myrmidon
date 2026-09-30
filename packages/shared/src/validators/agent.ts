@@ -275,12 +275,21 @@ export const testAdapterEnvironmentSchema = z.object({
 
 export type TestAdapterEnvironment = z.infer<typeof testAdapterEnvironmentSchema>;
 
+// myrmidon(S6): the operator-settable per-agent tool/connection permission.
+// `all` is the explicit default; `listed` is an allow-list.
+export const agentToolAccessSchema = z.object({
+  mode: z.enum(["all", "listed"]),
+  tools: z.array(z.string().trim().min(1).max(200)).max(500).optional(),
+  connections: z.array(z.string().trim().min(1).max(200)).max(500).optional(),
+});
+
 export const updateAgentPermissionsSchema = z.object({
   canCreateAgents: z.boolean(),
   canCreateSkills: z.boolean().optional(),
   canAssignTasks: z.boolean(),
   trustPreset: trustPresetSchema.optional(),
   authorizationPolicy: trustAuthorizationPolicySchema.optional(),
+  toolAccess: agentToolAccessSchema.optional(), // myrmidon(S6)
 });
 
 export type UpdateAgentPermissions = z.infer<typeof updateAgentPermissionsSchema>;

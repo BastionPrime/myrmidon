@@ -35,6 +35,7 @@ import { EmergencyStopBannerView } from "../components/myrmidon/EmergencyStopBan
 import { PageTabBar } from "../components/PageTabBar";
 import { adapterLabels, roleLabels, help } from "../components/agent-config-primitives";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
+import { AgentToolAccessSection } from "../components/myrmidon/AgentToolAccessSection"; // myrmidon(S6)
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
 import { redactCommandText as redactCommandSecretText } from "@paperclipai/adapter-utils";
 import { MarkdownEditor } from "../components/MarkdownEditor";
@@ -2307,6 +2308,13 @@ function ConfigurationTab({
               disabled={updatePermissions.isPending || taskAssignLocked}
             />
           </div>
+          {/* myrmidon(S6): per-agent tool and connection permission */}
+          <AgentToolAccessSection
+            permissions={agent.permissions}
+            base={{ canCreateAgents, canCreateSkills, canAssignTasks }}
+            pending={updatePermissions.isPending}
+            onSave={(update) => updatePermissions.mutate(update)}
+          />
         </div>
       </div> : null}
     </div>

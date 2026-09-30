@@ -367,6 +367,7 @@ export {
   testAdapterEnvironmentSchema,
   agentPermissionsSchema,
   updateAgentPermissionsSchema,
+  agentToolAccessSchema, // myrmidon(S6)
   type CreateAgent,
   type BuiltInAgentProvision,
   type BuiltInAgentReset,

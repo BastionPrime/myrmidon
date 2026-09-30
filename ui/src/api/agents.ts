@@ -80,6 +80,8 @@ export interface AgentPermissionUpdate {
   canAssignTasks: boolean;
   trustPreset?: AgentPermissions["trustPreset"];
   authorizationPolicy?: AgentPermissions["authorizationPolicy"];
+  // myrmidon(S6)
+  toolAccess?: { mode: "all" | "listed"; tools?: string[]; connections?: string[] };
 }
 
 export interface AgentWakeRequest {

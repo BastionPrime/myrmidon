@@ -1887,6 +1887,7 @@ export {
   testAdapterEnvironmentSchema,
   agentPermissionsSchema,
   updateAgentPermissionsSchema,
+  agentToolAccessSchema, // myrmidon(S6)
   type CreateAgent,
   type BuiltInAgentProvision,
   type BuiltInAgentReset,
@@ -2775,3 +2776,5 @@ export * from "./announcements.js";
 export * from "./myrmidon-workspace-hygiene.js";
 // myrmidon(C0): live run-admission limits shared by the server, the UI and the settings validator.
 export * from "./myrmidon-runtime-limits.js";
+// myrmidon(S6): per-agent tool and connection permissions.
+export * from "./myrmidon-agent-tool-permissions.js";
