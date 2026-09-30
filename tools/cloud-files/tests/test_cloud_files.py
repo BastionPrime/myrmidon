@@ -33,7 +33,7 @@ H = {"Accept": "application/json, text/event-stream", "Content-Type": "applicati
 
 class Resolver(PeerResolver):
     def addrs(self, host):
-        return {"bot-a-host": {"10.0.0.1"}, "bot-b-host": {"10.0.0.2"}, "bot-c-host": {"10.0.0.3"}}.get(host, set())
+        return {"bot-a-host": {"192.0.2.1"}, "bot-b-host": {"192.0.2.2"}, "bot-c-host": {"192.0.2.3"}}.get(host, set())
 
 
 def graph_handler(calls):
@@ -143,14 +143,14 @@ class AuthTests(unittest.TestCase):
 
     def test_file_transfer_only_from_bot_peer(self):
         e = Env()
-        with TestClient(e.app, base_url="http://cloud-files:8080", client=("10.0.0.1", 5000)) as c:
+        with TestClient(e.app, base_url="http://cloud-files:8080", client=("192.0.2.1", 5000)) as c:
             r = c.put("/v1/files?name=a.txt", content=b"abc")
             self.assertEqual(r.status_code, 201)
             fid = r.json()["id"]
             self.assertEqual(c.get(f"/v1/files/{fid}").content, b"abc")
-        c = TestClient(e.app, base_url="http://cloud-files:8080", client=("10.0.0.2", 5000))
+        c = TestClient(e.app, base_url="http://cloud-files:8080", client=("192.0.2.2", 5000))
         self.assertEqual(c.get(f"/v1/files/{fid}").status_code, 404)  # another bot never sees it
-        c = TestClient(e.app, base_url="http://cloud-files:8080", client=("10.9.9.9", 5000))
+        c = TestClient(e.app, base_url="http://cloud-files:8080", client=("192.0.2.99", 5000))
         if True:
             self.assertEqual(c.put("/v1/files?name=a", content=b"x", headers=GW).status_code, 403)
             self.assertEqual(c.put("/v1/files?name=a", content=b"x").status_code, 401)
@@ -161,7 +161,7 @@ class AuthTests(unittest.TestCase):
             out = e.call(c, "drive_download", {"root": "sources", "path": "RQ002/clip.txt"})
             self.assertFalse(out["result"].get("isError"), out)
             fid = json.loads(out["result"]["content"][0]["text"])["file_id"]
-        c = TestClient(e.app, base_url="http://cloud-files:8080", client=("10.0.0.1", 1))
+        c = TestClient(e.app, base_url="http://cloud-files:8080", client=("192.0.2.1", 1))
         self.assertEqual(c.get(f"/v1/files/{fid}").content, b"hello world")
 
     def test_dns_rebinding_host_refused(self):
