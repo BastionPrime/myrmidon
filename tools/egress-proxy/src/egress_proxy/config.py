@@ -16,17 +16,23 @@ from dataclasses import dataclass, field
 DEFAULT_PORT = 3128
 DEFAULT_BIND = "0.0.0.0"
 DEFAULT_CONNECT_TIMEOUT_SEC = 30
+DEFAULT_POLICY_REFRESH_SEC = 30
 
 MODE_ENV = "EGRESS_PROXY_MODE"
 PORT_ENV = "EGRESS_PROXY_PORT"
 BIND_ENV = "EGRESS_PROXY_BIND"
 BOTS_FILE_ENV = "EGRESS_PROXY_BOTS_FILE"
 CONNECT_TIMEOUT_ENV = "EGRESS_PROXY_CONNECT_TIMEOUT_SEC"
+POLICY_URL_ENV = "EGRESS_PROXY_POLICY_URL"
+POLICY_TOKEN_ENV = "EGRESS_PROXY_POLICY_TOKEN"
+POLICY_FILE_ENV = "EGRESS_PROXY_POLICY_FILE"
+POLICY_REFRESH_ENV = "EGRESS_PROXY_POLICY_REFRESH_SEC"
 
-#: The only mode this image implements. A list that refuses destinations is
-#: EGRESS-B; until then an operator who asks for one must get a refusal to
-#: start, not a service that quietly keeps letting everything through.
-SUPPORTED_MODES = ("log",)
+#: `log` records every destination and refuses none (EGRESS-A). `enforce` adds
+#: the decision of every project whose policy says `block` (EGRESS-B); a project
+#: whose policy says `log` keeps recording even then, so one project can be
+#: switched back without touching the service.
+SUPPORTED_MODES = ("log", "enforce")
 
 
 class ConfigError(Exception):
@@ -48,6 +54,13 @@ class Config:
     port: int = DEFAULT_PORT
     connect_timeout_sec: int = DEFAULT_CONNECT_TIMEOUT_SEC
     bots: dict[str, BotEntry] = field(default_factory=dict)
+    #: Where the lists come from: the board over HTTP, or a file. Either is
+    #: optional in `log` mode and required in `enforce` — an enforcing service
+    #: without a source would have nothing to decide with.
+    policy_url: str = ""
+    policy_token: str = ""
+    policy_file: str = ""
+    policy_refresh_sec: int = DEFAULT_POLICY_REFRESH_SEC
 
 
 def _read_int(env: dict[str, str], name: str, default: int, minimum: int, maximum: int) -> int:
@@ -101,8 +114,16 @@ def load_config(env: dict[str, str] | None = None) -> Config:
     mode = (env.get(MODE_ENV) or "log").strip().lower() or "log"
     if mode not in SUPPORTED_MODES:
         raise ConfigError(
-            f"{MODE_ENV} must be one of {', '.join(SUPPORTED_MODES)} (this image only records destinations; "
-            f"a list that refuses them is not implemented yet), got {mode!r}"
+            f"{MODE_ENV} must be one of {', '.join(SUPPORTED_MODES)}, got {mode!r}"
+        )
+    policy_url = (env.get(POLICY_URL_ENV) or "").strip()
+    policy_file = (env.get(POLICY_FILE_ENV) or "").strip()
+    if mode == "enforce" and not policy_url and not policy_file:
+        # Same fail-closed rule as EGRESS-A's `log` without a proxy address: a
+        # service asked to enforce must not come up enforcing nothing.
+        raise ConfigError(
+            f"{MODE_ENV} is \"enforce\": set {POLICY_URL_ENV} (the board's policy endpoint) "
+            f"or {POLICY_FILE_ENV} — without a list there is nothing to decide with"
         )
     return Config(
         mode=mode,
@@ -110,4 +131,8 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         port=_read_int(env, PORT_ENV, DEFAULT_PORT, 1, 65535),
         connect_timeout_sec=_read_int(env, CONNECT_TIMEOUT_ENV, DEFAULT_CONNECT_TIMEOUT_SEC, 1, 600),
         bots=load_bots((env.get(BOTS_FILE_ENV) or "").strip() or None),
+        policy_url=policy_url,
+        policy_token=(env.get(POLICY_TOKEN_ENV) or "").strip(),
+        policy_file=policy_file,
+        policy_refresh_sec=_read_int(env, POLICY_REFRESH_ENV, DEFAULT_POLICY_REFRESH_SEC, 1, 3600),
     )

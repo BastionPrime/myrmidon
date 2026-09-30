@@ -210,3 +210,5 @@ export { aiProviderDefaults } from "./ai_provider_defaults.js";
 export * from "./email.js";
 export { announcementDismissals, announcementPublications } from "./announcement_dismissals.js";
 export { litellmCostEvents, litellmModels, type LitellmModelRates } from "./litellm_costs.js";
+// myrmidon(EGRESS-B): destination allowlists and per-project mode of the bot egress proxy.
+export { myrmidonEgressPolicies } from "./myrmidon_egress_policies.js";
