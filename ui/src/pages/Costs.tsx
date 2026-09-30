@@ -12,6 +12,7 @@ import type {
 import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight, Coins, DollarSign, ReceiptText } from "lucide-react";
 import { budgetsApi } from "../api/budgets";
 import { costsApi } from "../api/costs";
+import { GatewayCostsTab } from "../components/myrmidon/litellm-costs/GatewayCostsTab"; // myrmidon(M2-A)
 import { BillerSpendCard } from "../components/BillerSpendCard";
 import { BudgetIncidentCard } from "../components/BudgetIncidentCard";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
@@ -34,7 +35,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const NO_COMPANY = "__none__";
-export type CostsMainTab = "overview" | "budgets" | "providers" | "billers" | "finance";
+export type CostsMainTab = "overview" | "budgets" | "providers" | "billers" | "finance" | "gateway"; // myrmidon(M2-A): gateway tab
 
 export interface CostsProps {
   /** Render inside Audit without a second page-level title or breadcrumb. */
@@ -652,6 +653,7 @@ export function Costs({
             <TabsTrigger value="providers">Providers</TabsTrigger>
             <TabsTrigger value="billers">Billers</TabsTrigger>
             <TabsTrigger value="finance">Finance</TabsTrigger>
+            <TabsTrigger value="gateway">Gateway</TabsTrigger> {/* myrmidon(M2-A) */}
           </TabsList>
         ) : null}
 
@@ -1083,6 +1085,10 @@ export function Costs({
               </Tabs>
             </>
           )}
+        </TabsContent>
+
+        <TabsContent value="gateway" className="mt-4 space-y-4"> {/* myrmidon(M2-A) */}
+          <GatewayCostsTab companyId={companyId} from={from || undefined} to={to || undefined} />
         </TabsContent>
 
         <TabsContent value="finance" className="mt-4 space-y-4">
