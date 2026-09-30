@@ -8,12 +8,16 @@
 
 Сервер доски работает под тем же uid, что и боты с терминалом. Доступ доски к сокету демона Docker равен root хоста для любого такого бота: контейнер с `Privileged`, с монтированием `/` и так далее создаётся одним вызовом. dockergate стоит между доской и демоном и пропускает только вызовы, которые делает драйвер, и только с телами, которые драйвер строит. Всё остальное запрещено (запрет по умолчанию). Сырой сокет демона доске не монтируется, доске отдаётся сокет dockergate (`MYRMIDON_BOT_DOCKER_SOCKET`, см. [SETTINGS.md](SETTINGS.md)).
 
+Дополнительные read-only тома бота (общие каталоги) описаны в
+[bot-extra-mounts.md](bot-extra-mounts.md); на стороне dockergate их разрешает
+ключ `mountSources`.
+
 ## Как решается
 
 1. **Вызывающий.** Соединение принимается, только если его открыл закреплённый процесс доски (`SO_PEERCRED`, затем сверка процесса по `/proc`): первый потомок главного процесса контейнера доски с ожидаемым `argv`. Чужой вызывающий получает статический отказ или молчаливое закрытие; слот соединения он не занимает. Режим `caller.mode: uid` (только uid и gid) нужен для CI и отвергается проверкой конфигурации при боевом `volumeRoot`.
 2. **Маршруты.** Сопоставляется сырой request-target, без раскодирования процентных escape-последовательностей; допускаются только литералы шаблона. Метод, версия API (только `v1.45`) и заголовки проверяются жёстко.
 3. **Тела.** Тело создания контейнера разбирается строгой схемой (неизвестный ключ, дубликат ключа, `null`, дробное число и экранированная буква отклоняются), затем пересобирается канонически, и сравнивается побайтно с полученным. Пересборка идёт от значений из `bots[]`, а не из запроса. Tar-загрузки (`ustar`) проверяются побайтно и пересобираются так же: типы, uid/gid, режимы, пути, порядок, содержимое.
-4. **Согласованность бота.** `botKey` берётся из имени контейнера; метка, тома, сеть и скрипт помощника обязаны ему соответствовать. Пределы памяти, CPU и числа процессов не могут превышать записанные в `bots[]`.
+4. **Согласованность бота.** `botKey` берётся из имени контейнера; метка, тома, сеть и скрипт помощника обязаны ему соответствовать. Дополнительные тома сверх трёх томов бота разрешены только как read-only binds, источник которых целиком назван в `mountSources`, а точка монтирования не занята; у помощника дополнительных томов нет. Пределы памяти, CPU и числа процессов не могут превышать записанные в `bots[]`.
 5. **Состояние.** Перед вызовом dockergate сам смотрит контейнер и проверяет предусловия (метка бота, статус, наличие `.next`).
 6. **Ответы урезаются** до полей, которые читает драйвер, с потолком размера.
 
@@ -47,19 +51,20 @@
 | `apiVersion` | только `1.45` |
 | `caller` | обязательно. `container` (имя контейнера доски), `containerLabels`, `uid`, `gid`, `argv`, `maxStartDelayTicks`, `mode` (`container-main-process` по умолчанию, `uid` только для CI) |
 | `volumeRoot` | каталог томов ботов на хосте; том бота `<root>/<botKey>/{hermes,workspace,scratch}` |
+| `mountSources` | каталоги хоста, которые бот может смонтировать дополнительно, только для чтения (пустой или отсутствующий список — ни одного). Каждый дополнительный bind в теле создания должен начинаться с одного из этих путей целиком, иметь суффикс `ro` и точку монтирования вне `/data/hermes`, `/workspace`, `/scratch`, `/tmp`; иначе `mount_source_not_allowed` или `binds_mismatch`. Список применим и при `SIGHUP` |
 | `network` | единственная сеть ботов |
 | `images` | непустой список образов, только по дайджесту (`имя@sha256:...`), тег не допускается |
 | `bots[]` | запись бота: `botKey`, `maxMemoryMb`, `maxCpus`, `maxPids` |
 | `limits` | лимиты и таймауты: размеры заголовка и тел, таймауты чтения и апстрима, число соединений и вызовов в полёте, общая частота, частота отказов на процесс, окна частоты по ботам (`createPerWindow`, `startPerWindow`, `restartPerWindow`, `stopPerWindow`, `putArchivePerWindow`, `rateWindowSec`). Пропущенный ключ берёт значение по умолчанию |
 | `statsFile` | абсолютный путь файла счётчиков |
 
-`SIGHUP` перечитывает файл; применяются только `bots`, `images`, `network` и `volumeRoot`. Неверный файл или файл, меняющий что-либо ещё, отклоняется, работает прежняя конфигурация.
+`SIGHUP` перечитывает файл; применяются только `bots`, `images`, `network`, `volumeRoot` и `mountSources`. Неверный файл или файл, меняющий что-либо ещё, отклоняется, работает прежняя конфигурация.
 
 ## Журнал и счётчики
 
 Журнал (JSON, одна строка на решение) содержит маршрут, `botKey`, решение, код причины, и для отказа по полю тела: путь поля, длину значения и первые 12 символов sha256. Тел запросов и ответов, имён из tar, значений окружения, заголовков клиента и секретов в нём нет по построению. События без решения: `caller_decoy`, `reject_flood`, `caller_resolve_failed`, `caller_not_board_main`, `config_reload_failed`.
 
-Коды причин: `caller_resolve_failed`, `caller_not_board_main`, `caller_pin_stale`, `target_form`, `method_not_allowed`, `api_version`, `route_not_allowed`, `header_forbidden`, `content_type`, `body_not_allowed`, `body_too_large`, `json_syntax`, `json_duplicate_key`, `json_unknown_key`, `json_type`, `json_value`, `json_not_canonical`, `bot_not_enrolled`, `image_not_allowed`, `image_contract`, `image_user`, `helper_image_mismatch`, `name_label_mismatch`, `binds_mismatch`, `network_mismatch`, `limit_exceeds_enrollment`, `script_mismatch`, `nonce_invalid`, `tar_syntax`, `tar_type`, `tar_owner`, `tar_mode`, `tar_path`, `tar_nonce`, `tar_order`, `tar_content`, `tar_too_large`, `tar_not_canonical`, `foreign_container`, `state_precondition`, `volume_root_invariant`, `rate_limited`, `concurrency_limited`, `upstream_error`, `upstream_timeout`, `upstream_upgrade`, `response_too_large`, `marker_too_large`.
+Коды причин: `caller_resolve_failed`, `caller_not_board_main`, `caller_pin_stale`, `target_form`, `method_not_allowed`, `api_version`, `route_not_allowed`, `header_forbidden`, `content_type`, `body_not_allowed`, `body_too_large`, `json_syntax`, `json_duplicate_key`, `json_unknown_key`, `json_type`, `json_value`, `json_not_canonical`, `bot_not_enrolled`, `image_not_allowed`, `image_contract`, `image_user`, `helper_image_mismatch`, `name_label_mismatch`, `binds_mismatch`, `mount_source_not_allowed`, `network_mismatch`, `limit_exceeds_enrollment`, `script_mismatch`, `nonce_invalid`, `tar_syntax`, `tar_type`, `tar_owner`, `tar_mode`, `tar_path`, `tar_nonce`, `tar_order`, `tar_content`, `tar_too_large`, `tar_not_canonical`, `foreign_container`, `state_precondition`, `volume_root_invariant`, `rate_limited`, `concurrency_limited`, `upstream_error`, `upstream_timeout`, `upstream_upgrade`, `response_too_large`, `marker_too_large`.
 
 `statsFile` (JSON, переписывается атомарно) хранит только числа и имена: разрешения и отказы по маршрутам и причинам, `denyPeer`, `rejectDropped`, `resolveFailures`, `resolveDecoys`, ошибки апстрима, `markerTooLarge`, `rateLimited`, состояние закрепления, ответ демона на ping, гистограмму длительности по маршрутам. Значений из запросов и ответов демона в нём нет. Полезные сигналы для мониторинга: рост `denyPeer` или `resolveDecoys`, отказы кроме ожидаемых, `pinned: false`, устаревший `updatedAt`.
 
@@ -72,8 +77,9 @@
    Содержимое не трогать. (uid 65532 — это пользователь самого контейнера dockergate,
    к владельцу тома он отношения не имеет.)
 2. Добавить запись в `bots[]` (структурной правкой JSON, не регуляркой) с потолками памяти, CPU и числа процессов.
-3. Проверить: `dockergate check-config --config <файл>`.
-4. Отправить `SIGHUP` процессу dockergate.
+3. Если боту нужны дополнительные read-only тома, добавить их источники в `mountSources` (тоже структурной правкой); источник, не названный здесь, до демона не дойдёт.
+4. Проверить: `dockergate check-config --config <файл>`.
+5. Отправить `SIGHUP` процессу dockergate.
 
 ## Выкат и откат
 
