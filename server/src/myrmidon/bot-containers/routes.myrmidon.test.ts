@@ -297,7 +297,9 @@ describe("myrmidon(CONCURRENCY-SYNC) status: the board's limit against the appli
   });
 
   it("says an unmanaged gateway cannot be read or changed, and warns when it limits runs", async () => {
-    const recentGatewayRateLimit = vi.fn(async () => "2026-01-01T00:00:00.000Z");
+    const recentGatewayRateLimit = vi.fn(
+      async (_agent: BotContainerRouteAgent, _opts: { sinceIso: string }) => "2026-01-01T00:00:00.000Z",
+    );
     const agent = card({ ...ENABLED_CARD, enabled: false }, { runtimeConfig: board(3) });
     const res = await request(app(member, { agent, getRuntime: () => runtime(noContainer), recentGatewayRateLimit }))
       .get(statusUrl)
