@@ -309,6 +309,39 @@ does not confirm a model provider is configured or that a run would
 actually succeed — that needs a live-run check on a stand, not a
 container health check.
 
+## G4 adapter contract check
+
+`g4-contract-check.sh` exercises the `hermes_gateway` adapter's wire
+contract against a container booted from the CI-built image (the node:test
+wrapper `scripts/myrmidon/bot-runtime/g4-contract.myrmidon.test.mjs` runs
+the live part when `G4_CONTRACT_CHECK_IMAGE` names the image — e.g.
+`ghcr.io/itkadr-git/myrmidon-hermes:main` or the tag being released;
+locally: `bash docker/bot-runtime/g4-contract-check.sh <image> [port]`).
+It checks, over the live gateway HTTP API:
+
+1. `/health` is open, a wrong bearer is rejected (401), stopping an
+   unknown run is a clean 404;
+2. `Idempotency-Key`: same key + same body replays the same `run_id` with
+   `replayed: true`; same key + different body is
+   `idempotency_key_conflict` — the property the board's infra-interrupt
+   relief for `hermes_gateway` (L1) relies on;
+3. `/stop` on a live run: a run pinned to a loopback mock provider stays
+   `running`, `POST .../stop` flips it to `stopping` and then `cancelled`,
+   with `run.cancelled` as the terminal SSE event;
+4. `POST .../approval` with nothing pending is a 409 (the endpoint the
+   adapter's auto-deny posts to);
+5. the `MYRMIDON_BOT_YOLO` switch: `1` exports `HERMES_YOLO_MODE=1` to
+   the gateway process, `0` leaves it unset (approvals follow
+   `config.yaml`).
+
+The check needs no secrets: the API server key is generated per run and
+used only in headers/env of that run; the mock provider never leaves
+loopback and streams one chunk per second so the run is stoppable. The
+script binds `/data/hermes` from a throwaway directory (key through
+`${HERMES_HOME}/.env`, per the bot-runtime contract) and mounts
+`/workspace`/`/scratch` as uid-10001 tmpfs, mirroring the container
+driver's volume layout.
+
 ## What's not verified yet
 
 This Dockerfile and entrypoint were written by reading a reference
