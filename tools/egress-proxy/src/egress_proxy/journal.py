@@ -70,11 +70,12 @@ class DestinationJournal:
         port: int,
         scheme: str,
         result: str,
+        project: str | None = None,
     ) -> dict[str, Any]:
         record = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "bot": bot,
-            "project": project_for(self.bots, bot),
+            "project": project_for(self.bots, bot) if project is None else project,
             "method": method,
             "scheme": scheme,
             "destination": host,

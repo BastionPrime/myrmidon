@@ -188,5 +188,151 @@ class HealthTest(ProxyHarnessTestCase):
         self.assertEqual(self._lines(), [])
 
 
+class EnforceTest(unittest.TestCase):
+    """myrmidon(EGRESS-B): the same proxy, now with a decision."""
+
+    def setUp(self) -> None:
+        from egress_proxy.policy import BotPolicy, Destination, EgressPolicy, ProjectPolicy
+
+        self.journal_text = io.StringIO()
+        self.target = ThreadingHTTPServer(("127.0.0.1", 0), _TargetHandler)
+        threading.Thread(target=self.target.serve_forever, daemon=True).start()
+        self.addCleanup(self.target.shutdown)
+
+        self.policy = EgressPolicy(
+            bots={
+                "agent-a": BotPolicy(project="example-project", allow=(Destination("127.0.0.1", 9999),)),
+                "agent-b": BotPolicy(project="other-project"),
+            },
+            projects={
+                "example-project": ProjectPolicy(mode="block", allow=(Destination("127.0.0.1", self.target.server_port),)),
+                "other-project": ProjectPolicy(mode="log"),
+            },
+        )
+        self.proxy = EgressProxyServer(
+            Config(
+                mode="enforce",
+                bind="127.0.0.1",
+                port=0,
+                connect_timeout_sec=2,
+                bots={"agent-a": BotEntry(bot_key="agent-a", project="from-the-file")},
+            ),
+            DestinationJournal(self.journal_text, {}),
+            policy=self.policy,
+        )
+        threading.Thread(target=self.proxy.serve_forever, daemon=True).start()
+        self.addCleanup(self.proxy.shutdown)
+
+    @staticmethod
+    def _basic(user: str) -> str:
+        return "Basic " + base64.b64encode(f"{user}:egress".encode("utf-8")).decode("ascii")
+
+    def _request(self, head: bytes) -> bytes:
+        with socket.create_connection(("127.0.0.1", self.proxy.port), timeout=5) as sock:
+            sock.sendall(head)
+            sock.settimeout(5)
+            chunks: list[bytes] = []
+            while True:
+                try:
+                    chunk = sock.recv(65536)
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return b"".join(chunks)
+
+    def _lines(self) -> list[dict]:
+        return [json.loads(line) for line in self.journal_text.getvalue().splitlines() if line.strip()]
+
+    def test_an_allowed_destination_still_goes_through(self) -> None:
+        response = self._request(
+            (
+                f"GET http://127.0.0.1:{self.target.server_port}/hello HTTP/1.0\r\n"
+                f"Proxy-Authorization: {self._basic('agent-a')}\r\n"
+                "\r\n"
+            ).encode("ascii")
+        )
+        self.assertIn(b"200", response.split(b"\r\n", 1)[0])
+        self.assertEqual(self._lines()[0]["result"], "ok")
+        self.assertEqual(self._lines()[0]["project"], "example-project")
+
+    def test_a_destination_on_no_list_is_refused_and_recorded(self) -> None:
+        response = self._request(
+            (
+                f"CONNECT 127.0.0.1:{self.target.server_port + 1} HTTP/1.0\r\n"
+                f"Proxy-Authorization: {self._basic('agent-a')}\r\n"
+                "\r\n"
+            ).encode("ascii")
+        )
+        self.assertIn(b"403", response.split(b"\r\n", 1)[0])
+        lines = self._lines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["result"], "blocked")
+        self.assertEqual(lines[0]["project"], "example-project")
+
+    def test_the_bot_s_own_list_is_added_to_its_project_s(self) -> None:
+        response = self._request(
+            (
+                f"GET http://127.0.0.1:9999/hello HTTP/1.0\r\n"
+                f"Proxy-Authorization: {self._basic('agent-a')}\r\n"
+                "\r\n"
+            ).encode("ascii")
+        )
+        # Nothing listens on 9999: the point is that the policy let it through,
+        # so the answer is the upstream 502, not the policy's 403.
+        self.assertIn(b"502", response.split(b"\r\n", 1)[0])
+
+    def test_a_project_in_log_mode_is_only_recorded(self) -> None:
+        response = self._request(
+            (
+                f"CONNECT 127.0.0.1:{self.target.server_port} HTTP/1.0\r\n"
+                f"Proxy-Authorization: {self._basic('agent-b')}\r\n"
+                "\r\n"
+            ).encode("ascii")
+        )
+        self.assertIn(b"200", response.split(b"\r\n", 1)[0])
+        self.assertEqual(self._lines()[0]["project"], "other-project")
+        self.assertEqual(self._lines()[0]["result"], "ok")
+
+    def test_the_refusal_feed_lists_what_was_refused(self) -> None:
+        self._request(
+            (
+                f"CONNECT 127.0.0.1:{self.target.server_port + 1} HTTP/1.0\r\n"
+                f"Proxy-Authorization: {self._basic('agent-a')}\r\n"
+                "\r\n"
+            ).encode("ascii")
+        )
+        response = self._request(b"GET /refusals HTTP/1.0\r\n\r\n")
+        self.assertIn(b"200", response.split(b"\r\n", 1)[0])
+        body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+        self.assertEqual(len(body["refusals"]), 1)
+        self.assertEqual(body["refusals"][0]["result"], "blocked")
+        self.assertEqual(body["refusals"][0]["destination"], "127.0.0.1")
+
+    def test_log_mode_is_the_rollback_switch(self) -> None:
+        # The same document, but the service is in `log`: nothing may be refused
+        # even though the project's policy says `block`.
+        log_proxy = EgressProxyServer(
+            Config(mode="log", bind="127.0.0.1", port=0, connect_timeout_sec=2),
+            DestinationJournal(io.StringIO(), {}),
+            policy=self.policy,
+        )
+        threading.Thread(target=log_proxy.serve_forever, daemon=True).start()
+        self.addCleanup(log_proxy.shutdown)
+        with socket.create_connection(("127.0.0.1", log_proxy.port), timeout=5) as sock:
+            sock.sendall(
+                (
+                    f"CONNECT 127.0.0.1:{self.target.server_port + 1} HTTP/1.0\r\n"
+                    f"Proxy-Authorization: {self._basic('agent-a')}\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            head = sock.recv(4096)
+        # 502 (nothing there) is the upstream answer; a 403 would mean the policy
+        # was enforced in a mode that must only record.
+        self.assertIn(b"502", head.split(b"\r\n", 1)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,17 +1,26 @@
-# Outbound proxy for container bots, log-only (EGRESS-A).
+# Outbound proxy for container bots (EGRESS-A) with the per-project lists (EGRESS-B).
 #
 # `bots` — the network the bot containers live on — must already exist and must have no route
 # out (docker `internal: true`). `egress` is an ordinary bridge with a route out; this proxy is
 # the only service on both, so it is the only way off the bots' network. Every request a bot
 # sends outward therefore arrives here and is written to the journal (docker logs), naming the
-# bot, its project and the destination. Nothing is refused: EGRESS-B is what adds the lists.
+# bot, its project and the destination.
+#
+# EGRESS_PROXY_MODE=log records and refuses nothing (EGRESS-A). EGRESS_PROXY_MODE=enforce adds
+# the decision of every project whose policy says `block`: a destination on neither the project's
+# list nor the bot's is refused with 403 and recorded with `result: "blocked"`. The lists are
+# edited on the board (a project's "Egress" section and the agent card's) and fetched from
+# EGRESS_PROXY_POLICY_URL with EGRESS_PROXY_POLICY_TOKEN. The board reads this service's recent
+# refusals for the project page, so the board needs this address too
+# (MYRMIDON_BOT_EGRESS_REFUSALS_URL=http://egress-proxy:3128).
 #
 # The bot side of the same item is server/src/myrmidon/bot-containers/egress.ts — set
 # MYRMIDON_BOT_EGRESS_MODE=log and MYRMIDON_BOT_EGRESS_PROXY=http://egress-proxy:3128 there, and
 # the bots' profiles carry the proxy variables (docs/myrmidon/egress.md).
 #
-# Before `up`: create ./config/bots.json (bot key -> project; see config.example.json). A bot
-# missing from it is still served and recorded — without a project, which is the gap the
+# Before `up`: create ./config/bots.json (bot key -> project; see config.example.json). It is the
+# fallback for the journal's project name; once the board names a bot's project, that wins. A bot
+# missing from both is still served and recorded — without a project, which is the gap the
 # observation period exists to close.
 #
 # The published address is the compose service name on the bots' network: `http://egress-proxy:3128`.
@@ -36,9 +45,14 @@ services:
     pids_limit: 256
     networks: [bots, egress]
     environment:
+      # `log` keeps the fleet recording; switch to `enforce` once a project's list is verified.
       EGRESS_PROXY_MODE: log
       EGRESS_PROXY_PORT: "3128"
       EGRESS_PROXY_BOTS_FILE: /config/bots.json
+      # The board publishes the lists; the token is the same on both sides.
+      EGRESS_PROXY_POLICY_URL: http://board.example.com:3100/api/myrmidon/bot-egress/policy
+      EGRESS_PROXY_POLICY_TOKEN: <shared token>
+      EGRESS_PROXY_POLICY_REFRESH_SEC: "30"
     volumes:
       - ./config:/config:ro
     tmpfs: ["/tmp:size=16m"]

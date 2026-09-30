@@ -79,6 +79,7 @@ import { ChoosePathButton } from "./PathInstructionsModal";
 import { AgentCardModelsFields } from "./myrmidon/AgentCardModelsFields";
 // myrmidon(W2b): bot container settings on the agent card
 import { AgentCardContainerFields } from "./myrmidon/AgentCardContainerFields";
+import { AgentCardEgressFields } from "./myrmidon/AgentCardEgressFields"; // myrmidon(EGRESS-B)
 import { OpenCodeLogoIcon } from "./OpenCodeLogoIcon";
 import { ReportsToPicker } from "./ReportsToPicker";
 import {
@@ -1721,6 +1722,10 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
               unsaved={"container" in overlay.adapterConfig || overlay.adapterType !== undefined}
               onChange={(next) => mark("adapterConfig", "container", next)}
             />
+          )}
+          {/* myrmidon(EGRESS-B): the bot's project and its own egress list */}
+          {!isCreate && adapterType === "hermes_gateway" && (
+            <AgentCardEgressFields agentId={props.agent.id} />
           )}
           {isLocal && (<>
               <ModelDropdown
