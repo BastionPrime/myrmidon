@@ -210,6 +210,11 @@ case the interface refuses — which is exactly the case the script would refuse
   is off.
 - The server log: migrations applied, no startup errors:
   `docker compose logs --since 10m <service>`.
+- Ad-hoc operator indexes: a migration may drop indexes created by hand outside the
+  migration history (the release migration drops the `myr_hotfix_*` expression indexes
+  once the hot-path predicates are uuid-typed). When the database was touched by hand,
+  compare it with the schema after the deploy: `pnpm db:generate` in a checkout of the
+  deployed tag must report no drift.
 - The interface opens, the agent list is in place, an issue opens.
 - Runs start again: queued wakes are delivered, a new run goes through.
 - The plugins (hindsight and the rest) are `ready` in the plugin settings.
