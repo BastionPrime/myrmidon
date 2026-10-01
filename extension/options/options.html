@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Myrmidon Bridge — options</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 560px; margin: 24px auto; padding: 0 16px; }
+      h1 { font-size: 16px; }
+      p, li { font-size: 13px; }
+      code { background: #f6f8fa; padding: 1px 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Myrmidon Bridge options</h1>
+    <p>
+      The extension connects outbound to the bridge gateway only. Pairing,
+      connect and disconnect live in the toolbar popup.
+    </p>
+    <p>What this build implements:</p>
+    <ul>
+      <li>read-only actions: open, read, click, screenshot</li>
+      <li>allowlist of tender-site domains, checked locally before every action</li>
+      <li>the bridge token stays in <code>chrome.storage.local</code> on this computer</li>
+    </ul>
+    <p>
+      Signing steps are never automated: the person at this computer presses
+      the button on the final step; the extension does not hold the key or the
+      PIN.
+    </p>
+    <script type="module" src="../entry-options.js"></script>
+  </body>
+</html>
