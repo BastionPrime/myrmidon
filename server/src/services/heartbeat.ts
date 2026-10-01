@@ -625,6 +625,9 @@ import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { serverVersion } from "../version.js";
 // myrmidon(R3): maintenance mode admission gate
 import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/maintenance/gate.js";
+// myrmidon(D2): uuid-typed json comparisons for the board DB hot path. See
+// docs/myrmidon/DIVERGENCE.md.
+import { jsonTextUuid } from "../myrmidon/db-hot-path/json-uuid.js";
 // myrmidon(P1): stale active environment lease sweep
 import { createStaleActiveLeaseSweep } from "../myrmidon/leases-stale-sweep.js";
 // myrmidon(M3): skip idle timer heartbeats
@@ -9973,7 +9976,10 @@ export function heartbeatService(
             !["issue_commented", "issue_reopened_via_comment"].includes(reason ?? "")) continue;
         const [comment] = await db.select().from(issueComments).where(and(
           eq(issueComments.companyId, run.companyId), eq(issueComments.issueId, issueId),
-          sql`${issueComments.id}::text = ${commentId}`, eq(issueComments.authorType, "user"),
+          // myrmidon(D2): uuid-typed comparison instead of `issue_comments.id::text
+          // = $commentId`; the text cast defeated the primary-key index. The guard
+          // keeps a malformed saved id a no-match instead of a UUID cast error.
+          eq(issueComments.id, jsonTextUuid(sql`${commentId}`)), eq(issueComments.authorType, "user"),
           eq(issueComments.authorUserId, requestedByActorId), isNull(issueComments.deletedAt),
           isNull(issueComments.createdByRunId),
           stoppedNativeContinuation ? undefined : gt(issueComments.createdAt, run.finishedAt),
@@ -18913,7 +18919,13 @@ export function heartbeatService(
       .select({ id: heartbeatRuns.id, companyId: heartbeatRuns.companyId })
       .from(agentWakeupRequests)
       .innerJoin(heartbeatRuns, and(
-        sql`${heartbeatRuns.resultJson}->>'queuedCommentInterruptQueueId' = ${agentWakeupRequests.id}::text`,
+        // myrmidon(D2): uuid-typed comparison instead of
+        // `heartbeat_runs.result_json->>'queuedCommentInterruptQueueId' =
+        // agent_wakeup_requests.id::text`. The text cast defeated
+        // agent_wakeup_requests' primary-key index and forced a sequential
+        // scan of the whole table on every recovery sweep. See jsonTextUuid's
+        // doc comment and docs/myrmidon/DIVERGENCE.md.
+        eq(jsonTextUuid(sql`${heartbeatRuns.resultJson}->>'queuedCommentInterruptQueueId'`), agentWakeupRequests.id),
         eq(heartbeatRuns.companyId, agentWakeupRequests.companyId),
         eq(heartbeatRuns.agentId, agentWakeupRequests.agentId),
       ))

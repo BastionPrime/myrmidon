@@ -1982,6 +1982,13 @@
       "when": 1790767639973,
       "tag": "0285_litellm_costs",
       "breakpoints": true
+    },
+    {
+      "idx": 286,
+      "version": "7",
+      "when": 1790822836557,
+      "tag": "0286_db_hot_path_uuid_indexes",
+      "breakpoints": true
     }
   ]
 }
