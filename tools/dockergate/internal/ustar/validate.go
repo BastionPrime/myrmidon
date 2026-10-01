@@ -327,14 +327,26 @@ func checkContent(entries []Entry, dirs, files map[string]bool, mount, nonce str
 func content(detail string) *deny.Error { return deny.New(deny.TarContent).WithDetail(detail) }
 
 // checkApplied requires an object with exactly the string keys restartHash and
-// filesHash and the string array files. Its content is not rebuilt: the
-// marker is data the board writes for itself.
+// filesHash and the string array files, plus the optional integer
+// maxConcurrentRuns (1..50) the board records since CONCURRENCY-SYNC. Any
+// other key is refused. Its content is not rebuilt: the marker is data the
+// board writes for itself.
 func checkApplied(data []byte) *deny.Error {
 	if len(data) > MaxApplied {
 		return content("applied_size")
 	}
 	v, derr := jsonx.Parse(data)
-	if derr != nil || v.Kind != jsonx.KindObject || len(v.Members) != 3 {
+	if derr != nil || v.Kind != jsonx.KindObject {
+		return content("applied_json")
+	}
+	want := 3
+	if m := v.Get("maxConcurrentRuns"); m != nil {
+		if m.Kind != jsonx.KindInt || m.N < 1 || m.N > 50 {
+			return content("applied_keys")
+		}
+		want = 4
+	}
+	if len(v.Members) != want {
 		return content("applied_json")
 	}
 	for _, key := range []string{"restartHash", "filesHash"} {
