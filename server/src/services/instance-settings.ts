@@ -43,6 +43,8 @@ import { preserveStackGeneralKey } from "../myrmidon/stack-registry/store.js";
 import { preserveBotCanaryGeneralKey } from "../myrmidon/bot-containers/canary-store.js";
 // myrmidon(CLOUD-CONNECTOR): keep the cloud connector state across vendor writes of `general`
 import { preserveCloudConnectorGeneralKey } from "../myrmidon/cloud-connector/store.js";
+// myrmidon(SEC1): keep the access-hub host registry across vendor writes of `general`
+import { preserveAccessHubHostsGeneralKey } from "../myrmidon/access-hub/host-registry.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -554,17 +556,17 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state; myrmidon(R5-B): keep bot canary state; myrmidon(SUA): keep stack registry cache
+          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state; myrmidon(R5-B): keep bot canary state; myrmidon(SUA): keep stack registry cache; myrmidon(SEC1): keep the access-hub host registry
           // myrmidon(BROWSER-CONSOLE): same for the browser console sessions/journal key
           general: {
             ...nextGeneral,
-            ...preserveMaintenanceGeneralKey(current.general),
-            ...preserveDeployJobsGeneralKey(current.general),
-            ...preserveBrowserConsoleGeneralKey(current.general),
-            ...preserveStackGeneralKey(current.general),
-            ...preserveBotCanaryGeneralKey(current.general),
-            // myrmidon(CLOUD-CONNECTOR): same for the cloud connector accounts/roots/grants/journal
-            ...preserveCloudConnectorGeneralKey(current.general),
+            ...preserveMaintenanceGeneralKey(current.general), // myrmidon(R3)
+            ...preserveDeployJobsGeneralKey(current.general), // myrmidon(R5-A)
+            ...preserveBrowserConsoleGeneralKey(current.general), // myrmidon(BROWSER-CONSOLE)
+            ...preserveStackGeneralKey(current.general), // myrmidon(SUA)
+            ...preserveBotCanaryGeneralKey(current.general), // myrmidon(R5-B)
+            ...preserveAccessHubHostsGeneralKey(current.general), // myrmidon(SEC1)
+            ...preserveCloudConnectorGeneralKey(current.general), // myrmidon(CLOUD-CONNECTOR)
           },
           updatedAt: now,
         })
