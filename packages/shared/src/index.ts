@@ -2778,3 +2778,5 @@ export * from "./myrmidon-workspace-hygiene.js";
 export * from "./myrmidon-runtime-limits.js";
 // myrmidon(S6): per-agent tool and connection permissions.
 export * from "./myrmidon-agent-tool-permissions.js";
+// myrmidon(M2-B): per-agent gateway key names and fallback-chain cycle checks.
+export * from "./myrmidon-litellm-sync.js";
