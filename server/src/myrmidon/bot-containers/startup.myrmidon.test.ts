@@ -35,7 +35,7 @@ function driver(): BotContainerDriver {
   return {
     status: async (botKey) => ({ botKey, state: "running", restartHash: "r", filesHash: "f" }),
     list: async () => [],
-    templateDrift: async () => false,
+    templateDrift: async () => ({ drifted: false, fields: [] }),
     create: async () => {},
     recreate: async () => {},
     writeProfile: async () => {},

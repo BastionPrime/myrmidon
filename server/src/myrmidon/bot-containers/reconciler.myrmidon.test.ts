@@ -6,7 +6,7 @@ import {
   type MaintenanceEnterResult,
   type MaintenanceWindowView,
 } from "./reconciler.js";
-import type { BotContainerDriver, BotContainerSpec, BotContainerStatus } from "./driver.js";
+import type { BotContainerDriver, BotContainerSpec, BotContainerStatus, TemplateDriftField } from "./driver.js";
 import type { CompiledProfile } from "./types.js";
 
 const SPEC: BotContainerSpec = {
@@ -42,7 +42,11 @@ interface FakeDriver extends BotContainerDriver {
  */
 function fakeDriver(
   initial: BotContainerStatus,
-  opts: { drift?: boolean; fail?: Partial<Record<"create" | "recreate" | "writeProfile" | "start" | "restart", string>> } = {},
+  opts: {
+    drift?: boolean;
+    driftFields?: TemplateDriftField[];
+    fail?: Partial<Record<"create" | "recreate" | "writeProfile" | "start" | "restart", string>>;
+  } = {},
 ): FakeDriver {
   const calls: string[] = [];
   let current = initial;
@@ -62,7 +66,13 @@ function fakeDriver(
     },
     async templateDrift() {
       calls.push("templateDrift");
-      return current.state !== "missing" && (opts.drift ?? false);
+      const drifted = current.state !== "missing" && (opts.drift ?? false);
+      // The report names the field: the default is the 01.10 shape — an
+      // inspect that does not carry the bind list at all.
+      const fields = drifted
+        ? (opts.driftFields ?? [{ field: "HostConfig.Binds", expected: ["/srv/myrmidon/bots/agent-a/hermes:/data/hermes"], actual: undefined }])
+        : [];
+      return { drifted, fields };
     },
     async create() {
       calls.push("create");
@@ -134,11 +144,16 @@ function fakeMaintenance(runningSequence: number[], opts: { owned?: boolean } = 
 }
 
 function fakeActivity() {
+  // `records` keeps the shape the assertions have always compared (level and
+  // message); `entries` keeps the details too, for the checks that need them.
   const records: Array<{ level: string; message: string }> = [];
+  const entries: Array<{ level: string; message: string; details?: Record<string, unknown> }> = [];
   return {
     records,
-    record: vi.fn((entry: { level: "info" | "error"; message: string }) => {
+    entries,
+    record: vi.fn((entry: { level: "info" | "error"; message: string; details?: Record<string, unknown> }) => {
       records.push({ level: entry.level, message: entry.message });
+      entries.push(entry);
     }),
   };
 }
@@ -375,6 +390,41 @@ describe("reconcileBot", () => {
       expect(activity.records.at(-1)).toEqual({
         level: "info",
         message: "bot container recreated for a template change (image, resource limits or network)",
+      });
+    });
+
+    it("logs which field drifted, with both values, before it recreates anything", async () => {
+      const applied = profile();
+      const driver = fakeDriver(
+        { botKey: "agent-a", state: "running", ...hashesOf(applied) },
+        {
+          drift: true,
+          driftFields: [
+            {
+              field: "HostConfig.Binds",
+              expected: ["/srv/myrmidon/bots/agent-a/hermes:/data/hermes"],
+              actual: undefined,
+            },
+          ],
+        },
+      );
+      const activity = fakeActivity();
+      const outcome = await run(driver, fakeMaintenance([0]), { activity });
+      expect(outcome).toEqual({ kind: "applied_restart" });
+      // The 01.10 incident: the log named no field at all, so nothing said why
+      // every bot was recreated every pass.
+      expect(activity.entries[0]).toMatchObject({
+        level: "info",
+        message: "bot container template drift detected",
+        details: {
+          fields: [
+            {
+              field: "HostConfig.Binds",
+              expected: ["/srv/myrmidon/bots/agent-a/hermes:/data/hermes"],
+              actual: undefined,
+            },
+          ],
+        },
       });
     });
 

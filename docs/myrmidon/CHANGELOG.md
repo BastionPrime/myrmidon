@@ -19,6 +19,47 @@ version file to edit. Base Paperclip version is in the image label
   action writes an activity log row. The section is enabled by the
   `MYRMIDON_HINDSIGHT_API_URL` + `MYRMIDON_HINDSIGHT_KEY_SECRET` pair.
 
+## 1.3.2
+
+Everything merged between the 1.3.1 and 1.3.2 tags. Deploy this release's dockergate image
+together with the board.
+
+### Bot containers
+
+- The reconciler no longer recreates bot containers whose template never changed. dockergate
+  trimmed `HostConfig.Binds` out of the container inspect (A2) while the driver's template-drift
+  check compared it, so every bot counted as drifted on every pass: production recreated all 51
+  bots every 17–20 minutes, interrupting every run in flight. The A2 answer carries the bind list
+  again, and a gate contract test checks that every field the drift check compares survives the
+  trim (the field list is emitted from the driver's code, not hand-copied) (#253).
+- Every drift writes an activity line naming the field and both values
+  (`bot container template drift detected`, `details.fields`), so it is diagnosable from the log
+  alone instead of costing another incident (#253).
+- The state-DB descriptor probe on the gateway write path is bounded: the WAL/SHM generation
+  check now has a budget, so a slow or stuck filesystem no longer stalls every bot write (#240).
+- Bot image development variant: a third build target with a repository-cycle toolchain is
+  available for development work (#238).
+
+### Interface
+
+- Live browser screen console core: the owner watches and drives the live browser that bots
+  authorize in. Registry, screen sessions with safe timers, a two-contour bot pause, the
+  session journal and site-data cleanup. See [guides/browsers.md](guides/browsers.md) (#210).
+- Access hub server core: the server module for the Access section (secrets, grants, rotation,
+  SSH keys) is merged. See [guides/access-hub.md](guides/access-hub.md) (#235).
+- Stack registry guide: the seeded component list, `GET /api/myrmidon/stack` and
+  `POST /api/myrmidon/stack/refresh`, the cache and the Docker socket setting. See
+  [guides/stack-registry.md](guides/stack-registry.md) (#243).
+- Access-hub guide aligned with the merged server module (#249).
+
+### Cloud storage
+
+- Owner-authorized cloud storage with per-agent folder grants: the owner connects one account
+  per provider, keeps a list of reachable folders and grants them to an agent, a caste or
+  everyone with a read-only or read-write mode. OneDrive provider and API under
+  `/api/myrmidon/cloud-connector`. See [guides/cloud-files-connector.md](guides/cloud-files-connector.md)
+  (#245).
+
 ## 1.3.1
 
 Everything merged between the 1.3.0 and 1.3.1 tags. The release replaces 1.3.0 and ships

@@ -43,7 +43,7 @@
 
 import { randomBytes } from "node:crypto";
 import http from "node:http";
-import type { BotContainerDriver, BotContainerSpec, BotContainerStatus } from "./driver.js";
+import type { BotContainerDriver, BotContainerSpec, BotContainerStatus, TemplateDriftField, TemplateDriftReport } from "./driver.js";
 import type { CompiledProfile } from "./types.js";
 import {
   assertBotRuntimeContract,
@@ -555,12 +555,81 @@ interface DockerInspect {
   HostConfig?: { Memory?: number; NanoCpus?: number; PidsLimit?: number; NetworkMode?: string; Binds?: string[] };
 }
 
-/** True when the container's live bind list is not exactly `wanted`, in order.
- *  Docker returns the binds as they were created, so a card that added, removed
- *  or reordered an extra mount shows up here as a template drift. */
-function bindsDrifted(existing: string[] | undefined, wanted: readonly string[]): boolean {
-  if (!existing || existing.length !== wanted.length) return true;
-  return existing.some((bind, index) => bind !== wanted[index]);
+/**
+ * The container-template fields the drift check compares, in the order the log
+ * names them. `field` is the dotted path inside a container inspect — the same
+ * path dockergate's A2 answer uses — so this table is also the contract with
+ * dockergate (tools/dockergate/internal/upstream/inspect.go): every path here
+ * must come back through the proxy. tools/dockergate/contract/emit-fixtures.ts
+ * writes this list into inspect-contract.json and the gate's contract test
+ * checks the A2 answer against it, so dockergate dropping a field (the 01.10
+ * incident: HostConfig.Binds) turns CI red instead of recreating every bot on
+ * every pass.
+ */
+const DRIFT_READS: ReadonlyArray<{
+  field: string;
+  actual: (info: Pick<DockerInspect, "Config" | "HostConfig">) => unknown;
+  expected: (body: DockerCreateContainerBody) => unknown;
+}> = [
+  { field: "Config.Image", actual: (info) => info.Config?.Image, expected: (body) => body.Image },
+  { field: "HostConfig.Memory", actual: (info) => info.HostConfig?.Memory, expected: (body) => body.HostConfig.Memory },
+  { field: "HostConfig.NanoCpus", actual: (info) => info.HostConfig?.NanoCpus, expected: (body) => body.HostConfig.NanoCpus },
+  { field: "HostConfig.PidsLimit", actual: (info) => info.HostConfig?.PidsLimit, expected: (body) => body.HostConfig.PidsLimit },
+  {
+    field: "HostConfig.NetworkMode",
+    actual: (info) => info.HostConfig?.NetworkMode,
+    expected: (body) => body.HostConfig.NetworkMode,
+  },
+  { field: "HostConfig.Binds", actual: (info) => info.HostConfig?.Binds, expected: (body) => body.HostConfig.Binds },
+];
+
+/** Dotted inspect paths the drift check reads; emitted as the board side of the
+ *  inspect contract with dockergate. */
+export const CONTAINER_TEMPLATE_INSPECT_FIELDS: readonly string[] = DRIFT_READS.map((read) => read.field);
+
+/** True when two inspect/body values are the same template value. Arrays
+ *  compare element by element and in order: Docker returns the binds as they
+ *  were created, and a card that added, removed or reordered an extra mount is
+ *  a template drift. */
+function sameTemplateValue(actual: unknown, expected: unknown): boolean {
+  if (Array.isArray(actual) || Array.isArray(expected)) {
+    return (
+      Array.isArray(actual) &&
+      Array.isArray(expected) &&
+      actual.length === expected.length &&
+      actual.every((value, index) => value === expected[index])
+    );
+  }
+  return actual === expected;
+}
+
+/**
+ * Pure drift check, field by field: which template fields of `existing` (a
+ * container's live inspect) no longer match `body` (a freshly built
+ * create-request)? Empty means the container still matches `body`. Comparing
+ * like with like: both sides must carry every field (an inspect that does not
+ * report one counts as a drift of that field, which is what the log names).
+ */
+export function templateDriftFields(
+  existing: Pick<DockerInspect, "Config" | "HostConfig">,
+  body: DockerCreateContainerBody,
+): TemplateDriftField[] {
+  const fields: TemplateDriftField[] = [];
+  for (const read of DRIFT_READS) {
+    const expected = read.expected(body);
+    const actual = read.actual(existing);
+    if (!sameTemplateValue(actual, expected)) fields.push({ field: read.field, expected, actual });
+  }
+  return fields;
+}
+
+/** The value the drift check expects to read back from a container created
+ *  from `body`, per field it compares. The board side of the inspect contract
+ *  with dockergate (contract/emit-fixtures.ts). */
+export function containerTemplateInspectExpectation(
+  body: DockerCreateContainerBody,
+): Array<{ path: string; value: unknown }> {
+  return DRIFT_READS.map((read) => ({ path: read.field, value: read.expected(body) }));
 }
 
 /**
@@ -573,14 +642,7 @@ export function containerTemplateDrifted(
   existing: Pick<DockerInspect, "Config" | "HostConfig">,
   body: DockerCreateContainerBody,
 ): boolean {
-  return (
-    existing.Config?.Image !== body.Image ||
-    existing.HostConfig?.Memory !== body.HostConfig.Memory ||
-    existing.HostConfig?.NanoCpus !== body.HostConfig.NanoCpus ||
-    existing.HostConfig?.PidsLimit !== body.HostConfig.PidsLimit ||
-    existing.HostConfig?.NetworkMode !== body.HostConfig.NetworkMode ||
-    bindsDrifted(existing.HostConfig?.Binds, body.HostConfig.Binds)
-  );
+  return templateDriftFields(existing, body).length > 0;
 }
 
 /**
@@ -842,11 +904,12 @@ export function dockerBotContainerDriver(
     return results;
   }
 
-  async function templateDrift(spec: BotContainerSpec): Promise<boolean> {
+  async function templateDrift(spec: BotContainerSpec): Promise<TemplateDriftReport> {
     const body = buildCreateContainerRequestBody(spec, config);
     const existing = await inspectByName(containerNameFor(spec.botKey));
-    if (!existing) return false;
-    return containerTemplateDrifted(existing, body);
+    if (!existing) return { drifted: false, fields: [] };
+    const fields = templateDriftFields(existing, body);
+    return { drifted: fields.length > 0, fields };
   }
 
   async function create(spec: BotContainerSpec): Promise<void> {

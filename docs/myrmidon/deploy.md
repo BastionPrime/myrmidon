@@ -76,6 +76,14 @@ There is no bypass: no flag, no setting. `--force` (redeploying the same image) 
 `--expect-*` do not skip the check. To deploy an image that does not pass, the image must go
 through CI: a PR into `main`, a merge, a build.
 
+### Deploy the board and dockergate together
+
+When the release notes say the A2 contract changed on both sides, deploy the board image AND
+the dockergate image from the same tag together. A 1.3.2 board against a 1.3.1 dockergate
+still recreates every bot on every pass (the 01.10 incident); a 1.3.2 dockergate against a
+1.3.1 board is safe but pointless. fleetd from the same tag too. The digests are in the
+GitHub release notes.
+
 `--dry-run` runs the same check (it only reads the registry and updates `origin/main` in the
 clone), so a trial run shows the refusal in advance.
 
@@ -217,6 +225,11 @@ case the interface refuses — which is exactly the case the script would refuse
   deployed tag must report no drift.
 - The interface opens, the agent list is in place, an issue opens.
 - Runs start again: queued wakes are delivered, a new run goes through.
+- Bot containers after a release that touches the reconciler or dockergate: for 30 minutes after
+  the deploy the board log must carry no `bot container recreated for a template change` and no
+  `bot container template drift detected` for a card nobody changed (including across a host
+  reboot). A real card change (for example `memoryMb`) still recreates that bot exactly once. When
+  one does appear, the drift line names the field and both values.
 - The plugins (hindsight and the rest) are `ready` in the plugin settings.
 - `$STATE_DIR/history.log` has the deploy line.
 
