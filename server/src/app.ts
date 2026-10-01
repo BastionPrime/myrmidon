@@ -102,6 +102,8 @@ import { myrmidonDeployJobsRoutes } from "./myrmidon/deploy-jobs/index.js"; // m
 import { myrmidonRuntimeLimitsRoutes } from "./myrmidon/runtime-limits/index.js"; // myrmidon(C0)
 import { myrmidonReplayBlockedRoutes } from "./myrmidon/replay-blocked/index.js"; // myrmidon(N1)
 import { myrmidonBotContainerRoutes } from "./myrmidon/bot-containers/routes-wiring.js"; // myrmidon(W2b)
+import { myrmidonLitellmCostsRoutes } from "./myrmidon/litellm-costs/routes.js"; // myrmidon(M2-A)
+import { myrmidonBotEgressRoutes } from "./myrmidon/bot-containers/egress-wiring.js"; // myrmidon(EGRESS-B)
 import { myrmidonWorkspaceHygieneRoutes } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
 // myrmidon(EMERGENCY-STOP): immediate stop of the runs a draining pause left running
 import { myrmidonEmergencyStopRoutes } from "./myrmidon/emergency-stop.js";
@@ -810,6 +812,8 @@ export async function createApp(
   api.use(myrmidonRuntimeLimitsRoutes(db)); // myrmidon(C0)
   api.use(myrmidonReplayBlockedRoutes(db)); // myrmidon(N1)
   api.use(myrmidonBotContainerRoutes(db)); // myrmidon(W2b)
+  api.use(myrmidonLitellmCostsRoutes(db)); // myrmidon(M2-A): gateway-collected costs and model catalog
+  api.use(myrmidonBotEgressRoutes(db)); // myrmidon(EGRESS-B)
   api.use(myrmidonWorkspaceHygieneRoutes(db)); // myrmidon(WORKSPACE-HYGIENE)
   api.use(myrmidonEmergencyStopRoutes(db)); // myrmidon(EMERGENCY-STOP)
   api.use(myrmidonStackRegistryRoutes(db)); // myrmidon(SUA)

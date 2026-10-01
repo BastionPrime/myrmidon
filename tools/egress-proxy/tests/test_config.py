@@ -1,9 +1,10 @@
 # tools/egress-proxy/tests/test_config.py
-"""myrmidon(EGRESS-A): a setting this image cannot honour stops it, loudly.
+"""myrmidon(EGRESS-A, EGRESS-B): a setting this image cannot honour stops it, loudly.
 
-Log-only is the whole contract of the service: an operator who asks for a mode
-that refuses destinations must get a refusal to start, not a proxy that quietly
-keeps letting everything through and looks like it is enforcing something.
+Log-only is the safe default of the service; `enforce` adds the per-project
+decision of EGRESS-B, and a mode the image does not implement must get a refusal
+to start, not a proxy that quietly keeps letting everything through and looks
+like it is enforcing something.
 """
 
 from __future__ import annotations
@@ -13,7 +14,15 @@ import os
 import tempfile
 import unittest
 
-from egress_proxy.config import BOTS_FILE_ENV, ConfigError, MODE_ENV, load_bots, load_config
+from egress_proxy.config import (
+    BOTS_FILE_ENV,
+    ConfigError,
+    MODE_ENV,
+    POLICY_FILE_ENV,
+    POLICY_URL_ENV,
+    load_bots,
+    load_config,
+)
 
 
 class LoadConfigTest(unittest.TestCase):
@@ -24,12 +33,40 @@ class LoadConfigTest(unittest.TestCase):
         self.assertEqual(config.bind, "0.0.0.0")
         self.assertEqual(config.connect_timeout_sec, 30)
         self.assertEqual(config.bots, {})
+        self.assertEqual(config.policy_url, "")
+        self.assertEqual(config.policy_file, "")
+        self.assertEqual(config.policy_refresh_sec, 30)
 
     def test_refuses_a_mode_it_does_not_implement(self) -> None:
-        for mode in ("block", "enforce", "off", "deny"):
+        for mode in ("block", "off", "deny"):
             with self.subTest(mode=mode):
                 with self.assertRaises(ConfigError):
                     load_config({MODE_ENV: mode})
+
+    def test_enforce_needs_a_policy_source(self) -> None:
+        with self.assertRaises(ConfigError) as raised:
+            load_config({MODE_ENV: "enforce"})
+        self.assertIn(POLICY_URL_ENV, str(raised.exception))
+        self.assertEqual(
+            load_config({MODE_ENV: "enforce", POLICY_URL_ENV: "http://board.example.com/policy"}).mode,
+            "enforce",
+        )
+        self.assertEqual(
+            load_config({MODE_ENV: "enforce", POLICY_FILE_ENV: "/etc/egress-policy.json"}).policy_file,
+            "/etc/egress-policy.json",
+        )
+
+    def test_reads_the_policy_settings(self) -> None:
+        config = load_config(
+            {
+                POLICY_URL_ENV: " http://board.example.com/api/myrmidon/bot-egress/policy ",
+                "EGRESS_PROXY_POLICY_TOKEN": " a-secret ",
+                "EGRESS_PROXY_POLICY_REFRESH_SEC": "15",
+            }
+        )
+        self.assertEqual(config.policy_url, "http://board.example.com/api/myrmidon/bot-egress/policy")
+        self.assertEqual(config.policy_token, "a-secret")
+        self.assertEqual(config.policy_refresh_sec, 15)
 
     def test_reads_the_port_and_the_connect_timeout(self) -> None:
         config = load_config({"EGRESS_PROXY_PORT": "8080", "EGRESS_PROXY_CONNECT_TIMEOUT_SEC": "5"})

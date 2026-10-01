@@ -1,4 +1,10 @@
 {
+  "accessHub": {
+    "notAvailable": {
+      "title": "Access hub is not available on this server yet",
+      "description": "This server does not serve the access-hub API yet, so there is nothing to manage here. The screen turns on by itself once the server part is deployed."
+    }
+  },
   "app": {
     "noCompanies": {
       "title": "Utwórz swoją pierwszą firmę",

@@ -10,6 +10,7 @@ import {
   AgentCardContainerFields,
   AgentCardContainerFieldsView,
   applyBlockedReason,
+  concurrencyView,
   type AgentCardContainerFieldsViewProps,
 } from "./AgentCardContainerFields";
 import {
@@ -43,6 +44,10 @@ const STATUS: BotContainerStatus = {
   imageAllowed: true,
   container: { state: "running", image: "bot-image:1" },
   containerError: null,
+  boardMaxConcurrentRuns: 3,
+  gatewayConcurrency: { board: 3, applied: 3, diverged: false, checkedAt: "2026-01-01T00:00:00.000Z" },
+  gatewayConcurrencyNote: null,
+  gatewayConcurrencyWarning: null,
 };
 
 let container: HTMLDivElement;
@@ -336,6 +341,76 @@ describe("myrmidon(W2b) container card section", () => {
     const { onRefresh } = renderView();
     click(byId("refresh"));
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("myrmidon(CONCURRENCY-SYNC) limit block", () => {
+  const diverged = {
+    ...STATUS,
+    gatewayConcurrency: { board: 3, applied: 2, diverged: true, checkedAt: "2026-01-01T00:00:00.000Z" },
+  };
+  const notReported = {
+    ...STATUS,
+    gatewayConcurrency: { board: 3, applied: null, diverged: false, checkedAt: "2026-01-01T00:00:00.000Z" },
+    gatewayConcurrencyNote: "The container's applied profile does not report its concurrency limit yet; the next reconcile pass records it (no restart).",
+  };
+  const unmanaged = {
+    ...STATUS,
+    container: { state: "missing" as const, image: null },
+    gatewayConcurrency: null,
+    gatewayConcurrencyNote: "This agent's gateway is not managed by the board's containers: the board cannot read or apply its concurrency limit.",
+    gatewayConcurrencyWarning: "Runs of this agent were rate-limited by its gateway (last at 2026-01-01T00:00:00.000Z) while the board asks for up to 3 at a time: the gateway is limiting runs below the board's limit.",
+  };
+
+  it("shows the board's value and the gateway's, with no badge while they agree", () => {
+    renderView();
+    expect(text("concurrency-board")).toBe("Board: 3");
+    expect(text("concurrency-gateway")).toBe("Gateway: 3");
+    expect(byId("concurrency-diverged")).toBeNull();
+    expect(byId("concurrency-note")).toBeNull();
+  });
+
+  it("flags a divergence between the two", () => {
+    renderView({ status: diverged });
+    expect(text("concurrency-board")).toBe("Board: 3");
+    expect(text("concurrency-gateway")).toBe("Gateway: 2");
+    expect(text("concurrency-diverged")).toBe("Diverged from the board");
+  });
+
+  it("says a limit nothing reported is not reported, not matching", () => {
+    renderView({ status: notReported });
+    expect(text("concurrency-gateway")).toBe("Gateway: not reported yet");
+    expect(text("concurrency-note")).toContain("does not report");
+    expect(byId("concurrency-diverged")).toBeNull();
+  });
+
+  it("says an unmanaged gateway is out of the board's hands and warns about rate limits", () => {
+    renderView({ status: unmanaged });
+    expect(text("concurrency-board")).toBe("Board: 3");
+    expect(text("concurrency-gateway")).toBe("Gateway: not managed by the board");
+    expect(text("concurrency-note")).toContain("not managed by the board");
+    expect(text("concurrency-warning")).toContain("below the board's limit");
+    expect(byId("concurrency-diverged")).toBeNull();
+  });
+
+  it("has nothing to show without a status or without anything said about the limit", () => {
+    renderView({ status: null });
+    expect(byId("concurrency")).toBeNull();
+    renderView({ status: { ...STATUS, gatewayConcurrency: null, gatewayConcurrencyNote: null, gatewayConcurrencyWarning: null } });
+    expect(byId("concurrency")).toBeNull();
+  });
+
+  it("turns the server's words into the block's content", () => {
+    expect(concurrencyView(null)).toBeNull();
+    expect(concurrencyView(STATUS)).toEqual({
+      board: "Board: 3",
+      gateway: "Gateway: 3",
+      diverged: false,
+      note: null,
+      warning: null,
+    });
+    expect(concurrencyView(diverged)?.diverged).toBe(true);
+    expect(concurrencyView(unmanaged)?.gateway).toBe("Gateway: not managed by the board");
   });
 });
 
