@@ -20,10 +20,10 @@ together with the board.
   check compared it, so every bot counted as drifted on every pass: production recreated all 51
   bots every 17–20 minutes, interrupting every run in flight. The A2 answer carries the bind list
   again, and a gate contract test checks that every field the drift check compares survives the
-  trim (the field list is emitted from the driver's code, not hand-copied).
+  trim (the field list is emitted from the driver's code, not hand-copied) (#253).
 - Every drift writes an activity line naming the field and both values
   (`bot container template drift detected`, `details.fields`), so it is diagnosable from the log
-  alone instead of costing another incident.
+  alone instead of costing another incident (#253).
 
 ## 1.3.1
 
