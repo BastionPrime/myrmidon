@@ -110,6 +110,7 @@ import { myrmidonBotCanaryRoutes } from "./myrmidon/bot-containers/canary-index.
 import { myrmidonWorkspaceHygieneRoutes } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
 // myrmidon(EMERGENCY-STOP): immediate stop of the runs a draining pause left running
 import { myrmidonEmergencyStopRoutes } from "./myrmidon/emergency-stop.js";
+import { myrmidonStackRegistryRoutes } from "./myrmidon/stack-registry/index.js"; // myrmidon(SUA)
 import { myrmidonFleetConsoleRoutes } from "./myrmidon/fleet-console/index.js"; // myrmidon(SC1)
 import { instanceSettingsService } from "./services/instance-settings.js";
 import { openApiRoutes } from "./routes/openapi.js";
@@ -822,6 +823,7 @@ export async function createApp(
   api.use(myrmidonBotCanaryRoutes(db)); // myrmidon(R5-B)
   api.use(myrmidonWorkspaceHygieneRoutes(db)); // myrmidon(WORKSPACE-HYGIENE)
   api.use(myrmidonEmergencyStopRoutes(db)); // myrmidon(EMERGENCY-STOP)
+  api.use(myrmidonStackRegistryRoutes(db)); // myrmidon(SUA)
   api.use(myrmidonFleetConsoleRoutes(db)); // myrmidon(SC1)
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));

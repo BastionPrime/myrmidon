@@ -223,6 +223,12 @@ does not ask the container. The runtime is connected by server startup (`startBo
 | `MYRMIDON_WORKSPACE_QUOTA_MB` | WH-C | unset (disabled) | Disk ceiling per workspace: a pass from the scheduler tick measures each workspace's directory (a walk bounded by depth, entries and time; sums over hardlink inodes are not duplicated) and on excess writes a "clean up" signal to the activity log — at most once a day per workspace. The variable is the default at first start: afterwards the effective values are stored in settings (`instance_settings.general.workspaceHygiene`) and change on the fly via `GET`/`PATCH /api/myrmidon/workspace-hygiene` (read — board, write — instance-admin). The pass deletes nothing — deletion remains with terminal-workspace resolution | Unset, empty, `0`, negative or non-numeric — the ceiling is off (no signals). Only workspaces with a local directory (`providerType = local_fs`) are measured; a workspace whose walk hit the bound is counted by the lower bound, and its report has `truncated` |
 | `MYRMIDON_WORKSPACE_TOTAL_QUOTA_MB` | WH-C | unset (disabled) | Ceiling on the sum of measured workspaces of one company: a separate signal in the activity log, at most once a day per company. Catches the case "many workspaces, each within its own ceiling" | Unset, empty, `0`, negative or non-numeric — the ceiling is off |
 
+## 1.3 — STACK-UPDATES stack registry (SUA, part A)
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_STACK_DOCKER_SOCKET` | SUA | `/var/run/docker.sock` | Path to the Docker unix socket the stack registry image probes use to read digests and component labels with the `docker-image` probe (Docker API `GET /images/{ref}/json`, 10s timeout) | Socket unavailable on `POST /api/myrmidon/stack/refresh` — 503, the previous cache is kept; an individual missing image is an honest «unknown» with a reason, not an error. Read on every refresh, no server restart needed |
+
 ## Settings in the agent record (not environment variables)
 
 | Field | Function | Default | What it does | How to disable / special |
