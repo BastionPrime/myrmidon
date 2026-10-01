@@ -347,11 +347,41 @@ describeEmbeddedPostgres("pending interaction wake sweep", () => {
     expect((await readWake(wakeId))?.error).toBe(PENDING_INTERACTION_WAKE_CANCELLED_INTERACTION_REASON);
   });
 
-  it("finalizes a wake whose task closed before the interaction was answered", async () => {
+  // myrmidon(N2): a card that still waits for an addressee who was never woken
+  // keeps its one delivery even when the task closed first — the card is
+  // answered instead of dying unanswered on the status flip.
+  it("re-admits an undelivered wake on a closed task", async () => {
     const { companyId, addresseeAgentId, otherAgentId } = await seedCompanyAndAgents();
     const issueId = await seedIssue({ companyId, assigneeAgentId: otherAgentId, status: "done" });
     const interactionId = await seedInteraction({ companyId, issueId, addresseeAgentId });
     const wakeId = await seedParkedWake({ companyId, agentId: addresseeAgentId, issueId, interactionId });
+    const reAdmitted: PendingInteractionWakeRow[] = [];
+    const { sweep, reAdmit } = sweepOf(reAdmitted);
+
+    const result = await sweep({ graceMs: GRACE_MS });
+
+    expect(result).toMatchObject({ inspected: 1, cancelled: 0, reAdmitted: 1 });
+    expect(reAdmit).toHaveBeenCalledTimes(1);
+    expect((await readWake(wakeId))?.error).toBe(PENDING_INTERACTION_WAKE_RE_ADMITTED_REASON);
+  });
+
+  it("finalizes a wake that already had its delivery when the task closed", async () => {
+    const { companyId, addresseeAgentId, otherAgentId } = await seedCompanyAndAgents();
+    const issueId = await seedIssue({ companyId, assigneeAgentId: otherAgentId, status: "done" });
+    const interactionId = await seedInteraction({ companyId, issueId, addresseeAgentId });
+    const wakeId = await seedParkedWake({
+      companyId,
+      agentId: addresseeAgentId,
+      issueId,
+      interactionId,
+      payload: {
+        issueId,
+        mutation: "interaction",
+        interactionId,
+        interactionKind: "request_confirmation",
+        pendingInteractionWakeSweep: { attempt: 1 },
+      },
+    });
     const reAdmitted: PendingInteractionWakeRow[] = [];
     const { sweep } = sweepOf(reAdmitted);
 
