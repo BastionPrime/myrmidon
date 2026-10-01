@@ -35,6 +35,23 @@ type Archive struct {
 	File      string `json:"file"`
 }
 
+// InspectField is one field of a container inspect that the board's
+// template-drift check reads, with the value it expects to read.
+type InspectField struct {
+	Path string          `json:"path"`
+	Want json.RawMessage `json:"want"`
+}
+
+// InspectContract is inspect-contract.json: the container inspect as the daemon
+// writes it (written by the driver's own code, not hand-copied), and every
+// field of it the drift check compares.
+type InspectContract struct {
+	BotKey  string          `json:"botKey"`
+	Name    string          `json:"name"`
+	Inspect json.RawMessage `json:"inspect"`
+	Fields  []InspectField  `json:"fields"`
+}
+
 // Manifest is manifest.json.
 type Manifest struct {
 	BotKey     string    `json:"botKey"`
@@ -106,6 +123,16 @@ func Traffic(t testing.TB) []Record {
 		t.Fatalf("traffic: %v", err)
 	}
 	return recs
+}
+
+// Inspect reads inspect-contract.json.
+func Inspect(t testing.TB) *InspectContract {
+	t.Helper()
+	var c InspectContract
+	if err := json.Unmarshal(Read(t, "inspect-contract.json"), &c); err != nil {
+		t.Fatalf("inspect-contract: %v", err)
+	}
+	return &c
 }
 
 // Body reads the bytes of a recorded body.

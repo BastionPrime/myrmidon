@@ -8,6 +8,23 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
+## 1.3.2
+
+Everything merged between the 1.3.1 and 1.3.2 tags. Deploy this release's dockergate image
+together with the board.
+
+### Bot containers
+
+- The reconciler no longer recreates bot containers whose template never changed. dockergate
+  trimmed `HostConfig.Binds` out of the container inspect (A2) while the driver's template-drift
+  check compared it, so every bot counted as drifted on every pass: production recreated all 51
+  bots every 17–20 minutes, interrupting every run in flight. The A2 answer carries the bind list
+  again, and a gate contract test checks that every field the drift check compares survives the
+  trim (the field list is emitted from the driver's code, not hand-copied) (#253).
+- Every drift writes an activity line naming the field and both values
+  (`bot container template drift detected`, `details.fields`), so it is diagnosable from the log
+  alone instead of costing another incident (#253).
+
 ## 1.3.1
 
 Everything merged between the 1.3.0 and 1.3.1 tags. The release replaces 1.3.0 and ships

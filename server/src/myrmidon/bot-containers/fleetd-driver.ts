@@ -25,7 +25,7 @@
 
 import http from "node:http";
 
-import type { BotContainerDriver, BotContainerSpec, BotContainerStatus } from "./driver.js";
+import type { BotContainerDriver, BotContainerSpec, BotContainerStatus, TemplateDriftField, TemplateDriftReport } from "./driver.js";
 import type { CompiledProfile } from "./types.js";
 
 /** The token header fleetd requires on every call. */
@@ -188,13 +188,15 @@ export function fleetdBotContainerDriver(
       return Array.isArray(res) ? res : res.bots;
     },
 
-    async templateDrift(spec: BotContainerSpec): Promise<boolean> {
-      const res = await callJson<{ drift: boolean }>({
+    async templateDrift(spec: BotContainerSpec): Promise<TemplateDriftReport> {
+      // fleetd answers `drift` and, since the inspect contract, optionally the
+      // per-field report; an older fleetd answers only `drift`.
+      const res = await callJson<{ drift: boolean; fields?: TemplateDriftField[] }>({
         method: "POST",
         path: `/bots/${encodeURIComponent(spec.botKey)}/template-drift`,
         body: { spec },
       });
-      return res.drift === true;
+      return { drifted: res.drift === true, fields: res.fields ?? [] };
     },
 
     async create(spec: BotContainerSpec): Promise<void> {

@@ -47,7 +47,13 @@ Extra read-only bot mounts (shared directories) are described in
    process-count limits may not exceed what `bots[]` records.
 5. **State.** Before a call, dockergate inspects the container itself and checks the
    preconditions (the bot label, status, the presence of `.next`).
-6. **Responses are cut down** to the fields the driver reads, with a size cap.
+6. **Responses are cut down** to the fields the driver reads, with a size cap. The A2 answer
+   carries the state the driver reads plus every field its template-drift check compares —
+   `Config.Image` and `HostConfig` `Memory`, `NanoCpus`, `PidsLimit`, `NetworkMode`, `Binds`.
+   Trimming away a compared field is not a smaller answer: the board reads nothing there, calls
+   the container different and recreates it on every pass (the 01.10 incident, `HostConfig.Binds`).
+   A gate contract test checks the A2 answer against the field list the driver emits
+   (`tools/dockergate/contract/emit-fixtures.ts`), so dropping one turns CI red.
 
 ## The allowed-call table
 
