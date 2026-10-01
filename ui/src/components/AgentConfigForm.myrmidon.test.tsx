@@ -209,6 +209,10 @@ const STATUS: BotContainerStatus = {
   imageAllowed: true,
   container: { state: "running", image: "bot-image:1" },
   containerError: null,
+  boardMaxConcurrentRuns: 3,
+  gatewayConcurrency: { board: 3, applied: 3, diverged: false, checkedAt: "2026-01-01T00:00:00.000Z" },
+  gatewayConcurrencyNote: null,
+  gatewayConcurrencyWarning: null,
 };
 
 async function act(callback: () => void | Promise<void>) {

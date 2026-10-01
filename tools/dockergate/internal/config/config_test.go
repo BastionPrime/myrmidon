@@ -69,6 +69,18 @@ func TestParseAccepts(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsMountSources(t *testing.T) {
+	s := replace(t, goodJSON, `"network"`, `"mountSources": ["/srv/shared/sources", "/srv/shared/tools"], "network"`)
+	c := mustParse(t, s)
+	if len(c.MountSources) != 2 || c.MountSources[0] != "/srv/shared/sources" || c.MountSources[1] != "/srv/shared/tools" {
+		t.Fatalf("mountSources: %v", c.MountSources)
+	}
+	// Absent means "no extra mount is allowed", not "any".
+	if len(mustParse(t, goodJSON).MountSources) != 0 {
+		t.Fatal("a config without mountSources must allow no extra mount")
+	}
+}
+
 func TestParseUIDMode(t *testing.T) {
 	s := replace(t, goodJSON, `"argv": ["node", "server.js"]`, `"argv": ["node"], "mode": "uid"`)
 	s = replace(t, s, "/srv/myrmidon-bots", "/tmp/ci-bots")
@@ -167,6 +179,25 @@ func TestParseRefuses(t *testing.T) {
 		{"volumeRoot with //", func(t *testing.T) string { return replace(t, goodJSON, `/srv/myrmidon-bots`, `/srv//bots`) }},
 		{"volumeRoot with a trailing slash", func(t *testing.T) string { return replace(t, goodJSON, `/srv/myrmidon-bots`, `/srv/bots/`) }},
 		{"relative volumeRoot", func(t *testing.T) string { return replace(t, goodJSON, `/srv/myrmidon-bots`, `srv/bots`) }},
+		{"relative mount source", func(t *testing.T) string {
+			return replace(t, goodJSON, `"network"`, `"mountSources": ["srv/shared"], "network"`)
+		}},
+		{"mount source with ..", func(t *testing.T) string {
+			return replace(t, goodJSON, `"network"`, `"mountSources": ["/srv/../etc"], "network"`)
+		}},
+		{"mount source with //", func(t *testing.T) string {
+			return replace(t, goodJSON, `"network"`, `"mountSources": ["/srv//shared"], "network"`)
+		}},
+		{"mount source with a trailing slash", func(t *testing.T) string {
+			return replace(t, goodJSON, `"network"`, `"mountSources": ["/srv/shared/"], "network"`)
+		}},
+		{"mount source is the root", func(t *testing.T) string {
+			return replace(t, goodJSON, `"network"`, `"mountSources": ["/"], "network"`)
+		}},
+		{"duplicate mount source", func(t *testing.T) string {
+			return replace(t, goodJSON, `"network"`, `"mountSources": ["/srv/shared", "/srv/shared"], "network"`)
+		}},
+		{"mount source is not a string", func(t *testing.T) string { return replace(t, goodJSON, `"network"`, `"mountSources": [42], "network"`) }},
 		{"network with a slash", func(t *testing.T) string { return replace(t, goodJSON, `bots-net`, `bots/net`) }},
 		{"empty network", func(t *testing.T) string { return replace(t, goodJSON, `"bots-net"`, `""`) }},
 		{"empty images", func(t *testing.T) string {

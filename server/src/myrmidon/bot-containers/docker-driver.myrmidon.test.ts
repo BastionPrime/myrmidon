@@ -19,6 +19,7 @@ import {
   demuxDockerLogs,
   dockerBotContainerDriver,
   parseAppliedMarker,
+  serializeAppliedMarker,
   type DockerDriverConfig,
 } from "./docker-driver.js";
 import type { BotContainerDriver, BotContainerSpec } from "./driver.js";
@@ -27,10 +28,11 @@ import { BOT_LABEL_KEYS, BOT_RUNTIME_CONTRACT_LABEL, BotContainerTemplateError }
 import type { CompiledProfile, CompiledProfileFile } from "./types.js";
 import { buildUstarArchive, parseUstarArchive, type UstarReadEntry } from "./ustar.js";
 
-const CONFIG: Pick<DockerDriverConfig, "volumeRoot" | "network" | "allowlist"> = {
+const CONFIG: Pick<DockerDriverConfig, "volumeRoot" | "network" | "allowlist" | "mountSources"> = {
   volumeRoot: "/srv/myrmidon/bots",
   network: "myrmidon-bots",
   allowlist: ["myrmidon-hermes:*"],
+  mountSources: ["/srv/shared/sources"],
 };
 
 function spec(overrides: Partial<BotContainerSpec> = {}): BotContainerSpec {
@@ -115,6 +117,39 @@ describe("buildCreateContainerRequestBody", () => {
     expect(Object.keys(labels).some((key) => key.includes("hash"))).toBe(false);
   });
 
+  it("appends the card's allowlisted extra mount to Binds as read-only", () => {
+    const body = buildCreateContainerRequestBody(
+      spec({
+        extraMounts: [{ source: "/srv/shared/sources", containerPath: "/srv/shared/sources", readOnly: true }],
+      }),
+      CONFIG,
+    );
+    expect(body.HostConfig.Binds).toEqual([
+      "/srv/myrmidon/bots/agent-a/hermes:/data/hermes",
+      "/srv/myrmidon/bots/agent-a/workspace:/workspace",
+      "/srv/myrmidon/bots/agent-a/scratch:/scratch",
+      "/srv/shared/sources:/srv/shared/sources:ro",
+    ]);
+  });
+
+  it("refuses an extra mount whose source is outside MYRMIDON_BOT_MOUNT_SOURCES", () => {
+    expect(() =>
+      buildCreateContainerRequestBody(
+        spec({ extraMounts: [{ source: "/srv/other/secret", containerPath: "/srv/other/secret", readOnly: true }] }),
+        CONFIG,
+      ),
+    ).toThrow(BotContainerTemplateError);
+  });
+
+  it("refuses an extra mount that would take over one of the driver's own mount points", () => {
+    expect(() =>
+      buildCreateContainerRequestBody(
+        spec({ extraMounts: [{ source: "/srv/shared/sources", containerPath: "/workspace", readOnly: true }] }),
+        CONFIG,
+      ),
+    ).toThrow(BotContainerTemplateError);
+  });
+
   it("rejects an image outside the allowlist, a foreign network, an invalid key and non-positive limits", () => {
     expect(() => buildCreateContainerRequestBody(spec({ image: "evil/other:latest" }), CONFIG)).toThrow(BotContainerTemplateError);
     expect(() => buildCreateContainerRequestBody(spec({ network: "host" }), CONFIG)).toThrow(BotContainerTemplateError);
@@ -128,7 +163,7 @@ describe("buildCreateContainerRequestBody", () => {
 describe("containerTemplateDrifted", () => {
   const body = buildCreateContainerRequestBody(spec(), CONFIG);
   function matchingInspect(): { Config: { Image: string }; HostConfig: typeof body.HostConfig } {
-    return { Config: { Image: body.Image }, HostConfig: { ...body.HostConfig } };
+    return { Config: { Image: body.Image }, HostConfig: { ...body.HostConfig, Binds: [...body.HostConfig.Binds] } };
   }
 
   it("is false when every template field still matches", () => {
@@ -142,6 +177,8 @@ describe("containerTemplateDrifted", () => {
     { field: "cpus", mutate: (e) => void (e.HostConfig.NanoCpus += 1) },
     { field: "pidsLimit", mutate: (e) => void (e.HostConfig.PidsLimit += 1) },
     { field: "network", mutate: (e) => void (e.HostConfig.NetworkMode = "other") },
+    { field: "binds (an extra mount added)", mutate: (e) => void e.HostConfig.Binds.push("/srv/shared/sources:/srv/shared/sources:ro") },
+    { field: "binds (an extra mount removed)", mutate: (e) => void e.HostConfig.Binds.splice(1, 1) },
   ];
   for (const { field, mutate } of mutations) {
     it(`is true when the ${field} changed`, () => {
@@ -150,6 +187,23 @@ describe("containerTemplateDrifted", () => {
       expect(containerTemplateDrifted(existing, body)).toBe(true);
     });
   }
+
+  it("is true when the live container carries no bind list at all", () => {
+    const existing = matchingInspect();
+    expect(containerTemplateDrifted({ Config: existing.Config, HostConfig: { ...existing.HostConfig, Binds: undefined } }, body)).toBe(
+      true,
+    );
+  });
+
+  it("is false for a bot whose card asked for the extra mount its container already has", () => {
+    const withMount = spec({
+      extraMounts: [{ source: "/srv/shared/sources", containerPath: "/srv/shared/sources", readOnly: true }],
+    });
+    const mountedBody = buildCreateContainerRequestBody(withMount, CONFIG);
+    expect(containerTemplateDrifted({ Config: { Image: mountedBody.Image }, HostConfig: { ...mountedBody.HostConfig } }, mountedBody)).toBe(
+      false,
+    );
+  });
 });
 
 describe("botStateFromInspect", () => {
@@ -302,6 +356,31 @@ describe("computeProfileRemovals / parseAppliedMarker", () => {
     expect(parseAppliedMarker("not json")).toBeNull();
     expect(parseAppliedMarker('{"restartHash":"r"}')).toBeNull();
     expect(parseAppliedMarker("[]")).toBeNull();
+  });
+
+  // myrmidon(CONCURRENCY-SYNC): the applied limit the card reads back. Written only by
+  // a profile that carries one, and kept only when it is a number the driver can trust
+  // (the marker lives on a volume the bot itself can write).
+  it("carries the applied concurrency limit written by a profile that has one", () => {
+    const marker = serializeAppliedMarker({ ...testProfile(), maxConcurrentRuns: 3 });
+    expect(parseAppliedMarker(marker)).toMatchObject({
+      restartHash: "restart-1",
+      filesHash: "files-1",
+      maxConcurrentRuns: 3,
+    });
+
+    // A profile without the number writes no field at all: "not reported", not "1".
+    const without = serializeAppliedMarker(testProfile());
+    expect(without).not.toContain("maxConcurrentRuns");
+    expect(parseAppliedMarker(without)?.maxConcurrentRuns).toBeUndefined();
+  });
+
+  it("drops a concurrency limit the marker cannot be trusted for", () => {
+    const base = { restartHash: "r", filesHash: "f" };
+    for (const value of ['"3"', "0", "-1", "2.5", "null", "true"]) {
+      expect(parseAppliedMarker(JSON.stringify({ ...base, maxConcurrentRuns: JSON.parse(value) }))?.maxConcurrentRuns).toBeUndefined();
+    }
+    expect(parseAppliedMarker(JSON.stringify({ ...base, maxConcurrentRuns: 5 }))?.maxConcurrentRuns).toBe(5);
   });
 });
 
@@ -725,7 +804,13 @@ describe("dockerBotContainerDriver against a fake Docker daemon", () => {
       scratch: path.join(volumeRoot, "agent-a", "scratch"),
     };
     driver = dockerBotContainerDriver(
-      { socketPath: daemon.socketPath, volumeRoot, network: "myrmidon-bots", allowlist: ["myrmidon-hermes:*"] },
+      {
+        socketPath: daemon.socketPath,
+        volumeRoot,
+        network: "myrmidon-bots",
+        allowlist: ["myrmidon-hermes:*"],
+        mountSources: [],
+      },
       {
         sleep: async () => {},
         healthPollIntervalMs: 0,

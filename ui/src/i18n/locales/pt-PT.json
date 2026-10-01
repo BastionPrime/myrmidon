@@ -1,10 +1,27 @@
 {
+  "accessHub": {
+    "notAvailable": {
+      "title": "Access hub is not available on this server yet",
+      "description": "This server does not serve the access-hub API yet, so there is nothing to manage here. The screen turns on by itself once the server part is deployed."
+    }
+  },
   "app": {
     "noCompanies": {
       "title": "Crie a sua primeira empresa",
       "description": "Comece por criar uma empresa.",
       "newCompany": "Nova empresa"
     }
+  },
+  "emergencyStopBanner": {
+    "banner": "{{agent}} is paused, but {{count}} run(s) are still finishing. They keep running until they finish on their own.",
+    "action": "Emergency stop",
+    "confirmTitle": "Stop {{count}} run(s) of {{agent}} now?",
+    "confirmDescription": "The run(s) are cancelled immediately with the same code a pause-cancellation uses, so no recovery hold appears. Work resumes when the agent is resumed. This cannot be undone.",
+    "cancel": "Cancel",
+    "confirmAction": "Stop runs now",
+    "toastTitle": "Emergency stop applied",
+    "toastBody": "{{count}} run(s) of {{agent}} were cancelled.",
+    "toastErrorTitle": "Emergency stop failed"
   },
   "maintenanceBanner": {
     "title": "Maintenance mode",

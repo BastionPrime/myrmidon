@@ -23,6 +23,16 @@ import {
   type GatewayErrorSpec,
   type RemoteToolProbe,
 } from "../myrmidon/tool-gateway-resilience.js";
+// myrmidon(BOARD-TOOLS-A2): bind a bot container's gateway session to the
+// agent's single active run and serve the task/project tools through it
+import {
+  BOT_GATEWAY_SOURCE_MARKER,
+  RunBoundToolError,
+  executeRunBoundProjectTool,
+  isRunBoundProjectTool,
+  runBoundProjectToolDescriptors,
+  selectBotGatewayRun,
+} from "../myrmidon/bot-containers/run-bound-tools.js";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
@@ -126,6 +136,9 @@ import {
   remoteUrlCredentialMatchesPublicUrl,
 } from "./remote-url-credentials.js";
 import { toolAccessPolicyService } from "./tool-access-policy.js";
+// myrmidon(S6): the per-agent tool/connection permission and its gate.
+import { agentToolPermissionAllows } from "@paperclipai/shared";
+import { loadAgentToolPermissions } from "../myrmidon/agent-tool-permissions.js";
 import { commitToolActionReview } from "./tool-action-review.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import {
@@ -315,6 +328,11 @@ export interface ToolGatewaySession {
   responsibleUserId?: string | null;
   /** Captured by the controller for this request, never accepted from tool arguments. */
   identityContextId?: string | null;
+  // myrmidon(BOARD-TOOLS-A2): run binding state of a bot-container gateway
+  // session (gateway_client token on a gateway the reconciler made):
+  // "bound" — bound to the agent's single active run; "unbound" — the agent
+  // has zero or several active runs; undefined — not a bot-container gateway.
+  botGatewayRunBinding?: "bound" | "unbound";
   createdAt: Date;
   expiresAt: Date;
 }
@@ -1083,6 +1101,36 @@ export function createToolGatewayService(
   const pluginToolDispatcher = options.pluginToolDispatcher;
   const interactions = issueThreadInteractionService(db);
   const policyService = toolAccessPolicyService(db);
+  // myrmidon(S6): one channel for every tool decision. The agent's own tool and
+  // connection permission is checked first and, in "listed" mode, refuses a tool it
+  // does not name. The check runs once the session carries its agent — for a
+  // run-bound call that is after the run was bound (A2) — so it applies to the tool
+  // list, a direct call, a run-scoped call and a resumed approved call alike, and a
+  // refusal travels the same journal path as any other denied call (`tool_gateway.call_denied`
+  // plus the `deny_agent_permission` reason code).
+  async function decideToolAccess(input: ToolAccessDecisionInput): Promise<ToolAccessDecision> {
+    const agentId = input.actor.agentId;
+    if (agentId) {
+      const permissions = await loadAgentToolPermissions(db, input.companyId, agentId);
+      if (
+        !agentToolPermissionAllows(permissions, {
+          toolName: input.request.toolName,
+          catalogEntryId: input.request.catalogEntryId ?? null,
+          connectionId: input.request.connectionId ?? null,
+        })
+      ) {
+        return {
+          decision: "deny",
+          allowed: false,
+          reasonCode: "deny_agent_permission",
+          explanation: "Tool access denied by the agent's tool permissions.",
+          effectiveProfileIds: [],
+          matchedPolicyIds: [],
+        };
+      }
+    }
+    return policyService.decide(input);
+  }
   const secrets = secretService(db);
   // Authentication produces a new session object for every operation. Keep
   // credential acquisition scoped to that object and out of persisted inputs.
@@ -2628,7 +2676,14 @@ export function createToolGatewayService(
     const connectedTools = await connectedMcpToolsForCompany(session.companyId);
     const hasOnDemandTargets = connectedTools.some(isOnDemandRemoteTool);
     const virtualTools = hasOnDemandTargets ? VIRTUAL_TOOLS : [];
-    const tool = [...allTools(), ...connectedTools, ...virtualTools]
+    const tool = [
+      ...allTools(),
+      // myrmidon(BOARD-TOOLS-A2): the task/project tools of the bound run
+      // ride the same bot gateway as the agent's assigned tools.
+      ...runBoundProjectToolDescriptors(session),
+      ...connectedTools,
+      ...virtualTools,
+    ]
       .filter(
         (candidate) =>
           session.agentId ||
@@ -2787,7 +2842,7 @@ export function createToolGatewayService(
     const decisions = await Promise.all(
       tools.map(async (tool) => ({
         tool,
-        decision: await policyService.decide(
+        decision: await decideToolAccess(
           policyInputForTool({ session, tool }),
         ),
       })),
@@ -2852,6 +2907,9 @@ export function createToolGatewayService(
     const onDemandTargets = allConnectedTools.filter(isOnDemandRemoteTool);
     const tools = [
       ...allTools(),
+      // myrmidon(BOARD-TOOLS-A2): the task/project tools of the bound run
+      // ride the same bot gateway as the agent's assigned tools.
+      ...runBoundProjectToolDescriptors(session),
       ...allConnectedTools.filter((tool) => !isOnDemandRemoteTool(tool)),
     ].filter(
       (tool) =>
@@ -2861,7 +2919,7 @@ export function createToolGatewayService(
     );
     const decisions = await Promise.all(
       tools.map(async (tool) => {
-        const decision = await policyService.decide(
+        const decision = await decideToolAccess(
           policyInputForTool({ session, tool }),
         );
         return { tool, decision };
@@ -2888,7 +2946,7 @@ export function createToolGatewayService(
     if (onDemandTargets.length > 0) {
       const targetDecisions = await Promise.all(
         onDemandTargets.map(async (tool) => {
-          const decision = await policyService.decide(
+          const decision = await decideToolAccess(
             policyInputForTool({ session, tool }),
           );
           return { tool, decision };
@@ -6981,6 +7039,8 @@ export function createToolGatewayService(
     let responsibleUserId: string | null = null;
     let issueId = row.gateway.issueId;
     let projectId = row.gateway.projectId;
+    // myrmidon(BOARD-TOOLS-A2): binding state of a bot-container gateway
+    let botGatewayRunBinding: "bound" | "unbound" | undefined;
     if (row.token.subjectType === "heartbeat_run") {
       const tokenRunId = row.token.subjectId;
       if (!tokenRunId || !uuidPattern.test(tokenRunId)) {
@@ -7052,6 +7112,73 @@ export function createToolGatewayService(
         });
       }
     }
+    // myrmidon(BOARD-TOOLS-A2): a gateway the bot-container reconciler made
+    // serves a `gateway_client` token with no run of its own. Bind the session
+    // to the agent's single active run: the audit then names the run, and the
+    // task/project tools are served through the same gateway. Zero or several
+    // active runs leave the session unbound (task/project tools refused).
+    if (
+      row.token.subjectType === "gateway_client" &&
+      row.gateway.agentId &&
+      asRecord(row.gateway.metadata)?.source === BOT_GATEWAY_SOURCE_MARKER
+    ) {
+      // myrmidon(BOARD-TOOLS-A2): the board refuses the API key of a
+      // terminated or pending-approval agent (middleware/auth.ts); a bot
+      // container's gateway token is refused for the same two statuses, so
+      // the gap between dismissal and the next reconcile sweep is closed
+      // here too.
+      const [gatewayOwner] = await db
+        .select({ status: agents.status })
+        .from(agents)
+        .where(eq(agents.id, row.gateway.agentId))
+        .limit(1);
+      if (
+        !gatewayOwner ||
+        gatewayOwner.status === "terminated" ||
+        gatewayOwner.status === "pending_approval"
+      ) {
+        return recordNamedGatewayAuthFailure({
+          gatewayId: input.gatewayId,
+          gatewayPublicId: input.gatewayPublicId,
+          bearerToken,
+          reasonCode: "gateway_agent_withheld",
+          clientMetadata,
+        });
+      }
+      const selection = await selectBotGatewayRun({
+        db,
+        companyId: row.gateway.companyId,
+        agentId: row.gateway.agentId,
+        statuses: ACTIVE_GATEWAY_RUN_STATUSES,
+      });
+      botGatewayRunBinding = selection.kind === "bound" ? "bound" : "unbound";
+      if (selection.kind === "bound") {
+        try {
+          const runContext = await resolveRunContext({
+            companyId: row.gateway.companyId,
+            agentId: row.gateway.agentId,
+            runId: selection.runId,
+            issueId: row.gateway.issueId,
+            projectId: row.gateway.projectId,
+          });
+          const [boundRun] = await db
+            .select({ responsibleUserId: heartbeatRuns.responsibleUserId })
+            .from(heartbeatRuns)
+            .where(eq(heartbeatRuns.id, selection.runId))
+            .limit(1);
+          runId = selection.runId;
+          responsibleUserId = boundRun?.responsibleUserId ?? null;
+          issueId = runContext.issueId;
+          projectId = runContext.projectId;
+        } catch {
+          runId = null;
+          responsibleUserId = null;
+          issueId = row.gateway.issueId;
+          projectId = row.gateway.projectId;
+          botGatewayRunBinding = "unbound";
+        }
+      }
+    }
     const now = new Date();
     await db
       .update(toolMcpGatewayTokens)
@@ -7076,6 +7203,7 @@ export function createToolGatewayService(
       actorType: runId ? "agent" : "system",
       actorId: runId ? agentId : row.token.id,
       responsibleUserId,
+      botGatewayRunBinding, // myrmidon(BOARD-TOOLS-A2)
       createdAt: row.token.createdAt,
       expiresAt:
         row.token.expiresAt ??
@@ -7859,7 +7987,7 @@ export function createToolGatewayService(
         session,
         tool,
       );
-      const currentAccess = await policyService.decide(
+      const currentAccess = await decideToolAccess(
         policyInputForTool({
           session,
           tool,
@@ -8887,7 +9015,7 @@ export function createToolGatewayService(
       await assertAgentInCompany(input.companyId, input.agentId);
       const decisions = await Promise.all(
         pluginTools().map(async (tool) => {
-          const decision = await policyService.decide(
+          const decision = await decideToolAccess(
             policyInputForAgentTool({
               companyId: input.companyId,
               agentId: input.agentId,
@@ -8924,7 +9052,7 @@ export function createToolGatewayService(
       );
       const decisions = await Promise.all(
         tools.map(async (tool) => {
-          const decision = await policyService.decide(
+          const decision = await decideToolAccess(
             policyInputForAgentTool({
               companyId: input.companyId,
               agentId: input.agentId,
@@ -9043,7 +9171,7 @@ export function createToolGatewayService(
         idempotencyKey: `test-call:${randomUUID()}`,
         consumeRateLimit: true,
       });
-      const accessDecision = await policyService.decide(decisionInput);
+      const accessDecision = await decideToolAccess(decisionInput);
       const recorded = await policyService.recordInvocation(
         decisionInput,
         accessDecision,
@@ -9615,7 +9743,7 @@ export function createToolGatewayService(
             "Tool definition or connection changed; request a new review",
             "approved_tool_target_changed",
           );
-        const access = await policyService.decide(
+        const access = await decideToolAccess(
           policyInputForTool({
             session,
             tool,
@@ -9758,9 +9886,115 @@ export function createToolGatewayService(
               : origin.responsibleUserId;
         }
       }
-      let tool = await findToolForSession(session, input.tool);
       let virtualToolName: string | null = null;
       let requestedParameters: unknown = input.parameters ?? {};
+
+      // myrmidon(BOARD-TOOLS-A2): the task/project tools of the run-bound bot
+      // gateway session. Their authority is the run binding itself (the same
+      // path the native runtime uses), so they are recorded and audited here
+      // with the run's identity instead of going through the assigned-tool
+      // profile, which models connections, not board actions.
+      if (isRunBoundProjectTool(input.tool)) {
+        if (!runBoundProjectToolDescriptors(session).some((candidate) => candidate.name === input.tool)) {
+          throw new ToolGatewayHttpError(
+            403,
+            "Task and project tools require the gateway session to be bound to one active run",
+            "agent_context_required",
+            { tool: input.tool },
+          );
+        }
+        const boundValidation = validateToolContent({
+          value: requestedParameters,
+          direction: "arguments",
+          sensitiveMode: "redact",
+          promptInjectionMode: "ignore",
+        });
+        let boundResult: { content: string; data: unknown };
+        try {
+          boundResult = await executeRunBoundProjectTool({
+            db,
+            session,
+            toolName: input.tool,
+            parameters: (asRecord(requestedParameters) ?? {}) as Record<string, unknown>,
+          });
+        } catch (err) {
+          if (err instanceof RunBoundToolError) {
+            throw new ToolGatewayHttpError(err.status, err.message, err.reasonCode, {
+              tool: input.tool,
+            });
+          }
+          throw err;
+        }
+        const boundResultValidation = validateToolContent({
+          value: boundResult.data,
+          direction: "result",
+          sensitiveMode: "redact",
+          promptInjectionMode: "block",
+        });
+        const [boundInvocation] = await db
+          .insert(toolInvocations)
+          .values({
+            companyId: session.companyId,
+            actorType: session.actorType ?? (session.agentId ? "agent" : "system"),
+            actorId: session.actorId ?? session.agentId ?? session.gatewayTokenId ?? session.companyId,
+            agentId: session.agentId,
+            issueId: session.issueId,
+            runId: session.runId,
+            gatewayId: session.gatewayId ?? null,
+            providerType: "paperclip_self",
+            upstreamToolName: input.tool,
+            riskLevel: input.tool === "list_projects" || input.tool === "list_project_repositories" ? "read" : "write",
+            toolName: input.tool,
+            argumentsHash: boundValidation.summary.sha256 ?? null,
+            argumentsSummary: boundValidation.summary,
+            policyDecision: "allow",
+            matchedPolicyIds: [],
+            approvalState: "not_required",
+            status: "succeeded",
+            resultHash: boundResultValidation.summary.sha256 ?? null,
+            resultSummary: boundResultValidation.summary,
+            resultSizeBytes: boundResultValidation.summary.sizeBytes ?? null,
+            startedAt: new Date(),
+            completedAt: new Date(),
+          })
+          .returning();
+        await writeToolCallEvent({
+          invocationId: boundInvocation.id,
+          session,
+          eventType: "call_completed",
+          outcome: "success",
+          toolName: input.tool,
+          policyDecision: "allow",
+          reasonCode: "run_bound_project_tool_completed",
+          argumentsSummary: boundValidation.summary,
+          resultSummary: boundResultValidation.summary,
+        });
+        await writeAudit({
+          session,
+          companyId: session.companyId,
+          agentId: session.agentId,
+          runId: session.runId,
+          issueId: session.issueId,
+          action: "tool_gateway.call_completed",
+          details: {
+            invocationId: boundInvocation.id,
+            decision: "allow",
+            reasonCode: "run_bound_project_tool_completed",
+            tool: input.tool,
+            durationMs: Date.now() - startedAt,
+            argumentsSummary: boundValidation.summary,
+            resultSummary: boundResultValidation.summary,
+          },
+        });
+        return {
+          invocationId: boundInvocation.id,
+          status: "completed" as const,
+          tool: input.tool,
+          result: { content: boundResult.content, data: boundResult.data },
+        };
+      }
+
+      let tool = await findToolForSession(session, input.tool);
 
       if (
         tool.name === "search_tools" &&
@@ -10283,7 +10517,7 @@ export function createToolGatewayService(
           idempotencyKey: input.idempotencyKey,
           consumeRateLimit: true,
         });
-        const accessDecision = await policyService.decide(decisionInput);
+        const accessDecision = await decideToolAccess(decisionInput);
         // myrmidon(P9): a paused remote tool fails fast here: after replay and
         // policy (a denied call keeps its 403) and before the invocation is
         // recorded (a refused call leaves no idempotency key behind).
@@ -10751,7 +10985,7 @@ export function createToolGatewayService(
         parameters: requestedParameters,
         consumeRateLimit: true,
       });
-      const accessDecision = await policyService.decide(decisionInput);
+      const accessDecision = await decideToolAccess(decisionInput);
       const recorded = await policyService.recordInvocation(
         decisionInput,
         accessDecision,

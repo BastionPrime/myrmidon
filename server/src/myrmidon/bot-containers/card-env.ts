@@ -11,6 +11,11 @@
 //     one is dropped with a warning, exactly as a run drops it. A container
 //     is never the host GitHub mode, in which a run would keep such a token, so
 //     it takes the managed side of that choice: no static GitHub token in its .env.
+//     myrmidon(FLEETD-VMEXEC): one exception, for named dev bots on a second
+//     machine only — MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST lists agent
+//     names whose GitHub token env bindings are kept (resolved from a bound
+//     company secret like any other env entry, still never in the container's
+//     Env). Empty by default: the fork's own behaviour is unchanged.
 //   - Secrets are resolved WITH a binding context (consumer: this agent, actor:
 //     system), so the board checks that the secret is bound to this agent at
 //     env.<NAME> and writes an access event. A resolve without a context checks
@@ -62,6 +67,28 @@ export const MANAGED_GITHUB_CARD_ENV_KEYS: ReadonlySet<string> = new Set([
   "PAPERCLIP_GIT_TOKEN",
 ]);
 
+/**
+ * myrmidon(FLEETD-VMEXEC): agents whose cards MAY bind the managed GitHub token
+ * names. A dev bot moved to a container on a second machine cannot use the
+ * board-managed GitHub broker (its launcher is never projected into a bot
+ * container), so those agents carry a bound company secret as env.GITHUB_TOKEN
+ * instead — written to hermes/.env like any other card env entry, never to the
+ * container's own Env. The list is agent NAMES (not ids), comma-separated,
+ * trimmed, case-sensitive, empty by default: nothing changes until an operator
+ * names the agents explicitly. Read per resolve (once a minute per bot, like
+ * the other per-tick bot settings), so an operator can empty the list to fall
+ * back to the fork's default immediately.
+ */
+export const GITHUB_ENV_ALLOWLIST_ENV = "MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST";
+
+export function parseGithubEnvAllowlist(raw: string | undefined): ReadonlySet<string> {
+  const entries = (raw ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return new Set(entries);
+}
+
 /** Who is asking, as the secrets service records and checks it. */
 export interface CardEnvBindingContext {
   consumerType: "agent";
@@ -86,6 +113,8 @@ export interface CardEnvPorts {
 export interface CardEnvAgent {
   id: string;
   companyId: string;
+  /** myrmidon(FLEETD-VMEXEC): the allowlist is agent names; profile-ports always provides it. */
+  name?: string;
   adapterConfig: Record<string, unknown>;
 }
 
@@ -111,7 +140,18 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-export function createCardEnvResolver(ports: CardEnvPorts): (agent: CardEnvAgent) => Promise<ResolvedCardEnv> {
+export interface CardEnvResolverOptions {
+  /** myrmidon(FLEETD-VMEXEC): agent names allowed to keep managed GitHub token
+   *  env bindings (see GITHUB_ENV_ALLOWLIST_ENV). Defaults to none. */
+  githubEnvAllowlist?: ReadonlySet<string>;
+  /** Test hook for the env source; production passes none (process.env). */
+  env?: NodeJS.ProcessEnv;
+}
+
+export function createCardEnvResolver(
+  ports: CardEnvPorts,
+  options: CardEnvResolverOptions = {},
+): (agent: CardEnvAgent) => Promise<ResolvedCardEnv> {
   const cache = new Map<string, { fingerprint: string; env: Record<string, HermesProfileEnvEntry> }>();
 
   return async function resolveCardEnv(agent: CardEnvAgent): Promise<ResolvedCardEnv> {
@@ -123,6 +163,14 @@ export function createCardEnvResolver(ports: CardEnvPorts): (agent: CardEnvAgent
         continue;
       }
       if (MANAGED_GITHUB_CARD_ENV_KEYS.has(name)) {
+        // myrmidon(FLEETD-VMEXEC): a named dev bot keeps the binding; the secret
+        // must still be bound to this agent, and the value lands in hermes/.env
+        // (0600, secret) exactly like any other card env entry.
+        const allowlist = options.githubEnvAllowlist ?? parseGithubEnvAllowlist((options.env ?? process.env)[GITHUB_ENV_ALLOWLIST_ENV]);
+        if (typeof agent.name === "string" && allowlist.has(agent.name)) {
+          bindings[name] = binding;
+          continue;
+        }
         warnings.push(`env.${name}: GitHub credentials are managed by the board, a bot container carries none from a card, dropped`);
         continue;
       }

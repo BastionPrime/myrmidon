@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BotExtraMount } from "./driver.js";
 import {
   assertBotRuntimeContract,
   BOT_KEY_PATTERN,
@@ -13,9 +14,11 @@ import {
   isUnderManagedDir,
   mountRootSegment,
   parseImageAllowlist,
+  parseMountSourceAllowlist,
   replacementContainerNameFor,
   resolveProfileFileTarget,
   validateBotKey,
+  validateExtraMounts,
 } from "./template.js";
 import type { CompiledProfileFile } from "./types.js";
 
@@ -94,6 +97,85 @@ describe("buildBinds", () => {
 
   it("rejects a bot key that could escape the volume root", () => {
     expect(() => buildBinds("/srv/myrmidon/bots", "../../etc")).toThrow(BotContainerTemplateError);
+  });
+
+  it("appends an allowlisted extra mount as read-only, after the three fixed binds", () => {
+    const mounts = [{ source: "/srv/shared/sources", containerPath: "/srv/shared/sources", readOnly: true } as const];
+    expect(buildBinds("/srv/myrmidon/bots", "agent-a", { mounts, allowedSources: ["/srv/shared/sources"] })).toEqual([
+      "/srv/myrmidon/bots/agent-a/hermes:/data/hermes",
+      "/srv/myrmidon/bots/agent-a/workspace:/workspace",
+      "/srv/myrmidon/bots/agent-a/scratch:/scratch",
+      "/srv/shared/sources:/srv/shared/sources:ro",
+    ]);
+  });
+});
+
+describe("validateExtraMounts", () => {
+  const allowed = ["/srv/shared/sources", "/srv/shared/tools"];
+  const mount = (over: Partial<Omit<BotExtraMount, "readOnly">> & { readOnly?: boolean } = {}): BotExtraMount =>
+    ({
+      source: "/srv/shared/sources",
+      containerPath: "/srv/shared/sources",
+      readOnly: true,
+      ...over,
+    }) as BotExtraMount;
+
+  it("accepts an allowlisted source with a safe target", () => {
+    expect(() => validateExtraMounts([mount(), mount({ source: "/srv/shared/tools", containerPath: "/opt/tools" })], allowed)).not.toThrow();
+  });
+
+  it("rejects a source outside the instance allowlist (no prefix rule)", () => {
+    expect(() => validateExtraMounts([mount({ source: "/srv/shared/other" })], allowed)).toThrow(BotContainerTemplateError);
+    expect(() => validateExtraMounts([mount({ source: "/srv/shared" })], allowed)).toThrow(BotContainerTemplateError);
+    expect(() => validateExtraMounts([mount({ source: "/srv/shared/sources/deeper" })], allowed)).toThrow(
+      BotContainerTemplateError,
+    );
+  });
+
+  it("rejects everything when the allowlist is empty", () => {
+    expect(() => validateExtraMounts([mount()], [])).toThrow(BotContainerTemplateError);
+  });
+
+  it("ignores an allowlist entry that is not a plain absolute directory", () => {
+    expect(() => validateExtraMounts([mount({ source: "/srv/shared/sources/" })], ["/srv/shared/sources/"])).toThrow(
+      BotContainerTemplateError,
+    );
+    expect(() => validateExtraMounts([mount({ source: "/srv/../etc" })], ["/srv/../etc"])).toThrow(BotContainerTemplateError);
+  });
+
+  it.each(["../etc", "srv/shared", "/srv/../etc", "/srv//shared", "/srv/shared/", "/", "/srv/share\nd"])(
+    "rejects an unsafe source %j",
+    (source) => {
+      expect(() => validateExtraMounts([mount({ source })], [source])).toThrow(BotContainerTemplateError);
+    },
+  );
+
+  it.each(["/data/hermes", "/workspace", "/workspace/shared", "/scratch", "/tmp", "/tmp/x", "relative", "/x/../y"])(
+    "rejects a reserved or unsafe container path %j",
+    (containerPath) => {
+      expect(() => validateExtraMounts([mount({ containerPath })], allowed)).toThrow(BotContainerTemplateError);
+    },
+  );
+
+  it("rejects the same container path twice", () => {
+    expect(() => validateExtraMounts([mount(), mount({ source: "/srv/shared/tools" })], allowed)).toThrow(
+      BotContainerTemplateError,
+    );
+  });
+
+  it("rejects a writable extra mount", () => {
+    expect(() => validateExtraMounts([mount({ readOnly: false })], allowed)).toThrow(BotContainerTemplateError);
+  });
+});
+
+describe("parseMountSourceAllowlist", () => {
+  it("splits on commas, trims and drops blanks", () => {
+    expect(parseMountSourceAllowlist("/srv/shared/sources, /srv/shared/tools ,")).toEqual([
+      "/srv/shared/sources",
+      "/srv/shared/tools",
+    ]);
+    expect(parseMountSourceAllowlist(undefined)).toEqual([]);
+    expect(parseMountSourceAllowlist("")).toEqual([]);
   });
 });
 
