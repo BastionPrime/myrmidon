@@ -107,6 +107,10 @@ import { myrmidonBotEgressRoutes } from "./myrmidon/bot-containers/egress-wiring
 import { myrmidonWorkspaceHygieneRoutes } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
 // myrmidon(EMERGENCY-STOP): immediate stop of the runs a draining pause left running
 import { myrmidonEmergencyStopRoutes } from "./myrmidon/emergency-stop.js";
+import {
+  myrmidonBrowserBridgePublicRoutes,
+  myrmidonBrowserBridgeRoutes,
+} from "./myrmidon/browser-bridge/index.js"; // myrmidon(EXTCASE-B)
 import { instanceSettingsService } from "./services/instance-settings.js";
 import { openApiRoutes } from "./routes/openapi.js";
 import {
@@ -615,6 +619,9 @@ export async function createApp(
   const emailChannels = emailChannelService(db, { heartbeat: connectionIntentHeartbeat, storage: opts.storageService, publicBaseUrl: opts.chatWebhookPublicBaseUrl ?? opts.authPublicBaseUrl });
   app.use(emailWebhookRoutes(emailChannels));
   app.use(chatWebhookRoutes(chatChannels));
+  // myrmidon(EXTCASE-B): the extension's one board-less endpoint (the pairing code
+  // is the credential), mounted outside `/api` with the other provider ingress.
+  app.use(myrmidonBrowserBridgePublicRoutes(db));
   const managedAutoInstallKeys = opts.managedPluginAutoInstall ?? null;
   const bundledCatalogRoot =
     opts.bundledPluginCatalogRoot ?? resolveBundledCatalogRoot(process.env);
@@ -815,6 +822,7 @@ export async function createApp(
   api.use(myrmidonBotEgressRoutes(db)); // myrmidon(EGRESS-B)
   api.use(myrmidonWorkspaceHygieneRoutes(db)); // myrmidon(WORKSPACE-HYGIENE)
   api.use(myrmidonEmergencyStopRoutes(db)); // myrmidon(EMERGENCY-STOP)
+  api.use(myrmidonBrowserBridgeRoutes(db)); // myrmidon(EXTCASE-B): bridge panel (codes, devices, allowlist)
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }

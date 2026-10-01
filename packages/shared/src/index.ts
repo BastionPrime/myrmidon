@@ -2776,5 +2776,7 @@ export * from "./announcements.js";
 export * from "./myrmidon-workspace-hygiene.js";
 // myrmidon(C0): live run-admission limits shared by the server, the UI and the settings validator.
 export * from "./myrmidon-runtime-limits.js";
+// myrmidon(EXTCASE-B): browser-bridge wire contract shared by the gateway, the extension and the panel.
+export * from "./myrmidon-browser-bridge.js";
 // myrmidon(S6): per-agent tool and connection permissions.
 export * from "./myrmidon-agent-tool-permissions.js";
