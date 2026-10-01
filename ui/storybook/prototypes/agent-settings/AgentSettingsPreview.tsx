@@ -53,6 +53,7 @@ const descriptions: Record<AgentLocalDetailView, string> = {
     "Manage environment variables, secret bindings, and credentials your agent can access.",
   tools: "Manage installed connections, available tools, and access policies.",
   channels: "Manage the external chat connections dedicated to this agent.",
+  memory: "View, export and remove the entries of this agent's memory bank.", // myrmidon(MEMORY-UI)
   permissions: "Set the agent’s trust level, authority, and boundaries.",
   "api-keys": "Manage the keys this agent uses to authenticate with Paperclip.",
   revisions:

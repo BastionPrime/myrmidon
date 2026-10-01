@@ -303,3 +303,15 @@ first use and grants `rw` to that agent alone. The owner cannot create a folder
 with that name (`400 reserved`), and an agent asking for it is told what to do
 when the answer is not obvious — no account connected for its company, or
 several clouds connected (`409`, naming the providers).
+
+## 1.4 — agent memory card (MEMORY-UI)
+
+The "Memory" tab of the agent card (`server/src/myrmidon/agent-memory/`):
+view, export and remove the entries of the agent's memory bank (the same
+service the memory plugin writes to). Two variables, both required to enable;
+the key itself is a company secret, not an environment variable.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_HINDSIGHT_API_URL` | MEMORY-UI | unset (off) | Base address of the shared memory (hindsight) service as the board server sees it; the tab's list, export, delete and clear calls go there | Unset, empty or not an `http(s)://` URL — the section is off: status answers `enabled: false`, data routes answer 503. Read per request, no restart needed. The address is not logged |
+| `MYRMIDON_HINDSIGHT_KEY_SECRET` | MEMORY-UI | unset (off) | Name of the company secret holding the memory service API key (self-hosted deployments with no auth may name a missing secret — the calls then go without a token) | Unset or empty — off, same as above. The key value is read only for the duration of a call, never written to the log or an API response |
