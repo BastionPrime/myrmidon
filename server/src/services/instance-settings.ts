@@ -34,9 +34,17 @@ import {
 } from "@paperclipai/shared";
 import { eq } from "drizzle-orm";
 // myrmidon(R3): keep maintenance mode state across vendor writes of `general`
-import { preserveMaintenanceGeneralKey } from "../myrmidon/maintenance/store.js";
+import { preserveMaintenanceGeneralKey, preserveBrowserConsoleGeneralKey } from "../myrmidon/maintenance/store.js";
 // myrmidon(R5-A): keep deploy job state across vendor writes of `general`
 import { preserveDeployJobsGeneralKey } from "../myrmidon/deploy-jobs/store.js";
+// myrmidon(SUA): the stack registry cache survives every vendor general write
+import { preserveStackGeneralKey } from "../myrmidon/stack-registry/store.js";
+// myrmidon(R5-B): keep bot image canary state across vendor writes of `general`
+import { preserveBotCanaryGeneralKey } from "../myrmidon/bot-containers/canary-store.js";
+// myrmidon(CLOUD-CONNECTOR): keep the cloud connector state across vendor writes of `general`
+import { preserveCloudConnectorGeneralKey } from "../myrmidon/cloud-connector/store.js";
+// myrmidon(SEC1): keep the access-hub host registry across vendor writes of `general`
+import { preserveAccessHubHostsGeneralKey } from "../myrmidon/access-hub/host-registry.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -548,11 +556,17 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state
+          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state; myrmidon(R5-B): keep bot canary state; myrmidon(SUA): keep stack registry cache; myrmidon(SEC1): keep the access-hub host registry
+          // myrmidon(BROWSER-CONSOLE): same for the browser console sessions/journal key
           general: {
             ...nextGeneral,
-            ...preserveMaintenanceGeneralKey(current.general),
-            ...preserveDeployJobsGeneralKey(current.general),
+            ...preserveMaintenanceGeneralKey(current.general), // myrmidon(R3)
+            ...preserveDeployJobsGeneralKey(current.general), // myrmidon(R5-A)
+            ...preserveBrowserConsoleGeneralKey(current.general), // myrmidon(BROWSER-CONSOLE)
+            ...preserveStackGeneralKey(current.general), // myrmidon(SUA)
+            ...preserveBotCanaryGeneralKey(current.general), // myrmidon(R5-B)
+            ...preserveAccessHubHostsGeneralKey(current.general), // myrmidon(SEC1)
+            ...preserveCloudConnectorGeneralKey(current.general), // myrmidon(CLOUD-CONNECTOR)
           },
           updatedAt: now,
         })

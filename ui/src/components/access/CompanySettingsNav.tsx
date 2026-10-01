@@ -19,6 +19,7 @@ const items = [
   { value: "instance-experimental", label: "Experimental", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/experimental` },
   { value: "instance-plugins", label: "Plugins", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/plugins` },
   { value: "instance-adapters", label: "Adapters", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/adapters` },
+  { value: "browsers", label: "Browsers", href: "/company/settings/browsers" },
 ] as const;
 
 type CompanySettingsTab = (typeof items)[number]["value"];
@@ -96,6 +97,10 @@ export function getCompanySettingsTab(pathname: string): CompanySettingsTab {
 
   if (pathname.includes("/company/settings/secrets")) {
     return "secrets";
+  }
+
+  if (pathname.includes("/company/settings/browsers")) {
+    return "browsers";
   }
 
   return "general";

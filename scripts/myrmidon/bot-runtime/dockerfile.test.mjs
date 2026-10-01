@@ -20,6 +20,12 @@ const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/myrmidon-bot
 // the default image, i.e. everything before it, must stay node-free.
 const variantStart = dockerfile.indexOf("FROM python:3.13-slim AS node_dist");
 assert.ok(variantStart > 0, "Dockerfile must define the node_dist stage of the Node.js variant");
+// The development variant (runtime-dev) is a third final stage. The Node.js
+// variant test must stop before it: the dev stage legitimately runs as root
+// while it installs toolchains, which the Node.js variant must never do.
+const devVariantStart = dockerfile.indexOf("FROM python:3.13-slim AS node24_dist");
+assert.ok(devVariantStart > 0, "Dockerfile must define the node24_dist stage of the development variant");
+assert.ok(devVariantStart > variantStart, "the development variant must follow the Node.js variant stages");
 const dockerfileInstructions = dockerfile
   .slice(0, variantStart)
   .split("\n")
@@ -79,7 +85,12 @@ describe("docker/bot-runtime/Dockerfile", () => {
 
   it("runs as a non-root, fixed uid", () => {
     assert.match(dockerfile, /USER 10001:10001/);
-    assert.doesNotMatch(dockerfile, /^USER root$/m);
+    // The development variant (see below) is the one stage that switches to root
+    // to install its toolchains, and it returns to the contract user before it
+    // ends. Every other stage — and the finished dev image — runs as 10001:10001.
+    const beforeDevVariant = dockerfile.slice(0, dockerfile.indexOf("Variant `runtime-dev`"));
+    assert.ok(beforeDevVariant.length > 0, "expected the runtime/node stages before the development variant");
+    assert.doesNotMatch(beforeDevVariant, /^USER root$/m);
     assert.doesNotMatch(dockerfile, /^USER 0(:0)?$/m);
   });
 
@@ -179,6 +190,29 @@ describe("docker/bot-runtime/Dockerfile", () => {
     assert.ok(runtimeIdx > smokeIdx, "expected the import smoke in the builder stage");
   });
 
+  it("runs the state-db descriptor-probe regression against the patched tree at build time", () => {
+    // Patch 06 bounds the /proc/self/fd generation probe on the write path. The import
+    // smoke only proves the patched module still imports; the behaviour check has to run
+    // too, against the same synced venv and the same patched tree, and the file it runs
+    // must ship in the build context.
+    const run = dockerfileInstructions.match(/^RUN [^\n]*\/tmp\/patch-tests\/(\S+\.py)\s+\/opt\/hermes-src$/m);
+    assert.ok(run, "expected a build-time run of a docker/bot-runtime/tests regression");
+    assert.ok(
+      fs.existsSync(path.join(IMAGE_DIR, "tests", run[1])),
+      `docker/bot-runtime/tests/${run[1]} must exist`,
+    );
+    assert.match(dockerfile, /^COPY tests\/ \/tmp\/patch-tests\/$/m);
+    const syncIdx = dockerfileInstructions.indexOf("uv sync --frozen");
+    const runIdx = dockerfileInstructions.indexOf(run[0]);
+    const runtimeIdx = dockerfileInstructions.indexOf("FROM python:3.13-slim AS runtime");
+    assert.ok(runIdx > syncIdx, "expected the regression run after uv sync");
+    assert.ok(runtimeIdx > runIdx, "expected the regression run in the builder stage");
+    // The builder stage's test copy must not reach the runtime image. Index into the raw
+    // Dockerfile here: the instruction list above has its comment lines stripped, so its
+    // offsets do not address the file it came from.
+    assert.doesNotMatch(dockerfile.slice(dockerfile.indexOf("FROM python:3.13-slim AS runtime")), /patch-tests/);
+  });
+
   it("redirects hermes' lazy installs and write tools off the sealed, read-only venv", () => {
     // Sealing /opt/hermes-src read-only (below) otherwise leaves
     // tools/lazy_deps.py trying to install into it and
@@ -226,6 +260,7 @@ describe("docker/bot-runtime/patches/", () => {
     assert.ok(files.some((f) => f.includes("secret")), "expected a session-snapshot secret-redaction patch");
     assert.ok(files.some((f) => f.includes("state-read")), "expected a state-read retry patch");
     assert.ok(files.some((f) => f.includes("gateway-executor")), "expected a gateway executor pool patch");
+    assert.ok(files.some((f) => f.includes("fd-probe")), "expected a state-db descriptor-probe patch");
     // The two hindsight patches are gone on purpose: v2026.9.24 removed the in-tree provider
     // (the plugin catalog owns it now) and the catalog plugin already carries the retain_async
     // fix. A stray hindsight patch would fail `git apply` at build time.
@@ -319,16 +354,27 @@ describe("docker/bot-runtime/patches/", () => {
   it("ships no browser, which is why the browser-tool socket patches are not carried", () => {
     // patches/README.md leaves tools/browser_tool*.py unported because the image has no
     // agent-browser CLI, Node or Chromium. If a browser is ever added, this fails: port
-    // those two files together with it. The Node.js variant below is not a browser
-    // and does not change this: it must not carry one either.
+    // those two files together with it. Neither the Node.js variant nor the development
+    // variant is a browser, and neither may carry one: the check below reaches both of
+    // them, and the main image (checked against `dockerfileInstructions`, which stops at
+    // the first variant stage) still ships no Node at all.
     assert.doesNotMatch(dockerfileInstructions, /chromium|playwright|agent-browser|nodejs|\bnpm\b|\bnpx\b/i);
-    const variant = dockerfile.slice(variantStart).split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
-    assert.doesNotMatch(variant, /chromium|playwright|agent-browser|puppeteer/i);
+    const variants = dockerfile.slice(variantStart).split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+    assert.doesNotMatch(variants, /chromium|playwright|agent-browser|puppeteer/i);
   });
 
-  it("keeps the Node.js variant a final stage on top of runtime, with the same user, label and no media tools", () => {
+  it("keeps the Node.js variant a stage on top of runtime, with the same user, label and no media tools", () => {
     assert.match(dockerfile, /^FROM runtime AS runtime-node$/m);
-    const variant = dockerfile.slice(dockerfile.indexOf("FROM runtime AS runtime-node"));
+    // Slice only the Node.js variant: up to the development variant's banner
+    // comment that follows it. Comment lines are dropped so prose (the dev
+    // stage's banner explains that it inherits the contract label) cannot
+    // satisfy or trip a shape assertion.
+    const nodeVariantRaw = dockerfile.slice(
+      dockerfile.indexOf("FROM runtime AS runtime-node"),
+      dockerfile.indexOf("Variant `runtime-dev`"),
+    );
+    assert.ok(nodeVariantRaw.length > 0, "expected the Node.js variant before the development variant");
+    const variant = nodeVariantRaw.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
     assert.match(variant, /^USER 10001:10001$/m);
     assert.doesNotMatch(variant, /^USER (root|0)/m);
     assert.doesNotMatch(variant, /ffmpeg|yt-dlp|imagemagick|libreoffice|tesseract/i);
@@ -355,6 +401,141 @@ describe("docker/bot-runtime/patches/", () => {
     }
     assert.ok(fs.existsSync(path.join(IMAGE_DIR, "node-tools/package-lock.json")));
     assert.match(dockerfile, /npm ci --omit=dev/);
+  });
+});
+
+// The development variant (`runtime-dev`, image myrmidon-hermes-dev): the same
+// runtime guarantees plus the toolchain a member of the development team needs
+// to run a repository pull-request cycle (install, typecheck, test, push) from
+// inside a bot container.
+describe("docker/bot-runtime/Dockerfile (development variant)", () => {
+  // Everything from the first stage that belongs to the development variant
+  // (the helper download stages plus the `runtime-dev` stage itself). Used for
+  // cross-stage assertions such as "every download is pinned".
+  const devVariant = dockerfile.slice(dockerfile.indexOf("FROM python:3.13-slim AS node24_dist"));
+  const devInstructions = devVariant.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+  // Only the final stage, for assertions about what the finished image is
+  // (user, label, PATH, the toolchain check) — the helper stages are throwaway
+  // builders that never reach the published image.
+  const devStage = dockerfile.slice(dockerfile.indexOf("FROM runtime AS runtime-dev"));
+  assert.ok(devStage.length > 0, "Dockerfile must define the runtime-dev stage");
+  const devStageInstructions = devStage.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+
+  it("is a stage on top of runtime that ends as the contract user and keeps the variant marker", () => {
+    assert.match(dockerfile, /^FROM runtime AS runtime-dev$/m);
+    // The contract user is restored before the stage ends — root is only used to install.
+    const afterUser = devStageInstructions.slice(devStageInstructions.lastIndexOf("USER 10001:10001"));
+    assert.ok(afterUser.length > 0, "the dev variant must return to USER 10001:10001");
+    assert.match(devStageInstructions, /^USER root$/m);
+    // The contract label is inherited from `runtime`; the variant only adds a marker.
+    assert.match(devStageInstructions, /io\.github\.itkadr-git\.myrmidon\.variant="dev"/);
+    assert.doesNotMatch(devStageInstructions, /myrmidon\.bot-runtime\.contract=/);
+    // No ENTRYPOINT/HEALTHCHECK/CMD override: the gateway entrypoint is inherited.
+    assert.doesNotMatch(devStageInstructions, /^(ENTRYPOINT|HEALTHCHECK|CMD) /m);
+  });
+
+  it("installs exactly the toolchain the pull-request cycle needs", () => {
+    // Read the apt list of the final stage itself rather than the whole variant:
+    // a bare substring match would also hit the prose, the Rust installer and the
+    // helper stages' own apt lists.
+    const aptBlock = devStage.match(/apt-get install -y --no-install-recommends([\s\S]*?)&& rm -rf/)?.[1] ?? "";
+    for (const tool of [
+      "bash",
+      "ca-certificates",
+      "curl",
+      "g++",
+      "gcc",
+      "gh",
+      "git",
+      "jq",
+      "libc6-dev",
+      "make",
+      "openssh-client",
+      "pkg-config",
+      "python3",
+      "ripgrep",
+      "unzip",
+      "xz-utils",
+      "zstd",
+    ]) {
+      const expected = new RegExp(`(^|\\s)${tool.replace(/\+/g, "\\+")}(\\s|$)`);
+      assert.match(aptBlock, expected, `the dev variant must install ${tool}`);
+    }
+    assert.match(devStage, /^ARG PNPM_VERSION=9\.15\.4$/m);
+    assert.match(devVariant, /^ARG NODE24_VERSION=24\.\d+\.\d+$/m);
+    assert.match(devVariant, /^ARG GO_VERSION=1\.25\.\d+$/m);
+    assert.match(devVariant, /^ARG DOCKER_CLI_VERSION=29\.\d+\.\d+$/m);
+  });
+
+  it("pins every downloaded toolchain by exact version and sha256, checked before use", () => {
+    assert.match(devVariant, /^ARG NODE24_SHA256=[0-9a-f]{64}$/m);
+    assert.match(devVariant, /^ARG GO_SHA256=[0-9a-f]{64}$/m);
+    assert.match(devVariant, /^ARG RUSTUP_SHA256_AMD64=[0-9a-f]{64}$/m);
+    assert.match(devVariant, /^ARG DOCKER_CLI_SHA256=[0-9a-f]{64}$/m);
+    // Four downloads in the variant: Node.js 24, Go, the Docker CLI tarball and
+    // rustup — each with its own digest check.
+    assert.equal(devVariant.match(/sha256sum -c -/g)?.length, 4);
+    // The pnpm version is verified in the image it was installed into.
+    assert.match(devStage, /pnpm --version \| grep -x "\$\{PNPM_VERSION\}"/);
+  });
+
+  it("carries the Docker CLI client only, never an engine", () => {
+    // The bot container runs no engine: dockerd is the sandbox VM's, reached over
+    // mutual TLS. Dragging an engine in would contradict the whole design, so the
+    // helper stage copies exactly one binary out of the release tarball.
+    assert.match(devVariant, /cp \/tmp\/docker-cli\/docker\/docker \/opt\/docker-cli\/bin\/docker/);
+    for (const engineBin of ["dockerd", "containerd", "runc", "docker-proxy", "dockerd-rootless.sh"]) {
+      assert.ok(
+        !new RegExp(`/opt/docker-cli/bin/${engineBin}\\b`).test(devVariant),
+        `the Docker helper stage must not install ${engineBin}`,
+      );
+    }
+    // No engine binary name is COPYed into the final stage either.
+    assert.doesNotMatch(devStageInstructions, /\bdockerd\b|\bcontainerd\b|\brunc\b/);
+  });
+
+  it("keeps the Rust channel in step with the package that owns the pin", () => {
+    // packages/paperclip-runner/rust-toolchain.toml is the single owner of the
+    // compiler pin (the repository's own build Dockerfile takes it from there).
+    const toolchain = fs.readFileSync(path.join(ROOT, "packages/paperclip-runner/rust-toolchain.toml"), "utf8");
+    const channel = toolchain.match(/^channel\s*=\s*"([^"]+)"$/m)?.[1];
+    assert.ok(channel, "rust-toolchain.toml must pin a channel");
+    assert.match(devVariant, new RegExp(`^ARG RUST_CHANNEL=${channel.replace(/\./g, "\\.")}$`, "m"));
+  });
+
+  it("keeps every PATH element out of a writable root (dockergate image check)", () => {
+    // PATH is assembled from /opt and /usr only, and never holds /data,
+    // /workspace, /scratch or /tmp — dockergate refuses the image otherwise.
+    // Join line continuations first (the same way the main-image test does),
+    // then take the last PATH value, which is the one the finished stage keeps.
+    const joined = devStageInstructions.replace(/\\\n/g, " ");
+    const values = [...joined.matchAll(/(?:^|\s)PATH=([^\s"']+)/g)].map((m) => m[1]);
+    assert.ok(values.length >= 1, "the dev variant must set PATH explicitly");
+    const path = values[values.length - 1];
+    for (const el of path.split(":")) {
+      for (const root of ["/data", "/workspace", "/scratch", "/tmp"]) {
+        assert.ok(el !== root && !el.startsWith(`${root}/`), `PATH element ${el} is under writable root ${root}`);
+      }
+    }
+    for (const tool of ["/opt/node24/bin", "/opt/pnpm/bin", "/opt/go/bin", "/opt/cargo/bin", "/opt/docker-cli/bin"]) {
+      assert.ok(path.split(":").includes(tool), `PATH must contain ${tool}`);
+    }
+    // The pnpm store is redirected to the durable volume, not the read-only image.
+    assert.match(devStageInstructions, /npm_config_store_dir=\/data\/hermes\//);
+  });
+
+  it("sets no shell-start variable, which dockergate also refuses", () => {
+    // image.go denies an image that carries ENV or BASH_ENV (a shell that reads a
+    // file at start). The dev variant must not introduce either.
+    assert.doesNotMatch(devStageInstructions, /^\s*ENV\s+[^\n]*\b(ENV|BASH_ENV)=/m);
+    assert.doesNotMatch(devStageInstructions, /\bBASH_ENV\b/);
+  });
+
+  it("checks every toolchain as the contract user in the finished stage", () => {
+    const check = devStageInstructions.slice(devStageInstructions.lastIndexOf("USER 10001:10001"));
+    for (const tool of ["node --version", "pnpm --version", "go version", "cargo --version", "rustc --version", "gh --version", "jq --version", "zstd --version", "docker --version"]) {
+      assert.ok(check.includes(tool), `the dev image's build-time check must run ${tool}`);
+    }
   });
 });
 
@@ -387,6 +568,23 @@ describe("myrmidon-bot-image.yml", () => {
     assert.match(workflow, /tags: myrmidon-hermes:pr-check\n\s+push: false\n\s+load: true/);
     assert.match(workflow, /docker image inspect[^\n]*myrmidon\.bot-runtime\.contract[^\n]*myrmidon-hermes:pr-check/);
     assert.match(workflow, /docker run --rm --entrypoint uv myrmidon-hermes:pr-check --version/);
+  });
+
+  it("builds and checks the development variant only in this repository, never pushing on a pull request", () => {
+    const devJob = workflow.slice(workflow.indexOf("  build-dev:"));
+    assert.ok(devJob.length > 0, "the workflow must define a build-dev job");
+    assert.match(devJob, /IMAGE: ghcr\.io\/itkadr-git\/myrmidon-hermes-dev\n/);
+    assert.match(devJob, /if: \$\{\{ github\.repository == 'itkadr-git\/myrmidon' \}\}/);
+    assert.equal(devJob.match(/target: runtime-dev\n/g)?.length, 2);
+    assert.match(devJob, /tags: myrmidon-hermes-dev:pr-check\n\s+push: false\n\s+load: true/);
+    // The finished image is inspected: its contract label and its user, checked
+    // against the image the PR build loaded (named by the variable `img`).
+    assert.match(devJob, /img=myrmidon-hermes-dev:pr-check/);
+    assert.match(devJob, /docker image inspect[^\n]*myrmidon\.bot-runtime\.contract[^\n]*"\$img"/);
+    assert.match(devJob, /docker image inspect[^\n]*\.Config\.User[^\n]*"\$img"/);
+    // The toolchain is exercised on a read-only root as the contract user.
+    assert.match(devJob, /--read-only --user 10001:10001/);
+    assert.match(devJob, /run go version/);
   });
 
   it("builds on push to main and myr-v* tags", () => {

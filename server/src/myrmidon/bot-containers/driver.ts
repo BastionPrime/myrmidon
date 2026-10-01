@@ -81,6 +81,30 @@ export interface BotContainerStatus {
   maxConcurrentRuns?: number;
 }
 
+/** One template field whose live value (the container's inspect) no longer
+ *  matches what a freshly built create body asks for. */
+export interface TemplateDriftField {
+  /** Dotted path of the field inside a container inspect, e.g.
+   *  `HostConfig.Binds` — also the name the activity log carries, so a drift
+   *  is diagnosable from the log alone. */
+  field: string;
+  /** Value the freshly built create body asks for. */
+  expected: unknown;
+  /** Value the live container shows. `undefined` when the inspect the driver
+   *  reads does not report the field at all, which is a drift of that field. */
+  actual: unknown;
+}
+
+/**
+ * Result of the side-effect-free template check. `fields` names every field
+ * that differs, with both values (the activity log writes them out); empty
+ * `fields` means the live container still matches the spec.
+ */
+export interface TemplateDriftReport {
+  drifted: boolean;
+  fields: TemplateDriftField[];
+}
+
 export interface BotContainerDriver {
   /** Throws when the container runtime itself cannot be asked (socket error,
    *  unexpected API error) — never guesses a state. */
@@ -89,12 +113,14 @@ export interface BotContainerDriver {
   list(): Promise<BotContainerStatus[]>;
   /**
    * Side-effect-free check: does the existing container's live template (image,
-   * resource limits, network) no longer match `spec`? False when no container
-   * exists. The reconciler applies a `true` with `recreate`, gated behind the
+   * resource limits, network, bind list) no longer match `spec`? `drifted` is
+   * false when no container exists; `fields` names every field that differs,
+   * with the wanted and the live value, so the caller can log what drifted.
+   * The reconciler applies a `drifted: true` with `recreate`, gated behind the
    * same maintenance-pause-and-drain flow as a profile "restart" class change
    * whenever the container is live.
    */
-  templateDrift(spec: BotContainerSpec): Promise<boolean>;
+  templateDrift(spec: BotContainerSpec): Promise<TemplateDriftReport>;
   /** Creates the bot's container from `spec` without starting it, after
    *  preparing its volumes (created if absent, owned by the container's uid,
    *  mode 0700). Throws, before creating anything, if the image is not present

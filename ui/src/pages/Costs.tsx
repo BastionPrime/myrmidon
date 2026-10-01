@@ -13,6 +13,7 @@ import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight, Coins, DollarSi
 import { budgetsApi } from "../api/budgets";
 import { costsApi } from "../api/costs";
 import { GatewayCostsTab } from "../components/myrmidon/litellm-costs/GatewayCostsTab"; // myrmidon(M2-A)
+import { GatewayKeysTab } from "../components/myrmidon/litellm-costs/GatewayKeysTab"; // myrmidon(M2-B)
 import { BillerSpendCard } from "../components/BillerSpendCard";
 import { BudgetIncidentCard } from "../components/BudgetIncidentCard";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
@@ -35,7 +36,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const NO_COMPANY = "__none__";
-export type CostsMainTab = "overview" | "budgets" | "providers" | "billers" | "finance" | "gateway"; // myrmidon(M2-A): gateway tab
+export type CostsMainTab = "overview" | "budgets" | "providers" | "billers" | "finance" | "gateway"; // myrmidon(M2-A): gateway tab | "gateway-keys"
 
 export interface CostsProps {
   /** Render inside Audit without a second page-level title or breadcrumb. */
@@ -654,6 +655,7 @@ export function Costs({
             <TabsTrigger value="billers">Billers</TabsTrigger>
             <TabsTrigger value="finance">Finance</TabsTrigger>
             <TabsTrigger value="gateway">Gateway</TabsTrigger> {/* myrmidon(M2-A) */}
+            <TabsTrigger value="gateway-keys">Gateway keys</TabsTrigger> {/* myrmidon(M2-B) */}
           </TabsList>
         ) : null}
 
@@ -1089,6 +1091,10 @@ export function Costs({
 
         <TabsContent value="gateway" className="mt-4 space-y-4"> {/* myrmidon(M2-A) */}
           <GatewayCostsTab companyId={companyId} from={from || undefined} to={to || undefined} />
+        </TabsContent>
+
+        <TabsContent value="gateway-keys" className="mt-4 space-y-4"> {/* myrmidon(M2-B) */}
+          <GatewayKeysTab companyId={companyId} />
         </TabsContent>
 
         <TabsContent value="finance" className="mt-4 space-y-4">

@@ -33,10 +33,11 @@ import (
 // would tell (lstat of the volume root, /proc) is replaced.
 
 // Canaries that must never leave the gate: the fake daemon puts them into the
-// inspect answers, the tests put them into requests.
+// inspect answers, the tests put them into requests. The bind list is not among
+// them: since the drift incident of 01.10 the A2 answer must carry
+// HostConfig.Binds, so seedMain seeds the real three binds.
 const (
-	envCanary  = "SECRET_TOKEN=canary-env-secret"
-	bindCanary = "/host/canary-bind:/x"
+	envCanary = "SECRET_TOKEN=canary-env-secret"
 )
 
 // syncBuf is the log sink.
@@ -408,7 +409,7 @@ func (r *rig) seedMain(status string) {
 		Labels:   map[string]string{"myrmidon.bot": r.key(), "myrmidon.image": r.m.Image},
 		User:     policy.BotUser,
 		Env:      []string{envCanary},
-		Binds:    []string{bindCanary},
+		Binds:    policy.Binds(r.m.VolumeRoot, r.m.BotKey),
 		Status:   status, Health: "healthy",
 		Memory: 1 << 30, NanoCPUs: 1_000_000_000, PidsLimit: 512, NetworkMode: r.m.Network,
 	})

@@ -45,7 +45,7 @@ function fakeDriver(overrides: Partial<BotContainerDriver> = {}): BotContainerDr
   return {
     status: async (botKey): Promise<BotContainerStatus> => ({ botKey, state: "running", image: "bot-image:1.1.0", restartHash: "r", filesHash: "f" }),
     list: async () => [],
-    templateDrift: async () => false,
+    templateDrift: async () => ({ drifted: false, fields: [] }),
     create: async () => {},
     recreate: async () => {},
     writeProfile: async () => {},

@@ -66,6 +66,57 @@
       }
     },
     {
+      "id": "06-state-db-fd-probe-budget",
+      "kind": "patch",
+      "patch": "docker/bot-runtime/patches/06-state-db-fd-probe-budget.patch",
+      "files": [
+        "hermes_state.py"
+      ],
+      "reason": "Before every state-DB write the gateway probes whether the WAL/SHM generation this handle opened is still on disk. When the handle has no recorded sidecar identity the probe readlinks every open descriptor of the process on the calling thread — the gateway's event loop. A state.db reached through a symlink never records an identity (SQLite puts -wal/-shm next to the link target, so the literal <path>-wal never stats), so a multi-profile gateway with hundreds of descriptors walked /proc/self/fd once per write and starved the out-of-loop liveness watchdog into a hard exit (75), failing every run in flight. Same verdict, at most one walk per second per handle.",
+      "dropCondition": "Upstream stops walking /proc/self/fd on the write path: a cached probe verdict, a minimum interval between probes, or the probe moved off the caller's thread.",
+      "offer": null,
+      "offerNote": "Not offered yet: see the note on delta 02 (publisher-scan wrapper pending).",
+      "probe": {
+        "source": "hermes",
+        "path": "hermes_state.py",
+        "upstreamMarker": "_WAL_PROBE_MIN_INTERVAL|_wal_probe_at|fd_probe_interval"
+      }
+    },
+    {
+      "id": "07-run-scratch-resurrection-guard",
+      "kind": "patch",
+      "patch": "docker/bot-runtime/patches/07-run-scratch-resurrection-guard.patch",
+      "files": [
+        "agent/file_safety.py"
+      ],
+      "reason": "The run harness removes each run's scratch dir at the run boundary. A path remembered mid-session then succeeds again the moment a write tool's folded mkdir -p re-creates the missing paperclip-run-* parent: mode 755, no run-scratch marker file, never reclaimed — unmarked residue in the shared /tmp holding payloads and comment bodies readable to every co-tenant agent in the container. The guard refuses a write whose ancestor is a removed run-scratch root; a live root and dirs outside the class are untouched, and the guard fails open on its own errors.",
+      "dropCondition": "Upstream ships an equivalent guard in agent/file_safety.py / tools/file_operations.py: a write into a removed run-scratch root is refused instead of re-creating it.",
+      "offer": null,
+      "offerNote": "Not offered yet: see the note on delta 02 (publisher-scan wrapper pending).",
+      "probe": {
+        "source": "hermes",
+        "path": "agent/file_safety.py",
+        "upstreamMarker": "run_scratch|paperclip-run"
+      }
+    },
+    {
+      "id": "08-run-scratch-guard-write-paths",
+      "kind": "patch",
+      "patch": "docker/bot-runtime/patches/08-run-scratch-guard-write-paths.patch",
+      "files": [
+        "tools/file_operations.py"
+      ],
+      "reason": "Same change as delta 07: the guard has to run on both write paths the model can reach (write_file, patch_replace) and at the _atomic_write chokepoint where the folded mkdir -p lives, which also covers the V4A patch path. The two patches are one change, split only to keep the diffs file-sized.",
+      "dropCondition": "Same as delta 07: upstream refuses a write into a removed run-scratch root on its own write paths.",
+      "offer": null,
+      "offerNote": "Not offered yet: see the note on delta 02 (publisher-scan wrapper pending).",
+      "probe": {
+        "source": "hermes",
+        "path": "tools/file_operations.py",
+        "upstreamMarker": "run_scratch|resurrection"
+      }
+    },
+    {
       "id": "hindsight-reflect-timeout-and-fact-types",
       "kind": "upstream-plugin-gap",
       "files": [
