@@ -266,4 +266,44 @@ describe("myrmidon(CLOUD-CONNECTOR) MCP surface", () => {
       .send({ jsonrpc: "2.0", id: 5, method: "initialize" })
       .expect(401);
   });
+
+  it("hands the agent its own folder when it asks for the reserved name", async () => {
+    const { service, provider } = buildService();
+    await configured(service);
+    const server = app(agentActor, service);
+
+    const response = await request(server).post("/api/mcp/cloud-tools").send(call("cloud_list", { root: "personal", path: "" })).expect(200);
+    expect(response.body.result.isError).toBeUndefined();
+    expect(provider.calls).toContain("list ");
+
+    const denied = await request(server)
+      .post("/api/mcp/cloud-tools")
+      .send(call("cloud_upload", { root: "personal", path: "denied.txt", contentBase64: "", overwrite: false }))
+      .expect(200);
+    // the folder exists and is this agent's own: the refusal here is the
+    // argument check, not an access one — access was granted on the first call
+    expect(denied.body.result.content[0].text).not.toMatch(/no access to folder/);
+  });
+
+  it("accepts the reserved name as the destination of a move", async () => {
+    const { service, provider } = buildService();
+    await configured(service);
+    const response = await request(app(agentActor, service))
+      .post("/api/mcp/cloud-tools")
+      .send(call("cloud_move", { root: "work", path: "a.txt", toRoot: "personal", toPath: "a.txt" }))
+      .expect(200);
+    expect(response.body.result.isError).toBeUndefined();
+    expect(JSON.stringify(response.body.result)).not.toMatch(/no access to folder/);
+    expect(provider.calls).toContain("move");
+  });
+
+  it("tells the agent in tools/list that the reserved name exists", async () => {
+    const server = app(agentActor, buildService().service);
+    const response = await request(server)
+      .post("/api/mcp/cloud-tools")
+      .send({ jsonrpc: "2.0", id: 6, method: "tools/list" })
+      .expect(200);
+    const listTool = response.body.result.tools.find((tool: { name: string }) => tool.name === "cloud_list");
+    expect(listTool.inputSchema.properties.root.description).toContain("personal");
+  });
 });

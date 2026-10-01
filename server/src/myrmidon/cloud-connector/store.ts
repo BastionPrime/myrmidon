@@ -6,7 +6,7 @@
 // No migrations, and an old image keeps working on the new schema.
 
 import { eq, sql } from "drizzle-orm";
-import { instanceSettings, type Db } from "@paperclipai/db";
+import { agents, instanceSettings, type Db } from "@paperclipai/db";
 import type {
   CloudAccount,
   CloudGrant,
@@ -160,6 +160,22 @@ export function dbCloudConnectorStore(db: Db): CloudConnectorStore {
   return {
     read: () => readCloudConnectorDocument(db),
     mutate: (change) => mutateCloudConnectorDocument(db, change),
+  };
+}
+
+/**
+ * The board role of an agent: the label a `caste` grant matches on. One
+ * primary-key read per tool call; an unknown agent reads as "no caste", so a
+ * caste grant can never match by accident.
+ */
+export function agentRoleFromDb(db: Db): (agentId: string) => Promise<string | null> {
+  return async (agentId) => {
+    const [row] = await db
+      .select({ role: agents.role })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .limit(1);
+    return row?.role ?? null;
   };
 }
 

@@ -29,7 +29,7 @@ import {
 import { forbidden, HttpError, unauthorized } from "../../errors.js";
 import { validate } from "../../middleware/validate.js";
 import { assertAuthenticated } from "../../routes/authz.js";
-import type { CloudAgentIdentity } from "./types.js";
+import { cloudAgentIdentity } from "./identity.js";
 import type { CloudConnectorService } from "./service.js";
 
 function toHttpError(error: unknown): unknown {
@@ -56,13 +56,6 @@ function assertCloudOwner(req: Request, companyId: string | null): string {
     throw forbidden("Owner access required");
   }
   return req.actor.userId ?? "board";
-}
-
-/** Agent identity for a tool call: the caller is the agent, never a proxy. */
-function agentIdentity(req: Request): CloudAgentIdentity {
-  assertAuthenticated(req);
-  if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized("Agent access required");
-  return { agentId: req.actor.agentId, caste: null };
 }
 
 export function cloudConnectorRoutes(deps: { service: CloudConnectorService }) {
@@ -124,7 +117,7 @@ export function cloudConnectorRoutes(deps: { service: CloudConnectorService }) {
     const companyId = companyIdOf(req) ?? undefined;
     const roots = await service.listRoots(providerId, companyId);
     if (req.actor.type === "agent") {
-      const access = await service.accessFor({ agentId: req.actor.agentId ?? "", caste: null });
+      const access = await service.accessFor(await cloudAgentIdentity(service, req));
       const allowed = new Set(access.map((entry) => entry.root.id));
       res.json({ roots: roots.filter((root) => allowed.has(root.id)) });
       return;
@@ -194,7 +187,7 @@ export function cloudConnectorRoutes(deps: { service: CloudConnectorService }) {
   });
 
   router.post("/myrmidon/cloud-connector/call", validate(cloudToolCallSchema), async (req, res) => {
-    const identity = agentIdentity(req);
+    const identity = await cloudAgentIdentity(service, req);
     res.json({ result: await service.callTool(identity, req.body) });
   });
 

@@ -11,17 +11,25 @@
 // can tell the difference between "you were not granted this" and "this cloud
 // said no".
 
-import { Router, type Request } from "express";
+import { Router } from "express";
 import {
+  CLOUD_PERSONAL_ROOT_ALIAS,
   CLOUD_TOOL_NAMES,
   cloudToolCallSchema,
   type CloudToolName,
 } from "@paperclipai/shared/myrmidon-cloud-connector";
-import { unauthorized } from "../../errors.js";
 import { CLOUD_DOWNLOAD_LIMIT_BYTES, CLOUD_READ_LIMIT_BYTES, type CloudConnectorService } from "./service.js";
-import type { CloudAgentIdentity } from "./types.js";
+import { cloudAgentIdentity } from "./identity.js";
 
 const PROTOCOL_VERSION = "2025-03-26";
+
+/**
+ * Every tool that touches a folder names it the same way, because an agent
+ * needs one rule: the folder's name as the owner wrote it, or the reserved
+ * `personal` for the folder the connector keeps for that agent alone.
+ */
+const ROOT_ARGUMENT_DESCRIPTION =
+  `Name of the granted cloud folder, as the owner named it — or "${CLOUD_PERSONAL_ROOT_ALIAS}" for your own folder, which the connector creates the first time you use it and grants to you alone.`;
 
 interface CloudMcpTool {
   name: CloudToolName;
@@ -48,7 +56,7 @@ export const CLOUD_MCP_TOOLS: CloudMcpTool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        root: { type: "string", description: "Name of the granted cloud folder, as the owner named it." },
+        root: { type: "string", description: ROOT_ARGUMENT_DESCRIPTION },
         path: { type: "string", description: "Folder path inside that root; omit or leave empty for the root." },
       },
       required: ["root"],
@@ -62,7 +70,7 @@ export const CLOUD_MCP_TOOLS: CloudMcpTool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        root: { type: "string", description: "Name of the granted cloud folder." },
+        root: { type: "string", description: ROOT_ARGUMENT_DESCRIPTION },
         query: { type: "string", description: "Text to look for in entry names (1-200 characters)." },
       },
       required: ["root", "query"],
@@ -75,7 +83,7 @@ export const CLOUD_MCP_TOOLS: CloudMcpTool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        root: { type: "string", description: "Name of the granted cloud folder." },
+        root: { type: "string", description: ROOT_ARGUMENT_DESCRIPTION },
         path: { type: "string", description: "File path inside that root." },
       },
       required: ["root", "path"],
@@ -88,7 +96,7 @@ export const CLOUD_MCP_TOOLS: CloudMcpTool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        root: { type: "string", description: "Name of the granted cloud folder." },
+        root: { type: "string", description: ROOT_ARGUMENT_DESCRIPTION },
         path: { type: "string", description: "File path inside that root." },
       },
       required: ["root", "path"],
@@ -102,7 +110,7 @@ export const CLOUD_MCP_TOOLS: CloudMcpTool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        root: { type: "string", description: "Name of the granted cloud folder." },
+        root: { type: "string", description: ROOT_ARGUMENT_DESCRIPTION },
         path: { type: "string", description: "File path inside that root." },
         contentBase64: { type: "string", description: "File content, base64 encoded." },
         overwrite: { type: "boolean", description: "Replace the file when it already exists." },
@@ -118,9 +126,9 @@ export const CLOUD_MCP_TOOLS: CloudMcpTool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        root: { type: "string", description: "Name of the granted cloud folder that holds the entry." },
+        root: { type: "string", description: ROOT_ARGUMENT_DESCRIPTION },
         path: { type: "string", description: "Current path inside that root." },
-        toRoot: { type: "string", description: "Granted cloud folder to move the entry into." },
+        toRoot: { type: "string", description: ROOT_ARGUMENT_DESCRIPTION },
         toPath: { type: "string", description: "New path inside that folder." },
       },
       required: ["root", "path", "toRoot", "toPath"],
@@ -138,13 +146,6 @@ const REQUIRED_ARGUMENTS: Record<CloudToolName, string[]> = {
   cloud_move: ["root", "path", "toRoot", "toPath"],
 };
 
-/** Agent identity for a tool call: the caller is the agent, never a proxy. */
-function agentIdentity(req: Request): CloudAgentIdentity {
-  const actor = req.actor;
-  if (!actor || actor.type !== "agent" || !actor.agentId) throw unauthorized("Agent access required");
-  return { agentId: actor.agentId, caste: null };
-}
-
 export function cloudConnectorMcpRoutes(deps: { service: CloudConnectorService }) {
   const router = Router();
   const { service } = deps;
@@ -158,7 +159,7 @@ export function cloudConnectorMcpRoutes(deps: { service: CloudConnectorService }
     // Every method on this endpoint belongs to an agent: a board user or
     // nobody reaching here is not an agent call, and an unauthenticated caller
     // gets no answer at all — not even the server's handshake.
-    const identity = agentIdentity(req);
+    const identity = await cloudAgentIdentity(service, req);
 
     if (method === "initialize") {
       return send({
