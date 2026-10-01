@@ -65,6 +65,11 @@ Everything merged after the 1.1.0 tag, including fixes that were never tagged on
 
 ### Wakes and heartbeat
 
+- Emergency stop for the runs a draining pause left finishing: the agent detail page shows a
+  banner with a confirm-and-stop button while the agent is paused and live runs remain, and
+  `POST /api/myrmidon/agents/:id/emergency-stop` cancels them immediately with the same
+  `agent_paused` code a pause-cancel uses — the agent's own status is untouched (#173). Operator
+  guide: [guides/emergency-stop.md](guides/emergency-stop.md).
 - Continuation wakes: age-threshold sweep and direct-delivery settlement fixed.
 - Tasks stranded by an operator pause are woken in batches when the pause is lifted.
 - Configurable cap on cross-issue influence.

@@ -124,9 +124,12 @@ import { initializeCloudRuntimeIdentity } from "./services/cloud-runtime-identit
 import { systemdNotify } from "./services/systemd-notify.js";
 import { flushInFlightRunLogMirrors } from "./services/run-log-store.js";
 import { startMaintenanceMode } from "./myrmidon/maintenance/index.js"; // myrmidon(R3)
+import { startDeployJobs } from "./myrmidon/deploy-jobs/index.js"; // myrmidon(R5-A)
 import { startRuntimeLimits } from "./myrmidon/runtime-limits/index.js"; // myrmidon(C0)
 import { startBotContainers, stopBotContainers } from "./myrmidon/bot-containers/startup.js"; // myrmidon(W2a)
+import { startLitellmCostSweep, stopLitellmCostSweep } from "./myrmidon/litellm-costs/startup.js"; // myrmidon(M2-A)
 import { interactionContinuationOutboxService } from "./myrmidon/interaction-continuation-outbox.js"; // myrmidon(O1)
+import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
 import {
   createPendingInteractionWakeSweep,
   readPendingInteractionWakeContextSnapshot,
@@ -1412,6 +1415,13 @@ async function startServerWithDatabaseTeardown(
         }));
     };
 
+    // myrmidon(WORKSPACE-HYGIENE): measures execution workspaces and signals one that outgrows
+    // its quota; the quotas live in the instance settings (GET/PATCH /api/myrmidon/workspace-hygiene)
+    const scheduleWorkspaceHygieneSweep = createWorkspaceHygieneScheduler({
+      db: db as any,
+      track: trackHeartbeatSchedulerWork,
+    });
+
     // The restart-safe cleanup backstop for adapter login sessions. The
     // in-process five-minute timer stays the primary control. This reaper runs
     // on startup and on the scheduler interval. It deletes the login sandbox for
@@ -1485,7 +1495,9 @@ async function startServerWithDatabaseTeardown(
     );
     await startRuntimeLimits(db as any); // myrmidon(C0): stored run admission limits in force before the scheduler starts runs
     await startMaintenanceMode(db as any); // myrmidon(R3): load open maintenance windows before startup recovery starts runs
+    startDeployJobs(db as any); // myrmidon(R5-A): resume an interface deploy job; no-op unless MYRMIDON_DEPLOY_ENABLED
     startBotContainers(db as any); // myrmidon(W2a): bot container sweep and the card's "Apply now" runtime; a no-op unless MYRMIDON_BOT_CONTAINERS is on
+    startLitellmCostSweep(db as any); // myrmidon(M2-A): gateway spend sweep; a no-op unless MYRMIDON_LITELLM_* is set
     const heartbeatSchedulingSuppression = await heartbeat.resolveSchedulingSuppression();
 
     // Reap orphaned runs before timer ticks start so wakeups cannot coalesce
@@ -1721,6 +1733,7 @@ async function startServerWithDatabaseTeardown(
         scheduleGitHubConnectionEventPoll();
         scheduleGitHubConnectionContinuitySweep();
         scheduleTerminalWorkspaceSweep();
+        scheduleWorkspaceHygieneSweep(); // myrmidon(WORKSPACE-HYGIENE)
         scheduleAdapterLoginReaperSweep();
         scheduleSetupTokenReaperSweep();
         scheduleEnvironmentLeaseCleanupSweep();
@@ -1871,6 +1884,18 @@ async function startServerWithDatabaseTeardown(
                 logger.warn({ ...swept }, "periodic stale-lock sweeper cleared issue locks");
               }
             })
+            // myrmidon(IDLE-PICKUP): the periodic safety net that wakes an
+            // idle agent with ready assigned tasks; the interval itself is
+            // enforced inside the sweeper (MYRMIDON_IDLE_PICKUP_INTERVAL_SEC).
+            .then(async () => {
+              const pickedUp = await heartbeat.sweepIdlePickup(new Date());
+              if (pickedUp.woken > 0) {
+                logger.warn(
+                  { ...pickedUp },
+                  "periodic idle pickup woke ready assigned issues",
+                );
+              }
+            })
             .catch((err) => {
               logger.error({ err }, "periodic heartbeat recovery failed");
             }));
@@ -2009,6 +2034,7 @@ async function startServerWithDatabaseTeardown(
     heartbeatSchedulerStopped = true;
     clearInterval(executionControlInterval);
     stopBotContainers(); // myrmidon(W2a)
+    stopLitellmCostSweep(); // myrmidon(M2-A)
     if (heartbeatSchedulerInterval) {
       clearInterval(heartbeatSchedulerInterval);
       heartbeatSchedulerInterval = null;

@@ -1887,6 +1887,7 @@ export {
   testAdapterEnvironmentSchema,
   agentPermissionsSchema,
   updateAgentPermissionsSchema,
+  agentToolAccessSchema, // myrmidon(S6)
   type CreateAgent,
   type BuiltInAgentProvision,
   type BuiltInAgentReset,
@@ -2324,6 +2325,9 @@ export {
   createCliAuthChallengeSchema,
   resolveCliAuthChallengeSchema,
   createBoardApiKeySchema,
+  BOARD_API_KEY_SCOPE_KINDS,
+  boardApiKeyScopeSchema,
+  normalizeBoardApiKeyScope,
   currentUserProfileSchema,
   authSessionSchema,
   updateCurrentUserProfileSchema,
@@ -2333,6 +2337,8 @@ export {
   updateMemberPermissionsSchema,
   searchAdminUsersQuerySchema,
   updateUserCompanyAccessSchema,
+  type BoardApiKeyScope,
+  type BoardApiKeyScopeKind,
   type CreateCostEvent,
   type CreateFinanceEvent,
   type UpdateBudget,
@@ -2765,5 +2771,10 @@ export * from "./types/email.js";
 export * from "./validators/email.js";
 export * from "./announcements.js";
 
+// myrmidon(WORKSPACE-HYGIENE): workspace quota values and the measurement record shared by the
+// server, the sweep and the settings validator.
+export * from "./myrmidon-workspace-hygiene.js";
 // myrmidon(C0): live run-admission limits shared by the server, the UI and the settings validator.
 export * from "./myrmidon-runtime-limits.js";
+// myrmidon(S6): per-agent tool and connection permissions.
+export * from "./myrmidon-agent-tool-permissions.js";

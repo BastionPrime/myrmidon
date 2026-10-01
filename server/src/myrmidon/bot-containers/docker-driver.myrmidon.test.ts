@@ -19,6 +19,7 @@ import {
   demuxDockerLogs,
   dockerBotContainerDriver,
   parseAppliedMarker,
+  serializeAppliedMarker,
   type DockerDriverConfig,
 } from "./docker-driver.js";
 import type { BotContainerDriver, BotContainerSpec } from "./driver.js";
@@ -355,6 +356,31 @@ describe("computeProfileRemovals / parseAppliedMarker", () => {
     expect(parseAppliedMarker("not json")).toBeNull();
     expect(parseAppliedMarker('{"restartHash":"r"}')).toBeNull();
     expect(parseAppliedMarker("[]")).toBeNull();
+  });
+
+  // myrmidon(CONCURRENCY-SYNC): the applied limit the card reads back. Written only by
+  // a profile that carries one, and kept only when it is a number the driver can trust
+  // (the marker lives on a volume the bot itself can write).
+  it("carries the applied concurrency limit written by a profile that has one", () => {
+    const marker = serializeAppliedMarker({ ...testProfile(), maxConcurrentRuns: 3 });
+    expect(parseAppliedMarker(marker)).toMatchObject({
+      restartHash: "restart-1",
+      filesHash: "files-1",
+      maxConcurrentRuns: 3,
+    });
+
+    // A profile without the number writes no field at all: "not reported", not "1".
+    const without = serializeAppliedMarker(testProfile());
+    expect(without).not.toContain("maxConcurrentRuns");
+    expect(parseAppliedMarker(without)?.maxConcurrentRuns).toBeUndefined();
+  });
+
+  it("drops a concurrency limit the marker cannot be trusted for", () => {
+    const base = { restartHash: "r", filesHash: "f" };
+    for (const value of ['"3"', "0", "-1", "2.5", "null", "true"]) {
+      expect(parseAppliedMarker(JSON.stringify({ ...base, maxConcurrentRuns: JSON.parse(value) }))?.maxConcurrentRuns).toBeUndefined();
+    }
+    expect(parseAppliedMarker(JSON.stringify({ ...base, maxConcurrentRuns: 5 }))?.maxConcurrentRuns).toBe(5);
   });
 });
 
