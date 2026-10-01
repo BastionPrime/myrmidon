@@ -21,6 +21,9 @@ import {
 } from "@paperclipai/shared";
 import { parseIssueExecutionState } from "./issue-execution-policy.js";
 import { isSupersededConversationRun } from "./agent-conversations.js";
+// myrmidon(D2): uuid-typed json comparisons for the board DB hot path. See
+// docs/myrmidon/DIVERGENCE.md.
+import { jsonTextUuid } from "../myrmidon/db-hot-path/json-uuid.js";
 
 /** An operator records observed outcomes; this is not permission to blindly retry. */
 export async function validateExecutionReconciliation(input: {
@@ -355,8 +358,17 @@ export async function settleUnrecoverableExecutions(
       heartbeatRuns,
       and(
         eq(heartbeatRuns.companyId, issueRecoveryActions.companyId),
-        sql`${heartbeatRuns.id}::text = ${issueRecoveryActions.evidence}->>'runId'`,
-        sql`coalesce(${heartbeatRuns.nativeIssueId}::text, ${heartbeatRuns.contextSnapshot}->>'issueId') = ${issueRecoveryActions.sourceIssueId}::text`,
+        // myrmidon(D2): uuid-typed comparisons instead of
+        // `heartbeat_runs.id::text = evidence->>'runId'` (and the same for the
+        // issue-id fallback). The text cast defeated heartbeat_runs' primary-key
+        // index, so every issue_recovery_actions lookup fell back to a
+        // sequential scan of the whole runs table. See jsonTextUuid's doc
+        // comment and docs/myrmidon/DIVERGENCE.md.
+        eq(heartbeatRuns.id, jsonTextUuid(sql`${issueRecoveryActions.evidence}->>'runId'`)),
+        eq(
+          sql`coalesce(${heartbeatRuns.nativeIssueId}, ${jsonTextUuid(sql`${heartbeatRuns.contextSnapshot}->>'issueId'`)})`,
+          issueRecoveryActions.sourceIssueId,
+        ),
       ),
     )
     .leftJoin(

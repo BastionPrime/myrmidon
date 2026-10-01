@@ -127,6 +127,9 @@ import {
 } from "../attachment-types.js";
 import { isUniqueViolation } from "../db-errors.js";
 import { coalescedOwnerId } from "../myrmidon/chat-reconciliation/owner-join.js";
+// myrmidon(D2): uuid-typed json comparisons for the board DB hot path. See
+// docs/myrmidon/DIVERGENCE.md.
+import { jsonTextUuid } from "../myrmidon/db-hot-path/json-uuid.js";
 import {
   bindTeamsPersonalRecipient,
   deriveTeamsPersonalRecipient,
@@ -13973,7 +13976,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         and visible_queue.provider_message_id = queued_notice.provider_message_id
         and visible_queue.direction = 'outbound' and visible_queue.comment_id is null
       where queued_notice.company_id = ${chatActions.companyId}
-        and queued_notice.comment_id::text = ${chatActions.payload}->>'commentId'
+        and queued_notice.comment_id = ${jsonTextUuid(sql`${chatActions.payload}->>'commentId'`)}
         and queued_notice.state = 'published'
         and queued_notice.idempotency_key = 'wake:' || ${owner.id}::text || ':queued:' ||
           ${chatActions.endpointId}::text || ':' || ${chatActions.conversationId}::text)`;
@@ -14001,8 +14004,14 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         removedComment,
         and(
           eq(removedComment.companyId, chatActions.companyId),
-          sql`${removedComment.issueId}::text = ${chatActions.payload}->>'issueId'`,
-          sql`${removedComment.id}::text = ${chatActions.payload}->>'commentId'`,
+          // myrmidon(D2): uuid-typed comparisons instead of
+          // `removed_comment.id::text = payload->>'commentId'` (and the same for
+          // issue_id). The text cast defeated issue_comments' primary-key index
+          // and forced Postgres to sequentially scan the whole table on every
+          // sweep call. See jsonTextUuid's doc comment and
+          // docs/myrmidon/DIVERGENCE.md.
+          eq(removedComment.issueId, jsonTextUuid(sql`${chatActions.payload}->>'issueId'`)),
+          eq(removedComment.id, jsonTextUuid(sql`${chatActions.payload}->>'commentId'`)),
           isNotNull(removedComment.deletedAt),
         ),
       )
@@ -34980,7 +34989,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           eq(heartbeatRuns.companyId, publication.companyId),
           eq(heartbeatRuns.agentId, endpoint.assignedAgentId),
           sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${publication.issueId}`,
-          sql`split_part(${chatPublications.idempotencyKey}, ':', 2) = ${heartbeatRuns.id}::text`,
+          // myrmidon(D2): uuid-typed comparison instead of `split_part(...) =
+          // heartbeat_runs.id::text`; the text cast defeated heartbeat_runs'
+          // primary-key index.
+          eq(heartbeatRuns.id, jsonTextUuid(sql`split_part(${chatPublications.idempotencyKey}, ':', 2)`)),
         ),
       )
       .innerJoin(
