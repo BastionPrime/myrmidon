@@ -456,3 +456,218 @@ USER 10001:10001
 # does a small real job (pptx written to a temp file, a Cyrillic text rendered
 # and re-encoded, a PDF built, pdfjs imported). Only /tmp is written to.
 RUN node /opt/node-tools/smoke.cjs && npm --version
+
+# ---------------------------------------------------------------------------
+# Variant `runtime-dev`: the `runtime` image plus the whole toolchain a member
+# of the development team needs to run a repository pull-request cycle
+# (install, typecheck, test, push) from inside a bot container. A bot container
+# has no Docker of its own — dockergate refuses arbitrary containers on purpose
+# — so the team cannot open a throwaway `node:24` container the way it does on
+# a separate sandbox host. Published as
+# ghcr.io/itkadr-git/myrmidon-hermes-dev by the same workflow and with the same
+# gating as the other variants (push to `main` and `myr-v*` tags; a pull
+# request builds and checks it, never pushes).
+#
+# Everything the shared `runtime` image guarantees still holds and is NOT
+# redeclared here: uid/gid `10001:10001`, the read-only root filesystem, the
+# three fixed volumes, the entrypoint, the health check and the inherited
+# `myrmidon.bot-runtime.contract="1"` label. This stage only ADDS toolchains.
+#
+# The dockergate image check (tools/dockergate/internal/policy/image.go) reads
+# this image too: no element of PATH may live under a writable root (/data,
+# /workspace, /scratch, /tmp), because a bot could plant a binary there. Every
+# toolchain below therefore lands under /opt or /usr, and no `ENV`/`BASH_ENV`
+# variable name is set (a shell that reads a file at start is refused).
+#
+# Versions are pinned exactly and verified by digest, following the rule the
+# Node.js variant above states: bump the version and its checksum together, the
+# build fails on a mismatch.
+# ---------------------------------------------------------------------------
+FROM python:3.13-slim AS node24_dist
+ARG NODE24_VERSION=24.21.0
+ARG NODE24_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
+
+# The slim base carries neither curl nor xz, and the Node.js tarball is .tar.xz.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    xz-utils \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN set -eu; \
+    curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE24_VERSION}/node-v${NODE24_VERSION}-linux-x64.tar.xz"; \
+    echo "${NODE24_SHA256}  /tmp/node.tar.xz" | sha256sum -c -; \
+    mkdir /opt/node24; \
+    tar -xJf /tmp/node.tar.xz -C /opt/node24 --strip-components=1; \
+    rm -rf /tmp/node.tar.xz /opt/node24/include /opt/node24/share /opt/node24/CHANGELOG.md /opt/node24/README.md; \
+    /opt/node24/bin/node --version | grep -x "v${NODE24_VERSION}"
+
+# Go: the repository's dockergate and fleetd tools are Go modules (go 1.25,
+# stdlib only), and CI runs gofmt/go vet/go test over them in their own lanes.
+# The official tarball is pinned by exact version and sha256, like Node.js.
+FROM python:3.13-slim AS go_dist
+ARG GO_VERSION=1.25.14
+ARG GO_SHA256=a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712
+
+# The slim base carries no curl.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    xz-utils \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN set -eu; \
+    curl -fsSL -o /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"; \
+    echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c -; \
+    mkdir -p /opt/go; \
+    tar -xzf /tmp/go.tar.gz -C /opt/go --strip-components=1; \
+    rm -f /tmp/go.tar.gz; \
+    /opt/go/bin/go version | grep -q "go${GO_VERSION}"
+
+# Docker CLI, client only. The bot container runs no engine (the container
+# driver refuses arbitrary containers on purpose); the development team's
+# engine is the sandbox VM, reached over mutual TLS. The static release
+# tarball is pinned by exact version and sha256 like every other download
+# here, and only the `docker` binary is copied out of it — the tarball also
+# ships dockerd, containerd and runc, and none of those may enter this image.
+FROM python:3.13-slim AS docker_cli_dist
+ARG DOCKER_CLI_VERSION=29.7.2
+ARG DOCKER_CLI_SHA256=803d433f226db4776e1768fd319fc6c6e4935a456acf84fcc0080818b854bc8f
+
+# The slim base carries no curl.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN set -eu; \
+    curl -fsSL -o /tmp/docker.tgz "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz"; \
+    echo "${DOCKER_CLI_SHA256}  /tmp/docker.tgz" | sha256sum -c -; \
+    mkdir -p /tmp/docker-cli /opt/docker-cli/bin; \
+    tar -xzf /tmp/docker.tgz -C /tmp/docker-cli; \
+    cp /tmp/docker-cli/docker/docker /opt/docker-cli/bin/docker; \
+    rm -rf /tmp/docker.tgz /tmp/docker-cli; \
+    /opt/docker-cli/bin/docker --version | grep -q "${DOCKER_CLI_VERSION}"
+
+FROM runtime AS runtime-dev
+LABEL org.opencontainers.image.title="myrmidon-hermes-dev" \
+      org.opencontainers.image.description="Bot runtime image, development variant: hermes gateway plus Node.js, pnpm, Go, Rust, git/gh/jq/zstd and a C toolchain for a repository pull-request cycle" \
+      io.github.itkadr-git.myrmidon.variant="dev"
+
+# The base stage is `USER 10001:10001`; installing needs root, and the stage
+# ends by returning to the contract user (the G3 driver refuses any other user,
+# and dockergate checks Config.User against 10001:10001 before any create).
+USER root
+
+# Build tools the repository needs to install and build its workspaces:
+# gcc/g++/make/pkg-config for native addons and node-gyp, python3 (present in
+# the base) for node-gyp itself, gh for the pull-request cycle, zstd and unzip
+# for archives, xz-utils for the tarballs above. Same --no-install-recommends
+# discipline as the other stages.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    g++ \
+    gcc \
+    gh \
+    git \
+    jq \
+    libc6-dev \
+    make \
+    openssh-client \
+    pkg-config \
+    python3 \
+    ripgrep \
+    unzip \
+    xz-utils \
+    zstd \
+  && rm -rf /var/lib/apt/lists/*
+
+# Rust: packages/paperclip-runner carries a native crate and its own
+# rust-toolchain.toml, which is the single owner of the compiler pin — the same
+# version-pinned, checksum-verified rustup installer and the same
+# "install the package-owned compiler before source enters the stage" step as
+# the repository's own build Dockerfile. RUST_CHANNEL must stay equal to the
+# channel in packages/paperclip-runner/rust-toolchain.toml; a guard test
+# (scripts/myrmidon/bot-runtime/dockerfile.test.mjs) fails if the two drift.
+ENV RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo
+ARG RUST_CHANNEL=1.97.1
+ARG RUSTUP_VERSION=1.29.0
+ARG RUSTUP_SHA256_AMD64=4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10
+# `rustup` lands in $CARGO_HOME/bin, which is not on PATH until the final
+# ENV below — put it on PATH for this RUN, or `rustup toolchain install`
+# exits 127 with "rustup: not found".
+RUN set -eux; \
+    export PATH="/opt/cargo/bin:$PATH"; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) rustTarget="x86_64-unknown-linux-gnu"; sha256="$RUSTUP_SHA256_AMD64" ;; \
+      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rustTarget}/rustup-init"; \
+    echo "${sha256}  /tmp/rustup-init" | sha256sum -c -; \
+    chmod +x /tmp/rustup-init; \
+    /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none; \
+    rm /tmp/rustup-init; \
+    rustup toolchain install "${RUST_CHANNEL}" --profile minimal --component rustfmt; \
+    rustup default "${RUST_CHANNEL}"; \
+    cargo --version; rustc --version; rustfmt --version
+
+COPY --from=node24_dist --chown=root:root /opt/node24 /opt/node24
+COPY --from=go_dist --chown=root:root /opt/go /opt/go
+COPY --from=docker_cli_dist --chown=root:root /opt/docker-cli /opt/docker-cli
+
+# pnpm: the repository pins `packageManager: pnpm@9.15.4`. It is installed with
+# the pinned Node.js npm into a sealed /opt prefix — the same reason the Node.js
+# variant keeps its global prefix off PATH: an element under a writable volume
+# is refused by dockergate, so the package manager may not live in /scratch.
+# corepack is deliberately not used (it fails on this base).
+ARG PNPM_VERSION=9.15.4
+RUN PATH=/opt/node24/bin:$PATH npm install --global --prefix /opt/pnpm "pnpm@${PNPM_VERSION}" \
+  && PATH=/opt/node24/bin:$PATH /opt/pnpm/bin/pnpm --version | grep -x "${PNPM_VERSION}" \
+  && rm -rf /root/.npm
+
+# The root filesystem is read-only at run time and the bot's writable
+# directories are exactly its three volumes, so every path pnpm or the
+# toolchains write to must live under one of them:
+#   - the pnpm store defaults to /data/hermes/.pnpm-store (the durable volume);
+#     an operator may point it at a shared host directory mounted into /data
+#     (see docker/bot-runtime/README.md, "Variant for the development team");
+#   - Rust's RUSTUP_HOME/CARGO_HOME stay sealed under /opt and cargo writes its
+#     target dir into the checked-out workspace, never into the image;
+#   - Go's build cache defaults under $HOME (/data/hermes) — the durable volume.
+# PATH is assembled from /opt and /usr only — never a writable volume.
+ENV PATH=/opt/node24/bin:/opt/pnpm/bin:/opt/go/bin:/opt/cargo/bin:/opt/docker-cli/bin:/opt/hermes-src/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    npm_config_store_dir=/data/hermes/.pnpm-store \
+    GOTOOLCHAIN=local \
+    GOFLAGS=-mod=mod
+
+USER 10001:10001
+
+# Build-time check as the contract user, in the finished stage: every toolchain
+# answers, and no PATH element is under a writable root the dockergate image
+# policy rejects. Running it here (not in a builder stage) is what makes the
+# check meaningful — it sees exactly what a bot container would.
+RUN set -eu; \
+    node --version; \
+    pnpm --version; \
+    go version; \
+    cargo --version; \
+    rustc --version; \
+    gh --version; \
+    jq --version; \
+    zstd --version; \
+    git --version; \
+    docker --version; \
+    for el in $(echo "$PATH" | tr ':' ' '); do \
+      case "$el" in \
+        /data|/data/*|/workspace|/workspace/*|/scratch|/scratch/*|/tmp|/tmp/*) \
+          echo "PATH element $el is under a writable root" >&2; exit 1 ;; \
+      esac; \
+    done
