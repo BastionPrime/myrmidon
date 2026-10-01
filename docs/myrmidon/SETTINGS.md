@@ -285,3 +285,11 @@ a folder whose company has no connected account answers a cloud call with `409 n
 | `MYRMIDON_CLOUD_GOOGLE_DRIVE_CLIENT_SECRET` | CLOUD-CONNECTOR | unset | Client secret of the same app | — |
 | `MYRMIDON_CLOUD_YANDEX_DISK_CLIENT_ID` | CLOUD-CONNECTOR | unset (off) | OAuth client id of the Yandex Disk app. Scopes requested: `cloud_api:disk.read cloud_api:disk.write`; Yandex does not support PKCE, so none is sent | Unset — Yandex Disk cannot be connected; the provider itself is added by part C |
 | `MYRMIDON_CLOUD_YANDEX_DISK_CLIENT_SECRET` | CLOUD-CONNECTOR | unset | Client secret of the same app | — |
+
+Agent surface: the connector also serves the cloud tools over MCP at
+`POST <board>/api/mcp/cloud-tools` (JSON-RPC; `initialize`, `tools/list`,
+`tools/call` with `cloud_list`, `cloud_search`, `cloud_read`, `cloud_download`,
+`cloud_upload`, `cloud_move`). It needs no variable of its own: the caller is the
+agent's own run key, and every call is confined to the folders granted to that
+agent. To let agents see the tools, register the board address as a tool
+connection and assign it — the endpoint itself is always on.

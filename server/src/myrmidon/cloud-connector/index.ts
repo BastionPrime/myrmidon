@@ -1,6 +1,6 @@
 // myrmidon(CLOUD-CONNECTOR): wiring for app.ts.
 //
-// One process-wide service: the routes and (later) the agent-facing MCP tools
+// One process-wide service: the owner/agent routes and the agent MCP surface
 // share the same state. The owner connects an account through the provider's
 // OAuth flow; the token lands in a company secret of the instance's secret
 // store, and the access-token resolver reads and refreshes it on demand, so
@@ -11,6 +11,7 @@
 // serves the folder/grant/journal surface but refuses to start a connect.
 
 import type { Db } from "@paperclipai/db";
+import { Router } from "express";
 import type { CloudRoot } from "@paperclipai/shared/myrmidon-cloud-connector";
 import { OAuthStateStore, readOAuthClients } from "./oauth.js";
 import { createCloudAccessTokenResolver, type CloudAccessTokenResolver } from "./access-token.js";
@@ -19,6 +20,7 @@ import { CloudProviderRegistry, type CloudProvider } from "./providers/provider.
 import { OneDriveProvider } from "./providers/onedrive.js";
 import { cloudConnectorService, type CloudConnectorService } from "./service.js";
 import { cloudConnectorRoutes } from "./routes.js";
+import { cloudConnectorMcpRoutes } from "./mcp.js";
 import { dbCloudConnectorStore, type CloudConnectorStore } from "./store.js";
 
 export interface CloudConnectorWiringOptions {
@@ -35,7 +37,7 @@ export interface CloudConnectorWiringOptions {
 }
 
 export interface CloudConnectorWiring {
-  routes: ReturnType<typeof cloudConnectorRoutes>;
+  routes: Router;
   service: CloudConnectorService;
   /** Access token of the account that owns a root; null when nobody connected it. */
   accessToken: (root: CloudRoot) => Promise<string | null>;
@@ -78,7 +80,12 @@ export function createCloudConnector(options: { db: Db } & CloudConnectorWiringO
     },
   });
 
-  return { routes: cloudConnectorRoutes({ service }), service, accessToken };
+  // One mount for app.ts: the owner/agent routes and the agent MCP surface.
+  const router = Router();
+  router.use(cloudConnectorRoutes({ service }));
+  router.use(cloudConnectorMcpRoutes({ service }));
+
+  return { routes: router, service, accessToken };
 }
 
 export function myrmidonCloudConnectorRoutes(db: Db, options: CloudConnectorWiringOptions = {}) {
@@ -89,5 +96,6 @@ export { cloudConnectorService, CloudConnectorService } from "./service.js";
 export { CloudProviderRegistry } from "./providers/provider.js";
 export { OneDriveProvider } from "./providers/onedrive.js";
 export { secretCloudTokenStore, memoryCloudTokenStore } from "./token-store.js";
+export { cloudConnectorMcpRoutes, CLOUD_MCP_TOOLS } from "./mcp.js";
 export { createCloudAccessTokenResolver } from "./access-token.js";
 export { OAuthStateStore, CLOUD_OAUTH_SPECS, readOAuthClients } from "./oauth.js";
