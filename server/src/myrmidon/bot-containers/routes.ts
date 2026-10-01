@@ -28,7 +28,7 @@ import {
   isBotContainersEnabled,
   readBotContainerAgentConfig,
 } from "./agent-config.js";
-import type { ApplyBotContainerOutcome, BotContainerAgent, BotContainerRuntimeDeps } from "./index.js";
+import type { ApplyBotContainerOptions, ApplyBotContainerOutcome, BotContainerAgent, BotContainerRuntimeDeps } from "./index.js";
 import {
   APPLIED_LIMIT_PENDING_NOTE,
   compareGatewayConcurrency,
@@ -64,7 +64,7 @@ export interface BotContainerRoutesDeps {
   applyNow(
     agent: BotContainerAgent,
     runtime: BotContainerRuntimeDeps,
-    opts: { env?: NodeJS.ProcessEnv },
+    opts: ApplyBotContainerOptions,
   ): Promise<ApplyBotContainerOutcome>;
   /**
    * myrmidon(CONCURRENCY-SYNC): when this agent's most recent run failed with
