@@ -758,7 +758,9 @@ describeEmbeddedPostgres("accepted plan workspace refresh", () => {
         workMode: "planning",
         priority: "medium",
         responsibleUserId: "responsible-user",
-        assigneeAgentId: agentId,
+        // Holds the in-flight claim only: unassigned so the idle pickup does not
+        // start it as the agent's next ready task and add runs to this scenario.
+        assigneeAgentId: null,
         identifier: "PAP-9302",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -917,7 +919,9 @@ describeEmbeddedPostgres("accepted plan workspace refresh", () => {
         workMode: "planning",
         priority: "medium",
         responsibleUserId: "responsible-user",
-        assigneeAgentId: agentId,
+        // Holds the in-flight claim only: unassigned so the idle pickup does not
+        // start it as the agent's next ready task and add runs to this scenario.
+        assigneeAgentId: null,
         identifier: "PAP-9402",
         createdAt: new Date(),
         updatedAt: new Date(),

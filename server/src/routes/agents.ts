@@ -4912,6 +4912,8 @@ export function agentRoutes(
         canCreateSkills: agent.permissions?.canCreateSkills ?? true,
         canAssignTasks: effectiveCanAssignTasks,
         trustPreset: agent.permissions?.trustPreset ?? "standard",
+        // myrmidon(S6): the tool/connection permission is part of what the change record shows.
+        toolAccess: agent.permissions?.toolAccess ?? null,
       },
     });
 
