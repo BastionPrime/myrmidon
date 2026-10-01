@@ -12,9 +12,11 @@ import {
 import type { DeploymentMode } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { authApi } from "@/api/auth";
+import { healthApi } from "@/api/health";
 import { queryKeys } from "@/lib/queryKeys";
 import { useCloudInstance } from "@/hooks/useCloudInstance";
 import { useSignOut } from "@/hooks/useSignOut";
+import { useTranslation } from "@/i18n";
 import { useSidebar } from "../context/SidebarContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -26,6 +28,7 @@ import { SidebarServerInfo } from "./SidebarServerInfo";
 const PROFILE_SETTINGS_PATH = "/company/settings/instance/profile";
 const DOCS_URL = "https://docs.paperclip.ing/";
 const FEEDBACK_URL = "https://paperclip.ing/feedback";
+const ABOUT_SETTINGS_PATH = "/company/settings";
 
 interface SidebarAccountMenuProps {
   deploymentMode?: DeploymentMode;
@@ -124,6 +127,17 @@ export function SidebarAccountMenu({
     queryFn: () => authApi.getSession(),
     retry: false,
   });
+  const { t } = useTranslation();
+  // myrmidon(ABOUT): release version in the sidebar footer. A passive health
+  // observer (same pattern as useCloudInstance): the layout's health query
+  // owns the fetch, this reads the shared cache without triggering one — a
+  // fetching observer here would also fight tests that seed the cache.
+  const { data: health } = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => healthApi.get(),
+    enabled: false,
+  });
+  const aboutVersionLabel = health?.version ? t("sidebar.version", { version: health.version }) : null;
 
   const signOutMutation = useSignOut({ onSignedOut: closeNavigationChrome });
 
@@ -249,6 +263,18 @@ export function SidebarAccountMenu({
           </Tooltip>
         ) : null}
       </div>
+      {/* myrmidon(ABOUT): release version in the sidebar footer; opens About. */}
+      {aboutVersionLabel && !rail ? (
+        <Link
+          to={ABOUT_SETTINGS_PATH}
+          data-testid="myrmidon-sidebar-version"
+          aria-label={t("about.title")}
+          onClick={closeNavigationChrome}
+          className="block truncate px-4 pb-1 pt-0.5 text-(length:--text-micro) text-muted-foreground/70 transition-colors hover:text-foreground"
+        >
+          {aboutVersionLabel}
+        </Link>
+      ) : null}
     </div>
   );
 }

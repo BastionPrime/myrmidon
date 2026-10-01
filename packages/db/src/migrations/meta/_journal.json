@@ -1961,6 +1961,41 @@
       "when": 1789700001000,
       "tag": "0281_chat_actions_inbound_wakeup_sweep_index",
       "breakpoints": true
+    },
+    {
+      "idx": 283,
+      "version": "7",
+      "when": 1789700002000,
+      "tag": "0283_board_api_key_scope_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 284,
+      "version": "7",
+      "when": 1790767639972,
+      "tag": "0284_stale_natasha_romanoff",
+      "breakpoints": true
+    },
+    {
+      "idx": 285,
+      "version": "7",
+      "when": 1790767639973,
+      "tag": "0285_litellm_costs",
+      "breakpoints": true
+    },
+    {
+      "idx": 286,
+      "version": "7",
+      "when": 1790822836557,
+      "tag": "0286_db_hot_path_uuid_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 287,
+      "version": "7",
+      "when": 1790833071250,
+      "tag": "0287_concerned_richard_fisk",
+      "breakpoints": true
     }
   ]
 }

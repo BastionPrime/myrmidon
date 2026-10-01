@@ -1,0 +1,45 @@
+# Microsoft 365 connector for container bots (OneDrive + mail).
+# `bots` (the Docker network the bot containers and the board live on) must already exist.
+# Before `up`: ./config/bots.json (see config.example.json) and ./secrets/gateway_token
+# (random, >= 32 chars; the same value is stored in the board as the connection's bearer).
+# After `up` the mailbox owner signs in once:
+#   docker compose exec -d cloud-files python -m cloud_files auth
+#   docker compose exec cloud-files cat /state/devicecode.json     # link and code, not secret
+
+name: cloud-files
+
+networks:
+  bots:
+    external: true
+    name: myrmidon-bots
+
+volumes:
+  state: {}  # Microsoft token (0600), call journal, staging store
+
+services:
+  cloud-files:
+    image: ghcr.io/itkadr-git/myrmidon-cloud-files@sha256:<digest from the CI run>
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    pids_limit: 256
+    networks: [bots]  # no published ports: the bots and the board reach it as http://cloud-files:8080
+    environment:
+      CLOUD_CLIENT_ID: "<Azure app client id>"
+      CLOUD_TENANT: consumers
+      CLOUD_SCOPES: "Files.ReadWrite.All Mail.ReadWrite Mail.Send offline_access User.Read"
+      CLOUD_ACL_FILE: /config/bots.json
+      CLOUD_GATEWAY_TOKEN_FILE: /run/secrets/gateway_token
+    secrets: [gateway_token]
+    volumes:
+      - ./config:/config:ro
+      - state:/state
+    tmpfs: ["/tmp:size=16m"]
+    mem_limit: 384m
+    cpus: 1.0
+
+secrets:
+  gateway_token:
+    file: ./secrets/gateway_token

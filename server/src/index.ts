@@ -124,8 +124,17 @@ import { initializeCloudRuntimeIdentity } from "./services/cloud-runtime-identit
 import { systemdNotify } from "./services/systemd-notify.js";
 import { flushInFlightRunLogMirrors } from "./services/run-log-store.js";
 import { startMaintenanceMode } from "./myrmidon/maintenance/index.js"; // myrmidon(R3)
+import { startDeployJobs } from "./myrmidon/deploy-jobs/index.js"; // myrmidon(R5-A)
+import { startRuntimeLimits } from "./myrmidon/runtime-limits/index.js"; // myrmidon(C0)
 import { startBotContainers, stopBotContainers } from "./myrmidon/bot-containers/startup.js"; // myrmidon(W2a)
+import { startLitellmCostSweep, stopLitellmCostSweep } from "./myrmidon/litellm-costs/startup.js"; // myrmidon(M2-A)
+import { startBotCanary, stopBotCanary } from "./myrmidon/bot-containers/canary-index.js"; // myrmidon(R5-B)
 import { interactionContinuationOutboxService } from "./myrmidon/interaction-continuation-outbox.js"; // myrmidon(O1)
+import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
+import {
+  createPendingInteractionWakeSweep,
+  readPendingInteractionWakeContextSnapshot,
+} from "./myrmidon/pending-interaction-wake-sweep.js"; // myrmidon(P12)
 // myrmidon(P11): database backup catch-up
 import { BACKUP_CATCHUP_WINDOW_ENV, readBackupCatchUpSettings, startBackupCatchUp } from "./myrmidon/backup-catch-up.js";
 import {
@@ -1252,6 +1261,43 @@ async function startServerWithDatabaseTeardown(
     if (heartbeatSchedulerStopped) return;
     trackHeartbeatSchedulerWork(runEnvironmentLeaseCleanupSweep(ENVIRONMENT_LEASE_CLEANUP_SWEEP_BACKOFF_MS));
   };
+  // myrmidon(P12): a parked addressee wake on a task with no live run never gets
+  // promoted (only the release paths of that task's own runs promote it), so the
+  // addressee never sees the interaction before it expires. The sweep re-admits
+  // the receipt when the interaction is still waiting and no run holds the task,
+  // and finalizes it when the interaction stopped waiting.
+  const WAKEUP_SOURCES = ["timer", "assignment", "on_demand", "automation"] as const;
+  const WAKEUP_TRIGGER_DETAILS = ["manual", "ping", "callback", "system"] as const;
+  const WAKEUP_ACTOR_TYPES = ["user", "agent", "system"] as const;
+  const narrowWakeValue = <T extends readonly string[]>(
+    values: T,
+    raw: string | null | undefined,
+  ): T[number] | undefined => values.find((value) => value === raw) as T[number] | undefined;
+  const pendingInteractionWakeSweep = createPendingInteractionWakeSweep({
+    db: db as any,
+    reAdmit: async (wake) => {
+      await environmentLeaseCleanupHeartbeat.wakeup(wake.agentId, {
+        source: narrowWakeValue(WAKEUP_SOURCES, wake.source),
+        triggerDetail: narrowWakeValue(WAKEUP_TRIGGER_DETAILS, wake.triggerDetail),
+        reason: wake.reason,
+        payload: wake.payload,
+        contextSnapshot: readPendingInteractionWakeContextSnapshot(wake.payload),
+        idempotencyKey: wake.idempotencyKey ?? null,
+        requestedByActorType: narrowWakeValue(WAKEUP_ACTOR_TYPES, wake.requestedByActorType),
+        requestedByActorId: wake.requestedByActorId,
+      });
+    },
+  });
+  const schedulePendingInteractionWakeSweep = () => {
+    if (heartbeatSchedulerStopped) return;
+    trackHeartbeatSchedulerWork(pendingInteractionWakeSweep().then((result) => {
+      if (result.reAdmitted > 0 || result.cancelled > 0) {
+        logger.info(result, "pending interaction wake sweep settled parked addressee wakes");
+      }
+    }).catch((err) => {
+      logger.error({ err }, "pending interaction wake sweep failed");
+    }));
+  };
   const githubConnectionEvents = githubConnectionEventService(db as any, {
     wakeup: environmentLeaseCleanupHeartbeat.wakeup,
   });
@@ -1321,6 +1367,10 @@ async function startServerWithDatabaseTeardown(
     });
     const terminalWorkspaces = executionWorkspaceService(db as any, {
       workspaceReaperCooldownDays: config.workspaceReaperCooldownDays,
+      // myrmidon(WORKSPACE-HYGIENE): merged copies use the short cooldown; a
+      // stuck undeletable copy is signalled once a day.
+      myrmidonWorkspaceMergedCooldownMs: config.myrmidonWorkspaceMergedCooldownMs,
+      myrmidonWorkspaceStuckSignalAfterMs: config.myrmidonWorkspaceStuckSignalAfterMs,
     });
     const scheduleMergedPullRequestConfirmationSweep = () => {
       if (heartbeatSchedulerStopped) return;
@@ -1365,6 +1415,13 @@ async function startServerWithDatabaseTeardown(
           logger.error({ err }, "terminal issue workspace reaper failed");
         }));
     };
+
+    // myrmidon(WORKSPACE-HYGIENE): measures execution workspaces and signals one that outgrows
+    // its quota; the quotas live in the instance settings (GET/PATCH /api/myrmidon/workspace-hygiene)
+    const scheduleWorkspaceHygieneSweep = createWorkspaceHygieneScheduler({
+      db: db as any,
+      track: trackHeartbeatSchedulerWork,
+    });
 
     // The restart-safe cleanup backstop for adapter login sessions. The
     // in-process five-minute timer stays the primary control. This reaper runs
@@ -1437,8 +1494,12 @@ async function startServerWithDatabaseTeardown(
       },
       "worktree run-execution cutoff state",
     );
+    await startRuntimeLimits(db as any); // myrmidon(C0): stored run admission limits in force before the scheduler starts runs
     await startMaintenanceMode(db as any); // myrmidon(R3): load open maintenance windows before startup recovery starts runs
+    startDeployJobs(db as any); // myrmidon(R5-A): resume an interface deploy job; no-op unless MYRMIDON_DEPLOY_ENABLED
     startBotContainers(db as any); // myrmidon(W2a): bot container sweep and the card's "Apply now" runtime; a no-op unless MYRMIDON_BOT_CONTAINERS is on
+    startLitellmCostSweep(db as any); // myrmidon(M2-A): gateway spend sweep; a no-op unless MYRMIDON_LITELLM_* is set
+    startBotCanary(db as any); // myrmidon(R5-B): resume an open bot image rollout; a no-op unless MYRMIDON_BOT_CANARY is on
     const heartbeatSchedulingSuppression = await heartbeat.resolveSchedulingSuppression();
 
     // Reap orphaned runs before timer ticks start so wakeups cannot coalesce
@@ -1674,9 +1735,11 @@ async function startServerWithDatabaseTeardown(
         scheduleGitHubConnectionEventPoll();
         scheduleGitHubConnectionContinuitySweep();
         scheduleTerminalWorkspaceSweep();
+        scheduleWorkspaceHygieneSweep(); // myrmidon(WORKSPACE-HYGIENE)
         scheduleAdapterLoginReaperSweep();
         scheduleSetupTokenReaperSweep();
         scheduleEnvironmentLeaseCleanupSweep();
+        schedulePendingInteractionWakeSweep(); // myrmidon(P12)
 
         if (heartbeatSchedulerStopped) return;
         trackHeartbeatSchedulerWork(routines
@@ -1823,6 +1886,18 @@ async function startServerWithDatabaseTeardown(
                 logger.warn({ ...swept }, "periodic stale-lock sweeper cleared issue locks");
               }
             })
+            // myrmidon(IDLE-PICKUP): the periodic safety net that wakes an
+            // idle agent with ready assigned tasks; the interval itself is
+            // enforced inside the sweeper (MYRMIDON_IDLE_PICKUP_INTERVAL_SEC).
+            .then(async () => {
+              const pickedUp = await heartbeat.sweepIdlePickup(new Date());
+              if (pickedUp.woken > 0) {
+                logger.warn(
+                  { ...pickedUp },
+                  "periodic idle pickup woke ready assigned issues",
+                );
+              }
+            })
             .catch((err) => {
               logger.error({ err }, "periodic heartbeat recovery failed");
             }));
@@ -1840,6 +1915,7 @@ async function startServerWithDatabaseTeardown(
     startHeartbeatSchedulerInterval(() => {
       scheduleExternalObjectRefreshSweep(new Date());
       scheduleEnvironmentLeaseCleanupSweep();
+      schedulePendingInteractionWakeSweep(); // myrmidon(P12)
       scheduleGitHubConnectionEventPoll();
       scheduleGitHubConnectionContinuitySweep();
     });
@@ -1960,6 +2036,8 @@ async function startServerWithDatabaseTeardown(
     heartbeatSchedulerStopped = true;
     clearInterval(executionControlInterval);
     stopBotContainers(); // myrmidon(W2a)
+    stopLitellmCostSweep(); // myrmidon(M2-A)
+    stopBotCanary(); // myrmidon(R5-B)
     if (heartbeatSchedulerInterval) {
       clearInterval(heartbeatSchedulerInterval);
       heartbeatSchedulerInterval = null;

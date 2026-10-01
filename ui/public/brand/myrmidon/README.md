@@ -11,8 +11,8 @@ MYRMIDON — Saira Bold (в SVG уже кривыми). Подзаголовок
 | `myrmidon-mark.svg` / `myrmidon-mark-white.svg` | один знак без надписи, от 48 px |
 | `myrmidon-mark-small.svg` | тот же знак, утолщённая линия: 16–40 px |
 | `myrmidon-app-icon.svg` | белый муравей на плашке `#13294B`, скруглённый квадрат — значок приложения |
-| `myrmidon-favicon.svg` | тот же значок, 32×32 — вкладка браузера (SVG) |
-| `favicon.ico`, `icon-16.png`, `icon-32.png`, `icon-48.png` | вкладка браузера — растровые размеры |
+| `myrmidon-favicon.svg` | вкладка браузера (SVG): знак mark-small (те же 5 path, stroke 30) без плашки на прозрачном, viewBox обрезан по рисунку; navy в светлой теме, белый в тёмной (решение владельца 30.09) |
+| `favicon.ico` (слои 16/32/48), `icon-16.png`, `icon-32.png`, `icon-48.png` | вкладка браузера — растр этого же SVG со сглаживанием, navy на прозрачном |
 | `icon-180.png` | apple-touch-icon |
 | `icon-192.png`, `icon-512.png` | значки приложения (Android/PWA) |
 

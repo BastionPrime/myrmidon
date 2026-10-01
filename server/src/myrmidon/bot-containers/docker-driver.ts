@@ -43,13 +43,14 @@
 
 import { randomBytes } from "node:crypto";
 import http from "node:http";
-import type { BotContainerDriver, BotContainerSpec, BotContainerStatus } from "./driver.js";
+import type { BotContainerDriver, BotContainerSpec, BotContainerStatus, TemplateDriftField, TemplateDriftReport } from "./driver.js";
 import type { CompiledProfile } from "./types.js";
 import {
   assertBotRuntimeContract,
   BOT_LABEL_KEYS,
   BOT_MANAGED_DIRS,
   BOT_KEY_PATTERN,
+  BOT_MOUNT_SOURCES_ENV,
   BOT_VOLUME_MOUNTS,
   BotContainerTemplateError,
   buildBinds,
@@ -60,6 +61,7 @@ import {
   isUnderManagedDir,
   mountRootSegment,
   parseImageAllowlist,
+  parseMountSourceAllowlist,
   replacementContainerNameFor,
   resolveProfileFileTarget,
   validateBotKey,
@@ -97,6 +99,9 @@ export interface DockerDriverConfig {
   volumeRoot: string;
   network: string;
   allowlist: readonly string[];
+  /** Host directories a card may mount into a bot container, read-only
+   *  (MYRMIDON_BOT_MOUNT_SOURCES). Empty means "nothing extra may be mounted". */
+  mountSources: readonly string[];
 }
 
 export function readDockerDriverConfig(env: NodeJS.ProcessEnv = process.env): DockerDriverConfig {
@@ -109,6 +114,7 @@ export function readDockerDriverConfig(env: NodeJS.ProcessEnv = process.env): Do
     volumeRoot,
     network: env[BOT_NETWORK_ENV]?.trim() || DEFAULT_BOT_NETWORK,
     allowlist: parseImageAllowlist(env[BOT_IMAGE_ALLOWLIST_ENV]),
+    mountSources: parseMountSourceAllowlist(env[BOT_MOUNT_SOURCES_ENV]),
   };
 }
 
@@ -145,12 +151,13 @@ export interface DockerCreateContainerBody {
  * template" enforcement. Never adds anything a caller passed beyond `spec`'s
  * fields: no arbitrary binds, no host network, no privileged mode, and no
  * `Env` (secrets travel only in the profile's hermes/.env). Throws on an
- * image outside the allowlist or a network other than the one configured for
- * this driver.
+ * image outside the allowlist, a network other than the one configured for
+ * this driver, or an extra mount whose source is not in
+ * MYRMIDON_BOT_MOUNT_SOURCES (template.ts buildBinds).
  */
 export function buildCreateContainerRequestBody(
   spec: BotContainerSpec,
-  config: Pick<DockerDriverConfig, "volumeRoot" | "network" | "allowlist">,
+  config: Pick<DockerDriverConfig, "volumeRoot" | "network" | "allowlist" | "mountSources">,
 ): DockerCreateContainerBody {
   validateBotKey(spec.botKey);
   if (!isImageAllowed(spec.image, config.allowlist)) {
@@ -178,7 +185,10 @@ export function buildCreateContainerRequestBody(
       Init: true,
       RestartPolicy: { Name: "on-failure" },
       NetworkMode: config.network,
-      Binds: buildBinds(config.volumeRoot, spec.botKey),
+      Binds: buildBinds(config.volumeRoot, spec.botKey, {
+        mounts: spec.extraMounts,
+        allowedSources: config.mountSources,
+      }),
       Privileged: false,
     },
   };
@@ -368,6 +378,9 @@ export interface AppliedMarker {
   filesHash: string;
   /** Profile paths (CompiledProfileFile.path) this apply wrote. */
   files: string[];
+  /** myrmidon(CONCURRENCY-SYNC): gateway.api_server.max_concurrent_runs the applied
+   *  profile carries. Absent in markers written before the field existed. */
+  maxConcurrentRuns?: number;
 }
 
 export function serializeAppliedMarker(profile: CompiledProfile): string {
@@ -375,6 +388,9 @@ export function serializeAppliedMarker(profile: CompiledProfile): string {
     restartHash: profile.restartHash,
     filesHash: profile.filesHash,
     files: profile.files.map((file) => file.path).sort(),
+    // Only when the profile carries one: an old-style profile keeps a marker without
+    // the field, which the card reads as "not reported" rather than as a value.
+    ...(profile.maxConcurrentRuns === undefined ? {} : { maxConcurrentRuns: profile.maxConcurrentRuns }),
   };
   return `${JSON.stringify(marker)}\n`;
 }
@@ -389,10 +405,16 @@ export function parseAppliedMarker(raw: string): AppliedMarker | null {
     return null;
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const { restartHash, filesHash, files } = parsed as Record<string, unknown>;
+  const { restartHash, filesHash, files, maxConcurrentRuns } = parsed as Record<string, unknown>;
   if (typeof restartHash !== "string" || typeof filesHash !== "string") return null;
   const fileList = Array.isArray(files) ? files.filter((path): path is string => typeof path === "string") : [];
-  return { restartHash, filesHash, files: fileList };
+  const marker: AppliedMarker = { restartHash, filesHash, files: fileList };
+  // A number the driver cannot trust (a hand-edited volume) is simply not carried:
+  // the card then says "not reported", and classifyProfileChange heals it.
+  if (typeof maxConcurrentRuns === "number" && Number.isInteger(maxConcurrentRuns) && maxConcurrentRuns > 0) {
+    marker.maxConcurrentRuns = maxConcurrentRuns;
+  }
+  return marker;
 }
 
 /**
@@ -530,25 +552,97 @@ interface DockerInspect {
   Image: string;
   Config?: { Image?: string; Labels?: Record<string, string> };
   State?: { Status?: string; ExitCode?: number; Health?: { Status?: string } };
-  HostConfig?: { Memory?: number; NanoCpus?: number; PidsLimit?: number; NetworkMode?: string };
+  HostConfig?: { Memory?: number; NanoCpus?: number; PidsLimit?: number; NetworkMode?: string; Binds?: string[] };
+}
+
+/**
+ * The container-template fields the drift check compares, in the order the log
+ * names them. `field` is the dotted path inside a container inspect — the same
+ * path dockergate's A2 answer uses — so this table is also the contract with
+ * dockergate (tools/dockergate/internal/upstream/inspect.go): every path here
+ * must come back through the proxy. tools/dockergate/contract/emit-fixtures.ts
+ * writes this list into inspect-contract.json and the gate's contract test
+ * checks the A2 answer against it, so dockergate dropping a field (the 01.10
+ * incident: HostConfig.Binds) turns CI red instead of recreating every bot on
+ * every pass.
+ */
+const DRIFT_READS: ReadonlyArray<{
+  field: string;
+  actual: (info: Pick<DockerInspect, "Config" | "HostConfig">) => unknown;
+  expected: (body: DockerCreateContainerBody) => unknown;
+}> = [
+  { field: "Config.Image", actual: (info) => info.Config?.Image, expected: (body) => body.Image },
+  { field: "HostConfig.Memory", actual: (info) => info.HostConfig?.Memory, expected: (body) => body.HostConfig.Memory },
+  { field: "HostConfig.NanoCpus", actual: (info) => info.HostConfig?.NanoCpus, expected: (body) => body.HostConfig.NanoCpus },
+  { field: "HostConfig.PidsLimit", actual: (info) => info.HostConfig?.PidsLimit, expected: (body) => body.HostConfig.PidsLimit },
+  {
+    field: "HostConfig.NetworkMode",
+    actual: (info) => info.HostConfig?.NetworkMode,
+    expected: (body) => body.HostConfig.NetworkMode,
+  },
+  { field: "HostConfig.Binds", actual: (info) => info.HostConfig?.Binds, expected: (body) => body.HostConfig.Binds },
+];
+
+/** Dotted inspect paths the drift check reads; emitted as the board side of the
+ *  inspect contract with dockergate. */
+export const CONTAINER_TEMPLATE_INSPECT_FIELDS: readonly string[] = DRIFT_READS.map((read) => read.field);
+
+/** True when two inspect/body values are the same template value. Arrays
+ *  compare element by element and in order: Docker returns the binds as they
+ *  were created, and a card that added, removed or reordered an extra mount is
+ *  a template drift. */
+function sameTemplateValue(actual: unknown, expected: unknown): boolean {
+  if (Array.isArray(actual) || Array.isArray(expected)) {
+    return (
+      Array.isArray(actual) &&
+      Array.isArray(expected) &&
+      actual.length === expected.length &&
+      actual.every((value, index) => value === expected[index])
+    );
+  }
+  return actual === expected;
+}
+
+/**
+ * Pure drift check, field by field: which template fields of `existing` (a
+ * container's live inspect) no longer match `body` (a freshly built
+ * create-request)? Empty means the container still matches `body`. Comparing
+ * like with like: both sides must carry every field (an inspect that does not
+ * report one counts as a drift of that field, which is what the log names).
+ */
+export function templateDriftFields(
+  existing: Pick<DockerInspect, "Config" | "HostConfig">,
+  body: DockerCreateContainerBody,
+): TemplateDriftField[] {
+  const fields: TemplateDriftField[] = [];
+  for (const read of DRIFT_READS) {
+    const expected = read.expected(body);
+    const actual = read.actual(existing);
+    if (!sameTemplateValue(actual, expected)) fields.push({ field: read.field, expected, actual });
+  }
+  return fields;
+}
+
+/** The value the drift check expects to read back from a container created
+ *  from `body`, per field it compares. The board side of the inspect contract
+ *  with dockergate (contract/emit-fixtures.ts). */
+export function containerTemplateInspectExpectation(
+  body: DockerCreateContainerBody,
+): Array<{ path: string; value: unknown }> {
+  return DRIFT_READS.map((read) => ({ path: read.field, value: read.expected(body) }));
 }
 
 /**
  * Pure drift check: does `existing` (a container's live inspect) still match
  * `body` (a freshly built create-request) on every field that identifies the
- * container's *template* — image, the three resource limits and the network?
+ * container's *template* — image, the three resource limits, the network and
+ * the bind list (which carries the card's extra mounts)?
  */
 export function containerTemplateDrifted(
   existing: Pick<DockerInspect, "Config" | "HostConfig">,
   body: DockerCreateContainerBody,
 ): boolean {
-  return (
-    existing.Config?.Image !== body.Image ||
-    existing.HostConfig?.Memory !== body.HostConfig.Memory ||
-    existing.HostConfig?.NanoCpus !== body.HostConfig.NanoCpus ||
-    existing.HostConfig?.PidsLimit !== body.HostConfig.PidsLimit ||
-    existing.HostConfig?.NetworkMode !== body.HostConfig.NetworkMode
-  );
+  return templateDriftFields(existing, body).length > 0;
 }
 
 /**
@@ -790,6 +884,7 @@ export function dockerBotContainerDriver(
       image: info.Config?.Image,
       restartHash: marker?.restartHash,
       filesHash: marker?.filesHash,
+      maxConcurrentRuns: marker?.maxConcurrentRuns,
     };
   }
 
@@ -809,11 +904,12 @@ export function dockerBotContainerDriver(
     return results;
   }
 
-  async function templateDrift(spec: BotContainerSpec): Promise<boolean> {
+  async function templateDrift(spec: BotContainerSpec): Promise<TemplateDriftReport> {
     const body = buildCreateContainerRequestBody(spec, config);
     const existing = await inspectByName(containerNameFor(spec.botKey));
-    if (!existing) return false;
-    return containerTemplateDrifted(existing, body);
+    if (!existing) return { drifted: false, fields: [] };
+    const fields = templateDriftFields(existing, body);
+    return { drifted: fields.length > 0, fields };
   }
 
   async function create(spec: BotContainerSpec): Promise<void> {

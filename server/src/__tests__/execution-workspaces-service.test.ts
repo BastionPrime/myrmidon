@@ -261,8 +261,10 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       ),
       // Disable the reaper cooldown for the delivery, terminal, race, and
       // cleanup tests. They assert immediate reaping. The cooldown gets its own
-      // tests further down.
+      // tests further down. myrmidon(WORKSPACE-HYGIENE): the merged-copy
+      // cooldown is a separate knob, so disable it here too.
       workspaceReaperCooldownDays: 0,
+      myrmidonWorkspaceMergedCooldownMs: 0,
     });
   }, 20_000);
 
@@ -692,6 +694,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     const service = executionWorkspaceService(db, {
       resolvePullRequestDetails: async () => ({ state: "unknown", headRef: null, headSha: null }),
       workspaceReaperCooldownDays: 0,
+      myrmidonWorkspaceMergedCooldownMs: 0,
     });
 
     const firstSweep = await service.sweepTerminalWorkspaces(1);
@@ -733,6 +736,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       resolvePullRequestDetails: async () => ({ state: "unknown", headRef: null, headSha: null }),
       now: () => new Date(clockMs),
       workspaceReaperCooldownDays: 0,
+      myrmidonWorkspaceMergedCooldownMs: 0,
     });
 
     // An eligible ancestry workspace with an old updatedAt. Its source issue
@@ -846,6 +850,11 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
           ?? { state: "unknown", headRef: null, headSha: null },
         now: () => new Date(nowMs),
         workspaceReaperCooldownDays: cooldownDays,
+        // myrmidon(WORKSPACE-HYGIENE): these cases check the generic day-based
+        // cooldown. Pin the merged-copy cooldown to the same window so the gate
+        // they assert keeps its meaning; the short merged cooldown has its own
+        // tests in workspace-hygiene-merged-cleanup.myrmidon.test.ts.
+        myrmidonWorkspaceMergedCooldownMs: cooldownDays * DAY_MS,
       });
     }
 
@@ -1071,6 +1080,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       resolvePullRequestDetails: async (_companyId, reference) =>
         pullRequestDetailsByKey.get(`${seeded.companyId}:${reference.number}`) ?? { state: "unknown" },
       workspaceReaperCooldownDays: 0,
+      myrmidonWorkspaceMergedCooldownMs: 0,
       beforeTerminalWorkspaceCleanup: async () => {
         await fs.writeFile(path.join(seeded.worktreePath, "late-work.txt"), "not delivered\n", "utf8");
       },
@@ -1101,6 +1111,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       resolvePullRequestDetails: async (_companyId, reference) =>
         pullRequestDetailsByKey.get(`${seeded.companyId}:${reference.number}`) ?? { state: "unknown" },
       workspaceReaperCooldownDays: 0,
+      myrmidonWorkspaceMergedCooldownMs: 0,
       beforeTerminalWorkspaceCleanup: async (workspace) => {
         // Stand in for a reopen and a fresh archive that ran after this sweep
         // captured the generation. Raise the generation past the captured value,
@@ -1705,6 +1716,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       resolvePullRequestDetails: async (_companyId, reference) =>
         pullRequestDetailsByKey.get(`${failSeed.companyId}:${reference.number}`) ?? { state: "unknown" },
       workspaceReaperCooldownDays: 0,
+      myrmidonWorkspaceMergedCooldownMs: 0,
       beforeTerminalWorkspaceCleanup: async (workspace) => {
         await db
           .update(executionWorkspaces)
@@ -1751,6 +1763,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       resolvePullRequestDetails: async (_companyId, reference) =>
         pullRequestDetailsByKey.get(`${seeded.companyId}:${reference.number}`) ?? { state: "unknown" },
       workspaceReaperCooldownDays: 0,
+      myrmidonWorkspaceMergedCooldownMs: 0,
       beforeTerminalWorkspaceCleanup: async () => {
         try {
           await runGit(seeded.worktreePath, ["commit", "--allow-empty", "-m", "Late commit"]);
