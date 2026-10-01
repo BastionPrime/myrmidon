@@ -71,6 +71,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/cloud-files-connector.md](guides/cloud-files-connector.md) | Коннектор Microsoft 365 для ботов-контейнеров: настройка и журнал |
 | [guides/maintenance-banner.md](guides/maintenance-banner.md) | Как баннер обслуживания группирует окна агентов |
 | [guides/access-hub.md](guides/access-hub.md) | Хаб доступов в настройках: секреты парка, выдача агентам, ротация, SSH-ключи, журнал |
+| [guides/emergency-stop.md](guides/emergency-stop.md) | Аварийная остановка прогонов, которые осушаемая пауза оставила дорабатывать |
 
 ## Сборка и запуск
 
