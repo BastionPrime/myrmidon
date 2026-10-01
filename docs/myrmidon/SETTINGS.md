@@ -218,6 +218,26 @@ does not ask the container. The runtime is connected by server startup (`startBo
 
 ## 1.3 — WORKSPACE-HYGIENE (agent workspaces)
 
+## 1.4 — live browser screen (BROWSER-CONSOLE)
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_BROWSER_FLEET` | BROWSER-CONSOLE | unset (fleet empty) | The live browser registry: a JSON array `[{"id":"browser-a","displayName":"Live browser A","egress":{"ru":"socks ru1","ig":"socks nd1"}}]`. The list, screen, journal and site-data cleanup in the Settings → Browsers section read this registry; "who is using it" comes from live sessions. Identifiers are lowercase slugs, up to 16 browsers, up to 8 egress keys. Read on every request, no restart needed | Invalid JSON, not an array, a bad id or a duplicate identifier — the registry is read as empty, a warning goes to the server log; the section answers with an empty list, not an error |
+| `MYRMIDON_BROWSER_CONSOLE_HOST` | BROWSER-CONSOLE | unset | Base address of the screen node HTTP API (x11vnc+websockify, a separate deployment). Read in `server/src/myrmidon/browser-console/screen-console-client.ts` | Unset or empty — calls to the node are impossible: "Open screen" answers 502 (the node "did not answer"). The value is not logged |
+| `MYRMIDON_BROWSER_CONSOLE_TOKEN` | BROWSER-CONSOLE | unset | The screen node token, sent as Bearer. Read in the same place | Unset — same as without the host. The value is not logged |
+| `MYRMIDON_BROWSER_IDLE_TIMEOUT_MIN` | BROWSER-CONSOLE | `30` | After how many minutes without activity (POST `/screen/heartbeat` with `activity: true`) the screen session closes on its own: bots resume, the journal gets `closedBy: idle_timeout` | From 1 to 1440; unset, non-numeric or out of range — the default |
+| `MYRMIDON_BROWSER_MAX_DURATION_MIN` | BROWSER-CONSOLE | `120` | A hard session ceiling: closes even with constant activity (`closedBy: max_duration`) | From 5 to 1440; unset, non-numeric or out of range — the default |
+
+The screen session, "who is using it" and the journal (the last 50 entries: who/when/duration/closed-by)
+are stored in `instance_settings.general.myrmidonBrowserConsole` — no migrations. The owner (role owner
+in the company, instance admin, local implicit) opens the screen, closes it ("Done"), cleans site data
+and reads the journal; any authenticated panel user reads the registry; agents get 403 for everything
+except the registry. While a session is open, the screen node receives `pause` for bots (the contract) and
+the board server rejects MCP calls into that browser (423, a safeguard). Site-data cleanup takes a
+domain typed in (bare domain); cookies+storage are cleaned on the node via CDP.
+
+## 1.3 — WORKSPACE-HYGIENE (agent workspaces)
+
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_WORKSPACE_QUOTA_MB` | WH-C | unset (disabled) | Disk ceiling per workspace: a pass from the scheduler tick measures each workspace's directory (a walk bounded by depth, entries and time; sums over hardlink inodes are not duplicated) and on excess writes a "clean up" signal to the activity log — at most once a day per workspace. The variable is the default at first start: afterwards the effective values are stored in settings (`instance_settings.general.workspaceHygiene`) and change on the fly via `GET`/`PATCH /api/myrmidon/workspace-hygiene` (read — board, write — instance-admin). The pass deletes nothing — deletion remains with terminal-workspace resolution | Unset, empty, `0`, negative or non-numeric — the ceiling is off (no signals). Only workspaces with a local directory (`providerType = local_fs`) are measured; a workspace whose walk hit the bound is counted by the lower bound, and its report has `truncated` |
