@@ -105,6 +105,9 @@
 | `MYRMIDON_DEPLOY_HEALTH_TIMEOUT_SEC` | R5-A | `300` | Зарезервировано: бюджет фазы сверки здоровья | От 10 до 3600 |
 | `MYRMIDON_DEPLOY_REGISTRY_INSPECT_URL` | R5-A | не задан | Read-only inspect-эндпоинт реестра для проверки digest, отвечает на `?ref=<ссылка>` JSON-ом как `imagetools inspect`; для случаев, когда контейнер доски не видит ghcr.io | Не задан — доска читает ghcr.io напрямую |
 | `MYRMIDON_DEPLOY_GITHUB_HEADERS_JSON` | R5-A | не задан | JSON-объект заголовков к вызовам GitHub API при проверке коммита (для лимитов); значения не логируются | Не задан — анонимные вызовы |
+| `MYRMIDON_BUILD_DATE` | ABOUT | не задана | Дата сборки образа в «About Myrmidon» (Instance → General и футер сайдбара): CI образа передаёт её build-аргументом в `Dockerfile`. Не-дата или не ISO-формат — поле `buildDate` маршрута `GET /api/myrmidon/about` остаётся `null` | Не задана или неверный формат — поле скрыто, локальная сборка без stamp |
+| `MYRMIDON_BASE_PAPERCLIP` | ABOUT | не задана | Релиз вендорской основы Paperclip (например, `2026.916.1`), из которой собран образ: CI образа передаёт её build-аргументом; показывается в «About Myrmidon» рядом с версией Myrmidon | Не задана или формат не `ГГГГ.N.N` — поле `basePaperclipVersion` остаётся `null` |
+| `MYRMIDON_IMAGE_DIGEST` | ABOUT | не задан | Отпечаток работающего образа (`sha256:…`), если окружение развёртывания его закрепило (полная ссылка вида `repo@sha256:…` тоже принимается — digest берётся после `@`). Показывается в «About Myrmidon» | Не задан или не `sha256:<64 hex>` — поле `imageDigest` остаётся `null` |
 
 
 ## Трек 6 — безопасность и модели

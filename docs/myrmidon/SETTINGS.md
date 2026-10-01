@@ -105,7 +105,9 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MYRMIDON_DEPLOY_HEALTH_TIMEOUT_SEC` | R5-A | `300` | Reserved: budget of the health verification phase | From 10 to 3600 |
 | `MYRMIDON_DEPLOY_REGISTRY_INSPECT_URL` | R5-A | unset | Read-only inspect endpoint of the registry for digest verification, answers `?ref=<reference>` with JSON like `imagetools inspect`; for cases when the board container cannot see ghcr.io | Unset — the board reads ghcr.io directly |
 | `MYRMIDON_DEPLOY_GITHUB_HEADERS_JSON` | R5-A | unset | JSON object of headers for GitHub API calls at commit verification (for rate limits); values are not logged | Unset — anonymous calls |
-
+| `MYRMIDON_BUILD_DATE` | ABOUT | unset | Build date of the image shown in "About Myrmidon" (Instance → General and the sidebar footer): the image CI passes it as a build argument to the `Dockerfile`. Non-ISO or non-date value — the `buildDate` field of `GET /api/myrmidon/about` stays `null` | Unset or wrong format — the field is hidden, a local build without a stamp |
+| `MYRMIDON_BASE_PAPERCLIP` | ABOUT | unset | Release of the vendor Paperclip base (e.g. `2026.916.1`) the image was cut from: the image CI passes it as a build argument; shown in "About Myrmidon" next to the Myrmidon version | Unset or a format other than `YYYY.N.N` — the `basePaperclipVersion` field stays `null` |
+| `MYRMIDON_IMAGE_DIGEST` | ABOUT | unset | Digest of the running image (`sha256:…`) when the deployment pinned it (a full reference of the form `repo@sha256:…` is also accepted — the digest is taken after the `@`). Shown in "About Myrmidon" | Unset or not `sha256:<64 hex>` — the `imageDigest` field stays `null` |
 
 ## Track 6 — security and models
 
