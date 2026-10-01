@@ -17,6 +17,8 @@ import { createCloudAccessTokenResolver, type CloudAccessTokenResolver } from ".
 import { secretCloudTokenStore, type CloudTokenStore } from "./token-store.js";
 import { CloudProviderRegistry, type CloudProvider } from "./providers/provider.js";
 import { OneDriveProvider } from "./providers/onedrive.js";
+import { GoogleDriveProvider } from "./providers/google-drive.js";
+import { YandexDiskProvider } from "./providers/yandex-disk.js";
 import { cloudConnectorService, type CloudConnectorService } from "./service.js";
 import { cloudConnectorRoutes } from "./routes.js";
 import { dbCloudConnectorStore, type CloudConnectorStore } from "./store.js";
@@ -29,7 +31,7 @@ export interface CloudConnectorWiringOptions {
   /** Override for tests; production reads MYRMIDON_CLOUD_<PROVIDER>_CLIENT_ID/_SECRET. */
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
-  /** Extra providers (Google Drive and Yandex Disk register here). */
+  /** Extra providers appended to the three built-in clouds (tests, new clouds). */
   providers?: readonly CloudProvider[];
   stateStore?: OAuthStateStore;
 }
@@ -63,6 +65,8 @@ export function createCloudConnector(options: { db: Db } & CloudConnectorWiringO
 
   const providers = new CloudProviderRegistry([
     new OneDriveProvider({ accessToken, fetchImpl: options.fetchImpl }),
+    new GoogleDriveProvider({ accessToken, fetchImpl: options.fetchImpl }),
+    new YandexDiskProvider({ accessToken, fetchImpl: options.fetchImpl }),
     ...(options.providers ?? []),
   ]);
 
@@ -88,6 +92,8 @@ export function myrmidonCloudConnectorRoutes(db: Db, options: CloudConnectorWiri
 export { cloudConnectorService, CloudConnectorService } from "./service.js";
 export { CloudProviderRegistry } from "./providers/provider.js";
 export { OneDriveProvider } from "./providers/onedrive.js";
+export { GoogleDriveProvider } from "./providers/google-drive.js";
+export { YandexDiskProvider } from "./providers/yandex-disk.js";
 export { secretCloudTokenStore, memoryCloudTokenStore } from "./token-store.js";
 export { createCloudAccessTokenResolver } from "./access-token.js";
 export { OAuthStateStore, CLOUD_OAUTH_SPECS, readOAuthClients } from "./oauth.js";
