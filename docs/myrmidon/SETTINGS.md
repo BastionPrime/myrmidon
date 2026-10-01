@@ -266,3 +266,14 @@ environment variables.
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_FLEET_CONSOLE_URL` | SC1 | unset (off) | Base address of the Guacamole client for which the panel signs the auth-JSON (e.g. `https://guac.example.com`, no trailing `/`). It also goes into the token-issuing response and the `consoleUrl` address | Unset or empty — token issuance answers `503 console_not_configured`, the node registry and the log keep working. The company secret with the shared key is `guacamole-json-secret-key` (the value is read by the server, never appears in a response or the log); a registry row may reference a secret with the node password. Read at route assembly on server startup |
+## 1.4 — agent memory card (MEMORY-UI)
+
+The "Memory" tab of the agent card (`server/src/myrmidon/agent-memory/`):
+view, export and remove the entries of the agent's memory bank (the same
+service the memory plugin writes to). Two variables, both required to enable;
+the key itself is a company secret, not an environment variable.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_HINDSIGHT_API_URL` | MEMORY-UI | unset (off) | Base address of the shared memory (hindsight) service as the board server sees it; the tab's list, export, delete and clear calls go there | Unset, empty or not an `http(s)://` URL — the section is off: status answers `enabled: false`, data routes answer 503. Read per request, no restart needed. The address is not logged |
+| `MYRMIDON_HINDSIGHT_KEY_SECRET` | MEMORY-UI | unset (off) | Name of the company secret holding the memory service API key (self-hosted deployments with no auth may name a missing secret — the calls then go without a token) | Unset or empty — off, same as above. The key value is read only for the duration of a call, never written to the log or an API response |

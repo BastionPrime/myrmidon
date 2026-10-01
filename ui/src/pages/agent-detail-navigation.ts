@@ -8,6 +8,7 @@ export type AgentDetailView =
   | "secrets"
   | "tools"
   | "channels"
+  | "memory"
   | "permissions"
   | "api-keys"
   | "revisions"
@@ -34,6 +35,7 @@ export const AGENT_DETAIL_NAVIGATION: ReadonlyArray<{
       { value: "secrets", label: "Secrets" },
       { value: "tools", label: "Tools" },
       { value: "channels", label: "Channels" },
+      { value: "memory", label: "Memory" }, // myrmidon(MEMORY-UI): agent card memory tab
     ],
   },
   {
@@ -53,6 +55,7 @@ export function parseAgentDetailView(value: string | null): AgentLocalDetailView
   if (value === "secrets") return "secrets";
   if (value === "tools") return "tools";
   if (value === "channels") return "channels";
+  if (value === "memory") return "memory"; // myrmidon(MEMORY-UI)
   if (value === "permissions" || value === "trust") return "permissions";
   if (value === "api-keys" || value === "keys") return "api-keys";
   if (value === "revisions" || value === "history") return "revisions";

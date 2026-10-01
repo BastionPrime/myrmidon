@@ -94,6 +94,7 @@ import { AgentIcon, AgentIconPicker } from "../components/AgentIconPicker";
 import { RunTranscriptView, type TranscriptMode } from "../components/transcript/RunTranscriptView";
 import { AgentToolsTab } from "./AgentToolsTab";
 import { AgentChannelsPanel } from "../components/chat/AgentChannelsPanel";
+import { AgentMemoryTab } from "../components/myrmidon/agent-memory/AgentMemoryTab"; // myrmidon(MEMORY-UI)
 import { useChatConnectorsEnabled } from "@/hooks/useChatConnectorsEnabled";
 import {
   appendCapped,
@@ -1459,6 +1460,10 @@ export function AgentDetail() {
 
       {activeView === "channels" && resolvedCompanyId && (
         <AgentChannelsPanel agentId={agent.id} companyId={resolvedCompanyId} />
+      )}
+
+      {activeView === "memory" && (
+        <AgentMemoryTab agentId={agent.id} /> /* myrmidon(MEMORY-UI): agent card memory tab */
       )}
 
       {activeView === "permissions" && (
