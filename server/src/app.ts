@@ -104,6 +104,7 @@ import { myrmidonReplayBlockedRoutes } from "./myrmidon/replay-blocked/index.js"
 import { aboutRoutes } from "./myrmidon/about/routes.js"; // myrmidon(ABOUT)
 import { myrmidonBotContainerRoutes } from "./myrmidon/bot-containers/routes-wiring.js"; // myrmidon(W2b)
 import { myrmidonLitellmCostsRoutes } from "./myrmidon/litellm-costs/routes.js"; // myrmidon(M2-A)
+import { myrmidonLitellmKeysRoutes } from "./myrmidon/litellm-keys/routes.js"; // myrmidon(M2-B)
 import { myrmidonBotEgressRoutes } from "./myrmidon/bot-containers/egress-wiring.js"; // myrmidon(EGRESS-B)
 import { myrmidonBotCanaryRoutes } from "./myrmidon/bot-containers/canary-index.js"; // myrmidon(R5-B)
 import { myrmidonWorkspaceHygieneRoutes } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
@@ -816,6 +817,7 @@ export async function createApp(
   api.use(aboutRoutes()); // myrmidon(ABOUT)
   api.use(myrmidonBotContainerRoutes(db)); // myrmidon(W2b)
   api.use(myrmidonLitellmCostsRoutes(db)); // myrmidon(M2-A): gateway-collected costs and model catalog
+  api.use(myrmidonLitellmKeysRoutes(db)); // myrmidon(M2-B): per-agent gateway keys and fallback topology
   api.use(myrmidonBotEgressRoutes(db)); // myrmidon(EGRESS-B)
   api.use(myrmidonBotCanaryRoutes(db)); // myrmidon(R5-B)
   api.use(myrmidonWorkspaceHygieneRoutes(db)); // myrmidon(WORKSPACE-HYGIENE)
