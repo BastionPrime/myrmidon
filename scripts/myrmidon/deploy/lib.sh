@@ -188,6 +188,7 @@ load_config() {
   : "${MAINTENANCE_ENTER_COMMAND:=}"
   : "${MAINTENANCE_EXIT_COMMAND:=}"
   : "${MAINTENANCE_PAUSE_SEC:=0}"
+  : "${MAINTENANCE_EXIT_WAIT_SEC:=120}"
   : "${RUNNING_RUNS_COMMAND:=}"
   : "${RUNS_WAIT_TIMEOUT_SEC:=1800}"
   : "${ALLOW_UNKNOWN_RUNS:=0}"
@@ -292,9 +293,17 @@ maintenance_enter() {
 }
 
 maintenance_exit() {
+  # myrmidon(EXIT-ASYNC, OPE-3367): the exit POST returns as soon as the window
+  # is marked `leaving` (the server finishes the leave asynchronously; admission
+  # already reopens in `leaving`). The deploy therefore waits on the STATE, not
+  # on the HTTP call: poll GET /maintenance until the instance window is gone
+  # (state `off`), bounded by MAINTENANCE_EXIT_WAIT_SEC. Without this wait the
+  # script reported success while the window was still `leaving` and the next
+  # deploy's enter raced the previous exit (409 "still leaving").
   case "$MAINTENANCE_MODE" in
     api)
-      run http_post_json "$MAINTENANCE_API_URL" '{"action":"exit","scope":{"type":"instance"}}' "$MAINTENANCE_TOKEN_FILE" >/dev/null
+      run http_post_json "$MAINTENANCE_API_URL" '{action: "exit", scope: {type: "instance"}}' "$MAINTENANCE_TOKEN_FILE" >/dev/null
+      wait_for_maintenance_off
       ;;
     hook)
       [[ -n "$MAINTENANCE_EXIT_COMMAND" ]] || die "MAINTENANCE_MODE=hook needs MAINTENANCE_EXIT_COMMAND"
@@ -304,6 +313,23 @@ maintenance_exit() {
   esac
 }
 
+# myrmidon(EXIT-ASYNC, OPE-3367): poll the maintenance status until the
+# instance window is retired (state `off` / no instance window), or give up
+# after MAINTENANCE_EXIT_WAIT_SEC (default 120). A missing state field means
+# the board is not in maintenance at all — that is success, not a wait. Fails
+# (return 1) on timeout so the caller can report a degraded-but-live board
+# instead of a silent half-left window.
+wait_for_maintenance_off() {
+  local deadline=$((SECONDS + MAINTENANCE_EXIT_WAIT_SEC)) body state
+  while :; do
+    body="$(http_get "$MAINTENANCE_API_URL" "$MAINTENANCE_TOKEN_FILE" 2>/dev/null)" || body=""
+    state="$(jq -r '.instance.state // "off"' <<<"$body" 2>/dev/null || echo off)"
+    [[ "$state" == "off" ]] && return 0
+    ((SECONDS < deadline)) || { log "maintenance: instance window still '$state' after ${MAINTENANCE_EXIT_WAIT_SEC}s (MAINTENANCE_EXIT_WAIT_SEC)"; return 1; }
+    sleep "$POLL_INTERVAL_SEC"
+  done
+}
+
 # Prints the number of running agent runs, or nothing when unknown.
 running_runs() {
   if [[ -n "$RUNNING_RUNS_COMMAND" ]]; then
@@ -311,6 +337,64 @@ running_runs() {
   elif [[ "$MAINTENANCE_MODE" == "api" ]]; then
     http_get "$MAINTENANCE_API_URL" "$MAINTENANCE_TOKEN_FILE" | jq -r '.instance.runningRuns // empty'
   fi
+}
+
+# myrmidon(POST-DEPLOY-CHECK, OPE-3367): after the image switch, the health
+# check and the maintenance exit, prove the deploy did not leave the fleet
+# stalled the way 1.2.2/1.2.3 did (issues blocked by recovery, wakes
+# skipped). Read-only against the board API the deploy already talks to.
+# Facts checked:
+#   1. No issue is `blocked` with an update inside the deploy window — GET
+#      /companies/<id>/issues?status=blocked&updatedSince=<deploy start>. A
+#      planned restart must not turn in-flight work into blocked; any hit
+#      here is the OPE-3367 failure signature.
+#   2. The maintenance window retired (`off`) — the admission gate that
+#      closed during the drain is gone, so the vendor's periodic
+#      resumeQueuedRuns re-admits what queued up (runs resume).
+# BOARD_API_URL/BOARD_COMPANY_ID are optional: unset means the check is
+# skipped with a log line, so a standalone install without board
+# credentials stays deployable. A configured but unreadable board is a
+# degraded deploy, not a pass. Returns 1 (and logs "degraded:") when the
+# deploy must be reported degraded; 0 on a clean check.
+post_deploy_fleet_check() {
+  local started_at="$1" rc=0
+  if [[ -z "${BOARD_API_URL:-}" || -z "${BOARD_COMPANY_ID:-}" ]]; then
+    log "post-deploy check: BOARD_API_URL/BOARD_COMPANY_ID not set; skipping the fleet check (set them in the deploy env to enable)"
+    return 0
+  fi
+  local -a auth=()
+  mapfile -t auth < <(auth_header_args "$MAINTENANCE_TOKEN_FILE")
+  local body blocked
+  body="$(curl -fsS --max-time 30 "${auth[@]}" \
+    "$BOARD_API_URL/companies/$BOARD_COMPANY_ID/issues?status=blocked&updatedSince=$started_at&limit=100" 2>/dev/null)" || body=""
+  if [[ -z "$body" ]]; then
+    log "post-deploy check: board issue list unreadable (BOARD_API_URL=$BOARD_API_URL)"
+    log "degraded: board issue list unreadable after deploy"
+    return 1
+  fi
+  blocked="$(jq -r 'if type == "array" then length elif type == "object" and (.issues | type == "array") then (.issues | length) else "?" end' <<<"$body" 2>/dev/null || echo "?")"
+  if [[ "$blocked" == "?" || -z "$blocked" ]]; then
+    log "post-deploy check: unexpected board answer shape for blocked issues"
+    log "degraded: board issue list unreadable after deploy"
+    return 1
+  fi
+  if ((blocked > 0)); then
+    log "post-deploy check: $blocked blocked issue(s) updated since the deploy started ($started_at) — inspect them before waking agents by hand"
+    log "degraded: $blocked blocked issue(s) in the deploy window"
+    rc=1
+  fi
+  local mstate mbody
+  mbody="$(http_get "$MAINTENANCE_API_URL" "$MAINTENANCE_TOKEN_FILE" 2>/dev/null)" || mbody=""
+  mstate="$(jq -r '.instance.state // "off"' <<<"$mbody" 2>/dev/null || echo off)"
+  if [[ "$mstate" != "off" ]]; then
+    log "post-deploy check: maintenance window still '$mstate' after exit"
+    log "degraded: maintenance window did not retire after exit"
+    rc=1
+  fi
+  if ((rc == 0)); then
+    log "post-deploy check: no blocked issues in the deploy window, maintenance retired"
+  fi
+  return "$rc"
 }
 
 wait_for_idle_runs() {

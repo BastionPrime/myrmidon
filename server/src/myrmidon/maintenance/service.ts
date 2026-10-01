@@ -378,7 +378,23 @@ export function maintenanceService(
       });
       if (!window) return { scope, state: "off" as const, changed: false };
       if (changed) await audit(window, "exit_requested", actor, reason ? { exitReason: reason } : {});
-      await finishLeaving(window);
+      // myrmidon(EXIT-ASYNC, OPE-3367): the exit HTTP call returns as soon as
+      // the window is marked `leaving`; it does NOT await finishLeaving. The
+      // original inline await ran resumeQueuedRuns (the whole queued backlog),
+      // the Zabbix onExited hook, the retire write and the exit audit inside
+      // the request, so the deploy script's 30s http_post_json timeout (and
+      // any client's 120s) cut the call off mid-flight and the window stayed
+      // `leaving` for minutes. `leaving` already opens the admission gate
+      // (gate.ts treats `leaving` as not-under-maintenance), and the
+      // maintenance tick (tickWindow: state `leaving` -> finishLeaving) owns
+      // the tail: it retries resumeQueuedRuns when the vendor periodic
+      // resumeQueuedRuns pass has not picked the queue up yet, and retire is
+      // a row-locked idempotent write, so a crash between mark and finish
+      // leaves at most a `leaving` window the next tick (default 5s,
+      // MYRMIDON_MAINTENANCE_TICK_SEC) completes crash-safely. Callers that
+      // need the off state (deploy.sh step 8, deploy-jobs reconcile) poll
+      // GET /maintenance until state is `off`, same as they already poll
+      // `on` before the image switch.
       const still = (await readMaintenanceDocument(db)).windows.find((w) => w.id === window.id);
       if (still) return { ...(await view(still)), changed };
       return { scope, state: "off" as const, changed };

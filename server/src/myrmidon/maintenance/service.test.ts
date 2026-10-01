@@ -164,12 +164,47 @@ describeEmbeddedPostgres("maintenance service and API", () => {
     expect((await svc.status()).windows[0]).toMatchObject({ state: "on", queuedRuns: 1, queuedWakeups: 1 });
     expect((await runStatuses(agentId)).sort()).toEqual(["queued", "succeeded"]);
 
+    // myrmidon(EXIT-ASYNC, OPE-3367): exit returns as soon as the window is
+    // marked `leaving` (admission already reopens); the leave tail (queued-run
+    // resume, hook, retire) is finished by the tick, not by the exit call.
     const exited = await svc.exit({ type: "agent", id: agentId }, ADMIN);
-    expect(exited).toMatchObject({ state: "off", changed: true });
+    expect(exited).toMatchObject({ state: "leaving", changed: true });
+    // The tick finishes the leave: it resumes the queued wake and retires the
+    // window in one pass (the old inline finishLeaving did the same work
+    // inside the exit call).
+    await svc.tick();
     await heartbeatService(db).drainActiveRunExecutions();
     await waitFor(async () => (await runStatuses(agentId)).every((s) => s === "succeeded"));
     expect(await runStatuses(agentId)).toEqual(["succeeded", "succeeded"]);
     expect((await svc.status()).active).toBe(false);
+  }, 30_000);
+
+  // myrmidon(EXIT-ASYNC, OPE-3367): the deploy's leave step died on a 120s curl
+  // timeout because exit awaited the whole leave tail inline. The exit call
+  // must return promptly — here: under 5s with a queued backlog present.
+  it("exit returns promptly even with queued wakeups (async leave)", async () => {
+    const { agentId } = await seed();
+    await wake(agentId);
+    await waitFor(async () => (await runStatuses(agentId)).includes("running"));
+
+    const svc = service();
+    await svc.enter({ scope: { type: "agent", id: agentId }, reason: "agent upgrade" }, ADMIN);
+    await heartbeatService(db).drainActiveRunExecutions();
+    await svc.tick();
+    // A wake during the window queues behind the admission gate.
+    await wake(agentId);
+    await heartbeatService(db).resumeQueuedRuns();
+    expect((await svc.status()).windows[0]).toMatchObject({ state: "on", queuedRuns: 1 });
+
+    const startedAt = Date.now();
+    const exited = await svc.exit({ type: "agent", id: agentId }, ADMIN);
+    const elapsedMs = Date.now() - startedAt;
+    expect(exited).toMatchObject({ state: "leaving", changed: true });
+    expect(elapsedMs).toBeLessThan(5_000);
+    // The tick owns the tail: the window retires without another exit call.
+    await svc.tick();
+    const afterTick = await svc.status();
+    expect(afterTick.active).toBe(false);
   }, 30_000);
 
   it("reports a drain timeout once and keeps waiting with onTimeout=wait", async () => {
@@ -205,7 +240,11 @@ describeEmbeddedPostgres("maintenance service and API", () => {
       status: 404,
     });
     expect(await svc.exit({ type: "instance" }, ADMIN)).toEqual({ scope: { type: "instance" }, state: "off", changed: false });
-    expect(await svc.exit({ type: "company", id: companyId }, ADMIN)).toMatchObject({ state: "off", changed: true });
+    // myrmidon(EXIT-ASYNC, OPE-3367): the first exit marks `leaving` and
+    // returns; the leave tail belongs to the tick.
+    expect(await svc.exit({ type: "company", id: companyId }, ADMIN)).toMatchObject({ state: "leaving", changed: true });
+    await service().tick();
+    expect((await service().status()).active).toBe(false);
     expect(await svc.exit({ type: "company", id: companyId }, ADMIN)).toMatchObject({ state: "off", changed: false });
   });
 
@@ -251,11 +290,18 @@ describeEmbeddedPostgres("maintenance service and API", () => {
       expect(res.body).toMatchObject({ state: "on", changed: true, scope: { type: "instance" } });
       const seen = await request(app(member)).get("/api/myrmidon/maintenance").expect(200);
       expect(seen.body).toMatchObject({ active: true, instance: { state: "on" } });
+      // myrmidon(EXIT-ASYNC, OPE-3367): the POST returns the `leaving` view
+      // (the leave tail is async); callers wait on GET until `off`.
       const exit = await request(app(admin))
         .post("/api/myrmidon/maintenance")
         .send({ action: "exit", scope: { type: "instance" } })
         .expect(200);
-      expect(exit.body).toMatchObject({ state: "off", changed: true });
+      expect(exit.body).toMatchObject({ state: "leaving", changed: true });
+      const svc = service();
+      // The tick finishes the leave tail and retires the window.
+      await svc.tick();
+      const after = await request(app(admin)).get("/api/myrmidon/maintenance").expect(200);
+      expect(after.body).toMatchObject({ active: false, instance: null });
     });
 
     it("shows the instance window in /api/health, also to anonymous callers", async () => {

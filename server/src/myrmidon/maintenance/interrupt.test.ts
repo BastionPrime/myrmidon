@@ -167,7 +167,10 @@ describeEmbeddedPostgres("maintenance interrupt_and_retry", () => {
       .update(agents)
       .set({ adapterConfig: { command: process.execPath, args: ["-e", FAST] } })
       .where(eq(agents.id, agentId));
+    // myrmidon(EXIT-ASYNC, OPE-3367): exit returns at `leaving`; the tick
+    // finishes the leave and resumes the queued retry.
     await svc.exit({ type: "instance" }, ADMIN);
+    await svc.tick();
     await waitFor(async () => (await run(retries[0]!.id)).status === "succeeded");
     expect(await holds(issueId)).toEqual([]);
     const actions = await db.select({ action: activityLog.action }).from(activityLog);

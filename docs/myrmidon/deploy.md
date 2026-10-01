@@ -117,7 +117,19 @@ Order:
    the server service is recreated.
 7. The `/api/health` check (`verify-health.sh`): `status` is `ok`, the version and commit
    match.
-8. Leaving maintenance mode.
+8. Leaving maintenance mode (myrmidon EXIT-ASYNC, OPE-3367): the exit `POST` returns as soon
+   as the window is marked `leaving` — the leave tail (resuming queued runs, the Zabbix
+   period deletion, retiring the window) runs asynchronously on the maintenance tick. The
+   deploy then **waits on the state, not on the HTTP call**: it polls `GET /maintenance`
+   until the instance window is gone (`state: off`), bounded by `MAINTENANCE_EXIT_WAIT_SEC`
+   (120 s by default). Admission already reopens in `leaving`, so the board serves runs
+   while the window retires.
+9. The post-deploy fleet check (myrmidon POST-DEPLOY-CHECK, OPE-3367): no issue became
+   `blocked` inside the deploy window (`GET /companies/<id>/issues?status=blocked&updatedSince=…`
+   through `BOARD_API_URL` + `BOARD_COMPANY_ID`), and the maintenance window retired. A
+   degraded verdict does not fail the deploy — the image is switched and healthy — but it is
+   printed loudly (`DEPLOY DEGRADED`) so the operator reacts immediately. Without
+   `BOARD_API_URL`/`BOARD_COMPANY_ID` the check is skipped with a log line.
 
 If step 7 fails, the script exits with an error, **maintenance stays on**, and the output
 carries the rollback command and the dump path.

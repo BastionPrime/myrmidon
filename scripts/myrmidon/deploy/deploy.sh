@@ -18,7 +18,9 @@
 # wait until no runs are in progress (a drain timeout lifts maintenance again
 # and aborts before the image changes); switch the image line in the compose
 # override file and recreate only the server service; verify /api/health
-# (status, version, commit); leave maintenance.
+# (status, version, commit); leave maintenance (myrmidon EXIT-ASYNC: wait for
+# the window to retire, not for the exit HTTP call); run the post-deploy
+# fleet check (no issues blocked in the deploy window).
 #
 # On a failed health check the script stops with maintenance still on and
 # prints the rollback command. --dry-run changes nothing and prints the plan
@@ -74,7 +76,8 @@ if [[ "$DRY_RUN" == "1" ]]; then
   plan "5. wait for zero running runs (timeout ${RUNS_WAIT_TIMEOUT_SEC}s); on a drain timeout maintenance is lifted and the deploy aborts before the image changes"
   plan "6. set image in $OVERRIDE_PATH to $ref; docker compose up -d --no-deps $COMPOSE_SERVICE"
   plan "7. verify $HEALTH_URL: status ok, version ${expect_version:-<from image label>}, commit ${expect_commit:-<from image label>}"
-  plan "8. leave maintenance"
+  plan "8. leave maintenance (exit returns when the window is marked leaving; the deploy waits for state off)"
+  plan "9. post-deploy fleet check: no issues blocked in the deploy window, maintenance retired (needs BOARD_API_URL/BOARD_COMPANY_ID; otherwise skipped)"
   exit 0
 fi
 
@@ -97,6 +100,12 @@ fi
 
 log "3/8 database dump"
 take_dump "${digest#sha256:}"
+
+# myrmidon(POST-DEPLOY-CHECK, OPE-3367): the deploy window starts when the
+# first board-affecting step runs (maintenance enter). Issues blocked after
+# this moment are the OPE-3367 failure signature and trip the post-deploy
+# fleet check below.
+deploy_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 LAST_DUMP_FILE="${LAST_DUMP_FILE:-}"
 
 log "4/8 enter maintenance"
@@ -141,6 +150,19 @@ if ! "$MYR_SCRIPT_DIR/verify-health.sh" --url "$HEALTH_URL" --timeout "$HEALTH_T
   exit 1
 fi
 
-log "8/8 leave maintenance"
+log "8/9 leave maintenance"
+# myrmidon(EXIT-ASYNC, OPE-3367): the exit POST returns once the window is
+# marked `leaving`; maintenance_exit then waits (bounded) for the window to
+# retire, so the deploy waits on the STATE, not on the HTTP call.
 maintenance_exit
+
+# myrmidon(POST-DEPLOY-CHECK, OPE-3367): the board is live again — prove the
+# deploy did not leave the fleet stalled. A degraded verdict does NOT fail the
+# deploy (the image is switched and healthy); it is reported loudly so the
+# operator reacts immediately instead of discovering 15 minutes of a stalled
+# team by hand.
+log "9/9 post-deploy fleet check"
+if ! post_deploy_fleet_check "$deploy_started_at"; then
+  log "DEPLOY DEGRADED: $ref is running and healthy, but the post-deploy check reported problems above; inspect the board now"
+fi
 log "deployed $ref (previous: ${previous:-<none>}, dump: $LAST_DUMP_FILE)"

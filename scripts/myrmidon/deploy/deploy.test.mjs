@@ -558,6 +558,125 @@ describe("deploy.sh: only CI images from the registry", () => {
   });
 });
 
+// myrmidon(EXIT-ASYNC, OPE-3367): deploy.sh must wait on the maintenance
+// STATE, not on the exit HTTP call. This suite runs the real lib.sh
+// functions against a fake `curl`/`jq` pair that answers the maintenance
+// status and the board issue list from files the test controls.
+describe("lib.sh: async maintenance exit and post-deploy fleet check (OPE-3367)", () => {
+  function libSandbox() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myrmidon-lib-"));
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    // curl answers per-URL from files: maintenance.json, issues.json, health.json
+    const fakeCurl = `#!/usr/bin/env bash
+echo "curl $*" >> "$SANDBOX/calls.log"
+url="$*"
+case "$url" in
+  *maintenance*) cat "$SANDBOX/maintenance.json" 2>/dev/null || echo '{"active":false,"instance":null,"windows":[]}' ;;
+  *issues*) cat "$SANDBOX/issues.json" 2>/dev/null || echo '[]' ;;
+  *) cat "$SANDBOX/health.json" 2>/dev/null || echo '{"status":"ok"}' ;;
+esac
+`;
+    fs.writeFileSync(path.join(bin, "curl"), fakeCurl, { mode: 0o755 });
+    const config = path.join(dir, "lib-test.env");
+    fs.writeFileSync(
+      config,
+      [
+        `COMPOSE_DIR=${dir}`,
+        "COMPOSE_SERVICE=server",
+        "HEALTH_URL=http://127.0.0.1:3100/api/health",
+        "POLL_INTERVAL_SEC=0",
+        "MAINTENANCE_MODE=api",
+        "MAINTENANCE_API_URL=http://127.0.0.1:3100/api/myrmidon/maintenance",
+        "MAINTENANCE_EXIT_WAIT_SEC=2",
+        "",
+      ].join("\n"),
+    );
+    return { dir, bin, config };
+  }
+
+  // Sources lib.sh the way deploy.sh does and calls one function.
+  function callLib(sb, functionCall) {
+    const script = `source "$MYR_SCRIPT_DIR/lib.sh"; load_config "$LIB_CONFIG"; ${functionCall}`;
+    const libScript = path.join(sb.dir, "call-lib.sh");
+    fs.writeFileSync(libScript, script, { mode: 0o755 });
+    const result = spawnSync(bashPath(), [libScript], {
+      env: { ...process.env, PATH: `${sb.bin}:${process.env.PATH}`, SANDBOX: sb.dir, LIB_CONFIG: sb.config, MYR_SCRIPT_DIR: path.join(HERE) },
+      encoding: "utf8",
+    });
+    return { code: result.status, out: `${result.stdout}${result.stderr}` };
+  }
+
+  it("wait_for_maintenance_off returns 0 immediately when the window is retired", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    const { code, out } = callLib(sb, "wait_for_maintenance_off");
+    assert.equal(code, 0, out);
+  });
+
+  it("wait_for_maintenance_off waits while the window is leaving, then succeeds", () => {
+    const sb = libSandbox();
+    // First read: still leaving; the fake flips the file after the first GET.
+    const maint = path.join(sb.dir, "maintenance.json");
+    fs.writeFileSync(maint, JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    const fakeCurl = fs.readFileSync(path.join(sb.bin, "curl"), "utf8");
+    const flipping = fakeCurl.replace(
+      "*maintenance*) cat \"$SANDBOX/maintenance.json\"",
+      '*maintenance*) if [ -e "$SANDBOX/flip" ]; then echo \'{"active":false,"instance":null,"windows":[]}\'; else cat "$SANDBOX/maintenance.json"; touch "$SANDBOX/flip"; fi',
+    );
+    fs.writeFileSync(path.join(sb.bin, "curl"), flipping, { mode: 0o755 });
+    const { code, out } = callLib(sb, "wait_for_maintenance_off");
+    assert.equal(code, 0, out);
+  });
+
+  it("wait_for_maintenance_off fails after MAINTENANCE_EXIT_WAIT_SEC when the window never retires", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    const { code, out } = callLib(sb, "wait_for_maintenance_off");
+    assert.notEqual(code, 0);
+    assert.match(out, /still 'leaving' after 2s/);
+  });
+
+  it("post_deploy_fleet_check passes when no issue is blocked and the window retired", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 0, out);
+    assert.match(out, /post-deploy check: no blocked issues in the deploy window, maintenance retired/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when an issue became blocked in the window", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([{ id: "i1", status: "blocked" }]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1);
+    assert.match(out, /degraded: 1 blocked issue/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when the board answers an unexpected shape", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    // issues.json carries a non-array, non-{issues:[]} body: the shape the
+    // check cannot count, so it must report degraded instead of passing.
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify({ error: "boom" }));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1, out);
+    assert.match(out, /degraded: board issue list unreadable/);
+  });
+
+  it("post_deploy_fleet_check is skipped without BOARD_API_URL/BOARD_COMPANY_ID", () => {
+    const sb = libSandbox();
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 0, out);
+    assert.match(out, /skipping the fleet check/);
+  });
+});
+
 describe("rollback.sh", () => {
   it("returns to the previous digest without restoring the database", () => {
     const sb = sandbox();
