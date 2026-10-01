@@ -1,6 +1,6 @@
 # Myrmidon settings
 
-> Русская версия: [SETTINGS.ru.md](SETTINGS.ru.md)
+> Russian version: [SETTINGS.ru.md](SETTINGS.ru.md)
 
 Our settings are environment variables `MYRMIDON_<AREA>_<NAME>`. Vendor `PAPERCLIP_*`
 variables remain as they are and are not described here, except where we change their
