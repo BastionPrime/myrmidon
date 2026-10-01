@@ -226,3 +226,14 @@ does not ask the container. The runtime is connected by server startup (`startBo
 | Field | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `permissions.toolAccess` | S6 | `{ "mode": "all" }`, written into the agent record explicitly | The agent's permission for tools and connections. `mode: "listed"` — only tools from `tools` and connections from `connections` are allowed, other calls are rejected (403, `deny_agent_permission`, a line in the call log). Set by the operator in the agent card (Permissions tab, "Tool and connection access" section) or `PATCH /api/agents/:id/permissions` with the `toolAccess` field | `{ "mode": "all" }` — previous behavior. An agent without the field and a record with an unreadable value are read as `all` |
+
+## SC1 — server console (SERVER-CONSOLE, 1.4)
+
+The "Server console" section in company settings (`server/src/myrmidon/fleet-console/`,
+contract — [design/server-console.md](design/server-console.md)). One variable: the address
+of the Guacamole client. The signing key and node passwords are company secrets, not
+environment variables.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_FLEET_CONSOLE_URL` | SC1 | unset (off) | Base address of the Guacamole client for which the panel signs the auth-JSON (e.g. `https://guac.example.com`, no trailing `/`). It also goes into the token-issuing response and the `consoleUrl` address | Unset or empty — token issuance answers `503 console_not_configured`, the node registry and the log keep working. The company secret with the shared key is `guacamole-json-secret-key` (the value is read by the server, never appears in a response or the log); a registry row may reference a secret with the node password. Read at route assembly on server startup |
