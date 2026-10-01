@@ -9,16 +9,17 @@
 
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import type {
-  CloudAccessMode,
-  CloudAccount,
-  CloudGrant,
-  CloudJournalEntry,
-  CloudProviderId,
-  CloudResolvedAccess,
-  CloudRoot,
-  CloudToolCall,
-  CloudToolResult,
+import {
+  CLOUD_PERSONAL_ROOT_ALIAS,
+  type CloudAccessMode,
+  type CloudAccount,
+  type CloudGrant,
+  type CloudJournalEntry,
+  type CloudProviderId,
+  type CloudResolvedAccess,
+  type CloudRoot,
+  type CloudToolCall,
+  type CloudToolResult,
 } from "@paperclipai/shared/myrmidon-cloud-connector";
 import { CloudConnectorError, type CloudAgentIdentity, type CloudListing } from "./types.js";
 import { splitCloudPath } from "./paths.js";
@@ -26,9 +27,13 @@ import {
   allowsWrite,
   assertModeAllowedForRoot,
   outsideGrantMessage,
+  personalRootAmbiguousMessage,
   personalRootFolder,
   personalRootName,
+  personalRootNoAccountMessage,
+  personalRootUnknownCompanyMessage,
   readOnlyMessage,
+  reservedRootNameMessage,
   resolveAccess,
   resolveNamedRoot,
 } from "./grants.js";
@@ -61,6 +66,12 @@ export interface CloudConnectorServiceDeps {
   db?: Db;
   providers: CloudProviderRegistry;
   store?: CloudConnectorStore;
+  /**
+   * The board role of an agent, which is the label a `caste` grant matches on.
+   * Production reads the agents table; tests pass a stub. Absent or empty
+   * means the caller has no caste, so only agent and "everyone" grants match.
+   */
+  agentRole?: (agentId: string) => Promise<string | null>;
   /** Present when the owner can connect an account through OAuth (part B). */
   oauth?: CloudOAuthDeps;
   now?: () => number;
@@ -140,6 +151,18 @@ export class CloudConnectorService {
 
   private async document(): Promise<CloudConnectorDocument> {
     return this.store().read();
+  }
+
+  /**
+   * The label a `caste` grant matches on: the agent's board role. An agent
+   * whose role the board cannot report has no caste, and then only the agent
+   * and "everyone" grants apply — never a caste grant by accident.
+   */
+  async agentCaste(agentId: string): Promise<string | null> {
+    const lookup = this.deps.agentRole;
+    if (!lookup || !agentId) return null;
+    const role = (await lookup(agentId))?.trim();
+    return role && role.length > 0 ? role : null;
   }
 
   // -- accounts -------------------------------------------------------------
@@ -299,6 +322,9 @@ export class CloudConnectorService {
     if (!this.deps.providers.has(input.providerId)) {
       throw new CloudConnectorError(400, `unknown cloud provider "${input.providerId}"`);
     }
+    if (input.name.trim().toLowerCase() === CLOUD_PERSONAL_ROOT_ALIAS) {
+      throw new CloudConnectorError(400, reservedRootNameMessage(input.name));
+    }
     const root: CloudRoot = {
       id: this.newId(),
       providerId: input.providerId,
@@ -418,8 +444,7 @@ export class CloudConnectorService {
   // -- agent tool calls -----------------------------------------------------
 
   async callTool(identity: CloudAgentIdentity, call: CloudToolCall): Promise<CloudToolResult> {
-    const document = await this.document();
-    const access = resolveNamedRoot(document.roots, document.grants, identity, call.root);
+    let access: CloudResolvedAccess | null = null;
     const audit = async (ok: boolean, detail: string | null, root: CloudRoot | null): Promise<void> => {
       const entry: CloudJournalEntry = {
         id: this.newId(),
@@ -439,6 +464,12 @@ export class CloudConnectorService {
     };
 
     try {
+      // `personal` is the one root name an agent never has to be told: it is
+      // that agent's own folder, and the connector creates it here on first
+      // use. Every other name is resolved against what the owner granted.
+      const personal = call.root === CLOUD_PERSONAL_ROOT_ALIAS ? await this.personalRootFor(identity) : null;
+      const document = await this.document();
+      access = resolveNamedRoot(document.roots, document.grants, identity, personal?.name ?? call.root);
       if (!access) throw new CloudConnectorError(403, outsideGrantMessage(call.root));
       const provider = this.deps.providers.get(access.root.providerId);
       if (!provider) throw new CloudConnectorError(400, `unknown cloud provider "${access.root.providerId}"`);
@@ -498,6 +529,25 @@ export class CloudConnectorService {
       await audit(false, message, root);
       return { ok: false, tool: call.tool, root: call.root, path: call.path ?? "", error: message };
     }
+  }
+
+  /**
+   * Turn the reserved `personal` alias into a concrete root: the calling
+   * agent's own folder, created on first use. The folder lives in the one
+   * cloud this agent's company has connected; with none, or with several, the
+   * agent gets a refusal that names what the owner has to do rather than a
+   * folder picked at random.
+   */
+  private async personalRootFor(identity: CloudAgentIdentity): Promise<CloudRoot> {
+    const companyId = identity.companyId ?? null;
+    if (!companyId) throw new CloudConnectorError(409, personalRootUnknownCompanyMessage());
+    const accounts = (await this.document()).accounts.filter((entry) => entry.companyId === companyId);
+    if (accounts.length === 0) throw new CloudConnectorError(409, personalRootNoAccountMessage());
+    const providerIds = [...new Set(accounts.map((entry) => entry.providerId))];
+    if (providerIds.length > 1) throw new CloudConnectorError(409, personalRootAmbiguousMessage(providerIds));
+    const providerId = providerIds[0];
+    if (!providerId) throw new CloudConnectorError(409, personalRootNoAccountMessage());
+    return this.ensurePersonalRoot(providerId, companyId, identity.agentId, identity.agentId);
   }
 
   /**

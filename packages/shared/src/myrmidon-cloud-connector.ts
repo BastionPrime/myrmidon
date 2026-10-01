@@ -159,6 +159,14 @@ export const CLOUD_TOOL_NAMES = [
 ] as const;
 export type CloudToolName = (typeof CLOUD_TOOL_NAMES)[number];
 
+/**
+ * The root name an agent may always use: it stands for that agent's own folder.
+ * The connector creates the folder on first use and grants it read-write to
+ * that agent only, so an agent can rely on one stable name it does not have to
+ * be told. Reserved: the owner cannot create a root with this slug.
+ */
+export const CLOUD_PERSONAL_ROOT_ALIAS = "personal";
+
 export const cloudToolCallSchema = z.object({
   tool: z.enum(CLOUD_TOOL_NAMES),
   root: z.string().trim().min(1).max(120),

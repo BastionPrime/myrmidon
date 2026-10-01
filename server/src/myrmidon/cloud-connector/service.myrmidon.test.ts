@@ -7,6 +7,7 @@
 // cloud so no network or key is needed.
 
 import { describe, expect, it } from "vitest";
+import type { CloudProviderId } from "@paperclipai/shared/myrmidon-cloud-connector";
 import { cloudConnectorService, CLOUD_READ_LIMIT_BYTES } from "./service.js";
 import { CloudProviderRegistry, type CloudLocation, type CloudProvider, type CloudSearchHit } from "./providers/provider.js";
 import { memoryCloudConnectorStore } from "./store.js";
@@ -18,10 +19,15 @@ function item(name: string, content: number): CloudItem {
 }
 
 class FakeProvider implements CloudProvider {
-  readonly id = "onedrive" as const;
-  readonly displayName = "OneDrive";
+  readonly id: CloudProviderId;
+  readonly displayName: string;
   readonly writes: string[] = [];
   readonly folders: string[] = [];
+
+  constructor(id: CloudProviderId = "onedrive", displayName = "OneDrive") {
+    this.id = id;
+    this.displayName = displayName;
+  }
 
   async list(location: CloudLocation): Promise<CloudListing> {
     return { path: joinCloudPath(location.parts), items: [item("a.txt", 3)], truncated: false };
@@ -52,13 +58,14 @@ class FakeProvider implements CloudProvider {
   }
 }
 
-function build() {
+function build(options: { agentRole?: (agentId: string) => Promise<string | null>; providers?: CloudProvider[] } = {}) {
   const provider = new FakeProvider();
   const store = memoryCloudConnectorStore();
   let counter = 0;
   const service = cloudConnectorService({
-    providers: new CloudProviderRegistry([provider]),
+    providers: new CloudProviderRegistry([provider, ...(options.providers ?? [])]),
     store,
+    agentRole: options.agentRole,
     now: () => 1_750_000_000_000,
     newId: () => `id-${(counter += 1)}`,
   });
@@ -67,6 +74,8 @@ function build() {
 
 const agentA = { agentId: "agent-a", caste: null };
 const agentB = { agentId: "agent-b", caste: null };
+const agentC = { agentId: "agent-c", companyId: "company-a", caste: null };
+const agentBInCompany = { agentId: "agent-b", companyId: "company-a", caste: null };
 
 async function seed(service: ReturnType<typeof build>["service"]) {
   await service.connectAccount({ providerId: "onedrive", displayName: "Owner OneDrive", companyId: "company-a", tokenRef: "secret/onedrive" }, "board");
@@ -219,5 +228,89 @@ describe("cloud connector service", () => {
     await expect(
       service.createRoot({ providerId: "dropbox" as never, companyId: "company-a", name: "x", kind: "own", folder: "X" }, "board"),
     ).rejects.toThrow(/unknown cloud provider/);
+  });
+
+  it("creates the agent's own folder the first time it uses the reserved name, and reuses it after that", async () => {
+    const { service, provider } = build();
+    await seed(service);
+
+    const first = await service.callTool(agentC, { tool: "cloud_list", root: "personal", path: "" });
+    expect(first.ok).toBe(true);
+    // the fake records the folder it was asked to create: the root itself
+    expect(provider.folders).toEqual(["root"]);
+
+    const second = await service.callTool(agentC, {
+      tool: "cloud_upload",
+      root: "personal",
+      path: "note.txt",
+      contentBase64: Buffer.from("hi").toString("base64"),
+    });
+    expect(second.ok).toBe(true);
+    // the folder is made once: the second call reuses the root it already has
+    expect(provider.folders).toEqual(["root"]);
+    const personal = (await service.listRoots("onedrive")).filter((root) => root.personalForAgentId === "agent-c");
+    expect(personal).toHaveLength(1);
+    // and the journal names the folder the call actually landed in
+    const journal = await service.journal();
+    expect(journal[0]).toMatchObject({ actor: "agent-c", tool: "cloud_upload", rootName: personal[0]?.name });
+  });
+
+  it("keeps one agent out of another agent's own folder", async () => {
+    const { service } = build();
+    await seed(service);
+    await service.callTool(agentC, { tool: "cloud_list", root: "personal", path: "" });
+
+    const other = await service.callTool(agentBInCompany, { tool: "cloud_list", root: "personal", path: "" });
+    expect(other.ok).toBe(true);
+    const roots = await service.listRoots("onedrive");
+    const personal = roots.filter((root) => root.personalForAgentId !== null);
+    expect(personal.map((root) => root.personalForAgentId).sort()).toEqual(["agent-b", "agent-c"]);
+    const agentBAccess = await service.accessFor({ agentId: "agent-b", caste: null });
+    expect(agentBAccess.filter((entry) => entry.root.personalForAgentId === "agent-c")).toHaveLength(0);
+  });
+
+  it("refuses the reserved name with a reason the agent can act on", async () => {
+    const { service } = build({ providers: [new FakeProvider("google-drive", "Google Drive")] });
+    const noAccount = await service.callTool(agentC, { tool: "cloud_list", root: "personal", path: "" });
+    expect(noAccount.ok).toBe(false);
+    expect(noAccount.error).toMatch(/no cloud account is connected/);
+
+    await seed(service);
+    await service.connectAccount(
+      { providerId: "google-drive", displayName: "Owner Drive", companyId: "company-a", tokenRef: "secret/drive" },
+      "board",
+    );
+    const ambiguous = await service.callTool(agentC, { tool: "cloud_list", root: "personal", path: "" });
+    expect(ambiguous.ok).toBe(false);
+    expect(ambiguous.error).toMatch(/ambiguous/);
+
+    const unknownCompany = await service.callTool({ agentId: "agent-c", caste: null }, { tool: "cloud_list", root: "personal", path: "" });
+    expect(unknownCompany.ok).toBe(false);
+    expect(unknownCompany.error).toMatch(/company this agent works for/);
+  });
+
+  it("keeps the reserved name out of the owner's hands", async () => {
+    const { service } = build();
+    await expect(
+      service.createRoot({ providerId: "onedrive", companyId: "company-a", name: "personal", kind: "own", folder: "Shared" }, "board"),
+    ).rejects.toThrow(/reserved/);
+  });
+
+  it("reads the agent's board role as the caste grants match on", async () => {
+    const roles: Record<string, string> = { "agent-a": "engineers", "agent-b": "   " };
+    const { service } = build({ agentRole: async (agentId) => roles[agentId] ?? null });
+    expect(await service.agentCaste("agent-a")).toBe("engineers");
+    expect(await service.agentCaste("agent-b")).toBeNull();
+    expect(await service.agentCaste("nobody")).toBeNull();
+
+    await seed(service);
+    const team = await service.createRoot({ providerId: "onedrive", companyId: "company-a", name: "team", kind: "own", folder: "Team" }, "board");
+    await service.setGrant({ rootId: team.id, targetKind: "caste", caste: "engineers", mode: "ro" }, "board");
+
+    const allowed = await service.callTool({ agentId: "agent-a", caste: await service.agentCaste("agent-a") }, { tool: "cloud_list", root: "team", path: "" });
+    expect(allowed.ok).toBe(true);
+    const denied = await service.callTool({ agentId: "agent-b", caste: await service.agentCaste("agent-b") }, { tool: "cloud_list", root: "team", path: "" });
+    expect(denied.ok).toBe(false);
+    expect(denied.error).toMatch(/not granted/);
   });
 });

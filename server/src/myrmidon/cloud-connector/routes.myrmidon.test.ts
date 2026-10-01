@@ -84,13 +84,14 @@ interface Harness {
   stateStore: OAuthStateStore;
 }
 
-function buildService(): Harness {
+function buildService(options: { agentRole?: (agentId: string) => Promise<string | null> } = {}): Harness {
   let counter = 0;
   const tokenStore = memoryCloudTokenStore();
   const stateStore = new OAuthStateStore();
   const service = cloudConnectorService({
     providers: new CloudProviderRegistry([new FakeProvider()]),
     store: memoryCloudConnectorStore(),
+    agentRole: options.agentRole,
     now: () => 1_750_000_000_000,
     newId: () => `id-${(counter += 1)}`,
     oauth: {
@@ -280,5 +281,54 @@ describe("myrmidon(CLOUD-CONNECTOR) routes: agent tool call", () => {
     const server = app(agentActor, service);
     const roots = await request(server).get("/api/myrmidon/cloud-connector/roots").expect(200);
     expect(roots.body.roots.map((root: { name: string }) => root.name).sort()).toEqual(["shared", "work"]);
+  });
+
+  it("gives the agent its own folder through the reserved name, and lists it afterwards", async () => {
+    const { service } = buildService();
+    await configured(service);
+    const server = app(agentActor, service);
+
+    const first = await request(server)
+      .post("/api/myrmidon/cloud-connector/call")
+      .send({ tool: "cloud_list", root: "personal", path: "" })
+      .expect(200);
+    expect(first.body.result.ok).toBe(true);
+
+    const roots = await request(server).get("/api/myrmidon/cloud-connector/roots").expect(200);
+    expect(roots.body.roots.map((root: { name: string }) => root.name).sort()).toEqual(["agent-11111111-1111-4111-8111-111111111111", "shared", "work"]);
+  });
+
+  it("matches a caste grant by the agent's board role", async () => {
+    const { service } = buildService({ agentRole: async () => "engineers" });
+    await configured(service);
+    const team = await service.createRoot(
+      { providerId: "onedrive", companyId: COMPANY_ID, name: "team", kind: "own", folder: "Team" },
+      "user-owner",
+    );
+    await service.setGrant({ rootId: team.id, targetKind: "caste", caste: "engineers", mode: "ro" }, "user-owner");
+
+    const allowed = await request(app(agentActor, service))
+      .post("/api/myrmidon/cloud-connector/call")
+      .send({ tool: "cloud_list", root: "team", path: "" })
+      .expect(200);
+    expect(allowed.body.result.ok).toBe(true);
+
+    const outsider = buildService({ agentRole: async () => "designers" });
+    await configured(outsider.service);
+    const refused = await request(app(agentActor, outsider.service))
+      .post("/api/myrmidon/cloud-connector/call")
+      .send({ tool: "cloud_list", root: "team", path: "" })
+      .expect(200);
+    expect(refused.body.result.ok).toBe(false);
+  });
+
+  it("refuses a folder the owner named with the reserved word", async () => {
+    const { service } = buildService();
+    await configured(service);
+    const refused = await request(app(owner, service))
+      .post(`/api/myrmidon/cloud-connector/roots${query}`)
+      .send({ providerId: "onedrive", companyId: COMPANY_ID, name: "personal", kind: "own", folder: "Shared" })
+      .expect(400);
+    expect(refused.body.error).toMatch(/reserved/);
   });
 });
