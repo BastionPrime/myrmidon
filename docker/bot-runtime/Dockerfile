@@ -205,13 +205,23 @@ raise SystemExit(0 if o.status in ('installed', 'none') else 1)"
 RUN /opt/hermes-src/.venv/bin/python -c 'import aiohttp, mcp, hindsight_client'
 
 # myrmidon(G1): import smoke for every module a patch in patches/ changes
-# (hermes_state: 04; tools.environments.base and base_session_env: 02; gateway.run: 05)
+# (hermes_state: 04, 06; tools.environments.base and base_session_env: 02; gateway.run: 05)
 # plus the vendored memory provider (a relative-import package, so a broken plugin tree
 # fails the build here, not at the first bot start). `git apply` only proves the hunks
 # land; a patch that applies cleanly but breaks a module's imports or top-level code
 # would otherwise surface only when a bot starts. No bytecode is written, so the sealed
 # tree stays as the build left it.
 RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python -c 'import hermes_state, tools.environments.base, tools.environments.base_session_env, gateway.run'
+
+# myrmidon(G1): behaviour check for patch 06 — the state-DB generation probe must not
+# walk /proc/self/fd once per write while the gateway holds hundreds of descriptors
+# (see patches/README.md and tests/state_db_fd_probe_budget.py). The import smoke above
+# proves the patched module still imports; this one proves the patched behaviour still
+# holds, against the same synced venv and the same patched tree. It runs in the builder
+# stage only; the tests directory is not copied into the runtime image.
+COPY tests/ /tmp/patch-tests/
+RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python /tmp/patch-tests/state_db_fd_probe_budget.py /opt/hermes-src
+
 # The provider itself, through hermes' OWN discovery path (the same one the gateway uses at
 # start): a staging home gets the same symlink the entrypoint will make at run time, and
 # find_provider_dir must resolve it. This catches a broken plugin tree, a missing

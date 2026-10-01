@@ -66,6 +66,23 @@
       }
     },
     {
+      "id": "06-state-db-fd-probe-budget",
+      "kind": "patch",
+      "patch": "docker/bot-runtime/patches/06-state-db-fd-probe-budget.patch",
+      "files": [
+        "hermes_state.py"
+      ],
+      "reason": "Before every state-DB write the gateway probes whether the WAL/SHM generation this handle opened is still on disk. When the handle has no recorded sidecar identity the probe readlinks every open descriptor of the process on the calling thread — the gateway's event loop. A state.db reached through a symlink never records an identity (SQLite puts -wal/-shm next to the link target, so the literal <path>-wal never stats), so a multi-profile gateway with hundreds of descriptors walked /proc/self/fd once per write and starved the out-of-loop liveness watchdog into a hard exit (75), failing every run in flight. Same verdict, at most one walk per second per handle.",
+      "dropCondition": "Upstream stops walking /proc/self/fd on the write path: a cached probe verdict, a minimum interval between probes, or the probe moved off the caller's thread.",
+      "offer": null,
+      "offerNote": "Not offered yet: see the note on delta 02 (publisher-scan wrapper pending).",
+      "probe": {
+        "source": "hermes",
+        "path": "hermes_state.py",
+        "upstreamMarker": "_WAL_PROBE_MIN_INTERVAL|_wal_probe_at|fd_probe_interval"
+      }
+    },
+    {
       "id": "hindsight-reflect-timeout-and-fact-types",
       "kind": "upstream-plugin-gap",
       "files": [

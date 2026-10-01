@@ -190,6 +190,29 @@ describe("docker/bot-runtime/Dockerfile", () => {
     assert.ok(runtimeIdx > smokeIdx, "expected the import smoke in the builder stage");
   });
 
+  it("runs the state-db descriptor-probe regression against the patched tree at build time", () => {
+    // Patch 06 bounds the /proc/self/fd generation probe on the write path. The import
+    // smoke only proves the patched module still imports; the behaviour check has to run
+    // too, against the same synced venv and the same patched tree, and the file it runs
+    // must ship in the build context.
+    const run = dockerfileInstructions.match(/^RUN [^\n]*\/tmp\/patch-tests\/(\S+\.py)\s+\/opt\/hermes-src$/m);
+    assert.ok(run, "expected a build-time run of a docker/bot-runtime/tests regression");
+    assert.ok(
+      fs.existsSync(path.join(IMAGE_DIR, "tests", run[1])),
+      `docker/bot-runtime/tests/${run[1]} must exist`,
+    );
+    assert.match(dockerfile, /^COPY tests\/ \/tmp\/patch-tests\/$/m);
+    const syncIdx = dockerfileInstructions.indexOf("uv sync --frozen");
+    const runIdx = dockerfileInstructions.indexOf(run[0]);
+    const runtimeIdx = dockerfileInstructions.indexOf("FROM python:3.13-slim AS runtime");
+    assert.ok(runIdx > syncIdx, "expected the regression run after uv sync");
+    assert.ok(runtimeIdx > runIdx, "expected the regression run in the builder stage");
+    // The builder stage's test copy must not reach the runtime image. Index into the raw
+    // Dockerfile here: the instruction list above has its comment lines stripped, so its
+    // offsets do not address the file it came from.
+    assert.doesNotMatch(dockerfile.slice(dockerfile.indexOf("FROM python:3.13-slim AS runtime")), /patch-tests/);
+  });
+
   it("redirects hermes' lazy installs and write tools off the sealed, read-only venv", () => {
     // Sealing /opt/hermes-src read-only (below) otherwise leaves
     // tools/lazy_deps.py trying to install into it and
@@ -237,6 +260,7 @@ describe("docker/bot-runtime/patches/", () => {
     assert.ok(files.some((f) => f.includes("secret")), "expected a session-snapshot secret-redaction patch");
     assert.ok(files.some((f) => f.includes("state-read")), "expected a state-read retry patch");
     assert.ok(files.some((f) => f.includes("gateway-executor")), "expected a gateway executor pool patch");
+    assert.ok(files.some((f) => f.includes("fd-probe")), "expected a state-db descriptor-probe patch");
     // The two hindsight patches are gone on purpose: v2026.9.24 removed the in-tree provider
     // (the plugin catalog owns it now) and the catalog plugin already carries the retain_async
     // fix. A stray hindsight patch would fail `git apply` at build time.
