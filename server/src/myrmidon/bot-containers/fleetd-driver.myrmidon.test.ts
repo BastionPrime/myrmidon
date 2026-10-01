@@ -98,16 +98,20 @@ describe("myrmidon(FLEETD-VMEXEC) fleetd driver — the HTTP contract", () => {
     }
   });
 
-  it("sends the spec for templateDrift/create/recreate and returns the drift flag", async () => {
+  it("sends the spec for templateDrift/create/recreate and returns the drift report", async () => {
     const { server, config, calls } = await fakeServer((call, res) => {
       res.setHeader("Content-Type", "application/json");
-      if (call.path === "/v1/bots/bot-a/template-drift") res.end(JSON.stringify({ drift: true }));
-      else res.end("{}");
+      if (call.path === "/v1/bots/bot-a/template-drift") {
+        res.end(JSON.stringify({ drift: true, fields: [{ field: "HostConfig.Binds", expected: ["a:/b"], actual: null }] }));
+      } else res.end("{}");
     });
     try {
       const driver = fleetdBotContainerDriver(config);
       const spec = { botKey: "bot-a", image: "example.com/bot@sha256:aa", memoryMb: 1024, cpus: 1, pidsLimit: 256, network: "net-a" };
-      expect(await driver.templateDrift(spec)).toBe(true);
+      expect(await driver.templateDrift(spec)).toEqual({
+        drifted: true,
+        fields: [{ field: "HostConfig.Binds", expected: ["a:/b"], actual: null }],
+      });
       await driver.create(spec);
       await driver.recreate(spec);
       expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
