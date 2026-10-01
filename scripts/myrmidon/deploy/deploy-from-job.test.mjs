@@ -155,17 +155,78 @@ describe("deploy-from-job.sh", () => {
     assert.match(read(sb.override), new RegExp(`image: ${CI_IMAGE}@${NEW}`));
   });
 
-  it("reports health-failed when deploy.sh fails the health check", () => {
+  it("reports health-failed when deploy.sh fails the health check and AUTO_ROLLBACK=0", async () => {
     const sb = sandbox({
       job: { id: JOB_ID, status: "maintenance_on", digest: NEW },
       health: { status: "ok", version: "0.0.0", commit: COMMIT },
     });
+    fs.writeFileSync(sb.config, `${fs.readFileSync(sb.config, "utf8")}\nAUTO_ROLLBACK=0\n`);
     const { code } = run(sb, ["--once"]);
     // The executor itself succeeds: the failure is reported, not hidden.
     assert.equal(code, 0);
     const r = report(sb);
     assert.equal(r.phase, "health-failed");
     assert.match(r.detail, /exit 1/);
+    // No rollback ran.
+    assert.doesNotMatch(calls(sb), /rollback\.sh/);
+  });
+
+  it("auto-rolls back to the previous image when the health check fails (R5-C)", async () => {
+    // deploy.sh fails the health check (version mismatch); with the automatic
+    // rollback on (the default) the executor runs rollback.sh to the image
+    // deploy.sh remembered, and reports rolled-back when its health check
+    // passes. The rollback target exists: deploy.sh wrote PREVIOUS_IMAGE_FILE
+    // before the switch, and the fake board serves the OLD image's health.
+    const sb = sandbox({
+      job: { id: JOB_ID, status: "maintenance_on", digest: NEW },
+      health: { status: "ok", version: "0.0.0", commit: COMMIT },
+    });
+    // A flipping health: the new image reports a mismatched version during
+    // the deploy, the previous image reports the matching one during the
+    // rollback. The override file tells them apart: after deploy.sh switched
+    // it to NEW, the rollback switches it back to OLD.
+    const flip = `#!/usr/bin/env bash
+echo "curl $*" >> "$SANDBOX/calls.log"
+case "$*" in
+  *myrmidon/deploy-jobs*) cat "$SANDBOX/board-jobs.json" ;;
+  *myrmidon/maintenance*) cat "$SANDBOX/board-maintenance.json" ;;
+  *api/health*)
+    if grep -q "${NEW}" "$SANDBOX/compose/docker-compose.myrmidon-image.yml" 2>/dev/null; then
+      printf '{"status":"ok","version":"0.0.0","commit":"${COMMIT}"}'
+    else
+      printf '{"status":"ok","version":"${VERSION}","commit":"${COMMIT}"}'
+    fi ;;
+  *) echo "{}" ;;
+esac
+`;
+    fs.writeFileSync(path.join(sb.bin, "curl"), flip, { mode: 0o755 });
+    const { code, out } = run(sb, ["--once"]);
+    assert.equal(code, 0, out);
+    // The rollback really ran: after the failed deploy of NEW (its pull is
+    // logged), the OLD image was pulled and brought up again.
+    assert.match(calls(sb), new RegExp(`docker pull --quiet ${CI_IMAGE}@${NEW}`));
+    assert.match(calls(sb), new RegExp(`docker pull --quiet ${CI_IMAGE}@${OLD}`));
+    const r = report(sb);
+    assert.equal(r.phase, "rolled-back");
+    assert.match(r.detail, /rolled back to the previous image/);
+    // The override points at the OLD image again — the board runs locally.
+    assert.match(read(sb.override), new RegExp(`image: ${CI_IMAGE}@${OLD}`));
+  });
+
+  it("reports rollback-failed when the rollback itself fails (R5-C)", async () => {
+    // The health stays wrong for BOTH images: the deploy fails, the rollback
+    // fails its own health check, and the executor reports rollback-failed.
+    const sb = sandbox({
+      job: { id: JOB_ID, status: "maintenance_on", digest: NEW },
+      health: { status: "ok", version: "0.0.0", commit: COMMIT },
+    });
+    fs.writeFileSync(path.join(sb.dir, "health.json"), JSON.stringify({ status: "ok", version: "0.0.0", commit: COMMIT }));
+    const { code } = run(sb, ["--once"]);
+    assert.equal(code, 0);
+    const r = report(sb);
+    assert.equal(r.phase, "rollback-failed");
+    assert.match(r.detail, /rollback failed/);
+    assert.match(r.detail, /maintenance stays on/);
   });
 
   it("waits until the maintenance window is on before switching", () => {
@@ -228,15 +289,20 @@ esac
     assert.match(out, /refusing to run two/);
   });
 
-  it("reports error when the job digest fails the CI image check inside deploy.sh", () => {
+  it("reports error when the job digest fails the CI image check inside deploy.sh, without switching", () => {
+    // The image is refused BEFORE the switch: nothing changed, so the
+    // rollback has nothing to restore — rollback.sh refuses too (no previous
+    // image was recorded, the deploy never ran), and the executor's report is
+    // rollback-failed with the log pointing at the refused image. The board
+    // keeps the window on for the operator either way; the essential fact —
+    // no pull ever happened — is asserted below.
     const sb = sandbox({ job: { id: JOB_ID, status: "maintenance_on", digest: NEW } });
     fs.writeFileSync(path.join(sb.dir, "registry-missing"), "");
     const { code } = run(sb, ["--once"]);
     assert.equal(code, 0);
     const r = report(sb);
-    assert.equal(r.phase, "health-failed");
-    assert.match(r.detail, /exit 1/);
-    // deploy.sh refused before the pull.
+    assert.equal(r.phase, "rollback-failed");
+    // deploy.sh refused before the pull; nothing was switched.
     assert.doesNotMatch(calls(sb), /docker pull --quiet/);
   });
 });

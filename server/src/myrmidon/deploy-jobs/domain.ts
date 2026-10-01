@@ -10,6 +10,13 @@
 // setting that skips verification: a job never reaches "running" with an
 // unverified image.
 //
+// R5-C (auto-rollback by health): when the host reports a failed health check
+// and the automatic rollback is on, the job moves to `rolling_back` and the
+// host executor switches the image back to the locally remembered previous
+// one; a rollback that itself fails the health check ends `failed_rollback`
+// with the window left on for the operator. With the rollback off the job
+// ends `failed_health` with the window on, exactly as before.
+//
 // Design: docs/myrmidon/design/deploy-from-ui.md.
 
 export const DEPLOY_IMAGE_REPOSITORY = "ghcr.io/itkadr-git/myrmidon";
@@ -27,9 +34,21 @@ export type DeployJobStatus =
   | "maintenance_on"
   | "maintenance_failed"
   | "running"
+  | "rolling_back"
   | "succeeded"
   | "failed_health"
+  | "failed_rollback"
+  | "auto_rolled_back"
   | "aborted";
+
+/**
+ * Whether the job's failed health check triggered the automatic rollback to
+ * the locally known previous image (R5-C). A job that never reached the image
+ * switch, or that was aborted, did not roll anything back.
+ */
+export function isAutoRolledBack(job: DeployJob): boolean {
+  return job.status === "auto_rolled_back" || job.status === "failed_rollback";
+}
 
 /** Statuses under which the job still expects progress from the server itself. */
 export const DEPLOY_JOB_ACTIVE_STATUSES: readonly DeployJobStatus[] = [
@@ -39,12 +58,14 @@ export const DEPLOY_JOB_ACTIVE_STATUSES: readonly DeployJobStatus[] = [
   "maintenance_entering",
   "maintenance_on",
   "running",
+  "rolling_back",
 ];
 
 /** A job the host executor may pick up. */
 export const DEPLOY_JOB_DISPATCHABLE_STATUSES: readonly DeployJobStatus[] = [
   "maintenance_on",
   "running",
+  "rolling_back",
 ];
 
 export function isDeployJobActive(status: DeployJobStatus): boolean {
@@ -108,8 +129,11 @@ const STATUSES: readonly DeployJobStatus[] = [
   "maintenance_on",
   "maintenance_failed",
   "running",
+  "rolling_back",
   "succeeded",
   "failed_health",
+  "failed_rollback",
+  "auto_rolled_back",
   "aborted",
 ];
 
@@ -335,9 +359,11 @@ export class DeployJobConflict extends Error {
 }
 
 /**
- * Whether the job may be aborted right now: before the host starts the image
+ * May the job be aborted right now: before the host starts the image
  * switch anything is cancellable; once the switch started the operator's tool
- * is the rollback, not an abort. (`running` is the host's switch.)
+ * is the rollback, not an abort. (`running` is the host's switch;
+ * `rolling_back` is the automatic rollback of a failed switch — interrupting
+ * it by hand would leave the host mid-recreate.)
  */
 export function isAbortable(job: DeployJob): boolean {
   return ["pending", "verifying", "verified", "maintenance_entering"].includes(job.status);

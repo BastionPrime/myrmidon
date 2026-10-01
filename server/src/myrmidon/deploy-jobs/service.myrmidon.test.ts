@@ -23,7 +23,6 @@ const CI_LABELS = {
 };
 
 const SETTINGS: DeployJobsSettings = { ...readDeployJobsSettings({}), enabled: true, tickMs: 60_000 };
-
 function probes(overrides: Partial<ProbeDeps> = {}): ProbeDeps {
   return {
     fetchJson: async () => {
@@ -63,6 +62,7 @@ function harness(options: {
   labels?: Record<string, string> | null;
   onMain?: boolean;
   enabled?: boolean;
+  autoRollback?: boolean;
 } = {}): Harness {
   const store = new MemoryStore();
   const enter = vi.fn(async () => ({ id: "window-a", state: "entering" }));
@@ -88,7 +88,7 @@ function harness(options: {
     readHostReport: async (jobId) => reports.get(jobId) ?? null,
     readHealth: async () => health,
     now: () => new Date("2026-09-30T08:00:00.000Z"),
-    settings: { ...SETTINGS, enabled: options.enabled ?? true },
+    settings: { ...SETTINGS, enabled: options.enabled ?? true, autoRollback: options.autoRollback ?? true },
     probes: probes({
       fetchJson: async (url: string) => {
         if (url.startsWith("https://registry-inspect.example.com/")) return inspectAnswer;
@@ -198,8 +198,8 @@ describe("deploy jobs service: the tick drives the job", () => {
     expect(h.maintenance.exit).toHaveBeenCalled();
   });
 
-  it("fails the job when the host reports health-failed, and keeps the window for the rollback", async () => {
-    const h = harness();
+  it("fails the job when the host reports health-failed and the rollback is off, keeping the window", async () => {
+    const h = harness({ autoRollback: false });
     const job = await h.service.create({ reference: GOOD }, ACTOR);
     h.setWindow({ instance: { id: "window-a", state: "on" } });
     await h.service.tick();
@@ -215,7 +215,7 @@ describe("deploy jobs service: the tick drives the job", () => {
   });
 
   it("does not trust health-ok alone: the board's own health must agree", async () => {
-    const h = harness();
+    const h = harness({ autoRollback: false });
     const job = await h.service.create({ reference: GOOD }, ACTOR);
     h.setWindow({ instance: { id: "window-a", state: "on" } });
     await h.service.tick();
@@ -284,6 +284,87 @@ describe("deploy jobs service: the tick drives the job", () => {
     const current = await service.current();
     expect(current.job?.status).toBe("aborted");
     expect(current.job?.failureReason).toContain("exceeded the timeout");
+  });
+});
+
+describe("deploy jobs service: automatic rollback by health (R5-C)", () => {
+  /** Drive a job to `running` with a host report phase of choice. */
+  async function driveToRunning(h: Harness, phase: HostReport["phase"] = "claimed"): Promise<string> {
+    const job = await h.service.create({ reference: GOOD }, ACTOR);
+    h.setWindow({ instance: { id: "window-a", state: "on" } });
+    await h.service.tick();
+    h.reports.set(job.id, { jobId: job.id, phase });
+    await h.service.tick();
+    return job.id;
+  }
+
+  it("a failed health check rolls the job back automatically without a human", async () => {
+    const h = harness(); // autoRollback defaults to on
+    const jobId = await driveToRunning(h, "claimed");
+    h.reports.set(jobId, { jobId, phase: "health-failed", detail: "health did not match" });
+    await h.service.tick(); // running -> rolling_back
+
+    let current = await h.service.current();
+    expect(current.job?.status).toBe("rolling_back");
+    expect(current.job?.failureReason).toContain("health-failed");
+    // The window stays on: it covers the rollback switch too.
+    expect(h.maintenance.exit).not.toHaveBeenCalled();
+
+    // The host executor reports the rollback in progress, then done.
+    h.reports.set(jobId, { jobId, phase: "rolling-back" });
+    await h.service.tick();
+    expect((await h.service.current()).job?.status).toBe("rolling_back");
+
+    h.reports.set(jobId, { jobId, phase: "rolled-back", detail: "previous image healthy" });
+    await h.service.tick();
+
+    current = await h.service.current();
+    expect(current.job?.status).toBe("auto_rolled_back");
+    expect(current.job?.active).toBe(false);
+    expect(current.job?.failureReason).toContain("health did not match");
+    // The rollback succeeded: the window left, the board serves traffic again.
+    expect(h.maintenance.exit).toHaveBeenCalledWith("deploy rolled back automatically");
+    // Terminal: further ticks do nothing.
+    await h.service.tick();
+    expect((await h.service.current()).job?.status).toBe("auto_rolled_back");
+  });
+
+  it("a health-ok report the board's own health contradicts also rolls back", async () => {
+    const h = harness();
+    const jobId = await driveToRunning(h, "claimed");
+    h.reports.set(jobId, { jobId, phase: "health-ok", version: VERSION, commit: COMMIT });
+    h.setHealth({ version: "9.9.9", commit: "0000000000000000000000000000000000000000" });
+    await h.service.tick();
+    expect((await h.service.current()).job?.status).toBe("rolling_back");
+    expect((await h.service.current()).job?.failureReason).toContain("disagrees");
+
+    h.reports.set(jobId, { jobId, phase: "rolled-back" });
+    await h.service.tick();
+    expect((await h.service.current()).job?.status).toBe("auto_rolled_back");
+  });
+
+  it("a rollback that itself fails ends failed_rollback and keeps the window on", async () => {
+    const h = harness();
+    const jobId = await driveToRunning(h, "claimed");
+    h.reports.set(jobId, { jobId, phase: "health-failed", detail: "health did not match" });
+    await h.service.tick();
+    h.reports.set(jobId, { jobId, phase: "rollback-failed", detail: "rollback health check failed" });
+    await h.service.tick();
+
+    const current = await h.service.current();
+    expect(current.job?.status).toBe("failed_rollback");
+    expect(current.job?.failureReason).toContain("rollback health check failed");
+    expect(h.maintenance.exit).not.toHaveBeenCalled();
+  });
+
+  it("MYRMIDON_DEPLOY_AUTO_ROLLBACK=0 keeps the manual contract: failed_health, window on", async () => {
+    const h = harness({ autoRollback: false });
+    const jobId = await driveToRunning(h, "claimed");
+    h.reports.set(jobId, { jobId, phase: "health-failed", detail: "health did not match" });
+    await h.service.tick();
+    const current = await h.service.current();
+    expect(current.job?.status).toBe("failed_health");
+    expect(h.maintenance.exit).not.toHaveBeenCalled();
   });
 });
 

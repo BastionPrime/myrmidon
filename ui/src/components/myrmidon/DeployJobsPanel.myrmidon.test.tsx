@@ -147,5 +147,51 @@ describe("describeDeployStatus", () => {
     expect(describeDeployStatus("succeeded")).toBe("Deployed");
     expect(describeDeployStatus("failed_health")).toBe("Health check failed");
   });
+
+  it("maps the automatic rollback statuses (R5-C)", () => {
+    expect(describeDeployStatus("rolling_back")).toBe("Rolling back to the previous image");
+    expect(describeDeployStatus("auto_rolled_back")).toBe("Rolled back automatically");
+    expect(describeDeployStatus("failed_rollback")).toBe("Automatic rollback failed");
+  });
+});
+
+describe("DeployJobsPanel: automatic rollback copy (R5-C)", () => {
+  it("tells the operator a failed health check rolls the board back, and that auto-update waits for the stand", () => {
+    const panel = render();
+    expect(panel!.textContent).toContain("rolls back to the previous image automatically");
+    expect(panel!.textContent).toContain("Auto-update without a confirmation is off");
+  });
+
+  it("shows an automatically rolled back job as terminal, without an abort", () => {
+    const panel = render({
+      state: {
+        job: job({
+          status: "auto_rolled_back",
+          active: false,
+          abortable: false,
+          failureReason: "health did not match",
+        }),
+        history: [],
+      },
+    });
+    expect(panel!.textContent).toContain("Rolled back automatically");
+    expect(panel!.textContent).not.toContain("Abort");
+  });
+
+  it("shows a failing automatic rollback and keeps the failure reason visible", () => {
+    const panel = render({
+      state: {
+        job: job({
+          status: "failed_rollback",
+          active: false,
+          abortable: false,
+          failureReason: "the automatic rollback failed: rollback health check failed",
+        }),
+        history: [],
+      },
+    });
+    expect(panel!.textContent).toContain("Automatic rollback failed");
+    expect(panel!.textContent).toContain("rollback health check failed");
+  });
 });
 
