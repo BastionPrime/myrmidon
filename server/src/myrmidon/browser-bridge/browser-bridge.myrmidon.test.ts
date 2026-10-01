@@ -480,7 +480,10 @@ describe("browser bridge: allowlist settings and sessions", () => {
     });
     expect(next.domains).toEqual(["tender.example"]);
     expect(settings.updateGeneral).toHaveBeenCalledWith({
-      browserBridge: { domains: ["tender.example"], signing: { enabled: true, mode: "auto", types: [] } },
+      browserBridge: {
+        domains: ["tender.example"],
+        signing: { enabled: true, mode: "auto", types: [], dailyLimit: 0 },
+      },
     });
     expect(journal.at(-1)?.action).toBe("browser_bridge.allowlist.updated");
     expect(journal.at(-1)?.companyId).toBe(COMPANY_A);

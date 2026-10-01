@@ -22,9 +22,10 @@ import { logActivity } from "../../services/activity-log.js";
 import { instanceSettingsService } from "../../services/instance-settings.js";
 import { secretService } from "../../services/secrets.js";
 import { IdempotencyCache } from "./jsonrpc.js";
+import { bridgeJournalService } from "./journal-view.js";
 import { browserBridgePanelRoutes, browserBridgePublicRoutes } from "./routes.js";
 import { InMemoryBridgeSessionRegistry } from "./sessions.js";
-import { browserBridgeService, type BrowserBridgeService } from "./service.js";
+import { browserBridgeService, type BrowserBridgeService, type BridgeSignCounter } from "./service.js";
 import {
   InMemoryBridgeDeviceStore,
   SecretBackedBridgeDeviceStore,
@@ -85,9 +86,11 @@ export function createBrowserBridgeRuntime(
     sessions?: InMemoryBridgeSessionRegistry;
     idempotency?: IdempotencyCache;
     devices?: BridgeDeviceStore;
+    signCounter?: BridgeSignCounter;
   } = {},
 ): BrowserBridgeRuntime {
   const settings = instanceSettingsService(db);
+  const journal = bridgeJournalService(db);
   const sessions = overrides.sessions ?? new InMemoryBridgeSessionRegistry();
   const idempotency = overrides.idempotency ?? new IdempotencyCache();
 
@@ -109,6 +112,11 @@ export function createBrowserBridgeRuntime(
     },
     listCompanyIds: () => settings.listCompanyIds(),
     logActivity: (entry) => logActivity(db, entry),
+    // The daily limit counts journaled signatures, so the counter reads the
+    // same rows the journal view shows: one source of truth for both.
+    signCounter: overrides.signCounter ?? {
+      countToday: (companyId, at) => journal.countSignaturesToday(companyId, new Date(at)),
+    },
     pepper,
     dispatch: (input) =>
       dispatchBridgeAction({
@@ -134,7 +142,7 @@ export function browserBridgeRuntime(db: Db): BrowserBridgeRuntime {
 
 /** Board panel router for app.ts (`/api/myrmidon/browser-bridge/...`). */
 export function myrmidonBrowserBridgeRoutes(db: Db) {
-  return browserBridgePanelRoutes(() => browserBridgeRuntime(db).service);
+  return browserBridgePanelRoutes(() => browserBridgeRuntime(db).service, () => db);
 }
 
 /** Extension-facing router for app.ts (`POST /bridge/v1/pair`). */
@@ -153,4 +161,6 @@ export function startBrowserBridge(db: Db, server: HttpServer): void {
 
 export { InMemoryBridgeDeviceStore, InMemoryPairingCodeStore, SecretBackedBridgeDeviceStore };
 export { browserBridgeService, dispatchBridgeAction, setupBrowserBridgeWebSocketServer };
-export type { BrowserBridgeService, BridgeDeviceStore, BridgeSecretPort };
+export { bridgeJournalService, isBridgeJournalRow, isSignatureRow } from "./journal-view.js";
+export type { BridgeJournalQuery, BridgeJournalRow, BridgeJournalService } from "./journal-view.js";
+export type { BrowserBridgeService, BridgeDeviceStore, BridgeSecretPort, BridgeSignCounter };

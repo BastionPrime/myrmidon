@@ -14,6 +14,7 @@
 //   company the pairing belongs to.
 
 import { Router, type Request, type Response } from "express";
+import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import {
   BROWSER_BRIDGE_ERROR_CODES,
@@ -26,6 +27,7 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../../middleware/validate.js";
 import { assertBoardOrgAccess, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "../../routes/authz.js";
+import { bridgeJournalService } from "./journal-view.js";
 import type { BrowserBridgeActor } from "./journal.js";
 import { BrowserBridgeError, type BrowserBridgeService } from "./service.js";
 
@@ -95,6 +97,19 @@ function sendBridgeError(res: Response, err: unknown): void {
   throw err;
 }
 
+/** Panel query of the journal view: filters the UI's controls expose. */
+const bridgeJournalQuerySchema = z
+  .object({
+    deviceId: z.string().min(1).max(128).optional(),
+    method: z.string().min(1).max(64).optional(),
+    outcome: z.string().min(1).max(32).optional(),
+    signaturesOnly: z.coerce.boolean().optional(),
+    from: z.coerce.date().optional(),
+    to: z.coerce.date().optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+  })
+  .strict();
+
 /**
  * Board panel: pairing codes, devices, allowlist. Mounted under `/api`, so the
  * paths below are relative to that base.
@@ -104,7 +119,7 @@ function sendBridgeError(res: Response, err: unknown): void {
  * the runtime touches the secret service. Lazy resolution keeps app creation
  * cheap and keeps the failure at the first request that needs the bridge.
  */
-export function browserBridgePanelRoutes(getService: () => BrowserBridgeService) {
+export function browserBridgePanelRoutes(getService: () => BrowserBridgeService, getDb?: () => Db) {
   const router = Router();
 
   router.post(
@@ -182,6 +197,34 @@ export function browserBridgePanelRoutes(getService: () => BrowserBridgeService)
     } catch (err) {
       sendBridgeError(res, err);
     }
+  });
+
+  /**
+   * The journal view (design note §4.4): the bridge rows of one company —
+   * actions and signatures, with the document hash a signature leaves behind.
+   * A board member of the company reads it; the rows are already shaped by
+   * part B (sizes and references, never page content).
+   */
+  router.get("/myrmidon/browser-bridge/companies/:companyId/journal", async (req, res) => {
+    const companyId = String(req.params.companyId);
+    assertCompanyAccess(req, companyId);
+    const parsed = bridgeJournalQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid bridge journal query", issues: parsed.error.issues });
+      return;
+    }
+    if (!getDb) {
+      res.status(503).json({ error: "The bridge journal view is not available" });
+      return;
+    }
+    const journal = bridgeJournalService(getDb());
+    const rows = await journal.list({ companyId, ...parsed.data });
+    const signing = await getService().readSettings().then((settings) => settings.signing);
+    const signedToday =
+      parsed.data.signaturesOnly === true || signing.dailyLimit > 0
+        ? await journal.countSignaturesToday(companyId, new Date())
+        : null;
+    res.json({ rows, signedToday, dailyLimit: signing.dailyLimit });
   });
 
   return router;

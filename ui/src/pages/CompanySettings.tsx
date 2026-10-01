@@ -26,6 +26,7 @@ import {
 import { InstanceGeneralSettings } from "./InstanceGeneralSettings";
 import { FleetConsolePanel } from "../components/myrmidon/FleetConsolePanel"; // myrmidon(SC1)
 import { TracingHealthCard } from "../components/myrmidon/tracing-health/TracingHealthCard"; // myrmidon(TRACING-HEALTH)
+import { ConnectorPanel } from "@/components/myrmidon/ConnectorPanel"; // myrmidon(EXTCASE-PANEL)
 
 export function CompanySettings() {
   const {
@@ -339,6 +340,9 @@ export function CompanySettings() {
       <TracingHealthCard /> {/* myrmidon(TRACING-HEALTH): "LLM tracing" status card (part D) */}
 
       <InstanceGeneralSettings embedded />
+
+      {/* Connectors (client devices through the browser bridge) */}
+      <ConnectorPanel /> {/* myrmidon(EXTCASE-PANEL) */}
 
       {/* Danger Zone */}
       <div className="space-y-4">
