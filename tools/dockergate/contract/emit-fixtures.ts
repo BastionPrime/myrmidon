@@ -6,6 +6,10 @@
 //   scripts/   buildPrepareVolumesScript() and buildApplyScript(N) for several N
 //   bodies/    create bodies of all three forms, incl. fractional cpus/memory
 //   archives/  buildProfileArchives() output (fixed mtime)
+//   inspect-contract.json  the container inspect as the daemon writes it, plus
+//                 every field the driver's template-drift check reads off it
+//                 (the A2 contract with the gate: a compared field dockergate
+//                 trims away is a phantom drift on every pass)
 //   traffic.json  raw requests the real driver sends to a fake daemon over a
 //                 unix socket (create -> writeProfile -> start -> status ->
 //                 writeProfile -> restart -> recreate -> writeProfile -> start)
@@ -26,6 +30,7 @@ import {
   buildHelperContainerRequestBody,
   buildPrepareVolumesScript,
   buildProfileArchives,
+  containerTemplateInspectExpectation,
   dockerBotContainerDriver,
   serializeAppliedMarker,
 } from "../../../server/src/myrmidon/bot-containers/docker-driver.js";
@@ -112,6 +117,65 @@ for (const nonce of NONCES) {
     nonce,
   });
 }
+
+// ---- inspect contract (A2) ----
+// A container inspect as a Docker daemon writes it for a bot container, plus
+// every field the driver's template-drift check reads off it, with the value
+// the freshly built create body asks for. The Go contract test (gate package)
+// feeds this body through the gate and checks that the A2 answer still carries
+// every listed path with that value: a field dockergate drops makes the board
+// see a drift on an unchanged card and recreate every bot on every pass (the
+// 01.10 incident, HostConfig.Binds). Values come from the driver's own code,
+// never hand-copied.
+const SHARED_SOURCE = "/srv/shared/readonly";
+const inspectBody = buildCreateContainerRequestBody(
+  {
+    botKey: BOT_KEY,
+    image: IMAGE,
+    memoryMb: 1024,
+    cpus: 1,
+    pidsLimit: 512,
+    network: NETWORK,
+    // A card's extra read-only mount: part of the bind list the drift compares.
+    extraMounts: [{ source: SHARED_SOURCE, containerPath: SHARED_SOURCE, readOnly: true }],
+  },
+  { ...config, mountSources: [SHARED_SOURCE] },
+);
+const inspectExpectation = containerTemplateInspectExpectation(inspectBody);
+const expectedValue = (path: string): unknown => {
+  const found = inspectExpectation.find((entry) => entry.path === path);
+  if (!found) throw new Error(`the drift check does not read ${path}`);
+  return found.value;
+};
+write(
+  "inspect-contract.json",
+  `${JSON.stringify(
+    {
+      botKey: BOT_KEY,
+      name: `myrmidon-bot-${BOT_KEY}`,
+      // The daemon's answer, carrying the wanted values plus noise the trim
+      // must drop (the environment, the mount table).
+      inspect: {
+        Id: "b".repeat(64),
+        Name: `/myrmidon-bot-${BOT_KEY}`,
+        Image: IMAGE_ID,
+        Config: { Image: IMAGE, User: "10001:10001", Labels: inspectBody.Labels, Env: ["PATH=/usr/local/bin:/usr/bin"] },
+        State: { Status: "running", Running: true, Pid: 4321, ExitCode: 0, Health: { Status: "healthy" } },
+        HostConfig: {
+          Memory: expectedValue("HostConfig.Memory"),
+          NanoCpus: expectedValue("HostConfig.NanoCpus"),
+          PidsLimit: expectedValue("HostConfig.PidsLimit"),
+          NetworkMode: expectedValue("HostConfig.NetworkMode"),
+          Binds: expectedValue("HostConfig.Binds"),
+        },
+        Mounts: [{ Type: "bind", Source: "/host/noise-mount", Destination: "/noise" }],
+      },
+      fields: inspectExpectation.map((entry) => ({ path: entry.path, want: entry.value })),
+    },
+    null,
+    1,
+  )}\n`,
+);
 
 // ---- profile archives ----
 function profile(hashes: { restart: string; files: string }, extra: CompiledProfile["files"] = []): CompiledProfile {

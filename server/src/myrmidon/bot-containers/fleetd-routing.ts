@@ -16,7 +16,7 @@
 // local driver (a bot would silently run on the wrong machine).
 
 import { cardFleetHost, type FleetHostConfig } from "./fleetd-hosts.js";
-import type { BotContainerDriver, BotContainerSpec, BotContainerStatus } from "./driver.js";
+import type { BotContainerDriver, BotContainerSpec, BotContainerStatus, TemplateDriftReport } from "./driver.js";
 import type { CompiledProfile } from "./types.js";
 
 export interface FleetRoutingDeps {
@@ -62,7 +62,7 @@ export function fleetRoutingDriver(
       );
       return results.flat();
     },
-    async templateDrift(spec: BotContainerSpec): Promise<boolean> {
+    async templateDrift(spec: BotContainerSpec): Promise<TemplateDriftReport> {
       return driverFor(deps, agentOf(spec.botKey)).templateDrift(spec);
     },
     async create(spec: BotContainerSpec): Promise<void> {

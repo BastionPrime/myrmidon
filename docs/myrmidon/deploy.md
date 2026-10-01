@@ -217,6 +217,11 @@ case the interface refuses — which is exactly the case the script would refuse
   deployed tag must report no drift.
 - The interface opens, the agent list is in place, an issue opens.
 - Runs start again: queued wakes are delivered, a new run goes through.
+- Bot containers after a release that touches the reconciler or dockergate: for 30 minutes after
+  the deploy the board log must carry no `bot container recreated for a template change` and no
+  `bot container template drift detected` for a card nobody changed (including across a host
+  reboot). A real card change (for example `memoryMb`) still recreates that bot exactly once. When
+  one does appear, the drift line names the field and both values.
 - The plugins (hindsight and the rest) are `ready` in the plugin settings.
 - `$STATE_DIR/history.log` has the deploy line.
 

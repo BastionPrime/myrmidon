@@ -47,7 +47,7 @@ function minimalDriver(overrides: Partial<BotContainerDriver> = {}): BotContaine
   return {
     status: async (botKey) => ({ botKey, state: "running", restartHash: "r", filesHash: "f" }),
     list: async () => [],
-    templateDrift: async () => false,
+    templateDrift: async () => ({ drifted: false, fields: [] }),
     create: async () => {},
     recreate: async () => {},
     writeProfile: async () => {},
@@ -130,7 +130,7 @@ describe("applyBotContainerNow", () => {
       },
       async templateDrift() {
         events.push("drift");
-        return false;
+        return { drifted: false, fields: [] };
       },
     });
     const shared = deps(driver);
@@ -441,7 +441,7 @@ describe("applyBotContainerNow: the pass reconciles the card read at pass time",
       list: async () => [],
       templateDrift: async (spec) => {
         calls.push("templateDrift");
-        return container.image !== spec.image;
+        return { drifted: container.image !== spec.image, fields: [] };
       },
       create: async (spec) => {
         container.image = spec.image;

@@ -190,7 +190,14 @@ export async function reconcileBot(input: ReconcileBotInput): Promise<ReconcileO
 
     const profile = await compile();
     // Side-effect free; a drift is only ever applied below, through recreate.
-    const drifted = await driver.templateDrift(spec);
+    const drift = await driver.templateDrift(spec);
+    const drifted = drift.drifted;
+    if (drifted) {
+      // Names the field and both values, so a drift is diagnosable from the
+      // log alone — the 01.10 incident recreated every bot every pass with a
+      // message that named none of them.
+      await info("bot container template drift detected", { fields: drift.fields });
+    }
     // Hashes come only from the applied-state marker; none there means nothing
     // verified applied, which classifies as "restart", never "none".
     const changeClass = classifyProfileChange({ restartHash: status.restartHash, filesHash: status.filesHash }, profile);
