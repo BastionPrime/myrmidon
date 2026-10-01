@@ -72,6 +72,7 @@ function harness(
     profileWiring: vi.fn<Ports["profileWiring"]>(() => ({ compile, syncCard })),
     maintenancePort: vi.fn<Ports["maintenancePort"]>(() => maintenance),
     listAgents: vi.fn<Ports["listAgents"]>(() => agentsSweep),
+    readAgent: vi.fn<Ports["readAgent"]>(() => vi.fn(async () => null)),
     activitySink: vi.fn<Ports["activitySink"]>(() => sink),
     registerRuntime: vi.fn<Ports["registerRuntime"]>((runtime) => {
       registered = runtime;
@@ -162,6 +163,7 @@ describe("startBotContainers with the flag on", () => {
         syncCard: h.syncCard,
         maintenance: h.maintenance,
         activity: h.sink,
+        readAgent: expect.any(Function),
         network: DRIVER_CONFIG.network,
       });
       expect(opts).toEqual({ intervalMs: 60_000, env: ENABLED });
