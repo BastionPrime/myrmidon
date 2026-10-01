@@ -78,7 +78,17 @@ export class BrowserBridgeError extends Error {
 
 export interface BrowserBridgeSettingsPort {
   getGeneral(): Promise<{ browserBridge?: unknown }>;
-  updateGeneral(patch: { browserBridge: BrowserBridgeSettings }): Promise<unknown>;
+  updateGeneral(patch: Record<string, unknown>): Promise<unknown>;
+}
+
+/**
+ * The daily-limit counter of the panel's signing policy: how many signatures
+ * the company has already journaled today (UTC). The production port counts
+ * `browser_bridge.action.executed` rows with `method = "browser.sign"`; tests
+ * inject a fixed number so the limit gates without a database.
+ */
+export interface BridgeSignCounter {
+  countToday(companyId: string, now: number): Promise<number>;
 }
 
 export interface BrowserBridgeDispatchInput {
@@ -103,6 +113,12 @@ export interface BrowserBridgeServiceDeps {
   logActivity(entry: BrowserBridgeJournalEntry): Promise<unknown>;
   /** Board pepper for the HMAC of codes and tokens; never comes from settings. */
   pepper: string;
+  /**
+   * Daily signature counter for the panel's limit (defaults to "no limit is
+   * enforced", which keeps the service usable standalone; the server wiring
+   * in index.ts passes the journal-backed counter).
+   */
+  signCounter?: BridgeSignCounter;
   now?: () => number;
   randomBytes?: RandomBytes;
   generateCode?: () => string;
@@ -517,13 +533,28 @@ export function browserBridgeService(
       // switched-off bridge refuses the action instead of asking a person.
       let signDecision: BrowserBridgeSignDecision = "auto";
       if (isSign) {
-        signDecision = resolveSignDecision((await readSettings()).signing, actionType ?? "");
+        const signing = (await readSettings()).signing;
+        signDecision = resolveSignDecision(signing, actionType ?? "");
         if (signDecision === "refuse") {
           await logAction("denied", { reasonCode: BROWSER_BRIDGE_ERROR_CODES.signingDisabled });
           throw new BrowserBridgeError(
             BROWSER_BRIDGE_ERROR_CODES.signingDisabled,
             "signing is switched off in the bridge panel",
           );
+        }
+        // The daily ceiling is a preflight, not a post-check: a day already at
+        // the limit refuses the action before anything reaches the client PC.
+        // The counter is journaled signatures, so a refused or timed-out step
+        // never consumes the quota. 0 means "no limit".
+        if (signing.dailyLimit > 0) {
+          const signedToday = await (deps.signCounter?.countToday(companyId, now()) ?? Promise.resolve(0));
+          if (signedToday >= signing.dailyLimit) {
+            await logAction("denied", { reasonCode: BROWSER_BRIDGE_ERROR_CODES.dailyLimitReached });
+            throw new BrowserBridgeError(
+              BROWSER_BRIDGE_ERROR_CODES.dailyLimitReached,
+              "the daily signature limit of the bridge panel is reached",
+            );
+          }
         }
       }
 

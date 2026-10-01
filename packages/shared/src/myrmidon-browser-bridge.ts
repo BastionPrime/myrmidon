@@ -121,7 +121,7 @@ export const BRIDGE_READY_METHOD = "bridge.ready";
 export const BRIDGE_CANCEL_METHOD = "browser.cancel";
 
 /**
- * Signing (design note OPE-3383 §4.5, revision 2). The signature itself happens
+ * Signing (design note §4.5, revision 2). The signature itself happens
  * on the client PC: the extension talks to a local helper over native messaging,
  * the helper drives the token middleware, and the private key and the PIN never
  * pass through the board — only the command and the result (status plus the
@@ -137,6 +137,14 @@ export const signActionTypeSchema = z.string().regex(BROWSER_BRIDGE_SIGN_ACTION_
 export const BROWSER_BRIDGE_SIGNING_MODES = ["auto", "manual", "types"] as const;
 export type BrowserBridgeSigningMode = (typeof BROWSER_BRIDGE_SIGNING_MODES)[number];
 
+/**
+ * Daily signature ceiling of the bridge: the number of `browser.sign` actions
+ * journaled as executed per company per UTC day at which the gateway refuses
+ * further signatures for the rest of the day. The schema rejects anything
+ * above this so a typo cannot turn "5 per day" into a free-for-all.
+ */
+export const BROWSER_BRIDGE_MAX_DAILY_SIGNS = 10_000;
+
 export interface BrowserBridgeSigningSettings {
   /** The emergency switch: when off, every sign action is refused, whatever the mode. */
   enabled: boolean;
@@ -144,12 +152,15 @@ export interface BrowserBridgeSigningSettings {
   mode: BrowserBridgeSigningMode;
   /** Action types that need a person, when `mode` is `types`. */
   types: string[];
+  /** Journaled signatures per UTC day at which signing stops for the day; 0 = no limit. */
+  dailyLimit: number;
 }
 
 export const DEFAULT_BROWSER_BRIDGE_SIGNING: BrowserBridgeSigningSettings = {
   enabled: true,
   mode: "auto",
   types: [],
+  dailyLimit: 0,
 };
 
 export const browserBridgeSigningSchema = z
@@ -157,6 +168,7 @@ export const browserBridgeSigningSchema = z
     enabled: z.boolean().default(true),
     mode: z.enum(BROWSER_BRIDGE_SIGNING_MODES).default("auto"),
     types: z.array(signActionTypeSchema).max(64).default([]),
+    dailyLimit: z.number().int().min(0).max(BROWSER_BRIDGE_MAX_DAILY_SIGNS).default(0),
   })
   .strict();
 
@@ -181,7 +193,12 @@ export function resolveSignDecision(
 export function normalizeSigningSettings(raw: unknown): BrowserBridgeSigningSettings {
   const parsed = browserBridgeSigningSchema.safeParse(raw ?? {});
   if (!parsed.success) return { ...DEFAULT_BROWSER_BRIDGE_SIGNING };
-  return { enabled: parsed.data.enabled, mode: parsed.data.mode, types: [...parsed.data.types] };
+  return {
+    enabled: parsed.data.enabled,
+    mode: parsed.data.mode,
+    types: [...parsed.data.types],
+    dailyLimit: parsed.data.dailyLimit,
+  };
 }
 
 /**
@@ -310,6 +327,7 @@ export const BROWSER_BRIDGE_ERROR_CODES = {
   protocolVersionUnsupported: -32018,
   confirmationNotGranted: -32019,
   signingDisabled: -32020,
+  dailyLimitReached: -32021,
 } as const;
 
 export type BrowserBridgeErrorCode =
@@ -356,7 +374,7 @@ export const browserBridgeSettingsSchema = z
   .object({
     domains: z.array(z.string().min(1).max(253)).max(500),
     /** Signing policy of the client (design note §4.5, revision 2). */
-    signing: browserBridgeSigningSchema.default({ enabled: true, mode: "auto", types: [] }),
+    signing: browserBridgeSigningSchema.default({ ...DEFAULT_BROWSER_BRIDGE_SIGNING }),
   })
   .strict();
 

@@ -24,6 +24,7 @@ import {
   ToggleField,
 } from "../components/agent-config-primitives";
 import { InstanceGeneralSettings } from "./InstanceGeneralSettings";
+import { ConnectorPanel } from "@/components/myrmidon/ConnectorPanel"; // myrmidon(EXTCASE-PANEL)
 
 export function CompanySettings() {
   const {
@@ -333,6 +334,9 @@ export function CompanySettings() {
       />
 
       <InstanceGeneralSettings embedded />
+
+      {/* Connectors (client devices through the browser bridge) */}
+      <ConnectorPanel /> {/* myrmidon(EXTCASE-PANEL) */}
 
       {/* Danger Zone */}
       <div className="space-y-4">
