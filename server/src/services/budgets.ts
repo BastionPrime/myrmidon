@@ -43,6 +43,23 @@ export type BudgetEnforcementScope = {
 
 export type BudgetServiceHooks = {
   cancelWorkForScope?: (scope: BudgetEnforcementScope) => Promise<void>;
+  // myrmidon(M3): fired once per hard-stop event (only when the hard incident
+  // row was just created) so the owner is signalled in the interrupted issue
+  // threads instead of finding a silent cancel. Optional: absent hook keeps
+  // the vendor behaviour exactly as it was.
+  signalBudgetHardStop?: (input: {
+    companyId: string;
+    policyId: string;
+    scopeType: "company" | "agent" | "project";
+    scopeId: string;
+    scopeName: string;
+    amountLimit: number;
+    amountObserved: number;
+    windowStart: Date;
+    windowEnd: Date;
+    incidentId: string;
+    approvalId: string | null;
+  }) => Promise<void>;
 };
 
 function currentUtcMonthWindow(now = new Date()) {
@@ -600,8 +617,26 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
           }
           if (row.hardStopEnabled && observedAmount >= row.amount) {
             await resolveOpenSoftIncidents(row.id);
-            await createIncidentIfNeeded(row, "hard", observedAmount);
+            const hardIncident = await createIncidentIfNeeded(row, "hard", observedAmount);
             await pauseAndCancelScopeForBudget(row);
+            // myrmidon(M3): same one-shot owner signal as the cost-event path;
+            // the scope name is best-effort (falls back to the scope id).
+            if (hardIncident?.created) {
+              const scope = await resolveScopeRecord(db, row.scopeType as BudgetScopeType, row.scopeId).catch(() => null);
+              await hooks.signalBudgetHardStop?.({
+                companyId: row.companyId,
+                policyId: row.id,
+                scopeType: row.scopeType as "company" | "agent" | "project",
+                scopeId: row.scopeId,
+                scopeName: normalizeScopeName(row.scopeType as BudgetScopeType, scope?.name ?? row.scopeId),
+                amountLimit: row.amount,
+                amountObserved: observedAmount,
+                windowStart: resolveWindow(row.windowKind as BudgetWindowKind).start,
+                windowEnd: resolveWindow(row.windowKind as BudgetWindowKind).end,
+                incidentId: hardIncident.incident.id,
+                approvalId: hardIncident.incident.approvalId ?? null,
+              });
+            }
           }
         }
       } else {
@@ -694,6 +729,27 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
           await resolveOpenSoftIncidents(policy.id);
           const hardIncident = await createIncidentIfNeeded(policy, "hard", observedAmount);
           await pauseAndCancelScopeForBudget(policy);
+          if (hardIncident?.created) {
+            // myrmidon(M3): one owner signal per hard-stop event — the hook
+            // dedupes on its own (incident × issue); a failed delivery is
+            // swallowed inside the hook so enforcement stays committed. The
+            // scope name is best-effort: a scope row that vanished mid-stop
+            // falls back to the scope id, never failing the enforcement.
+            const scope = await resolveScopeRecord(db, policy.scopeType as BudgetScopeType, policy.scopeId).catch(() => null);
+            await hooks.signalBudgetHardStop?.({
+              companyId: policy.companyId,
+              policyId: policy.id,
+              scopeType: policy.scopeType as "company" | "agent" | "project",
+              scopeId: policy.scopeId,
+              scopeName: normalizeScopeName(policy.scopeType as BudgetScopeType, scope?.name ?? policy.scopeId),
+              amountLimit: policy.amount,
+              amountObserved: observedAmount,
+              windowStart: resolveWindow(policy.windowKind as BudgetWindowKind).start,
+              windowEnd: resolveWindow(policy.windowKind as BudgetWindowKind).end,
+              incidentId: hardIncident.incident.id,
+              approvalId: hardIncident.incident.approvalId ?? null,
+            });
+          }
           if (hardIncident?.created) {
             await logActivity(db, {
               companyId: policy.companyId,

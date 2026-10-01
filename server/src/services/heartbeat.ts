@@ -658,6 +658,14 @@ import {
   buildCrossChannelContext,
 } from "../myrmidon/agent-chat-bridge/cross-channel.js";
 
+// myrmidon(M3): owner signal on a budget hard-stop (see budget-signal.ts)
+import {
+  budgetSignalEnabled,
+  deliverBudgetHardStopSignal,
+  type BudgetHardStopSignalInput as BudgetSignalInput,
+  type BudgetSignalPorts,
+} from "../myrmidon/budget-signal.js";
+
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
 const MAX_RUN_EVENT_PAYLOAD_STRING_CHARS = 16 * 1024;
@@ -9159,6 +9167,13 @@ export function heartbeatService(
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
   const issuesSvc = issueService(db);
+  // myrmidon(M3): comment-writing port for the budget hard-stop signal.
+  const budgetSignalPorts: BudgetSignalPorts = {
+    addComment: (issueId, body, actor, options) =>
+      issuesSvc.addComment(issueId, body, actor, options),
+    now: () => new Date(),
+    log: logger,
+  };
   const treeControlSvc = issueTreeControlService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const environmentsSvc = environmentService(db);
@@ -9179,6 +9194,14 @@ export function heartbeatService(
   };
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
+    // myrmidon(M3): owner signal on a budget hard-stop — delivered into the
+    // interrupted issue threads, deduped per incident, off via
+    // MYRMIDON_BUDGET_SIGNAL_MODE=off.
+    signalBudgetHardStop:
+      budgetSignalEnabled(runtimeEnv)
+        ? (input: BudgetSignalInput) =>
+            deliverBudgetHardStopSignal(db, budgetSignalPorts, input).then(() => undefined)
+        : undefined,
   };
   const budgets = budgetService(db, budgetHooks);
   const recovery = recoveryService(db, {
