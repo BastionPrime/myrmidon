@@ -21,7 +21,7 @@ import { OneDriveProvider } from "./providers/onedrive.js";
 import { cloudConnectorService, type CloudConnectorService } from "./service.js";
 import { cloudConnectorRoutes } from "./routes.js";
 import { cloudConnectorMcpRoutes } from "./mcp.js";
-import { dbCloudConnectorStore, type CloudConnectorStore } from "./store.js";
+import { agentRoleFromDb, dbCloudConnectorStore, type CloudConnectorStore } from "./store.js";
 
 export interface CloudConnectorWiringOptions {
   /** Override for tests; production uses the instance settings row. */
@@ -72,6 +72,7 @@ export function createCloudConnector(options: { db: Db } & CloudConnectorWiringO
     db: options.db,
     store: documentStore,
     providers,
+    agentRole: agentRoleFromDb(options.db),
     oauth: {
       clients,
       stateStore: options.stateStore ?? new OAuthStateStore(),

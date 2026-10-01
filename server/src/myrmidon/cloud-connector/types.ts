@@ -40,6 +40,8 @@ export interface CloudListing {
 /** Identity of the agent on whose behalf a tool call runs. */
 export interface CloudAgentIdentity {
   agentId: string;
+  /** Company the agent works for; null when the caller cannot be placed in one. */
+  companyId?: string | null;
   /** Free-form caste label the board already uses for tool visibility; null when unset. */
   caste: string | null;
 }

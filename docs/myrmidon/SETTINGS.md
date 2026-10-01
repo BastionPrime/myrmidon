@@ -281,9 +281,9 @@ a folder whose company has no connected account answers a cloud call with `409 n
 | `MYRMIDON_CLOUD_CONNECTOR_REDIRECT_BASE` | CLOUD-CONNECTOR | unset (off) | Public base address of the panel the cloud providers send the owner back to (e.g. `https://board.example.com`, no trailing `/`). The connectors' callback is `<base>/api/myrmidon/cloud-connector/oauth/callback` and must be registered in each provider's OAuth app | Unset or empty — the callback address stays relative and every connect start answers `409 the connector callback address is not configured`; the folder/grant/journal surface keeps working |
 | `MYRMIDON_CLOUD_ONEDRIVE_CLIENT_ID` | CLOUD-CONNECTOR | unset (off) | OAuth client id of the Microsoft (OneDrive) app. Scopes requested: `Files.ReadWrite.All offline_access User.Read`; the account is a personal Microsoft account (`consumers`) | Unset — OneDrive cannot be connected (`409 not configured`); everything else keeps working |
 | `MYRMIDON_CLOUD_ONEDRIVE_CLIENT_SECRET` | CLOUD-CONNECTOR | unset | Client secret of the same app. Read by the server only, never returned in a response or written to a log | — |
-| `MYRMIDON_CLOUD_GOOGLE_DRIVE_CLIENT_ID` | CLOUD-CONNECTOR | unset (off) | OAuth client id of the Google Drive app. Scope requested: `https://www.googleapis.com/auth/drive` with `access_type=offline` (the connector confines every call to the granted folder) | Unset — Google Drive cannot be connected; the provider itself is added by part C |
+| `MYRMIDON_CLOUD_GOOGLE_DRIVE_CLIENT_ID` | CLOUD-CONNECTOR | unset (off) | OAuth client id of the Google Drive app. Scope requested: `https://www.googleapis.com/auth/drive` with `access_type=offline` (the connector confines every call to the granted folder) | Unset — Google Drive cannot be connected; the provider itself is registered by default |
 | `MYRMIDON_CLOUD_GOOGLE_DRIVE_CLIENT_SECRET` | CLOUD-CONNECTOR | unset | Client secret of the same app | — |
-| `MYRMIDON_CLOUD_YANDEX_DISK_CLIENT_ID` | CLOUD-CONNECTOR | unset (off) | OAuth client id of the Yandex Disk app. Scopes requested: `cloud_api:disk.read cloud_api:disk.write`; Yandex does not support PKCE, so none is sent | Unset — Yandex Disk cannot be connected; the provider itself is added by part C |
+| `MYRMIDON_CLOUD_YANDEX_DISK_CLIENT_ID` | CLOUD-CONNECTOR | unset (off) | OAuth client id of the Yandex Disk app. Scopes requested: `cloud_api:disk.read cloud_api:disk.write`; Yandex does not support PKCE, so none is sent | Unset — Yandex Disk cannot be connected; the provider itself is registered by default |
 | `MYRMIDON_CLOUD_YANDEX_DISK_CLIENT_SECRET` | CLOUD-CONNECTOR | unset | Client secret of the same app | — |
 
 Agent surface: the connector also serves the cloud tools over MCP at
@@ -293,3 +293,13 @@ Agent surface: the connector also serves the cloud tools over MCP at
 agent's own run key, and every call is confined to the folders granted to that
 agent. To let agents see the tools, register the board address as a tool
 connection and assign it — the endpoint itself is always on.
+
+Two things the agent surface relies on that are worth knowing when a call is
+refused. A `caste` grant matches the agent's board role (`agents.role`), read
+per call; an agent whose role is empty has no caste and only matches grants to
+the agent itself or to everyone. And the root name `personal` is reserved: it
+always means the calling agent's own folder, which the connector creates on
+first use and grants `rw` to that agent alone. The owner cannot create a folder
+with that name (`400 reserved`), and an agent asking for it is told what to do
+when the answer is not obvious — no account connected for its company, or
+several clouds connected (`409`, naming the providers).
