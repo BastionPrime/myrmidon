@@ -13,6 +13,15 @@ reads the journal.
 The section rides the operator visibility key of Secrets: the entry appears in
 the settings sidebar only where the Secrets page itself is visible.
 
+## Availability
+
+The section works only on a server that serves the access-hub API. On an
+instance without it (the API answers 404 or 501) the screen shows one notice
+in place of the tabs — "Access hub is not available on this server yet" — and
+asks for no other access-hub route; the settings entry stays and carries a
+"soon" badge while the API is missing. The screen turns on by itself once the
+server part is deployed. Every other failure stays an ordinary error.
+
 ## The one secrecy rule
 
 Secret values are never displayed. The list, the card and the journal render
