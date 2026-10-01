@@ -69,13 +69,13 @@ const agentA = { agentId: "agent-a", caste: null };
 const agentB = { agentId: "agent-b", caste: null };
 
 async function seed(service: ReturnType<typeof build>["service"]) {
-  await service.connectAccount({ providerId: "onedrive", displayName: "Owner OneDrive", tokenRef: "secret/onedrive" }, "board");
-  const work = await service.createRoot({ providerId: "onedrive", name: "work", kind: "own", folder: "Agents/agent-a" }, "board");
+  await service.connectAccount({ providerId: "onedrive", displayName: "Owner OneDrive", companyId: "company-a", tokenRef: "secret/onedrive" }, "board");
+  const work = await service.createRoot({ providerId: "onedrive", companyId: "company-a", name: "work", kind: "own", folder: "Agents/agent-a" }, "board");
   const shared = await service.createRoot(
-    { providerId: "onedrive", name: "shared", kind: "shared", driveId: "drive-x", itemId: "item-y" },
+    { providerId: "onedrive", companyId: "company-a", name: "shared", kind: "shared", driveId: "drive-x", itemId: "item-y" },
     "board",
   );
-  const secret = await service.createRoot({ providerId: "onedrive", name: "secret", kind: "own", folder: "Agents/agent-b" }, "board");
+  const secret = await service.createRoot({ providerId: "onedrive", companyId: "company-a", name: "secret", kind: "own", folder: "Agents/agent-b" }, "board");
   await service.setGrant({ rootId: work.id, targetKind: "agent", agentId: "agent-a", mode: "rw" }, "board");
   await service.setGrant({ rootId: shared.id, targetKind: "all", mode: "ro" }, "board");
   await service.setGrant({ rootId: secret.id, targetKind: "agent", agentId: "agent-b", mode: "rw" }, "board");
@@ -99,7 +99,7 @@ describe("cloud connector service", () => {
   it("gives the agent its own read-write folder on first use", async () => {
     const { service, provider } = build();
     await seed(service);
-    const root = await service.ensurePersonalRoot("onedrive", "agent-c", "board");
+    const root = await service.ensurePersonalRoot("onedrive", "company-a", "agent-c", "board");
     expect(root.personalForAgentId).toBe("agent-c");
     expect(root.folder).toBe("Agents/agent-c");
     const access = await service.accessFor({ agentId: "agent-c", caste: null });
@@ -210,14 +210,14 @@ describe("cloud connector service", () => {
     const { service } = build();
     await seed(service);
     await expect(
-      service.createRoot({ providerId: "onedrive", name: "work", kind: "own", folder: "Other" }, "board"),
+      service.createRoot({ providerId: "onedrive", companyId: "company-a", name: "work", kind: "own", folder: "Other" }, "board"),
     ).rejects.toThrow(/already exists/);
   });
 
   it("rejects an unknown provider", async () => {
     const { service } = build();
     await expect(
-      service.createRoot({ providerId: "dropbox" as never, name: "x", kind: "own", folder: "X" }, "board"),
+      service.createRoot({ providerId: "dropbox" as never, companyId: "company-a", name: "x", kind: "own", folder: "X" }, "board"),
     ).rejects.toThrow(/unknown cloud provider/);
   });
 });

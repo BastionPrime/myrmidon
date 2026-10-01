@@ -26,7 +26,9 @@ export interface CloudAccount {
   id: string;
   providerId: CloudProviderId;
   displayName: string;
-  /** Name of the connector-owned secret that holds the refresh token. Never the token itself. */
+  /** Company the owner connected the account for; null for accounts made before part B. */
+  companyId: string | null;
+  /** Id of the connector-owned company secret that holds the token bundle. Never the token itself. */
   tokenRef: string;
   scopes: string[];
   connectedAt: string;
@@ -36,6 +38,8 @@ export interface CloudAccount {
 export interface CloudRoot {
   id: string;
   providerId: CloudProviderId;
+  /** Company that owns the account this folder lives in; null for roots made before part B. */
+  companyId: string | null;
   /** Stable slug the owner sees and agents address: `[a-z0-9-]`, unique per provider. */
   name: string;
   kind: CloudRootKind;
@@ -87,16 +91,27 @@ export const cloudProviderIdSchema = z.enum(CLOUD_PROVIDER_IDS);
 export const cloudAccessModeSchema = z.enum(CLOUD_ACCESS_MODES);
 export const cloudRootKindSchema = z.enum(CLOUD_ROOT_KINDS);
 
-export const cloudAccountCreateSchema = z.object({
-  providerId: cloudProviderIdSchema,
-  displayName: z.string().trim().min(1).max(120),
-  tokenRef: z.string().trim().min(1).max(200),
-  scopes: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
+/** Owner starts an OAuth connect: the connector answers with the provider URL to open. */
+export const cloudConnectStartSchema = z.object({
+  companyId: z.string().trim().min(1).max(120),
+  displayName: z.string().trim().min(1).max(120).optional(),
 });
+
+export const cloudConnectStartResponseSchema = z.object({
+  providerId: cloudProviderIdSchema,
+  authorizeUrl: z.string().url(),
+  state: z.string().min(1),
+});
+
+/** What the callback answers: the connected account, never a token. */
+export interface CloudConnectResult {
+  account: CloudAccount;
+}
 
 export const cloudRootCreateSchema = z
   .object({
     providerId: cloudProviderIdSchema,
+    companyId: z.string().trim().min(1).max(120),
     name: z
       .string()
       .trim()

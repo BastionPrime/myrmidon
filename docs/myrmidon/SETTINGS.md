@@ -269,12 +269,18 @@ environment variables.
 ## CLOUD-CONNECTOR — cloud storage connector (1.4)
 
 The "Clouds" module (`server/src/myrmidon/cloud-connector/`, contract —
-`packages/shared/src/myrmidon-cloud-connector.ts`). Part A has **no environment
-variables**: the connector account is stored in `instance_settings.general.myrmidonCloudConnector`
-as a reference to a company secret (`tokenRef`), never as the token value; the account token is
-resolved by the caller wiring. A provider that is not connected answers a cloud call with
-`409 not connected`.
+`packages/shared/src/myrmidon-cloud-connector.ts`). The connector state lives in
+`instance_settings.general.myrmidonCloudConnector`; the owner's token never does — it is a company
+secret of the instance secret store (`myrmidon-cloud-<provider>`), written by the connect flow and
+rotated on every automatic refresh. A provider with no client credentials here cannot be connected;
+a folder whose company has no connected account answers a cloud call with `409 not connected`.
 
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
-| — | CLOUD-CONNECTOR | — | No settings yet; parts B (OAuth connect, the "Clouds" screen) and C (Google Drive, Yandex Disk) add theirs here | — |
+| `MYRMIDON_CLOUD_CONNECTOR_REDIRECT_BASE` | CLOUD-CONNECTOR | unset (off) | Public base address of the panel the cloud providers send the owner back to (e.g. `https://board.example.com`, no trailing `/`). The connectors' callback is `<base>/api/myrmidon/cloud-connector/oauth/callback` and must be registered in each provider's OAuth app | Unset or empty — the callback address stays relative and every connect start answers `409 the connector callback address is not configured`; the folder/grant/journal surface keeps working |
+| `MYRMIDON_CLOUD_ONEDRIVE_CLIENT_ID` | CLOUD-CONNECTOR | unset (off) | OAuth client id of the Microsoft (OneDrive) app. Scopes requested: `Files.ReadWrite.All offline_access User.Read`; the account is a personal Microsoft account (`consumers`) | Unset — OneDrive cannot be connected (`409 not configured`); everything else keeps working |
+| `MYRMIDON_CLOUD_ONEDRIVE_CLIENT_SECRET` | CLOUD-CONNECTOR | unset | Client secret of the same app. Read by the server only, never returned in a response or written to a log | — |
+| `MYRMIDON_CLOUD_GOOGLE_DRIVE_CLIENT_ID` | CLOUD-CONNECTOR | unset (off) | OAuth client id of the Google Drive app. Scope requested: `https://www.googleapis.com/auth/drive` with `access_type=offline` (the connector confines every call to the granted folder) | Unset — Google Drive cannot be connected; the provider itself is added by part C |
+| `MYRMIDON_CLOUD_GOOGLE_DRIVE_CLIENT_SECRET` | CLOUD-CONNECTOR | unset | Client secret of the same app | — |
+| `MYRMIDON_CLOUD_YANDEX_DISK_CLIENT_ID` | CLOUD-CONNECTOR | unset (off) | OAuth client id of the Yandex Disk app. Scopes requested: `cloud_api:disk.read cloud_api:disk.write`; Yandex does not support PKCE, so none is sent | Unset — Yandex Disk cannot be connected; the provider itself is added by part C |
+| `MYRMIDON_CLOUD_YANDEX_DISK_CLIENT_SECRET` | CLOUD-CONNECTOR | unset | Client secret of the same app | — |

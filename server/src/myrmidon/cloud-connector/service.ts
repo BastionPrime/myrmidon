@@ -34,6 +34,17 @@ import {
 } from "./grants.js";
 import type { CloudProviderRegistry } from "./providers/provider.js";
 import {
+  CLOUD_OAUTH_SPECS,
+  buildAuthorizeUrl,
+  createCodeVerifier,
+  exchangeCode,
+  serializeTokenBundle,
+  type OAuthClient,
+  type OAuthProviderSpec,
+  type OAuthStateStore,
+} from "./oauth.js";
+import type { CloudTokenStore } from "./token-store.js";
+import {
   appendJournal,
   dbCloudConnectorStore,
   type CloudConnectorDocument,
@@ -50,19 +61,39 @@ export interface CloudConnectorServiceDeps {
   db?: Db;
   providers: CloudProviderRegistry;
   store?: CloudConnectorStore;
+  /** Present when the owner can connect an account through OAuth (part B). */
+  oauth?: CloudOAuthDeps;
   now?: () => number;
   newId?: () => string;
+}
+
+export interface CloudOAuthDeps {
+  clients: Partial<Record<CloudProviderId, OAuthClient>>;
+  stateStore: OAuthStateStore;
+  tokenStore: CloudTokenStore;
+  specs?: Record<CloudProviderId, OAuthProviderSpec>;
+  fetchImpl?: typeof fetch;
+  now?: () => number;
 }
 
 export interface CreateAccountInput {
   providerId: CloudProviderId;
   displayName: string;
+  companyId: string;
   tokenRef: string;
   scopes?: string[];
 }
 
+export interface BeginConnectInput {
+  providerId: CloudProviderId;
+  companyId: string;
+  userId: string;
+  displayName?: string;
+}
+
 export interface CreateRootInput {
   providerId: CloudProviderId;
+  companyId: string;
   name: string;
   kind: "own" | "shared";
   description?: string;
@@ -77,6 +108,14 @@ export interface SetGrantInput {
   agentId?: string;
   caste?: string;
   mode: CloudAccessMode;
+}
+
+/** Secret name and key the connector uses for one provider's token bundle. */
+function accountSecretNaming(providerId: CloudProviderId): { name: string; key: string } {
+  return {
+    name: `myrmidon-cloud-${providerId}`,
+    key: `myrmidon_cloud_${providerId.replace(/-/g, "_")}`,
+  };
 }
 
 export class CloudConnectorService {
@@ -105,11 +144,110 @@ export class CloudConnectorService {
 
   // -- accounts -------------------------------------------------------------
 
-  async listAccounts(): Promise<CloudAccount[]> {
-    return (await this.document()).accounts;
+  private oauth(): CloudOAuthDeps {
+    const oauth = this.deps.oauth;
+    if (!oauth) throw new CloudConnectorError(409, "connecting a cloud account is not configured on this instance");
+    return oauth;
   }
 
-  /** One account per provider: connecting again replaces the previous token reference. */
+  async listAccounts(companyId?: string): Promise<CloudAccount[]> {
+    const accounts = (await this.document()).accounts;
+    return companyId ? accounts.filter((account) => account.companyId === companyId) : accounts;
+  }
+
+  /**
+   * Owner starts a connect: the connector answers the provider URL to open and
+   * remembers a single-use state that ties the callback to this owner.
+   */
+  async beginConnect(input: BeginConnectInput): Promise<{ providerId: CloudProviderId; authorizeUrl: string; state: string }> {
+    if (!this.deps.providers.has(input.providerId)) {
+      throw new CloudConnectorError(400, `unknown cloud provider "${input.providerId}"`);
+    }
+    const oauth = this.oauth();
+    const spec = (oauth.specs ?? CLOUD_OAUTH_SPECS)[input.providerId];
+    const client = oauth.clients[input.providerId];
+    if (!client) throw new CloudConnectorError(409, `${spec.displayName} is not configured on this instance`);
+    if (!client.redirectUri.startsWith("http")) {
+      throw new CloudConnectorError(409, "the connector callback address is not configured on this instance");
+    }
+    const verifier = spec.usePkce ? createCodeVerifier() : null;
+    const state = oauth.stateStore.issue({
+      providerId: input.providerId,
+      companyId: input.companyId,
+      userId: input.userId,
+      verifier,
+      displayName: input.displayName ?? null,
+    });
+    return {
+      providerId: input.providerId,
+      authorizeUrl: buildAuthorizeUrl({ spec, client, state, codeVerifier: verifier }),
+      state,
+    };
+  }
+
+  /** The provider sent the owner back with a code: store the token and record the account. */
+  async completeConnect(input: { state: string; code: string }): Promise<CloudAccount> {
+    const oauth = this.oauth();
+    const entry = oauth.stateStore.consume(input.state);
+    if (!entry) throw new CloudConnectorError(400, "this connect link has expired; start again from the panel");
+    const spec = (oauth.specs ?? CLOUD_OAUTH_SPECS)[entry.providerId];
+    const client = oauth.clients[entry.providerId];
+    if (!client) throw new CloudConnectorError(409, `${spec.displayName} is not configured on this instance`);
+    let bundle;
+    try {
+      bundle = await exchangeCode({
+        spec,
+        client,
+        code: input.code,
+        codeVerifier: entry.verifier,
+        fetchImpl: oauth.fetchImpl,
+        now: oauth.now,
+      });
+    } catch (error) {
+      throw new CloudConnectorError(400, `the cloud refused the authorization: ${(error as Error).message}`);
+    }
+    const value = serializeTokenBundle(bundle);
+    const previous = (await this.document()).accounts.find(
+      (account) => account.providerId === entry.providerId && account.companyId === entry.companyId,
+    );
+    const tokenRef = previous
+      ? await this.reuseAccountSecret(oauth.tokenStore, previous, entry.companyId, value)
+      : (
+          await oauth.tokenStore.write({
+            companyId: entry.companyId,
+            ...accountSecretNaming(entry.providerId),
+            value,
+            actor: { userId: entry.userId },
+          })
+        ).secretId;
+    return this.connectAccount(
+      {
+        providerId: entry.providerId,
+        displayName: entry.displayName ?? spec.displayName,
+        companyId: entry.companyId,
+        tokenRef,
+        scopes: bundle.scopes.length > 0 ? bundle.scopes : spec.scopes,
+      },
+      entry.userId,
+    );
+  }
+
+  /** Reconnecting rewrites the same secret, so no orphan token is left behind. */
+  private async reuseAccountSecret(store: CloudTokenStore, account: CloudAccount, companyId: string, value: string): Promise<string> {
+    const current = await store.read(companyId, account.tokenRef);
+    if (!current) {
+      const written = await store.write({
+        companyId,
+        ...accountSecretNaming(account.providerId),
+        value,
+      });
+      return written.secretId;
+    }
+    await store.rotate({ secretId: account.tokenRef, value, expectedLatestVersion: current.version });
+    return account.tokenRef;
+  }
+
+  /** One account per provider and company: connecting again replaces the previous one. */
   async connectAccount(input: CreateAccountInput, actor: string): Promise<CloudAccount> {
     if (!this.deps.providers.has(input.providerId)) {
       throw new CloudConnectorError(400, `unknown cloud provider "${input.providerId}"`);
@@ -118,6 +256,7 @@ export class CloudConnectorService {
       id: this.newId(),
       providerId: input.providerId,
       displayName: input.displayName,
+      companyId: input.companyId,
       tokenRef: input.tokenRef,
       scopes: input.scopes ?? [],
       connectedAt: this.iso(),
@@ -126,7 +265,12 @@ export class CloudConnectorService {
     await this.store().mutate( (current) => ({
       next: {
         ...current,
-        accounts: [...current.accounts.filter((entry) => entry.providerId !== input.providerId), account],
+        accounts: [
+          ...current.accounts.filter(
+            (entry) => !(entry.providerId === input.providerId && entry.companyId === input.companyId),
+          ),
+          account,
+        ],
       },
       result: account,
     }));
@@ -144,18 +288,21 @@ export class CloudConnectorService {
 
   // -- roots ----------------------------------------------------------------
 
-  async listRoots(providerId?: CloudProviderId): Promise<CloudRoot[]> {
-    const roots = (await this.document()).roots;
-    return providerId ? roots.filter((root) => root.providerId === providerId) : roots;
+  async listRoots(providerId?: CloudProviderId, companyId?: string): Promise<CloudRoot[]> {
+    let roots = (await this.document()).roots;
+    if (providerId) roots = roots.filter((root) => root.providerId === providerId);
+    if (companyId) roots = roots.filter((root) => root.companyId === companyId);
+    return roots;
   }
 
-  async createRoot(input: CreateRootInput, actor: string): Promise<CloudRoot> {
+  async createRoot(input: CreateRootInput, _actor: string): Promise<CloudRoot> {
     if (!this.deps.providers.has(input.providerId)) {
       throw new CloudConnectorError(400, `unknown cloud provider "${input.providerId}"`);
     }
     const root: CloudRoot = {
       id: this.newId(),
       providerId: input.providerId,
+      companyId: input.companyId,
       name: input.name,
       kind: input.kind,
       description: input.description ?? "",
@@ -165,9 +312,13 @@ export class CloudConnectorService {
       personalForAgentId: null,
       createdAt: this.iso(),
     };
-    void actor;
     await this.store().mutate( (current) => {
-      if (current.roots.some((entry) => entry.providerId === root.providerId && entry.name === root.name)) {
+      if (
+        current.roots.some(
+          (entry) =>
+            entry.providerId === root.providerId && entry.companyId === root.companyId && entry.name === root.name,
+        )
+      ) {
         throw new CloudConnectorError(409, `a folder named "${root.name}" already exists for this provider`);
       }
       return { next: { ...current, roots: [...current.roots, root] }, result: root };
@@ -250,9 +401,14 @@ export class CloudConnectorService {
   }
 
   /** Board-side folder tree of one root (the owner configuring grants). */
-  async tree(providerId: CloudProviderId, rootName: string, path: string, limit = 200): Promise<CloudListing> {
+  async tree(providerId: CloudProviderId, rootName: string, path: string, limit = 200, companyId?: string): Promise<CloudListing> {
     const document = await this.document();
-    const root = document.roots.find((entry) => entry.providerId === providerId && entry.name === rootName);
+    const root = document.roots.find(
+      (entry) =>
+        entry.providerId === providerId
+        && entry.name === rootName
+        && (companyId === undefined || entry.companyId === companyId),
+    );
     if (!root) throw new CloudConnectorError(404, "unknown cloud folder");
     const provider = this.deps.providers.get(root.providerId);
     if (!provider) throw new CloudConnectorError(400, `unknown cloud provider "${root.providerId}"`);
@@ -348,17 +504,18 @@ export class CloudConnectorService {
    * Give an agent its own folder: created on first use, granted read-write to
    * that agent only. Returns the existing personal root when it is already set up.
    */
-  async ensurePersonalRoot(providerId: CloudProviderId, agentId: string, actor: string): Promise<CloudRoot> {
+  async ensurePersonalRoot(providerId: CloudProviderId, companyId: string, agentId: string, actor: string): Promise<CloudRoot> {
     const rootName = personalRootName(agentId);
     const provider = this.deps.providers.get(providerId);
     if (!provider) throw new CloudConnectorError(400, `unknown cloud provider "${providerId}"`);
     const existing = (await this.document()).roots.find(
-      (entry) => entry.providerId === providerId && entry.name === rootName,
+      (entry) => entry.providerId === providerId && entry.companyId === companyId && entry.name === rootName,
     );
     if (existing) return existing;
     const root: CloudRoot = {
       id: this.newId(),
       providerId,
+      companyId,
       name: rootName,
       kind: "own",
       description: "Personal folder of one agent",

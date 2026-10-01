@@ -56,7 +56,16 @@ function parseAccount(value: unknown): CloudAccount | null {
   const connectedBy = str(value.connectedBy);
   if (!id || !providerId || !displayName || !tokenRef || !connectedAt || !connectedBy) return null;
   const scopes = Array.isArray(value.scopes) ? value.scopes.filter((s): s is string => typeof s === "string") : [];
-  return { id, providerId: providerId as CloudProviderId, displayName, tokenRef, scopes, connectedAt, connectedBy };
+  return {
+    id,
+    providerId: providerId as CloudProviderId,
+    displayName,
+    companyId: str(value.companyId),
+    tokenRef,
+    scopes,
+    connectedAt,
+    connectedBy,
+  };
 }
 
 function parseRoot(value: unknown): CloudRoot | null {
@@ -70,6 +79,7 @@ function parseRoot(value: unknown): CloudRoot | null {
   return {
     id,
     providerId: providerId as CloudProviderId,
+    companyId: str(value.companyId),
     name,
     kind,
     description: typeof value.description === "string" ? value.description : "",
