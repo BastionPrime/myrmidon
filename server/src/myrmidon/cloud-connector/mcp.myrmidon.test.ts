@@ -285,6 +285,18 @@ describe("myrmidon(CLOUD-CONNECTOR) MCP surface", () => {
     expect(denied.body.result.content[0].text).not.toMatch(/no access to folder/);
   });
 
+  it("accepts the reserved name as the destination of a move", async () => {
+    const { service, provider } = buildService();
+    await configured(service);
+    const response = await request(app(agentActor, service))
+      .post("/api/mcp/cloud-tools")
+      .send(call("cloud_move", { root: "work", path: "a.txt", toRoot: "personal", toPath: "a.txt" }))
+      .expect(200);
+    expect(response.body.result.isError).toBeUndefined();
+    expect(JSON.stringify(response.body.result)).not.toMatch(/no access to folder/);
+    expect(provider.calls).toContain("move");
+  });
+
   it("tells the agent in tools/list that the reserved name exists", async () => {
     const server = app(agentActor, buildService().service);
     const response = await request(server)

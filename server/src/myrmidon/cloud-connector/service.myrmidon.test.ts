@@ -23,6 +23,7 @@ class FakeProvider implements CloudProvider {
   readonly displayName: string;
   readonly writes: string[] = [];
   readonly folders: string[] = [];
+  readonly moves: string[] = [];
 
   constructor(id: CloudProviderId = "onedrive", displayName = "OneDrive") {
     this.id = id;
@@ -48,6 +49,8 @@ class FakeProvider implements CloudProvider {
   }
 
   async move(_source: CloudLocation, destination: CloudLocation): Promise<CloudItem> {
+    const path = joinCloudPath(destination.parts);
+    this.moves.push(`${path || "root"}`);
     return item(destination.parts[destination.parts.length - 1] ?? "", 3);
   }
 
@@ -253,6 +256,40 @@ describe("cloud connector service", () => {
     // and the journal names the folder the call actually landed in
     const journal = await service.journal();
     expect(journal[0]).toMatchObject({ actor: "agent-c", tool: "cloud_upload", rootName: personal[0]?.name });
+  });
+
+  it("moves a file into the agent's own folder through the reserved destination name", async () => {
+    const { service, provider } = build();
+    const { work } = await seed(service);
+    await service.setGrant({ rootId: work.id, targetKind: "agent", agentId: "agent-c", mode: "rw" }, "board");
+
+    const into = await service.callTool(agentC, {
+      tool: "cloud_move",
+      root: "work",
+      path: "note.txt",
+      toRoot: "personal",
+      toPath: "note.txt",
+    });
+    expect(into.ok).toBe(true);
+    expect(provider.moves).toEqual(["note.txt"]);
+    // the folder is created for this move, and only once
+    expect(provider.folders).toEqual(["root"]);
+
+    const out = await service.callTool(agentC, {
+      tool: "cloud_move",
+      root: "personal",
+      path: "note.txt",
+      toRoot: "work",
+      toPath: "back.txt",
+    });
+    expect(out.ok).toBe(true);
+    expect(provider.folders).toEqual(["root"]);
+    const personal = (await service.listRoots("onedrive")).filter((root) => root.personalForAgentId === "agent-c");
+    expect(personal).toHaveLength(1);
+    // the journal names the folder the move landed in, not the alias
+    const journal = await service.journal();
+    expect(journal[0]).toMatchObject({ actor: "agent-c", tool: "cloud_move", detail: expect.stringContaining("to work") });
+    expect(journal[1]).toMatchObject({ detail: expect.stringContaining(`to ${personal[0]?.name}`) });
   });
 
   it("keeps one agent out of another agent's own folder", async () => {

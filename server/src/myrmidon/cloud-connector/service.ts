@@ -466,10 +466,17 @@ export class CloudConnectorService {
     try {
       // `personal` is the one root name an agent never has to be told: it is
       // that agent's own folder, and the connector creates it here on first
-      // use. Every other name is resolved against what the owner granted.
-      const personal = call.root === CLOUD_PERSONAL_ROOT_ALIAS ? await this.personalRootFor(identity) : null;
+      // use. Both folder arguments accept it — the source `root` and the
+      // destination `toRoot` of a move. Every other name is resolved against
+      // what the owner granted.
+      const personalRoot =
+        call.root === CLOUD_PERSONAL_ROOT_ALIAS || call.toRoot === CLOUD_PERSONAL_ROOT_ALIAS
+          ? await this.personalRootFor(identity)
+          : null;
       const document = await this.document();
-      access = resolveNamedRoot(document.roots, document.grants, identity, personal?.name ?? call.root);
+      const folderName = (value: string): string =>
+        personalRoot && value === CLOUD_PERSONAL_ROOT_ALIAS ? personalRoot.name : value;
+      access = resolveNamedRoot(document.roots, document.grants, identity, folderName(call.root));
       if (!access) throw new CloudConnectorError(403, outsideGrantMessage(call.root));
       const provider = this.deps.providers.get(access.root.providerId);
       if (!provider) throw new CloudConnectorError(400, `unknown cloud provider "${access.root.providerId}"`);
@@ -510,14 +517,14 @@ export class CloudConnectorService {
         }
         case "cloud_move": {
           if (!allowsWrite(access.mode)) throw new CloudConnectorError(403, readOnlyMessage(access.root.name));
-          const destination = resolveNamedRoot(document.roots, document.grants, identity, call.toRoot ?? "");
+          const destination = resolveNamedRoot(document.roots, document.grants, identity, folderName(call.toRoot ?? ""));
           if (!destination) throw new CloudConnectorError(403, outsideGrantMessage(call.toRoot ?? ""));
           if (!allowsWrite(destination.mode)) throw new CloudConnectorError(403, readOnlyMessage(destination.root.name));
           if (destination.root.providerId !== access.root.providerId) {
             throw new CloudConnectorError(400, "moving between cloud providers is not supported");
           }
           const item = await provider.move(location, { root: destination.root, parts: splitCloudPath(call.toPath) });
-          await audit(true, `moved ${item.name}`, access.root);
+          await audit(true, `moved ${item.name} to ${destination.root.name}`, access.root);
           return { ok: true, tool: call.tool, root: call.root, path: call.path ?? "", result: item };
         }
         default:
