@@ -41,6 +41,8 @@ import { preserveDeployJobsGeneralKey } from "../myrmidon/deploy-jobs/store.js";
 import { preserveStackGeneralKey } from "../myrmidon/stack-registry/store.js";
 // myrmidon(R5-B): keep bot image canary state across vendor writes of `general`
 import { preserveBotCanaryGeneralKey } from "../myrmidon/bot-containers/canary-store.js";
+// myrmidon(CLOUD-CONNECTOR): keep the cloud connector state across vendor writes of `general`
+import { preserveCloudConnectorGeneralKey } from "../myrmidon/cloud-connector/store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -561,6 +563,8 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
             ...preserveBrowserConsoleGeneralKey(current.general),
             ...preserveStackGeneralKey(current.general),
             ...preserveBotCanaryGeneralKey(current.general),
+            // myrmidon(CLOUD-CONNECTOR): same for the cloud connector accounts/roots/grants/journal
+            ...preserveCloudConnectorGeneralKey(current.general),
           },
           updatedAt: now,
         })
