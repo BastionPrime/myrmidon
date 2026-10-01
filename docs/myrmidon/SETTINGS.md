@@ -213,9 +213,14 @@
 ## EXTCASE-B — мост браузера расширению клиента
 
 Настройки серверного модуля `server/src/myrmidon/browser-bridge/` (первый сторонний кейс: браузерные
-действия выполняются в браузере клиента, доска туда не дотягивается). Домены ТП (allowlist моста)
-задаются не переменной окружения, а настройками: `instance_settings.general.browserBridge`
-(`GET`/`PATCH /api/myrmidon/browser-bridge/settings`, чтение — board, запись — instance-admin).
+действия выполняются в браузере клиента, доска туда не дотягивается). Настройки моста задаются не
+переменной окружения, а записью `instance_settings.general.browserBridge`
+(`GET`/`PATCH /api/myrmidon/browser-bridge/settings`, чтение — board, запись — instance-admin):
+`domains` — домены ТП (allowlist), `signing` — политика подписи клиента
+(`enabled` — аварийное выключение, `mode` — `auto`/`manual`/`types`, `types` — типы действий,
+которые требуют человека при `mode: types`). Аварийное выключение одной кнопкой —
+`POST /api/myrmidon/browser-bridge/signing/disable`; после него шлюз отклоняет любое sign-действие
+(fail-closed), а факт выключения пишется в журнал компании.
 
 | Переменная | Функция | По умолчанию | Что делает | Как выключить / особое |
 |---|---|---|---|---|

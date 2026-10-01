@@ -55,6 +55,7 @@ export const BROWSER_BRIDGE_METHODS = [
   "browser.fill",
   "browser.download",
   "browser.screenshot",
+  "browser.sign",
 ] as const;
 
 export type BrowserBridgeMethod = (typeof BROWSER_BRIDGE_METHODS)[number];
@@ -71,6 +72,7 @@ export const BROWSER_BRIDGE_CAPABILITIES = [
   "fill",
   "download",
   "screenshot",
+  "sign",
 ] as const;
 
 export type BrowserBridgeCapability = (typeof BROWSER_BRIDGE_CAPABILITIES)[number];
@@ -83,6 +85,7 @@ export const BROWSER_BRIDGE_METHOD_CAPABILITY: Record<BrowserBridgeMethod, Brows
   "browser.fill": "fill",
   "browser.download": "download",
   "browser.screenshot": "screenshot",
+  "browser.sign": "sign",
 };
 
 export const bridgeCapabilitySetSchema = z
@@ -118,6 +121,83 @@ export const BRIDGE_READY_METHOD = "bridge.ready";
 export const BRIDGE_CANCEL_METHOD = "browser.cancel";
 
 /**
+ * Signing (design note OPE-3383 §4.5, revision 2). The signature itself happens
+ * on the client PC: the extension talks to a local helper over native messaging,
+ * the helper drives the token middleware, and the private key and the PIN never
+ * pass through the board — only the command and the result (status plus the
+ * document hash) travel. The gateway owns the policy: the mode of the client,
+ * the emergency switch, and the journal row of every signature.
+ */
+
+/** Shape of one action type. Part D owns the enum values; part B owns the shape. */
+export const BROWSER_BRIDGE_SIGN_ACTION_TYPE_PATTERN = /^[a-z][a-z0-9_.:-]{0,39}$/;
+
+export const signActionTypeSchema = z.string().regex(BROWSER_BRIDGE_SIGN_ACTION_TYPE_PATTERN);
+
+export const BROWSER_BRIDGE_SIGNING_MODES = ["auto", "manual", "types"] as const;
+export type BrowserBridgeSigningMode = (typeof BROWSER_BRIDGE_SIGNING_MODES)[number];
+
+export interface BrowserBridgeSigningSettings {
+  /** The emergency switch: when off, every sign action is refused, whatever the mode. */
+  enabled: boolean;
+  /** `auto` — the helper signs at once; `manual` — a person confirms; `types` — per action type. */
+  mode: BrowserBridgeSigningMode;
+  /** Action types that need a person, when `mode` is `types`. */
+  types: string[];
+}
+
+export const DEFAULT_BROWSER_BRIDGE_SIGNING: BrowserBridgeSigningSettings = {
+  enabled: true,
+  mode: "auto",
+  types: [],
+};
+
+export const browserBridgeSigningSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    mode: z.enum(BROWSER_BRIDGE_SIGNING_MODES).default("auto"),
+    types: z.array(signActionTypeSchema).max(64).default([]),
+  })
+  .strict();
+
+/** What the gateway must do with one sign action under the settings in force. */
+export type BrowserBridgeSignDecision = "auto" | "manual" | "refuse";
+
+/**
+ * The one place the signing policy is decided. Off wins over every mode — that
+ * is what makes the panel's emergency switch fail-closed rather than advisory.
+ */
+export function resolveSignDecision(
+  signing: BrowserBridgeSigningSettings,
+  actionType: string,
+): BrowserBridgeSignDecision {
+  if (!signing.enabled) return "refuse";
+  if (signing.mode === "manual") return "manual";
+  if (signing.mode === "types") return signing.types.includes(actionType) ? "manual" : "auto";
+  return "auto";
+}
+
+/** Read a stored signing block; anything unreadable falls back to the default. */
+export function normalizeSigningSettings(raw: unknown): BrowserBridgeSigningSettings {
+  const parsed = browserBridgeSigningSchema.safeParse(raw ?? {});
+  if (!parsed.success) return { ...DEFAULT_BROWSER_BRIDGE_SIGNING };
+  return { enabled: parsed.data.enabled, mode: parsed.data.mode, types: [...parsed.data.types] };
+}
+
+/**
+ * What the extension reports back for a signature. The signed bytes never leave
+ * the client PC, so the row carries the digest and the status, nothing else.
+ */
+export const browserBridgeSignResultSchema = z
+  .object({
+    status: z.enum(["signed", "refused"]),
+    documentHash: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+export type BrowserBridgeSignResult = z.infer<typeof browserBridgeSignResultSchema>;
+
+/**
  * Parameters of a bot-driven action, one shape for all methods. `confirmation:
  * "human"` marks the signing steps of design note §4.5: the gateway holds the
  * request for the 180 s budget and the person on the client PC presses the
@@ -129,6 +209,10 @@ export const browserBridgeActionParamsSchema = z
     target: z.string().min(1).max(512).optional(),
     value: z.string().max(4096).optional(),
     confirmation: z.enum(["none", "human"]).optional(),
+    /** `browser.sign`: workspace-relative reference to the document to sign. */
+    documentRef: z.string().min(1).max(512).optional(),
+    /** `browser.sign`: the action type of the signature (part D owns the enum). */
+    actionType: signActionTypeSchema.optional(),
   })
   .strict();
 
@@ -145,6 +229,7 @@ export const BROWSER_BRIDGE_METHOD_REQUIRED_PARAMS: Record<
   "browser.fill": ["target", "value"],
   "browser.download": ["url"],
   "browser.screenshot": [],
+  "browser.sign": ["documentRef", "actionType"],
 };
 
 /** Methods whose url is a navigation the gateway can check against the allowlist. */
@@ -224,6 +309,7 @@ export const BROWSER_BRIDGE_ERROR_CODES = {
   pairingCodeExpired: -32017,
   protocolVersionUnsupported: -32018,
   confirmationNotGranted: -32019,
+  signingDisabled: -32020,
 } as const;
 
 export type BrowserBridgeErrorCode =
@@ -269,18 +355,26 @@ export const PAIRING_CODE_PATTERN = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}-[ABCD
 export const browserBridgeSettingsSchema = z
   .object({
     domains: z.array(z.string().min(1).max(253)).max(500),
+    /** Signing policy of the client (design note §4.5, revision 2). */
+    signing: browserBridgeSigningSchema.default({ enabled: true, mode: "auto", types: [] }),
   })
   .strict();
 
+/** Patch of the bridge settings: absent keys keep their stored value. */
 export const browserBridgeSettingsPatchSchema = z
   .object({
-    domains: z.array(z.string().min(1).max(253)).max(500),
+    domains: z.array(z.string().min(1).max(253)).max(500).optional(),
+    signing: browserBridgeSigningSchema.optional(),
   })
   .strict();
 
 export type BrowserBridgeSettings = z.infer<typeof browserBridgeSettingsSchema>;
+export type BrowserBridgeSettingsPatch = z.infer<typeof browserBridgeSettingsPatchSchema>;
 
-export const DEFAULT_BROWSER_BRIDGE_SETTINGS: BrowserBridgeSettings = { domains: [] };
+export const DEFAULT_BROWSER_BRIDGE_SETTINGS: BrowserBridgeSettings = {
+  domains: [],
+  signing: { ...DEFAULT_BROWSER_BRIDGE_SIGNING },
+};
 
 export const pairingCodeRequestSchema = z
   .object({

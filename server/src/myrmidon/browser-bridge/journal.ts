@@ -23,6 +23,7 @@ export const BROWSER_BRIDGE_ACTIONS = {
   actionDenied: "browser_bridge.action.denied",
   actionTimedOut: "browser_bridge.action.timed_out",
   allowlistUpdated: "browser_bridge.allowlist.updated",
+  signingUpdated: "browser_bridge.signing.updated",
 } as const;
 
 export type BrowserBridgeAction = (typeof BROWSER_BRIDGE_ACTIONS)[keyof typeof BROWSER_BRIDGE_ACTIONS];
@@ -150,6 +151,16 @@ export interface ActionJournalInput extends JournalBase {
   durationMs: number;
   reasonCode: number | null;
   result: unknown;
+  /**
+   * Sign actions only: the action type, the digest the helper reported, and its
+   * status. The document itself never leaves the client PC, so this is all a
+   * signature leaves behind.
+   */
+  sign?: {
+    actionType: string;
+    documentHash: string | null;
+    status: string | null;
+  };
 }
 
 export function actionEntry(input: ActionJournalInput): BrowserBridgeJournalEntry {
@@ -167,8 +178,26 @@ export function actionEntry(input: ActionJournalInput): BrowserBridgeJournalEntr
     confirmation: input.confirmation,
     durationMs: input.durationMs,
     ...(input.reasonCode === null ? {} : { reasonCode: input.reasonCode }),
+    ...(input.sign
+      ? {
+          signActionType: input.sign.actionType,
+          signStatus: input.sign.status,
+          documentHash: input.sign.documentHash,
+        }
+      : {}),
     // Only the summary crosses into the journal; `input.result` stays out.
     result: summarizeActionResult(input.method, input.result),
+  });
+}
+
+/** The panel changed the signing policy, including the emergency switch. */
+export function signingUpdatedEntry(
+  base: JournalBase & { enabled: boolean; mode: string; types: readonly string[] },
+): BrowserBridgeJournalEntry {
+  return journalEntry(base, BROWSER_BRIDGE_ACTIONS.signingUpdated, "signing", {
+    enabled: base.enabled,
+    mode: base.mode,
+    types: [...base.types],
   });
 }
 
@@ -195,6 +224,12 @@ export function summarizeActionResult(method: BrowserBridgeMethod, result: unkno
       bytes: typeof payload.bytes === "number" ? payload.bytes : 0,
       ...(typeof payload.workspacePath === "string" ? { workspacePath: payload.workspacePath } : {}),
     };
+  }
+  if (method === "browser.sign") {
+    // The digest, the action type and the status are the signature's whole
+    // trail; the document bytes stay on the client PC.
+    const payload = (result ?? {}) as { status?: unknown };
+    return { signStatus: typeof payload.status === "string" ? payload.status : null };
   }
   return {};
 }

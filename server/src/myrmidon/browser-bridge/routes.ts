@@ -21,7 +21,7 @@ import {
   browserBridgeSettingsPatchSchema,
   pairingCodeRequestSchema,
   pairingExchangeRequestSchema,
-  type BrowserBridgeSettings,
+  type BrowserBridgeSettingsPatch,
   type PairingExchangeRequest,
 } from "@paperclipai/shared";
 import { validate } from "../../middleware/validate.js";
@@ -68,6 +68,7 @@ export function bridgeErrorStatus(code: number): number {
     case BROWSER_BRIDGE_ERROR_CODES.notPaired:
     case BROWSER_BRIDGE_ERROR_CODES.revoked:
     case BROWSER_BRIDGE_ERROR_CODES.domainNotAllowed:
+    case BROWSER_BRIDGE_ERROR_CODES.signingDisabled:
       return 403;
     case BROWSER_BRIDGE_ERROR_CODES.pairingCodeExpired:
       return 410;
@@ -158,10 +159,26 @@ export function browserBridgePanelRoutes(getService: () => BrowserBridgeService)
     try {
       res.json(
         await getService().updateSettings({
-          settings: req.body as BrowserBridgeSettings,
+          patch: req.body as BrowserBridgeSettingsPatch,
           actor: journalActor(req),
         }),
       );
+    } catch (err) {
+      sendBridgeError(res, err);
+    }
+  });
+
+  /**
+   * The emergency switch of design note §4.4: one call, no body, and signing is
+   * off whatever mode the client was in. It is the same write as PATCH settings
+   * with `signing.enabled: false`, kept as its own route so the panel button and
+   * an operator's script do not have to remember the current mode.
+   */
+  router.post("/myrmidon/browser-bridge/signing/disable", async (req, res) => {
+    assertInstanceAdmin(req);
+    try {
+      const settings = await getService().disableSigning({ actor: journalActor(req) });
+      res.json({ signing: settings.signing });
     } catch (err) {
       sendBridgeError(res, err);
     }

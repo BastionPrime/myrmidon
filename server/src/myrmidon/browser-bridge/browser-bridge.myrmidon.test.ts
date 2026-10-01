@@ -87,12 +87,18 @@ class FakeSession implements BridgeSession {
 
 function harness(options: {
   allowlist?: string[];
+  signing?: { enabled: boolean; mode: string; types: string[] };
   behavior?: (method: string, params: unknown) => Promise<unknown>;
   now?: () => number;
 } = {}) {
   const journal: BrowserBridgeJournalEntry[] = [];
   const settings = {
-    general: { browserBridge: { domains: options.allowlist ?? [] } } as { browserBridge?: unknown },
+    general: {
+      browserBridge: {
+        domains: options.allowlist ?? [],
+        ...(options.signing ? { signing: options.signing } : {}),
+      },
+    } as { browserBridge?: unknown },
     getGeneral: vi.fn(async () => settings.general),
     updateGeneral: vi.fn(async (patch: { browserBridge: unknown }) => {
       settings.general = patch;
@@ -102,7 +108,7 @@ function harness(options: {
   const session = new FakeSession(
     DEVICE,
     COMPANY_A,
-    ["open", "read", "click", "screenshot"],
+    ["open", "read", "click", "screenshot", "sign"],
     options.behavior ?? (async () => ({ ok: true })),
   );
   const sessions = new InMemoryBridgeSessionRegistry();
@@ -129,7 +135,7 @@ function harness(options: {
 async function pair(service: BrowserBridgeService, companyId = COMPANY_A) {
   const created = await service.createPairingCode({ companyId, actor: USER_ACTOR, label: "client-pc" });
   const paired = await service.exchangePairingCode({
-    request: { code: created.code, deviceId: DEVICE, extVersion: "0.1.0", capabilities: ["open", "read", "click", "screenshot"] },
+    request: { code: created.code, deviceId: DEVICE, extVersion: "0.1.0", capabilities: ["open", "read", "click", "screenshot", "sign"] },
     actor: { actorType: "system", actorId: "pairing", agentId: null, runId: null, agentApiKeyId: null },
   });
   return { created, paired };
@@ -214,7 +220,7 @@ describe("browser bridge: pairing", () => {
     const { created, paired } = await pair(service);
     expect(created.code).toBeTruthy();
     expect(paired.deviceId).toBe(DEVICE);
-    expect(paired.capabilities).toEqual(["open", "read", "click", "screenshot"]);
+    expect(paired.capabilities).toEqual(["open", "read", "click", "screenshot", "sign"]);
     const parts = parseBridgeToken(paired.token);
     expect(parts?.companyId).toBe(COMPANY_A);
     expect(parts?.deviceId).toBe(DEVICE);
@@ -469,11 +475,13 @@ describe("browser bridge: allowlist settings and sessions", () => {
   it("stores the normalized allowlist and journals it per company", async () => {
     const { service, journal, settings } = harness();
     const next = await service.updateSettings({
-      settings: { domains: ["Tender.Example ", "tender.example"] },
+      patch: { domains: ["Tender.Example ", "tender.example"] },
       actor: USER_ACTOR,
     });
     expect(next.domains).toEqual(["tender.example"]);
-    expect(settings.updateGeneral).toHaveBeenCalledWith({ browserBridge: { domains: ["tender.example"] } });
+    expect(settings.updateGeneral).toHaveBeenCalledWith({
+      browserBridge: { domains: ["tender.example"], signing: { enabled: true, mode: "auto", types: [] } },
+    });
     expect(journal.at(-1)?.action).toBe("browser_bridge.allowlist.updated");
     expect(journal.at(-1)?.companyId).toBe(COMPANY_A);
   });
@@ -496,5 +504,131 @@ describe("browser bridge: allowlist settings and sessions", () => {
     for (let i = 0; i < 25; i += 1) {
       expect(generatePairingCode()).toMatch(PAIRING_CODE_PATTERN);
     }
+  });
+});
+
+describe("browser bridge: signing policy", () => {
+  const DOCUMENT_HASH = "a".repeat(64);
+  const SIGN_PARAMS = { documentRef: "workspace/tender/application.pdf", actionType: "application.submit" };
+  const SIGNED = async () => ({ status: "signed", documentHash: DOCUMENT_HASH });
+
+  async function runSign(
+    harnessed: ReturnType<typeof harness>,
+    params: Record<string, unknown> = SIGN_PARAMS,
+  ) {
+    await pair(harnessed.service);
+    return harnessed.service.runAction({
+      companyId: COMPANY_A,
+      deviceId: DEVICE,
+      method: "browser.sign",
+      params,
+      actor: AGENT_ACTOR,
+    });
+  }
+
+  it("signs on the action budget by default and journals type and digest", async () => {
+    const harnessed = harness({ behavior: SIGNED });
+    const result = await runSign(harnessed);
+    expect(harnessed.session.requests.at(-1)?.timeoutMs).toBe(BRIDGE_ACTION_TIMEOUT_MS);
+    expect(result.confirmation).toBe("not_required");
+    const executed = harnessed.journal.at(-1);
+    expect(executed?.action).toBe("browser_bridge.action.executed");
+    expect(executed?.details).toMatchObject({
+      method: "browser.sign",
+      signActionType: "application.submit",
+      signStatus: "signed",
+      documentHash: DOCUMENT_HASH,
+      result: { signStatus: "signed" },
+    });
+    expect(executed?.details).not.toHaveProperty("documentRef");
+  });
+
+  it("waits for a person in manual mode", async () => {
+    const harnessed = harness({ signing: { enabled: true, mode: "manual", types: [] }, behavior: SIGNED });
+    const result = await runSign(harnessed);
+    expect(harnessed.session.requests.at(-1)?.timeoutMs).toBe(BRIDGE_CONFIRMATION_TIMEOUT_MS);
+    expect(result.confirmation).toBe("confirmed");
+    expect(harnessed.journal.at(-1)?.details).toMatchObject({ confirmation: "confirmed" });
+  });
+
+  it("applies the per-type mode only to the listed action types", async () => {
+    const listed = harness({
+      signing: { enabled: true, mode: "types", types: ["application.submit"] },
+      behavior: SIGNED,
+    });
+    await runSign(listed);
+    expect(listed.session.requests.at(-1)?.timeoutMs).toBe(BRIDGE_CONFIRMATION_TIMEOUT_MS);
+
+    const other = harness({
+      signing: { enabled: true, mode: "types", types: ["application.submit"] },
+      behavior: SIGNED,
+    });
+    await runSign(other, { documentRef: "workspace/tender/notice.pdf", actionType: "notice.acknowledge" });
+    expect(other.session.requests.at(-1)?.timeoutMs).toBe(BRIDGE_ACTION_TIMEOUT_MS);
+  });
+
+  it("refuses every sign action when the emergency switch is off, without reaching the device", async () => {
+    const harnessed = harness({ signing: { enabled: false, mode: "auto", types: [] }, behavior: SIGNED });
+    await pair(harnessed.service);
+    const before = harnessed.session.requests.length;
+    await expect(
+      harnessed.service.runAction({
+        companyId: COMPANY_A,
+        deviceId: DEVICE,
+        method: "browser.sign",
+        params: SIGN_PARAMS,
+        actor: AGENT_ACTOR,
+      }),
+    ).rejects.toMatchObject({ reasonCode: BROWSER_BRIDGE_ERROR_CODES.signingDisabled });
+    expect(harnessed.session.requests.length).toBe(before);
+    expect(harnessed.journal.at(-1)?.action).toBe("browser_bridge.action.denied");
+    expect(harnessed.journal.at(-1)?.details).toMatchObject({
+      reasonCode: BROWSER_BRIDGE_ERROR_CODES.signingDisabled,
+      signActionType: "application.submit",
+    });
+  });
+
+  it("journals a refusal by the helper as a denial with the digest", async () => {
+    const harnessed = harness({
+      behavior: async () => ({ status: "refused", documentHash: DOCUMENT_HASH }),
+    });
+    await expect(runSign(harnessed)).rejects.toMatchObject({
+      reasonCode: BROWSER_BRIDGE_ERROR_CODES.confirmationNotGranted,
+    });
+    expect(harnessed.journal.at(-1)?.action).toBe("browser_bridge.action.denied");
+    expect(harnessed.journal.at(-1)?.details).toMatchObject({
+      confirmation: "not_confirmed",
+      signStatus: "refused",
+      documentHash: DOCUMENT_HASH,
+    });
+  });
+
+  it("treats an answer without a digest as a failure, not a signature", async () => {
+    const harnessed = harness({ behavior: async () => ({ status: "signed" }) });
+    await expect(runSign(harnessed)).rejects.toMatchObject({
+      reasonCode: BROWSER_BRIDGE_ERROR_CODES.internalError,
+    });
+    expect(harnessed.journal.at(-1)?.details).toMatchObject({
+      outcome: "error",
+      documentHash: null,
+    });
+  });
+
+  it("switches signing off once and journals it once", async () => {
+    const harnessed = harness();
+    const off = await harnessed.service.disableSigning({ actor: USER_ACTOR });
+    expect(off.signing.enabled).toBe(false);
+    const rows = harnessed.journal.filter((entry) => entry.action === "browser_bridge.signing.updated");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.details).toMatchObject({ enabled: false, mode: "auto" });
+    await harnessed.service.disableSigning({ actor: USER_ACTOR });
+    expect(harnessed.journal.filter((entry) => entry.action === "browser_bridge.signing.updated")).toHaveLength(1);
+  });
+
+  it("requires the typed arguments of browser.sign", () => {
+    expect(validateActionParams("browser.sign", { documentRef: "x.pdf" }).ok).toBe(false);
+    expect(validateActionParams("browser.sign", { actionType: "application.submit" }).ok).toBe(false);
+    expect(validateActionParams("browser.sign", { ...SIGN_PARAMS, actionType: "Application Submit" }).ok).toBe(false);
+    expect(validateActionParams("browser.sign", SIGN_PARAMS).ok).toBe(true);
   });
 });

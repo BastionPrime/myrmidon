@@ -26,15 +26,20 @@ import {
   BRIDGE_ACTION_TIMEOUT_MS,
   BRIDGE_CONFIRMATION_TIMEOUT_MS,
   PAIRING_CODE_TTL_MS,
+  browserBridgeSignResultSchema,
   isUrlAllowedByAllowlist,
   normalizeAllowlistDomains,
   normalizeCapabilitySet,
   normalizePairingCode,
+  normalizeSigningSettings,
+  resolveSignDecision,
   validateActionParams,
   type BrowserBridgeActionParams,
   type BrowserBridgeCapability,
   type BrowserBridgeMethod,
   type BrowserBridgeSettings,
+  type BrowserBridgeSettingsPatch,
+  type BrowserBridgeSignDecision,
   type PairingExchangeRequest,
 } from "@paperclipai/shared";
 import {
@@ -44,6 +49,7 @@ import {
   deviceRevokedEntry,
   pairingCreatedEntry,
   pairingRejectedEntry,
+  signingUpdatedEntry,
   type BrowserBridgeActor,
   type BrowserBridgeJournalEntry,
 } from "./journal.js";
@@ -146,7 +152,9 @@ export interface BrowserBridgeService {
   listDevices(companyId: string): Promise<DeviceView[]>;
   revokeDevice(input: { companyId: string; deviceId: string; actor: BrowserBridgeActor }): Promise<{ revoked: boolean }>;
   readSettings(): Promise<BrowserBridgeSettings>;
-  updateSettings(input: { settings: BrowserBridgeSettings; actor: BrowserBridgeActor }): Promise<BrowserBridgeSettings>;
+  updateSettings(input: { patch: BrowserBridgeSettingsPatch; actor: BrowserBridgeActor }): Promise<BrowserBridgeSettings>;
+  /** One-call emergency switch: signing off, journaled, fail-closed. */
+  disableSigning(input: { actor: BrowserBridgeActor }): Promise<BrowserBridgeSettings>;
   /** Authenticate a device's bridge token; refuses revoked and unknown devices. */
   authenticateDevice(input: { companyId: string; deviceId: string; token: string }): Promise<BridgeDeviceRecord>;
   runAction(input: {
@@ -177,8 +185,63 @@ export function browserBridgeService(
 
   async function readSettings(): Promise<BrowserBridgeSettings> {
     const general = await deps.settings.getGeneral();
-    const stored = general.browserBridge as { domains?: unknown } | undefined;
-    return { domains: normalizeAllowlistDomains(stored?.domains) };
+    const stored = general.browserBridge as { domains?: unknown; signing?: unknown } | undefined;
+    return {
+      domains: normalizeAllowlistDomains(stored?.domains),
+      signing: normalizeSigningSettings(stored?.signing),
+    };
+  }
+
+  function mergeSettings(current: BrowserBridgeSettings, patch: BrowserBridgeSettingsPatch): BrowserBridgeSettings {
+    return {
+      domains: patch.domains === undefined ? current.domains : normalizeAllowlistDomains(patch.domains),
+      signing: patch.signing === undefined ? current.signing : normalizeSigningSettings(patch.signing),
+    };
+  }
+
+  function signingChanged(before: BrowserBridgeSettings, after: BrowserBridgeSettings): boolean {
+    return (
+      before.signing.enabled !== after.signing.enabled ||
+      before.signing.mode !== after.signing.mode ||
+      before.signing.types.join(",") !== after.signing.types.join(",")
+    );
+  }
+
+  async function updateSettingsInternal(
+    patch: BrowserBridgeSettingsPatch,
+    actor: BrowserBridgeActor,
+  ): Promise<BrowserBridgeSettings> {
+    const current = await readSettings();
+    const next = mergeSettings(current, patch);
+    await deps.settings.updateGeneral({ browserBridge: next });
+    const companyIds = await deps.listCompanyIds();
+    const entries: BrowserBridgeJournalEntry[] = [];
+    if (current.domains.join(",") !== next.domains.join(",")) {
+      entries.push(
+        allowlistUpdatedEntry({
+          ...actor,
+          companyId: "",
+          entityType: "browser_bridge",
+          domains: next.domains,
+        }),
+      );
+    }
+    if (signingChanged(current, next)) {
+      entries.push(
+        signingUpdatedEntry({
+          ...actor,
+          companyId: "",
+          entityType: "browser_bridge",
+          enabled: next.signing.enabled,
+          mode: next.signing.mode,
+          types: next.signing.types,
+        }),
+      );
+    }
+    await Promise.all(
+      companyIds.flatMap((companyId) => entries.map((entry) => deps.logActivity({ ...entry, companyId }))),
+    );
+    return next;
   }
 
   function requireDispatch() {
@@ -340,23 +403,14 @@ export function browserBridgeService(
       return { revoked };
     },
 
-    async updateSettings({ settings, actor }) {
-      const next: BrowserBridgeSettings = { domains: normalizeAllowlistDomains(settings.domains) };
-      await deps.settings.updateGeneral({ browserBridge: next });
-      const companyIds = await deps.listCompanyIds();
-      await Promise.all(
-        companyIds.map((companyId) =>
-          deps.logActivity(
-            allowlistUpdatedEntry({
-              ...actor,
-              companyId,
-              entityType: "browser_bridge",
-              domains: next.domains,
-            }),
-          ),
-        ),
-      );
-      return next;
+    async updateSettings({ patch, actor }) {
+      return updateSettingsInternal(patch, actor);
+    },
+
+    async disableSigning({ actor }) {
+      const current = await readSettings();
+      if (!current.signing.enabled) return current; // already off: one row, not two
+      return updateSettingsInternal({ signing: { ...current.signing, enabled: false } }, actor);
     },
 
     async authenticateDevice({ companyId, deviceId, token }) {
@@ -411,49 +465,20 @@ export function browserBridgeService(
       const url = actionParams.url ?? null;
       const target = actionParams.target ?? null;
 
-      if (url) {
-        const allowlist = (await readSettings()).domains;
-        if (!isUrlAllowedByAllowlist(url, allowlist)) {
-          await deps.logActivity(
-            actionEntry({
-              ...actor,
-              companyId,
-              entityType: "browser_bridge",
-              deviceId,
-              method,
-              url,
-              target,
-              outcome: "denied",
-              confirmation: "not_required",
-              durationMs: 0,
-              reasonCode: BROWSER_BRIDGE_ERROR_CODES.domainNotAllowed,
-              result: null,
-            }),
-          );
-          throw new BrowserBridgeError(
-            BROWSER_BRIDGE_ERROR_CODES.domainNotAllowed,
-            "the url is outside the bridge allowlist",
-            { url },
-          );
-        }
-      }
-
-      const requiresConfirmation = actionParams.confirmation === "human";
-      const timeoutMs = requiresConfirmation ? BRIDGE_CONFIRMATION_TIMEOUT_MS : BRIDGE_ACTION_TIMEOUT_MS;
-      const startedAt = now();
-      const confirmation = requiresConfirmation ? "confirmed" : "not_required";
-      try {
-        const result = await requireDispatch()({
-          deviceId,
-          companyId,
-          method,
-          params: actionParams,
-          timeoutMs,
-          requiresConfirmation,
-          ...(requestId ? { idempotencyKey: `${deviceId}:${requestId}` } : {}),
-        });
-        const durationMs = now() - startedAt;
-        await deps.logActivity(
+      const isSign = method === "browser.sign";
+      const actionType = actionParams.actionType ?? null;
+      const logAction = (
+        outcome: "ok" | "denied" | "timeout" | "error",
+        options: {
+          confirmation?: "not_required" | "confirmed" | "not_confirmed";
+          durationMs?: number;
+          reasonCode?: number | null;
+          result?: unknown;
+          signStatus?: string | null;
+          documentHash?: string | null;
+        } = {},
+      ) =>
+        deps.logActivity(
           actionEntry({
             ...actor,
             companyId,
@@ -462,15 +487,62 @@ export function browserBridgeService(
             method,
             url,
             target,
-            outcome: "ok",
-            confirmation,
-            durationMs,
-            reasonCode: null,
-            result,
+            outcome,
+            confirmation: options.confirmation ?? "not_required",
+            durationMs: options.durationMs ?? 0,
+            reasonCode: options.reasonCode ?? null,
+            result: options.result ?? null,
+            ...(isSign
+              ? {
+                  sign: {
+                    actionType: actionType ?? "",
+                    documentHash: options.documentHash ?? null,
+                    status: options.signStatus ?? null,
+                  },
+                }
+              : {}),
           }),
         );
-        await deps.devices.touch(companyId, deviceId, new Date(now()).toISOString());
-        return { result, confirmation, durationMs };
+
+      if (url && !isUrlAllowedByAllowlist(url, (await readSettings()).domains)) {
+        await logAction("denied", { reasonCode: BROWSER_BRIDGE_ERROR_CODES.domainNotAllowed });
+        throw new BrowserBridgeError(
+          BROWSER_BRIDGE_ERROR_CODES.domainNotAllowed,
+          "the url is outside the bridge allowlist",
+          { url },
+        );
+      }
+
+      // Signing policy: the panel's emergency switch beats every mode, so a
+      // switched-off bridge refuses the action instead of asking a person.
+      let signDecision: BrowserBridgeSignDecision = "auto";
+      if (isSign) {
+        signDecision = resolveSignDecision((await readSettings()).signing, actionType ?? "");
+        if (signDecision === "refuse") {
+          await logAction("denied", { reasonCode: BROWSER_BRIDGE_ERROR_CODES.signingDisabled });
+          throw new BrowserBridgeError(
+            BROWSER_BRIDGE_ERROR_CODES.signingDisabled,
+            "signing is switched off in the bridge panel",
+          );
+        }
+      }
+
+      const requiresConfirmation = isSign ? signDecision === "manual" : actionParams.confirmation === "human";
+      const timeoutMs = requiresConfirmation ? BRIDGE_CONFIRMATION_TIMEOUT_MS : BRIDGE_ACTION_TIMEOUT_MS;
+      const startedAt = now();
+      const confirmation = requiresConfirmation ? "confirmed" : "not_required";
+
+      let result: unknown;
+      try {
+        result = await requireDispatch()({
+          deviceId,
+          companyId,
+          method,
+          params: actionParams,
+          timeoutMs,
+          requiresConfirmation,
+          ...(requestId ? { idempotencyKey: `${deviceId}:${requestId}` } : {}),
+        });
       } catch (err) {
         const refusal =
           err instanceof BrowserBridgeError
@@ -480,24 +552,53 @@ export function browserBridgeService(
                 err instanceof Error ? err.message : String(err),
               );
         const timedOut = refusal.reasonCode === BROWSER_BRIDGE_ERROR_CODES.timeout;
-        await deps.logActivity(
-          actionEntry({
-            ...actor,
-            companyId,
-            entityType: "browser_bridge",
-            deviceId,
-            method,
-            url,
-            target,
-            outcome: timedOut ? "timeout" : "error",
-            confirmation: timedOut && requiresConfirmation ? "not_confirmed" : confirmation,
-            durationMs: now() - startedAt,
-            reasonCode: refusal.reasonCode,
-            result: null,
-          }),
-        );
+        await logAction(timedOut ? "timeout" : "error", {
+          confirmation: timedOut && requiresConfirmation ? "not_confirmed" : confirmation,
+          durationMs: now() - startedAt,
+          reasonCode: refusal.reasonCode,
+        });
         throw refusal;
       }
+
+      const durationMs = now() - startedAt;
+      if (isSign) {
+        // Only the status and the digest come back from the client PC; the
+        // signed bytes never reach the board. A digestless answer is a failure
+        // of the extension, not a signature.
+        const signed = browserBridgeSignResultSchema.safeParse(result);
+        if (!signed.success) {
+          await logAction("error", {
+            confirmation,
+            durationMs,
+            reasonCode: BROWSER_BRIDGE_ERROR_CODES.internalError,
+          });
+          throw new BrowserBridgeError(
+            BROWSER_BRIDGE_ERROR_CODES.internalError,
+            "the extension did not report a signed-document digest",
+          );
+        }
+        if (signed.data.status === "refused") {
+          await logAction("denied", {
+            confirmation: "not_confirmed",
+            durationMs,
+            reasonCode: BROWSER_BRIDGE_ERROR_CODES.confirmationNotGranted,
+            signStatus: signed.data.status,
+            documentHash: signed.data.documentHash,
+          });
+          throw new BrowserBridgeError(BROWSER_BRIDGE_ERROR_CODES.confirmationNotGranted, "the signature was refused");
+        }
+        await logAction("ok", {
+          confirmation,
+          durationMs,
+          result,
+          signStatus: signed.data.status,
+          documentHash: signed.data.documentHash,
+        });
+      } else {
+        await logAction("ok", { confirmation, durationMs, result });
+      }
+      await deps.devices.touch(companyId, deviceId, new Date(now()).toISOString());
+      return { result, confirmation, durationMs };
     },
   };
 }
