@@ -12,6 +12,7 @@ import {
   readPendingInteractionWakeGraceMs,
   readPendingInteractionWakeInteractionId,
   readPendingInteractionWakeReAdmissions,
+  selectUndeliveredAddresseeInteractionIds,
 } from "./pending-interaction-wake-sweep.js";
 
 const CARD_ID = "d8c4554c-afa1-4f25-a013-bf765573396c";
@@ -52,11 +53,29 @@ describe("decidePendingInteractionWakeAction", () => {
       .toEqual({ kind: "cancel", reason: PENDING_INTERACTION_WAKE_CANCELLED_INTERACTION_REASON });
   });
 
-  it("finalizes a receipt whose task closed before its interaction was answered", () => {
-    for (const issueStatus of ["done", "cancelled", null]) {
-      expect(decidePendingInteractionWakeAction(facts({ issueStatus }), { maxReAdmissions: 1 }))
+  it("finalizes a receipt whose task row is gone", () => {
+    expect(decidePendingInteractionWakeAction(facts({ issueStatus: null }), { maxReAdmissions: 1 }))
+      .toEqual({ kind: "cancel", reason: PENDING_INTERACTION_WAKE_CANCELLED_ISSUE_REASON });
+  });
+
+  // myrmidon(N2): a card that still waits for an addressee who was never woken
+  // keeps its single delivery even when the task closed first. The task can
+  // touch `done` for a minute on its way to a reopen; the card must not die in
+  // that window unanswered.
+  it("re-admits an undelivered receipt on a closed task and finalizes it after that delivery", () => {
+    for (const issueStatus of ["done", "cancelled"]) {
+      expect(decidePendingInteractionWakeAction(facts({ issueStatus, reAdmissionAttempts: 0 }), { maxReAdmissions: 1 }))
+        .toEqual({ kind: "re_admit" });
+      expect(decidePendingInteractionWakeAction(facts({ issueStatus, reAdmissionAttempts: 1 }), { maxReAdmissions: 1 }))
         .toEqual({ kind: "cancel", reason: PENDING_INTERACTION_WAKE_CANCELLED_ISSUE_REASON });
     }
+  });
+
+  it("leaves a receipt on a closed task alone while its own run is still going", () => {
+    expect(decidePendingInteractionWakeAction(
+      facts({ issueStatus: "done", ownRunStillActive: true }),
+      { maxReAdmissions: 1 },
+    )).toEqual({ kind: "skip", reason: "own_run_active" });
   });
 
   it("re-admits a receipt whose interaction still waits on a task without a live run", () => {
@@ -84,6 +103,29 @@ describe("decidePendingInteractionWakeAction", () => {
       .toEqual({ kind: "cancel", reason: PENDING_INTERACTION_WAKE_RE_ADMISSION_LIMIT_REASON });
     expect(decidePendingInteractionWakeAction(facts({ reAdmissionAttempts: 1 }), { maxReAdmissions: 2 }))
       .toEqual({ kind: "re_admit" });
+  });
+});
+
+describe("selectUndeliveredAddresseeInteractionIds", () => {
+  const CARD_B = "11111111-2222-3333-4444-555555555555";
+  const RUN_ID = "5f0d3d1e-0000-4000-8000-000000000000";
+
+  // myrmidon(N2): only a receipt that exists and never became a run is
+  // undelivered; a delivered card and a card with no receipt keep the vendor
+  // expiry on a closed task.
+  it("keeps the card whose receipt never became a run", () => {
+    const rows = [
+      { idempotencyKey: `interaction-pending:${CARD_ID}`, runId: null },
+      { idempotencyKey: `interaction-pending:${CARD_B}`, runId: RUN_ID },
+      { idempotencyKey: "interaction:other", runId: null },
+      { idempotencyKey: null, runId: null },
+    ];
+    expect([...selectUndeliveredAddresseeInteractionIds(rows, [CARD_ID, CARD_B])]).toEqual([CARD_ID]);
+  });
+
+  it("ignores a card with no receipt at all", () => {
+    expect([...selectUndeliveredAddresseeInteractionIds([], [CARD_ID])]).toEqual([]);
+    expect([...selectUndeliveredAddresseeInteractionIds([{ idempotencyKey: null }], [CARD_ID])]).toEqual([]);
   });
 });
 

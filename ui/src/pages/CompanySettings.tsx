@@ -24,6 +24,7 @@ import {
   ToggleField,
 } from "../components/agent-config-primitives";
 import { InstanceGeneralSettings } from "./InstanceGeneralSettings";
+import { FleetConsolePanel } from "../components/myrmidon/FleetConsolePanel"; // myrmidon(SC1)
 
 export function CompanySettings() {
   const {
@@ -331,6 +332,8 @@ export function CompanySettings() {
             : null
         }
       />
+
+      <FleetConsolePanel /> {/* myrmidon(SC1) */}
 
       <InstanceGeneralSettings embedded />
 

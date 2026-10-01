@@ -37,6 +37,8 @@ import { eq } from "drizzle-orm";
 import { preserveMaintenanceGeneralKey, preserveBrowserConsoleGeneralKey } from "../myrmidon/maintenance/store.js";
 // myrmidon(R5-A): keep deploy job state across vendor writes of `general`
 import { preserveDeployJobsGeneralKey } from "../myrmidon/deploy-jobs/store.js";
+// myrmidon(R5-B): keep bot image canary state across vendor writes of `general`
+import { preserveBotCanaryGeneralKey } from "../myrmidon/bot-containers/canary-store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -548,13 +550,14 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state
+          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state; myrmidon(R5-B): keep bot canary state
           // myrmidon(BROWSER-CONSOLE): same for the browser console sessions/journal key
           general: {
             ...nextGeneral,
             ...preserveMaintenanceGeneralKey(current.general),
             ...preserveDeployJobsGeneralKey(current.general),
             ...preserveBrowserConsoleGeneralKey(current.general),
+            ...preserveBotCanaryGeneralKey(current.general),
           },
           updatedAt: now,
         })

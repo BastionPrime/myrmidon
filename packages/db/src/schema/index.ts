@@ -212,3 +212,4 @@ export { announcementDismissals, announcementPublications } from "./announcement
 export { litellmCostEvents, litellmModels, type LitellmModelRates } from "./litellm_costs.js";
 // myrmidon(EGRESS-B): destination allowlists and per-project mode of the bot egress proxy.
 export { myrmidonEgressPolicies } from "./myrmidon_egress_policies.js";
+export { myrmidonFleetServers } from "./myrmidon_fleet_servers.js"; // myrmidon(SC1): fleet-server registry for the browser console
