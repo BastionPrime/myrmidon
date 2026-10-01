@@ -20,6 +20,7 @@ const items = [
   { value: "instance-plugins", label: "Plugins", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/plugins` },
   { value: "instance-adapters", label: "Adapters", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/adapters` },
   { value: "browsers", label: "Browsers", href: "/company/settings/browsers" },
+  { value: "clouds", label: "Clouds", href: "/company/settings/clouds" }, // myrmidon(CLOUD-CONNECTOR)
 ] as const;
 
 type CompanySettingsTab = (typeof items)[number]["value"];
@@ -101,6 +102,11 @@ export function getCompanySettingsTab(pathname: string): CompanySettingsTab {
 
   if (pathname.includes("/company/settings/browsers")) {
     return "browsers";
+  }
+
+  // myrmidon(CLOUD-CONNECTOR): the Clouds settings section
+  if (pathname.includes("/company/settings/clouds")) {
+    return "clouds";
   }
 
   return "general";
