@@ -123,16 +123,24 @@ def main(argv):
         async def burst():
             stop = asyncio.Event()
             task = asyncio.create_task(heartbeat(stop))
+            interval = getattr(state.SessionDB, "_WAL_PROBE_MIN_INTERVAL_S", DEFAULT_PROBE_INTERVAL_S)
             started = time.monotonic()
-            for i in range(WRITES):
-                db._write_sql("INSERT INTO probe (x) VALUES (?)", (i,))
+            written = 0
+            # WRITES records, and then records until the clock has passed one probe
+            # interval, so the "at least one walk" clause below means the same thing on a
+            # fast runner as on a slow one. The cap keeps a pathological host bounded.
+            while written < WRITES or time.monotonic() - started < interval + 0.5:
+                db._write_sql("INSERT INTO probe (x) VALUES (?)", (written,))
+                written += 1
+                if written >= WRITES * 12:
+                    break
             duration = time.monotonic() - started
             stop.set()
             await task
-            return duration
+            return duration, written
 
         walk_durations.clear()
-        duration = asyncio.run(burst())
+        duration, written = asyncio.run(burst())
         walk_count = len(walk_durations)
         walk_total_ms = sum(walk_durations) * 1000.0
         max_gap_s = max(gaps) if gaps else 0.0
@@ -148,18 +156,18 @@ def main(argv):
     interval = getattr(state.SessionDB, "_WAL_PROBE_MIN_INTERVAL_S", DEFAULT_PROBE_INTERVAL_S)
     allowed = max(4, int(duration / interval) + 3)
     print(
-        f"open_fds={open_fds} writes={WRITES} duration_s={duration:.3f} "
+        f"open_fds={open_fds} writes={written} duration_s={duration:.3f} "
         f"fd_walks={walk_count} fd_walk_total_ms={walk_total_ms:.1f} "
         f"max_loop_gap_ms={max_gap_s * 1000:.1f}"
     )
     failures = []
     if walk_count > allowed:
         failures.append(
-            f"{walk_count} /proc/self/fd walks for {WRITES} writes in {duration:.3f}s "
+            f"{walk_count} /proc/self/fd walks for {written} writes in {duration:.3f}s "
             f"({walk_total_ms:.1f} ms on the event loop) — the walk scales with the write "
             f"count instead of the clock (allowed {allowed})"
         )
-    if duration > interval + 0.2 and walk_count < 1:
+    if walk_count < 1:
         failures.append(
             f"no /proc/self/fd walk in {duration:.3f}s of writes — a lost WAL generation "
             f"would never be noticed"
