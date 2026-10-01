@@ -3,6 +3,12 @@
 // preview (verify it is a CI image) → deploy → the job walks
 // maintenance → switch → health, with the abort available until the switch
 // starts. Only instance admins can start or abort; everyone sees the state.
+// myrmidon(R5-C): a failed health check no longer waits for the operator —
+// the executor rolls the image back to the locally remembered previous one
+// and the job ends auto_rolled_back (or failed_rollback when even the
+// rollback fails, which keeps the maintenance window on for a human).
+// Auto-update without a confirmation stays off (MYRMIDON_DEPLOY_AUTO_UPDATE,
+// off until the release scenario has run on the staging stand).
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Rocket } from "lucide-react";
@@ -52,7 +58,9 @@ export function DeployJobsPanelView({
         <p className="max-w-2xl text-sm text-muted-foreground">
           Deploy a new image of this board from its digest. Only images built by CI from main or a myr-v* tag are
           accepted; the check cannot be skipped. The deploy pauses the board (maintenance), switches the image, checks
-          health and resumes; on a failed health check the board stays paused for the rollback.
+          health and resumes; when the health check fails the board rolls back to the previous image automatically and
+          resumes on it (a failed rollback keeps the board paused for the operator). Auto-update without a confirmation
+          is off until the release scenario has run on the staging stand.
         </p>
       </div>
 

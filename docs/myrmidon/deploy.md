@@ -185,7 +185,21 @@ rules are the script's rules, not a second policy:
 - the job is marked succeeded only when the board's own `/api/health` agrees with the
   reported version and commit — a lying report cannot close a failed deploy;
 - a job stuck in one step longer than `MYRMIDON_DEPLOY_STEP_TIMEOUT_SEC` aborts itself and
-  leaves the window.
+  leaves the window;
+- **when the health check fails, the board rolls back automatically (R5-C).** The executor
+  immediately runs `rollback.sh` to the image `deploy.sh` remembered before the switch —
+  the locally known previous image (the rollback is the emergency path, so its CI-image
+  check only warns) — and reports `rolling-back`, then `rolled-back` (the previous image
+  is healthy again; the job ends `auto_rolled_back` and the maintenance window leaves: no
+  human took part) or `rollback-failed` (the job ends `failed_rollback` and the window
+  STAYS ON for the operator). `MYRMIDON_DEPLOY_AUTO_ROLLBACK=0` restores the manual
+  contract: the job ends `failed_health` with the window on and the rollback is the
+  operator's. The host side of the same switch is `AUTO_ROLLBACK` in `deploy.env` (1 by
+  default); both sides should agree;
+- **auto-update without a confirmation stays off (`MYRMIDON_DEPLOY_AUTO_UPDATE`, R5-C).**
+  Every deploy from the interface waits for an explicit confirmation; enabling unattended
+  deploys is a decision for after the release scenario has run on the staging stand
+  (STAND). The flag exists, is documented, and defaults to off.
 
 ### Enabling it
 

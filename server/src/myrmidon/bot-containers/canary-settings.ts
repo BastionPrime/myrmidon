@@ -4,6 +4,11 @@
 // Everything is off or neutral by default: no rollout is possible until
 // MYRMIDON_BOT_CANARY=1 AND MYRMIDON_BOT_CANARY_SELECTOR names a canary bot —
 // an instance that never opted in behaves exactly as before.
+//
+// myrmidon(R5-C): MYRMIDON_BOT_CANARY_AUTO_ROLLBACK is on by default —
+// restoring the touched bots to their card images after a failed rollout IS
+// the feature; =0 keeps the older behavior (the canary stays on the new image
+// for inspection and the rollback is the operator's).
 
 function readInt(env: NodeJS.ProcessEnv, name: string, fallback: number, min: number, max: number): number {
   const raw = env[name]?.trim();
@@ -42,6 +47,14 @@ export interface BotCanarySettings {
   tickMs: number;
   /** Digest verification: how long the registry/GitHub checks may take. */
   verifyTimeoutMs: number;
+  /**
+   * R5-C: when a rollout fails (canary health, canary smoke, wave health),
+   * restore every bot that received the new image to its card's own image.
+   * On by default — an automatic rollout must not leave bots on a broken
+   * image; MYRMIDON_BOT_CANARY_AUTO_ROLLBACK=0 restores the older behavior
+   * (the touched bots stay on the new image for inspection).
+   */
+  autoRollback: boolean;
 }
 
 export function readBotCanarySettings(env: NodeJS.ProcessEnv = process.env): BotCanarySettings {
@@ -54,5 +67,6 @@ export function readBotCanarySettings(env: NodeJS.ProcessEnv = process.env): Bot
     smokeTimeoutMs: readInt(env, "MYRMIDON_BOT_CANARY_SMOKE_TIMEOUT_SEC", 300, 10, 3600) * 1000,
     tickMs: readInt(env, "MYRMIDON_BOT_CANARY_TICK_SEC", 5, 1, 3600) * 1000,
     verifyTimeoutMs: readInt(env, "MYRMIDON_BOT_CANARY_VERIFY_TIMEOUT_SEC", 30, 1, 300) * 1000,
+    autoRollback: readBool(env, "MYRMIDON_BOT_CANARY_AUTO_ROLLBACK", true),
   };
 }
