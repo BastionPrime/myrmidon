@@ -1,4 +1,7 @@
 import { isCancelledNativeStartup } from "./cancelled-native-startup.js";
+// myrmidon(D2): uuid-typed json comparisons for the board DB hot path. See
+// docs/myrmidon/DIVERGENCE.md.
+import { jsonTextUuid } from "../myrmidon/db-hot-path/json-uuid.js";
 import { hasNativeLocalProcessStop, hasHistoricalSuspendedNativeSession } from "./native-local-process-stop.js";
 import { completeTerminatedRemoteNativeSessionCleanup } from "../vendor/paperclip-runner/index.js";
 import { hasRemoteTerminationReceipt, remoteLeaseCleanupScope } from "./remote-execution-termination.js";
@@ -147,9 +150,11 @@ export async function admitExplicitNativeContinuation(input: {
   for (const action of actions) {
     const runId = action.evidence.runId ?? action.evidence.sourceRunId;
     if (typeof runId !== "string") return blocked("source_missing", "The stopped run could not be identified. Your message is saved.");
-    // Text comparison keeps malformed historical evidence a hold, not a UUID cast error.
+    // myrmidon(D2): uuid-typed comparison instead of `heartbeat_runs.id::text =
+    // $runId`. The text cast defeated the primary-key index; jsonTextUuid keeps
+    // malformed historical evidence a hold, not a UUID cast error.
     let [run] = await db.select().from(heartbeatRuns).where(and(
-      eq(heartbeatRuns.companyId, companyId), sql`${heartbeatRuns.id}::text = ${runId}`,
+      eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.id, jsonTextUuid(sql`${runId}`)),
     ));
     if (!run || run.agentId !== agentId || !terminal.includes(run.status) ||
         (run.nativeIssueId ?? run.contextSnapshot?.issueId) !== issueId ||
