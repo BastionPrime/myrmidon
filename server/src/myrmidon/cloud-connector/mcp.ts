@@ -155,6 +155,11 @@ export function cloudConnectorMcpRoutes(deps: { service: CloudConnectorService }
     const method = typeof body.method === "string" ? body.method : "";
     const send = (result: unknown) => res.json({ jsonrpc: "2.0", id, result });
 
+    // Every method on this endpoint belongs to an agent: a board user or
+    // nobody reaching here is not an agent call, and an unauthenticated caller
+    // gets no answer at all — not even the server's handshake.
+    const identity = agentIdentity(req);
+
     if (method === "initialize") {
       return send({
         protocolVersion: PROTOCOL_VERSION,
@@ -163,10 +168,6 @@ export function cloudConnectorMcpRoutes(deps: { service: CloudConnectorService }
       });
     }
     if (method === "notifications/initialized") return res.status(202).end();
-
-    // Everything else is the agent's own surface: a board user or nobody
-    // reaching here is not an agent call.
-    const identity = agentIdentity(req);
 
     if (method === "tools/list") return send({ tools: CLOUD_MCP_TOOLS });
     if (method !== "tools/call") {

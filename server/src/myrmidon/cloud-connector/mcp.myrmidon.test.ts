@@ -260,5 +260,10 @@ describe("myrmidon(CLOUD-CONNECTOR) MCP surface", () => {
     const toolsList = { jsonrpc: "2.0", id: 4, method: "tools/list" };
     await request(app(boardActor, service)).post("/api/mcp/cloud-tools").send(toolsList).expect(401);
     await request(app(anonymous, service)).post("/api/mcp/cloud-tools").send(toolsList).expect(401);
+    // not even the handshake is served to a caller that is not an agent
+    await request(app(anonymous, service))
+      .post("/api/mcp/cloud-tools")
+      .send({ jsonrpc: "2.0", id: 5, method: "initialize" })
+      .expect(401);
   });
 });
