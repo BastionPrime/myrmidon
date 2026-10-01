@@ -256,6 +256,31 @@ domain typed in (bare domain); cookies+storage are cleaned on the node via CDP.
 |---|---|---|---|---|
 | `permissions.toolAccess` | S6 | `{ "mode": "all" }`, written into the agent record explicitly | The agent's permission for tools and connections. `mode: "listed"` — only tools from `tools` and connections from `connections` are allowed, other calls are rejected (403, `deny_agent_permission`, a line in the call log). Set by the operator in the agent card (Permissions tab, "Tool and connection access" section) or `PATCH /api/agents/:id/permissions` with the `toolAccess` field | `{ "mode": "all" }` — previous behavior. An agent without the field and a record with an unreadable value are read as `all` |
 
+## 1.4 — mail through the client's Outlook (EXTCASE-M)
+
+The mail path of the first third-party case (`server/src/myrmidon/client-mail/`, contract —
+[design/client-mail.md](design/client-mail.md)). The board side is what these variables
+configure; the mail module itself lives in the client's Windows connector service and reads
+none of them. Two of the values are names of company secrets, never values.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_OCR_BASE_URL` | EXTCASE-M / EXTCASE-OCR | unset (recognition off) | Base address the mail pipeline sends a PDF attachment to. The mail module reads the *same* four variables as the OCR path of the case (`server/src/myrmidon/ocr/`), so one deployment configures recognition once: `ragflow` expects the MCP endpoint of a RAGFlow/DeepDOC contour, `litellm` an OpenAI-compatible gateway | Unset or empty — recognition is off: a PDF attachment is journalled as unreadable and the message is still sorted and moved. The message is never lost because recognition is unconfigured |
+| `MYRMIDON_OCR_KEY_SECRET` | EXTCASE-M / EXTCASE-OCR | unset | **Name** of the company secret holding the OCR key. Both this and the address must be set for recognition to be on | Unset — recognition is off (see above). The secret is read per call from the company the mail belongs to; a key that is not bound to that company answers a refusal, not another company's key |
+| `MYRMIDON_OCR_BACKEND` | EXTCASE-M / EXTCASE-OCR | `ragflow` | Which contour the address points at: `ragflow` (JSON-RPC `tools/call` with `parser: deepdoc`) or `litellm` (chat completion with the PDF as a `file` part) | Any other value — `ragflow` |
+| `MYRMIDON_OCR_MODEL` | EXTCASE-M / EXTCASE-OCR | unset | For `ragflow` — the tool name of the call; for `litellm` — the model | Unset with `ragflow` — `parse_document`; unset with `litellm` — the backend's default of the call |
+| `MYRMIDON_OCR_TIMEOUT_SEC` | EXTCASE-M / EXTCASE-OCR | `120` | Timeout of one recognition request | Outside 5…600 or non-numeric — the default |
+| `MYRMIDON_CLIENT_MAIL_LLM_BASE_URL` | EXTCASE-M | unset (falls back to `MYRMIDON_BOT_LLM_BASE_URL`) | Address of the OpenAI-compatible gateway the classifier asks through (LiteLLM). Own variable so that a deployment can classify a client's mail through a separate contour — the case holds a client's mail, and a client's own gateway is a decision per client | Unset — the address the bots of this instance use (`MYRMIDON_BOT_LLM_BASE_URL`). Neither set, or the company has no `classifierModel`, or the secret named by `classifierKeySecret` does not exist — the classifier is not built: the mail is decided by the client's rules and the fallback folder alone. Read per call, no restart |
+
+Settings of one client company are not environment variables: they live in
+`instance_settings.general.clientMail.companies[companyId]` — the folders and categories the
+pipeline may use, the fallback folder, the platform bot that receives the task, the classifier
+model and the **name** of the secret holding its gateway key, the body-character cap and the
+client's own rules. The panel reads them with `GET /api/myrmidon/client-mail/settings/:companyId`
+(board) and writes them with `PATCH` of the same path (instance admin, so a settings change is
+audited in the client's company journal). Per company, so one client cannot read or change
+another's folders, categories or rules. Details and the API — [design/client-mail.md](design/client-mail.md).
+
 ## SC1 — server console (SERVER-CONSOLE, 1.4)
 
 The "Server console" section in company settings (`server/src/myrmidon/fleet-console/`,

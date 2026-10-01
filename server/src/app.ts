@@ -114,6 +114,7 @@ import { myrmidonEmergencyStopRoutes } from "./myrmidon/emergency-stop.js";
 import { myrmidonStackRegistryRoutes } from "./myrmidon/stack-registry/index.js"; // myrmidon(SUA)
 import { myrmidonFleetConsoleRoutes } from "./myrmidon/fleet-console/index.js"; // myrmidon(SC1)
 import { accessHubRoutes } from "./myrmidon/access-hub/routes.js"; // myrmidon(SEC1)
+import { myrmidonClientMailRoutes, myrmidonClientMailBatchRoutes } from "./myrmidon/client-mail/index.js"; // myrmidon(EXTCASE-M)
 import { instanceSettingsService } from "./services/instance-settings.js";
 import { openApiRoutes } from "./routes/openapi.js";
 import {
@@ -829,6 +830,8 @@ export async function createApp(
   api.use(myrmidonStackRegistryRoutes(db)); // myrmidon(SUA)
   api.use(myrmidonFleetConsoleRoutes(db)); // myrmidon(SC1)
   api.use(accessHubRoutes(db)); // myrmidon(SEC1): access-hub routes
+  api.use(myrmidonClientMailRoutes(db)); // myrmidon(EXTCASE-M): the mail settings, ledger and rule preview of a client company
+  api.use(myrmidonClientMailBatchRoutes(db)); // myrmidon(EXTCASE-M): the batch a client's mail module delivers
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }

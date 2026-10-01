@@ -43,6 +43,8 @@ import { preserveStackGeneralKey } from "../myrmidon/stack-registry/store.js";
 import { preserveBotCanaryGeneralKey } from "../myrmidon/bot-containers/canary-store.js";
 // myrmidon(SEC1): keep the access-hub host registry across vendor writes of `general`
 import { preserveAccessHubHostsGeneralKey } from "../myrmidon/access-hub/host-registry.js";
+// myrmidon(EXTCASE-M): the per-company mail settings survive every vendor general write
+import { preserveClientMailGeneralKey } from "../myrmidon/client-mail/store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -554,7 +556,7 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state; myrmidon(R5-B): keep bot canary state; myrmidon(SUA): keep stack registry cache; myrmidon(SEC1): keep the access-hub host registry
+          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state; myrmidon(R5-B): keep bot canary state; myrmidon(SUA): keep stack registry cache; myrmidon(SEC1): keep the access-hub host registry; myrmidon(EXTCASE-M): keep the per-company mail settings
           // myrmidon(BROWSER-CONSOLE): same for the browser console sessions/journal key
           general: {
             ...nextGeneral,
@@ -564,6 +566,7 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
             ...preserveStackGeneralKey(current.general), // myrmidon(SUA)
             ...preserveBotCanaryGeneralKey(current.general), // myrmidon(R5-B)
             ...preserveAccessHubHostsGeneralKey(current.general), // myrmidon(SEC1)
+            ...preserveClientMailGeneralKey(current.general), // myrmidon(EXTCASE-M)
           },
           updatedAt: now,
         })
