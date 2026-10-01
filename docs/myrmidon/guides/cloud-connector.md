@@ -31,9 +31,12 @@ Drive and Yandex Disk providers), it is marked as such. The module itself is
   (root, target): re-granting replaces the mode. When several grants match an
   agent, the most specific one wins (`agent` beats `caste` beats `all`); at
   equal specificity `rw` wins.
-- **Personal folder.** Each agent gets a personal root automatically on first
-  use: the name is `agent-<agent id>` and the folder is `Agents/<agent id>` in
-  the account's drive, created if missing and granted `rw` to that agent only.
+- **Personal folder.** The service can give an agent a personal root
+  (`ensurePersonalRoot`): the name is `agent-<agent id>` and the folder is
+  `Agents/<agent id>` in the account's drive, created if missing and granted
+  `rw` to that agent only. In part A nothing calls it — no route and no tool
+  path triggers it; the automatic creation on first use arrives with part B
+  (the agent-facing tool surface).
 
 ## Who can do what
 
@@ -94,8 +97,8 @@ Every refusal names the boundary the caller hit, never the internals:
 
 ## Journal
 
-Every tool call — allowed or refused — appends one journal entry: time, actor
-(agent id, or the board user id for owner actions), tool, root id and name,
+Every tool call that reaches the executor — allowed or refused — appends one
+journal entry: time, actor (the calling agent's id), tool, root id and name,
 path, ok flag, and a short detail (`listed N entries`, `read name (B bytes)`,
 or the refusal text). File contents never reach the journal. The journal keeps
 the last 200 entries; the owner reads it at
