@@ -1003,7 +1003,13 @@ export function recoveryService(
     existingUnresolvedBlockerIssueIds: (companyId, issueId) =>
       existingUnresolvedBlockerIssueIds(companyId, issueId),
     logActivity: (dbArg, input) => logActivity(dbArg, input),
-    recoveryNoticeMetadata: (input) => recoveryNoticeMetadata(input),
+    recoveryNoticeMetadata: (input) =>
+      recoveryNoticeMetadata({
+        cause: input.cause,
+        latestRun: input.latestRun as unknown as LatestIssueRun,
+        previousStatus: input.previousStatus,
+        recoveryOwner: input.recoveryOwner,
+      }),
     compactRecoveryPresentation: (title) => compactRecoveryPresentation(title),
     withRecoveryContext: (context, trust) => withRecoveryContext(context, trust),
   });

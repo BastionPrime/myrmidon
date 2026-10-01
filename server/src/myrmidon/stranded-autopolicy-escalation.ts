@@ -55,7 +55,11 @@
 import { and, eq } from "drizzle-orm";
 import type { agents, Db } from "@paperclipai/db";
 import { issues } from "@paperclipai/db";
-import type { IssueCommentPresentation, IssueCommentMetadata } from "@paperclipai/shared";
+import type {
+  IssueCommentAuthorType,
+  IssueCommentPresentation,
+  IssueCommentMetadata,
+} from "@paperclipai/shared";
 import {
   isPluginManagedIssueLifecycle,
   SUCCESSFUL_RUN_MISSING_STATE_REASON,
@@ -94,9 +98,14 @@ export interface StrandedAutopolicyDeps {
     addComment: (
       issueId: string,
       body: string,
-      actor: Record<string, unknown>,
+      actor: {
+        agentId?: string;
+        userId?: string;
+        runId?: string | null;
+        onBehalfOfUserId?: string | null;
+      },
       options?: {
-        authorType?: string | null;
+        authorType?: IssueCommentAuthorType | null;
         presentation?: IssueCommentPresentation | null;
         metadata?: IssueCommentMetadata | null;
       },
