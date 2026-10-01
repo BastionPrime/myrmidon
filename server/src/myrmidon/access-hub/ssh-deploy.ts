@@ -23,6 +23,9 @@ export interface DeployInput {
   targetUser: string;
   fingerprint: string;
   publicKey: string;
+  /** Part C: the secret the key belongs to — the authorized_keys line marker
+   * `myrmidon-access-<secretId>` and the revoke filter are keyed by it. */
+  secretId: string;
 }
 
 export interface DeployResult {

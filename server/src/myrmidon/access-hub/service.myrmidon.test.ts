@@ -397,6 +397,7 @@ describe("myrmidon(SEC1) fake deploy port", () => {
       targetUser: "agent-a",
       fingerprint: "SHA256:abc",
       publicKey: "ssh-ed25519 AAAA myrmidon-access-hub",
+      secretId: "sec-1",
     };
     const first = await port.deploy(input);
     expect(first.outcome).toBe("deployed");
