@@ -15,7 +15,11 @@ shows the live state of that container.
 | **Memory, MB** | Container memory limit. |
 | **CPUs** | Container CPU limit. |
 | **PIDs limit** | Maximum number of processes inside the container. |
-| **Extra mounts** | Additional read-only host directories (see [bot-extra-mounts.md](../bot-extra-mounts.md)). |
+| **Group** | Container group (not supported yet; shows a warning). |
+
+Additional read-only host directories can be mounted via the JSON card setting
+`adapterConfig.container.extraMounts` — see
+[bot-extra-mounts.md](../bot-extra-mounts.md).
 
 The section is absent for adapters other than `hermes_gateway` and when the
 agent is being created.
@@ -62,6 +66,10 @@ next periodic reconcile.
 
 ## Status and errors
 
-The section shows the container's state (`running`, `stopped`, `missing`) and
-image. A container error means the runtime did not answer; the board's own
-value is still shown, but no comparison with the gateway is possible.
+The section shows the container's state as a label: **Running**, **Stopped**,
+**Unhealthy**, or **Not created yet**. The image name is shown next to it.
+
+When the container runtime does not answer, the section shows
+**Container status unavailable: …** and the **Concurrent runs limit** block
+disappears entirely — no comparison is possible without an applied state to
+read.
