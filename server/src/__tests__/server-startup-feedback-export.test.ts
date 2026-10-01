@@ -399,6 +399,15 @@ vi.mock("../myrmidon/bot-containers/startup.js", () => ({
   stopBotContainers: vi.fn(),
 }));
 
+// myrmidon(R5-B): same for the bot image canary wiring — the canary index
+// imports the bot container runtime, which pulls the real services graph and
+// the partial @paperclipai/db mock has no table columns. The canary itself is
+// a no-op unless MYRMIDON_BOT_CANARY is set and has its own suites.
+vi.mock("../myrmidon/bot-containers/canary-index.js", () => ({
+  startBotCanary: vi.fn(),
+  stopBotCanary: vi.fn(),
+}));
+
 vi.mock("../startup-banner.js", () => ({
   printStartupBanner: vi.fn(),
 }));

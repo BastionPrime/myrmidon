@@ -39,6 +39,8 @@ import { preserveMaintenanceGeneralKey } from "../myrmidon/maintenance/store.js"
 import { preserveDeployJobsGeneralKey } from "../myrmidon/deploy-jobs/store.js";
 // myrmidon(SUA): the stack registry cache survives every vendor general write
 import { preserveStackGeneralKey } from "../myrmidon/stack-registry/store.js";
+// myrmidon(R5-B): keep bot image canary state across vendor writes of `general`
+import { preserveBotCanaryGeneralKey } from "../myrmidon/bot-containers/canary-store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -550,12 +552,13 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state; myrmidon(SUA): keep stack registry cache
+          // myrmidon(R3): keep maintenance mode state; myrmidon(R5-A): keep deploy job state; myrmidon(R5-B): keep bot canary state; myrmidon(SUA): keep stack registry cache
           general: {
             ...nextGeneral,
             ...preserveMaintenanceGeneralKey(current.general),
             ...preserveDeployJobsGeneralKey(current.general),
             ...preserveStackGeneralKey(current.general),
+            ...preserveBotCanaryGeneralKey(current.general),
           },
           updatedAt: now,
         })
