@@ -47,13 +47,10 @@ export function botCanaryRuntimePort(db: Db, env: NodeJS.ProcessEnv = process.en
       if (!botKey) return { kind: "not_applicable", reason: `agent id "${agent.agentId}" cannot be used as a bot key` };
       // myrmidon(R5-B): drive the same reconcile the sweep drives, with the
       // rollout's image in the card's place — the spec is otherwise the card's
-      // own (memory, cpu, pids, mounts). The per-bot lock serializes this with
-      // the sweep for this bot.
-      return applyBotContainerNow(
-        { ...agent, adapterConfig: { ...agent.adapterConfig, container: { ...parsed.config, image } } },
-        runtime,
-        { env: envForApply },
-      );
+      // own (memory, cpu, pids, mounts). The pass re-reads the card under the
+      // per-bot lock and the per-bot lock serializes this with the sweep for
+      // this bot.
+      return applyBotContainerNow(agent, runtime, { env: envForApply, specImage: image });
     },
     status: async (botKey: string) => {
       const runtime = getBotContainerRuntime();
