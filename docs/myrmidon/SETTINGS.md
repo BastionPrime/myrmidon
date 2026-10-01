@@ -266,3 +266,16 @@ environment variables.
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_FLEET_CONSOLE_URL` | SC1 | unset (off) | Base address of the Guacamole client for which the panel signs the auth-JSON (e.g. `https://guac.example.com`, no trailing `/`). It also goes into the token-issuing response and the `consoleUrl` address | Unset or empty — token issuance answers `503 console_not_configured`, the node registry and the log keep working. The company secret with the shared key is `guacamole-json-secret-key` (the value is read by the server, never appears in a response or the log); a registry row may reference a secret with the node password. Read at route assembly on server startup |
+
+## CLOUD-CONNECTOR — cloud storage connector (1.4)
+
+The "Clouds" module (`server/src/myrmidon/cloud-connector/`, contract —
+`packages/shared/src/myrmidon-cloud-connector.ts`). Part A has **no environment
+variables**: the connector account is stored in `instance_settings.general.myrmidonCloudConnector`
+as a reference to a company secret (`tokenRef`), never as the token value; the account token is
+resolved by the caller wiring. A provider that is not connected answers a cloud call with
+`409 not connected`.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| — | CLOUD-CONNECTOR | — | No settings yet; parts B (OAuth connect, the "Clouds" screen) and C (Google Drive, Yandex Disk) add theirs here | — |
