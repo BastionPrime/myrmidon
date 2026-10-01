@@ -8,6 +8,17 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
+## Unreleased
+
+### Memory and isolation
+
+- "Memory" tab on the agent card (MEMORY-UI, plan 1.4 item 1): view, export (JSON)
+  and removal of the entries of the agent's memory bank — resolved by the same bank
+  rule the memory plugin fork applies. Removing one entry is reversible (invalidation
+  with a reason); clearing the whole bank sits behind a typed confirmation; every
+  action writes an activity log row. The section is enabled by the
+  `MYRMIDON_HINDSIGHT_API_URL` + `MYRMIDON_HINDSIGHT_KEY_SECRET` pair.
+
 ## 1.3.2
 
 Everything merged between the 1.3.1 and 1.3.2 tags. Deploy this release's dockergate image
