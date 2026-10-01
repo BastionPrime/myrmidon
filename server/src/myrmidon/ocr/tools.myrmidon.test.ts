@@ -62,8 +62,15 @@ describe("base64 handling", () => {
 });
 
 describe("callOcrPdfTool", () => {
+  type RunOcr = (input: {
+    name: string;
+    bytes: Uint8Array;
+    origin: "mail_attachment" | "browser_download";
+    sourceId: string | null;
+  }) => Promise<typeof RESULT>;
+
   it("passes the decoded bytes and the origin to the OCR path", async () => {
-    const runOcr = vi.fn(async () => RESULT);
+    const runOcr = vi.fn<RunOcr>(async () => RESULT);
     const result = await callOcrPdfTool(
       { name: "tender.pdf", base64: PDF_BASE64, origin: "browser_download", sourceId: "https://tender.example.com/list" },
       { runOcr },
@@ -78,14 +85,14 @@ describe("callOcrPdfTool", () => {
   });
 
   it("defaults the origin to a mail attachment", async () => {
-    const runOcr = vi.fn(async () => RESULT);
+    const runOcr = vi.fn<RunOcr>(async () => RESULT);
     await callOcrPdfTool({ name: "tender.pdf", base64: PDF_BASE64 }, { runOcr });
     expect(runOcr.mock.calls[0]![0].origin).toBe("mail_attachment");
     expect(runOcr.mock.calls[0]![0].sourceId).toBeNull();
   });
 
   it("refuses invalid arguments before touching the bytes", async () => {
-    const runOcr = vi.fn(async () => RESULT);
+    const runOcr = vi.fn<RunOcr>(async () => RESULT);
     const cases: unknown[] = [
       {},
       { name: "", base64: PDF_BASE64 },
@@ -99,7 +106,7 @@ describe("callOcrPdfTool", () => {
   });
 
   it("refuses an oversized payload before decoding it", async () => {
-    const runOcr = vi.fn(async () => RESULT);
+    const runOcr = vi.fn<RunOcr>(async () => RESULT);
     await expect(
       callOcrPdfTool({ name: "tender.pdf", base64: PDF_BASE64 }, { runOcr, maxBytes: 4 }),
     ).rejects.toMatchObject({ code: "document_too_large" });
