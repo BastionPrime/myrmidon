@@ -86,6 +86,7 @@ import { Secrets } from "./pages/Secrets";
 import { AccessHubPage } from "./components/myrmidon/access-hub/AccessHubPage";
 import { BrowsersSettingsPage } from "./components/myrmidon/browsers/BrowsersSettingsPage"; // myrmidon(BROWSER-CONSOLE)
 import { CloudsSettingsPage } from "./components/myrmidon/clouds/CloudsSettingsPage"; // myrmidon(CLOUD-CONNECTOR)
+import { StackScreen } from "./components/myrmidon/stack/StackScreen"; // myrmidon(SUC)
 import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
@@ -283,6 +284,7 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
         path="org"
         element={streamlinedUiEnabled ? <Navigate to="/agents/all" replace /> : <ProductionSurface><ProductionOrgChart /></ProductionSurface>}
       />
+      <Route path="stack" element={<StackScreen />} /> {/* myrmidon(SUC) */}
       <Route path="agents" element={<Navigate to="/agents/all" replace />} />
       {AGENT_FILTER_TABS.map((tab) => (
         <Route
