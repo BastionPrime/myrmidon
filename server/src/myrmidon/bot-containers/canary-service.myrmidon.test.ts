@@ -82,6 +82,7 @@ function harness(options: {
   health?: string;
   smokeOk?: boolean;
   applyOutcome?: "ok" | "error" | "deferred";
+  autoRollback?: boolean;
 } = {}): Harness {
   const store = new MemoryStore();
   const appliedImages: string[] = [];
@@ -119,7 +120,7 @@ function harness(options: {
   const deps: BotCanaryServiceDeps = {
     runtime,
     now: () => new Date("2026-09-30T08:00:00.000Z"),
-    settings: { ...SETTINGS, enabled: options.enabled ?? true },
+    settings: { ...SETTINGS, enabled: options.enabled ?? true, autoRollback: options.autoRollback ?? true },
     probes: {
       fetchJson: async (url: string) => {
         if (url.startsWith("https://ghcr.io/token")) return { token: "fake-token" };
@@ -233,30 +234,44 @@ describe("bot canary service: the tick drives the canary", () => {
     expect(h.appliedImages).toEqual([`${CANARY}:${GOOD.slice(-19)}`]);
   });
 
-  it("a canary apply error fails the rollout and no other bot is touched", async () => {
+  it("a canary apply error rolls the rollout back to the canary's card image; no other bot is touched", async () => {
+    // With the automatic rollback on (the default since R5-C) the failed
+    // canary apply is followed by the rollback to the card image. The
+    // applyOutcome=error harness makes EVERY apply fail — including the
+    // rollback's — so this test pins the loud non-wedging ending; the
+    // successful rollback path is pinned in the R5-C suite with a
+    // discriminating applyNow.
     const h = harness({ applyOutcome: "error" });
     await h.service.create({ reference: GOOD }, ACTOR);
-    await h.service.tick();
+    await h.service.tick(); // apply fails -> rolling_back
     const job = (await h.service.current()).job;
-    expect(job?.status).toBe("canary_failed");
+    expect(job?.status).toBe("rolling_back");
     expect(job?.failureReason).toContain("recreate failed");
+    await h.service.tick(); // the rollback apply also errors -> aborted, loudly
+    const done = (await h.service.current()).job;
+    expect(done?.status).toBe("aborted");
+    expect(done?.failureReason).toContain("could not restore bot");
+    expect(done?.active).toBe(false);
     // the acceptance criterion: the other containers were not touched
-    expect(h.appliedImages).toHaveLength(1);
-    expect(h.appliedImages[0].startsWith(CANARY)).toBe(true);
+    expect(h.appliedImages.every((entry) => entry.startsWith(CANARY))).toBe(true);
     expect(h.smoke).not.toHaveBeenCalled();
   });
 
-  it("an unhealthy canary before the smoke fails the rollout", async () => {
+  it("an unhealthy canary before the smoke rolls back (see the R5-C suite)", async () => {
+    // The R5-B shape (canary_failed, canary left on the new image) is pinned
+    // in the R5-C suite with autoRollback off; here the default flow is the
+    // rollback — covered in detail by "a failed canary health check restores
+    // the canary to its own card image". This test keeps the health-gate
+    // fact: an unhealthy canary never reaches the smoke.
     const h = harness({ health: "unhealthy" });
     await h.service.create({ reference: GOOD }, ACTOR);
     await h.service.tick(); // apply
     await h.service.tick(); // -> health wait
-    await h.service.tick(); // sees unhealthy
+    await h.service.tick(); // sees unhealthy -> rolling_back
     const job = (await h.service.current()).job;
-    expect(job?.status).toBe("canary_failed");
+    expect(job?.status).toBe("rolling_back");
     expect(job?.failureReason).toContain("unhealthy");
     expect(h.smoke).not.toHaveBeenCalled();
-    expect(h.appliedImages).toHaveLength(1);
   });
 });
 
@@ -282,20 +297,25 @@ describe("bot canary service: the smoke gate", () => {
     expect(h.smoke).toHaveBeenCalledTimes(1);
   });
 
-  it("a failed smoke stops the rollout: no wave bot is ever touched", async () => {
+  it("a failed smoke stops the rollout and rolls the canary back: no wave bot is ever touched", async () => {
     const h = harness({ smokeOk: false });
     await driveToSmoke(h);
-    await h.service.tick(); // smoke runs and fails
-    const job = (await h.service.current()).job;
-    expect(job?.status).toBe("canary_smoke_failed");
+    await h.service.tick(); // smoke runs and fails -> rolling_back
+    let job = (await h.service.current()).job;
+    expect(job?.status).toBe("rolling_back");
     expect(job?.failureReason).toContain("smoke run failed");
-    // acceptance criterion: the other containers are left alone
-    expect(h.appliedImages).toHaveLength(1);
-    expect(h.appliedImages[0].startsWith(CANARY)).toBe(true);
+    await h.service.tick(); // rollback apply
+    await h.service.tick(); // -> rolled_back
+    job = (await h.service.current()).job;
+    expect(job?.status).toBe("rolled_back");
+    // acceptance criterion: the other containers are left alone — every
+    // apply went to the canary alone (the new image, then its card image).
+    expect(h.appliedImages.every((entry) => entry.startsWith(CANARY))).toBe(true);
+    expect(h.appliedImages.filter((entry) => !entry.startsWith(CANARY))).toEqual([]);
     // and the rollout is terminal: further ticks do nothing
     await h.service.tick();
     await h.service.tick();
-    expect(h.appliedImages).toHaveLength(1);
+    expect((await h.service.current()).job?.status).toBe("rolled_back");
   });
 });
 
@@ -373,7 +393,7 @@ describe("bot canary service: waves", () => {
     const deps: BotCanaryServiceDeps = {
       runtime,
       now: () => new Date("2026-09-30T08:00:00.000Z"),
-      settings: SETTINGS,
+      settings: { ...SETTINGS, autoRollback: false },
       probes: {
         fetchJson: async (url: string) => {
           if (url.startsWith("https://ghcr.io/token")) return { token: "t" };
@@ -413,6 +433,210 @@ describe("bot canary service: waves", () => {
     const job = (await h.service.current()).job;
     expect(job?.status).toBe("succeeded");
     expect(job?.doneBotKeys).toEqual([CANARY]);
+  });
+});
+
+describe("bot canary service: automatic rollback by health (R5-C)", () => {
+  /** Drive a healthy rollout through the canary into the waves. */
+  async function driveToWaves(h: Harness, ticks = 4): Promise<void> {
+    await h.service.create({ reference: GOOD }, ACTOR);
+    for (let i = 0; i < ticks; i += 1) await h.service.tick();
+  }
+
+  it("a failed canary health check restores the canary to its own card image, no human took part", async () => {
+    const h = harness({ health: "unhealthy" });
+    await h.service.create({ reference: GOOD }, ACTOR);
+    await h.service.tick(); // apply the new image to the canary
+    await h.service.tick(); // -> health wait
+    await h.service.tick(); // sees unhealthy -> rolling_back (was: canary_failed)
+
+    let job = (await h.service.current()).job;
+    expect(job?.status).toBe("rolling_back");
+    expect(job?.failureReason).toContain("unhealthy");
+    // The wave bots were never touched — only the canary got the new image.
+    expect(h.appliedImages.filter((entry) => !entry.startsWith(CANARY))).toEqual([]);
+
+    await h.service.tick(); // the rollback applies the canary's card image
+    await h.service.tick(); // nothing left to restore -> rolled_back
+    job = (await h.service.current()).job;
+    expect(job?.status).toBe("rolled_back");
+    expect(job?.active).toBe(false);
+    expect(job?.failureReason).toContain("unhealthy");
+    // The rollback re-applied the card image ("myrmidon-hermes:old"), not the
+    // rollout digest: the appliedImages log has canary:old after canary:GOOD.
+    const canaryApplies = h.appliedImages.filter((entry) => entry.startsWith(CANARY));
+    expect(canaryApplies).toEqual([`${CANARY}:${GOOD.slice(-19)}`, `${CANARY}:${"myrmidon-hermes:old".slice(-19)}`]);
+    // Terminal: further ticks do nothing.
+    await h.service.tick();
+    expect((await h.service.current()).job?.status).toBe("rolled_back");
+  });
+
+  it("a failed canary smoke run also rolls the canary back", async () => {
+    const h = harness({ smokeOk: false });
+    await h.service.create({ reference: GOOD }, ACTOR);
+    await h.service.tick(); // apply
+    await h.service.tick(); // health wait
+    await h.service.tick(); // smoke
+    await h.service.tick(); // smoke failed -> rolling_back
+    expect((await h.service.current()).job?.status).toBe("rolling_back");
+    await h.service.tick(); // rollback apply
+    await h.service.tick(); // nothing left to restore -> rolled_back
+    const job = (await h.service.current()).job;
+    expect(job?.status).toBe("rolled_back");
+    expect(job?.failureReason).toContain("smoke run failed");
+  });
+
+  it("a wave failure rolls back every bot that already got the new image", async () => {
+    // The canary and the first wave bot succeed; the second wave bot fails.
+    const store = new MemoryStore();
+    const agents = [CANARY, "agent-b", "agent-c"].map(agent);
+    let call = 0;
+    const appliedImages: string[] = [];
+    const runtime: BotCanaryRuntimePort = {
+      listAgents: vi.fn(async () => agents),
+      applyNow: vi.fn(async (a: BotContainerAgent, image: string): Promise<ApplyBotContainerOutcome> => {
+        call++;
+        appliedImages.push(`${a.agentId}:${image.slice(-19)}`);
+        // call 1: canary apply (ok). calls 2-3: rollback applies are fine;
+        // call 2 in this scenario is agent-b wave apply -> error.
+        if (call === 2) return { kind: "error", message: "docker refused" };
+        return { kind: "applied_restart" };
+      }),
+      status: vi.fn(async () => ({ state: "running" })),
+      canaryApiKey: vi.fn(async () => "fake-canary-key"),
+    };
+    const smoke = vi.fn(async () => ({ ok: true as const, runId: "run-smoke", status: "completed" }));
+    const deps: BotCanaryServiceDeps = {
+      runtime,
+      now: () => new Date("2026-09-30T08:00:00.000Z"),
+      settings: { ...SETTINGS, autoRollback: true },
+      probes: {
+        fetchJson: async (url: string) => {
+          if (url.startsWith("https://ghcr.io/token")) return { token: "t" };
+          if (url.includes("/manifests/")) return { config: { digest: "sha256:cfg" } };
+          if (url.includes("/blobs/")) return { config: { Labels: CI_LABELS } };
+          if (url.includes("/compare/")) return { status: "ahead" };
+          return [];
+        },
+      } as BotCanaryProbeDeps,
+      logActivity: (async () => ({})) as unknown as BotCanaryServiceDeps["logActivity"],
+      smoke: smoke as unknown as BotCanaryServiceDeps["smoke"],
+      env: {},
+    };
+    const service = botCanaryService(store as unknown as Db, deps);
+    await service.create({ reference: GOOD }, ACTOR);
+    await service.tick(); // canary apply
+    await service.tick(); // health wait
+    await service.tick(); // smoke
+    await service.tick(); // smoke ok -> wave_draining
+    await service.tick(); // agent-b apply fails -> rolling_back (targets: canary)
+
+    let job = (await service.current()).job;
+    expect(job?.status).toBe("rolling_back");
+    expect(job?.failureReason).toContain("agent-b");
+
+    await service.tick(); // rollback: canary restored to its card image
+    await service.tick(); // nothing left to restore -> rolled_back
+    job = (await service.current()).job;
+    expect(job?.status).toBe("rolled_back");
+    // agent-c was never touched: only canary:GOOD, agent-b:GOOD (failed apply),
+    // then canary:old.
+    expect(appliedImages).toEqual([
+      `${CANARY}:${GOOD.slice(-19)}`,
+      `agent-b:${GOOD.slice(-19)}`,
+      `${CANARY}:${"myrmidon-hermes:old".slice(-19)}`,
+    ]);
+  });
+
+  it("MYRMIDON_BOT_CANARY_AUTO_ROLLBACK=0 keeps the canary on the new image for inspection", async () => {
+    // Build the harness with the rollback off through settings directly.
+    const store = new MemoryStore();
+    const agents = [CANARY, "agent-b"].map(agent);
+    const appliedImages: string[] = [];
+    const runtime: BotCanaryRuntimePort = {
+      listAgents: vi.fn(async () => agents),
+      applyNow: vi.fn(async (a: BotContainerAgent, image: string): Promise<ApplyBotContainerOutcome> => {
+        appliedImages.push(`${a.agentId}:${image.slice(-19)}`);
+        return { kind: "applied_restart" };
+      }),
+      status: vi.fn(async () => ({ state: "unhealthy" })),
+      canaryApiKey: vi.fn(async () => "fake-canary-key"),
+    };
+    const deps: BotCanaryServiceDeps = {
+      runtime,
+      now: () => new Date("2026-09-30T08:00:00.000Z"),
+      settings: { ...SETTINGS, autoRollback: false },
+      probes: {
+        fetchJson: async (url: string) => {
+          if (url.startsWith("https://ghcr.io/token")) return { token: "t" };
+          if (url.includes("/manifests/")) return { config: { digest: "sha256:cfg" } };
+          if (url.includes("/blobs/")) return { config: { Labels: CI_LABELS } };
+          if (url.includes("/compare/")) return { status: "ahead" };
+          return [];
+        },
+      } as BotCanaryProbeDeps,
+      logActivity: (async () => ({})) as unknown as BotCanaryServiceDeps["logActivity"],
+      smoke: vi.fn(async () => ({ ok: true as const, runId: "run-smoke", status: "completed" })) as unknown as BotCanaryServiceDeps["smoke"],
+      env: {},
+    };
+    const service = botCanaryService(store as unknown as Db, deps);
+    await service.create({ reference: GOOD }, ACTOR);
+    await service.tick(); // apply
+    await service.tick(); // health wait
+    await service.tick(); // unhealthy -> canary_failed (no rollback)
+    const job = (await service.current()).job;
+    expect(job?.status).toBe("canary_failed");
+    // The canary stays on the new image; no card-image apply happened.
+    expect(appliedImages).toEqual([`${CANARY}:${GOOD.slice(-19)}`]);
+  });
+
+  it("a rollback apply error ends the rollout loudly and does not wedge", async () => {
+    // The canary apply succeeds, the smoke fails, and every rollback apply
+    // errors: the rollout must still end, with a reason that names the bot.
+    const store = new MemoryStore();
+    const agents = [CANARY].map(agent);
+    const runtime: BotCanaryRuntimePort = {
+      listAgents: vi.fn(async () => agents),
+      applyNow: vi.fn(async (): Promise<ApplyBotContainerOutcome> => {
+        // The canary apply (call 1) succeeds; every rollback apply errors.
+        canaryCalls += 1;
+        return canaryCalls === 1
+          ? { kind: "applied_restart" }
+          : { kind: "error", message: "docker refused the rollback" };
+      }),
+      status: vi.fn(async () => ({ state: "running" })),
+      canaryApiKey: vi.fn(async () => "fake-canary-key"),
+    };
+    let canaryCalls = 0;
+    const deps: BotCanaryServiceDeps = {
+      runtime,
+      now: () => new Date("2026-09-30T08:00:00.000Z"),
+      settings: { ...SETTINGS, autoRollback: true },
+      probes: {
+        fetchJson: async (url: string) => {
+          if (url.startsWith("https://ghcr.io/token")) return { token: "t" };
+          if (url.includes("/manifests/")) return { config: { digest: "sha256:cfg" } };
+          if (url.includes("/blobs/")) return { config: { Labels: CI_LABELS } };
+          if (url.includes("/compare/")) return { status: "ahead" };
+          return [];
+        },
+      } as BotCanaryProbeDeps,
+      logActivity: (async () => ({})) as unknown as BotCanaryServiceDeps["logActivity"],
+      smoke: vi.fn(async () => ({ ok: false as const, runId: "run-smoke", status: "failed", reason: "the smoke run ended in 'failed'" })) as unknown as BotCanaryServiceDeps["smoke"],
+      env: {},
+    };
+    const service = botCanaryService(store as unknown as Db, deps);
+    await service.create({ reference: GOOD }, ACTOR);
+    await service.tick(); // canary apply
+    await service.tick(); // health wait
+    await service.tick(); // smoke
+    await service.tick(); // smoke failed -> rolling_back
+    await service.tick(); // rollback apply errors -> aborted with the reason
+    const job = (await service.current()).job;
+    expect(job?.status).toBe("aborted");
+    expect(job?.failureReason).toContain("could not restore bot");
+    expect(job?.failureReason).toContain("agent-canary");
+    expect(job?.active).toBe(false);
   });
 });
 

@@ -27,6 +27,19 @@
 //   changed; after it, the tool is the rollback (R5-C), as with the board
 //   self-deploy.
 //
+// myrmidon(R5-C), auto-rollback by health: with
+// MYRMIDON_BOT_CANARY_AUTO_ROLLBACK on (the default) a failed rollout is not
+// left on the new image. The failure path goes through `failOrRollback`:
+// instead of a terminal status the rollout moves to `rolling_back`, and the
+// tick restores every bot that received the rollout's image (the canary and
+// the applied wave bots) to its OWN card image — the local image the card
+// pinned before the rollout — with the same applyNow, then the rollout ends
+// `rolled_back` with the original failure reason kept on the job. A rollback
+// apply error or timeout ends `aborted` with the reason: the sweep remains
+// the authority that re-applies the card image on its next pass anyway. With
+// the rollback off the rollout ends `canary_failed` / `canary_smoke_failed` /
+// `failed_health` as before.
+//
 // State is stored in instance_settings.general under the `myrmidonBotCanary`
 // key (the same storage pattern as R3/R5-A); the store module owns the row
 // locking, this module owns the rules.
@@ -41,6 +54,7 @@ import {
   assertNoActiveBotCanary,
   BotCanaryConflict,
   botCanaryReferenceProblem,
+  botCanaryRollbackTargets,
   isBotCanaryActive,
   isBotCanaryAbortable,
   newBotCanaryJob,
@@ -357,7 +371,7 @@ export function botCanaryService(db: Db, deps: BotCanaryServiceDeps) {
       case "canary_health_wait": {
         const status = await deps.runtime.status(job.canaryBotKey!).catch(() => null);
         if (status && (status.state === "unhealthy" || status.state === "stopped")) {
-          await failJob(job.id, "canary_failed", `the canary container reported '${status.state}' before the smoke run`);
+          await failOrRollback(job.id, "canary_failed", `the canary container reported '${status.state}' before the smoke run`);
           return;
         }
         if (!status) return;
@@ -393,6 +407,10 @@ export function botCanaryService(db: Db, deps: BotCanaryServiceDeps) {
         await finishWave(job);
         return;
       }
+      case "rolling_back": {
+        await continueRollback(job);
+        return;
+      }
       default:
         return;
     }
@@ -424,7 +442,7 @@ export function botCanaryService(db: Db, deps: BotCanaryServiceDeps) {
     // start of THIS agent alone, exactly as a card image change would.
     const outcome = await deps.runtime.applyNow(canary, image, env);
     if (outcome.kind === "error") {
-      await failJob(job.id, "canary_failed", `the canary reconcile failed: ${outcome.message}`);
+      await failOrRollback(job.id, "canary_failed", `the canary reconcile failed: ${outcome.message}`);
       return;
     }
     if (outcome.kind === "deferred") {
@@ -448,7 +466,7 @@ export function botCanaryService(db: Db, deps: BotCanaryServiceDeps) {
   async function runSmoke(job: BotCanaryJob): Promise<void> {
     const apiKey = await deps.runtime.canaryApiKey(job.canaryBotKey!).catch(() => null);
     if (!apiKey) {
-      await failJob(job.id, "canary_smoke_failed", "the canary bot's gateway key could not be resolved for the smoke run");
+      await failOrRollback(job.id, "canary_smoke_failed", "the canary bot's gateway key could not be resolved for the smoke run");
       return;
     }
     const result = await smoke(job.canaryBotKey!, job.id, {
@@ -471,7 +489,7 @@ export function botCanaryService(db: Db, deps: BotCanaryServiceDeps) {
       await auditFor(job, "canary_ok", { actorType: "system", actorId: "myrmidon-bot-canary" }, { smokeRunId: result.runId });
       return;
     }
-    await failJob(job.id, "canary_smoke_failed", `the canary smoke run failed: ${result.reason}${result.runId ? ` (run ${result.runId})` : ""}`);
+    await failOrRollback(job.id, "canary_smoke_failed", `the canary smoke run failed: ${result.reason}${result.runId ? ` (run ${result.runId})` : ""}`);
     await auditFor(job, "canary_smoke_failed", { actorType: "system", actorId: "myrmidon-bot-canary" }, { reason: result.reason, runId: result.runId });
   }
 
@@ -574,7 +592,7 @@ export function botCanaryService(db: Db, deps: BotCanaryServiceDeps) {
     });
     const outcome = await deps.runtime.applyNow(agent, image, env);
     if (outcome.kind === "error") {
-      await failJob(job.id, "failed_health", `bot ${botKey} failed to apply the new image: ${outcome.message}`);
+      await failOrRollback(job.id, "failed_health", `bot ${botKey} failed to apply the new image: ${outcome.message}`);
       return;
     }
     if (outcome.kind === "deferred") {
@@ -582,7 +600,7 @@ export function botCanaryService(db: Db, deps: BotCanaryServiceDeps) {
     }
     const status = await deps.runtime.status(botKey).catch(() => null);
     if (status && (status.state === "unhealthy" || status.state === "stopped")) {
-      await failJob(job.id, "failed_health", `bot ${botKey} is '${status.state}' after the wave apply`);
+      await failOrRollback(job.id, "failed_health", `bot ${botKey} is '${status.state}' after the wave apply`);
       return;
     }
     const at2 = now();
@@ -632,6 +650,155 @@ export function botCanaryService(db: Db, deps: BotCanaryServiceDeps) {
       const current = doc.jobs.find((j) => j.id === job.id);
       if (!current || current.status !== "wave_restoring") return { next: null, result: null };
       return { next: updateJob(doc, job.id, next), result: next.status };
+    });
+  }
+
+  /**
+   * The failure entry point (R5-C): with the automatic rollback on, a failed
+   * rollout moves to `rolling_back` — the tick restores every bot that
+   * received the new image to its own card image — and only then ends
+   * `rolled_back`. With the rollback off (or nothing to restore) the rollout
+   * ends `status` directly, the R5-B behavior.
+   */
+  async function failOrRollback(
+    jobId: string,
+    status: Extract<BotCanaryStatus, "aborted" | "failed_health" | "canary_failed" | "canary_smoke_failed">,
+    reason: string,
+  ) {
+    if (settings.autoRollback && status !== "aborted") {
+      const started = await startRollback(jobId, status, reason);
+      if (started) return;
+    }
+    await failJob(jobId, status, reason);
+  }
+
+  /**
+   * Move a failed rollout to `rolling_back` when at least one bot received
+   * the new image. Returns false when there is nothing to restore (the
+   * failure happened before any image switch) — the caller then ends the
+   * rollout directly.
+   */
+  async function startRollback(jobId: string, failedStatus: BotCanaryStatus, reason: string): Promise<boolean> {
+    const at = now();
+    let moved: BotCanaryJob | null = null;
+    await write((doc) => {
+      const job = doc.jobs.find((j) => j.id === jobId);
+      if (!job || !isBotCanaryActive(job.status) || job.status === "rolling_back") return { next: null, result: null };
+      const targets = botCanaryRollbackTargets(job);
+      if (targets.length === 0) return { next: null, result: false as boolean };
+      const next = appendBotCanaryStep(
+        { ...job, status: "rolling_back", failureReason: reason, updatedAt: at.toISOString() },
+        "rolling_back",
+        `${failedStatus}: restoring ${targets.length} bot(s) to their card images (${targets.join(", ")})`,
+        at,
+      );
+      moved = next;
+      return { next: updateJob(doc, jobId, next), result: true };
+    });
+    if (!moved) return false;
+    await auditFor(moved, "rolling_back", { actorType: "system", actorId: "myrmidon-bot-canary" }, { reason, failedStatus });
+    return true;
+  }
+
+  /**
+   * The rollback tick (R5-C): restore the next bot of the failed rollout to
+   * its own card image, one at a time (the same discipline waves use — one
+   * drain at a time). When the last bot is restored the rollout ends
+   * `rolled_back` with the original failure reason kept. An apply error on a
+   * rollback step ends the rollout `aborted` with the combined reason: the
+   * sweep re-applies the card image on its next pass anyway, so the state
+   * machine must not wedge — but the rollout must end, loudly.
+   */
+  async function continueRollback(job: BotCanaryJob): Promise<void> {
+    const current = (await store.read()).jobs.find((j) => j.id === job.id);
+    if (!current || current.status !== "rolling_back") return;
+    const targets = botCanaryRollbackTargets(current);
+    const pending = targets.filter((botKey) => !current.rolledBackBotKeys.includes(botKey));
+    if (pending.length === 0) {
+      const at = now();
+      const next = appendBotCanaryStep(
+        { ...current, status: "rolled_back", updatedAt: at.toISOString() },
+        "rolled_back",
+        `all touched bots restored to their card images: ${targets.join(", ")}`,
+        at,
+      );
+      await write((doc) => {
+        const c = doc.jobs.find((j) => j.id === job.id);
+        if (!c || c.status !== "rolling_back") return { next: null, result: null };
+        return { next: retireBotCanaryJob(updateJob(doc, job.id, next), job.id, at), result: next.status };
+      });
+      await auditFor(job, "rolled_back", { actorType: "system", actorId: "myrmidon-bot-canary" }, { reason: current.failureReason });
+      return;
+    }
+    const botKey = pending[0];
+    const agents = await deps.runtime.listAgents().catch(() => null);
+    if (!agents) return; // the driver did not answer; the next tick retries
+    const agent = agents.find((a) => a.agentId === botKey);
+    if (!agent) {
+      // The bot vanished mid-rollout: nothing to restore for it.
+      const at = now();
+      const next = appendBotCanaryStep(
+        { ...current, rolledBackBotKeys: [...current.rolledBackBotKeys, botKey], updatedAt: at.toISOString() },
+        "rolling_back",
+        `bot ${botKey} is not reconciled any more; skipped`,
+        at,
+      );
+      await write((doc) => {
+        const c = doc.jobs.find((j) => j.id === job.id);
+        if (!c || c.status !== "rolling_back") return { next: null, result: null };
+        return { next: updateJob(doc, job.id, next), result: next.status };
+      });
+      return;
+    }
+    const container = agent.adapterConfig?.container as Record<string, unknown> | undefined;
+    const cardImage = typeof container?.image === "string" ? container.image.trim() : "";
+    if (!cardImage) {
+      // No card image to restore (a malformed card): skip with a loud step.
+      const at = now();
+      const next = appendBotCanaryStep(
+        { ...current, rolledBackBotKeys: [...current.rolledBackBotKeys, botKey], updatedAt: at.toISOString() },
+        "rolling_back",
+        `bot ${botKey} has no card image to restore; skipped`,
+        at,
+      );
+      await write((doc) => {
+        const c = doc.jobs.find((j) => j.id === job.id);
+        if (!c || c.status !== "rolling_back") return { next: null, result: null };
+        return { next: updateJob(doc, job.id, next), result: next.status };
+      });
+      return;
+    }
+    const at = now();
+    const applying = appendBotCanaryStep(
+      { ...current, status: "rolling_back", updatedAt: at.toISOString() },
+      "rolling_back",
+      `restoring bot ${botKey} to its card image`,
+      at,
+    );
+    await write((doc) => {
+      const c = doc.jobs.find((j) => j.id === job.id);
+      if (!c || c.status !== "rolling_back") return { next: null, result: null };
+      return { next: updateJob(doc, job.id, applying), result: applying.status };
+    });
+    const outcome = await deps.runtime.applyNow(agent, cardImage, env);
+    if (outcome.kind === "error") {
+      await failJob(job.id, "aborted", `the automatic rollback could not restore bot ${botKey} to its card image: ${outcome.message} (the periodic sweep re-applies the card image; check the bot)`);
+      return;
+    }
+    if (outcome.kind === "deferred") {
+      return; // someone else's window; retry the same bot on a later tick
+    }
+    const at2 = now();
+    const done = appendBotCanaryStep(
+      { ...applying, rolledBackBotKeys: [...applying.rolledBackBotKeys, botKey], updatedAt: at2.toISOString() },
+      "rolling_back",
+      `bot ${botKey} restored to its card image`,
+      at2,
+    );
+    await write((doc) => {
+      const c = doc.jobs.find((j) => j.id === job.id);
+      if (!c || c.status !== "rolling_back") return { next: null, result: null };
+      return { next: updateJob(doc, job.id, done), result: done.status };
     });
   }
 
