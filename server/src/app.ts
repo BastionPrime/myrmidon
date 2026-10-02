@@ -132,6 +132,8 @@ import { myrmidonEvalsRoutes } from "./myrmidon/evals/index.js"; // myrmidon(1.6
 import { myrmidonTracingHealthRoutes } from "./myrmidon/tracing-health/index.js"; // myrmidon(TRACING-HEALTH)
 // myrmidon(1.6-CTO-CHAT-B): the board chat planner (owner text -> proposed epic).
 import { myrmidonCtoChatRoutes } from "./myrmidon/cto-chat/index.js";
+// myrmidon(1.6-SWARM-CLAIM-B): the lead's supervisor surface over the role queues
+import { myrmidonSwarmSupervisorRoutes } from "./myrmidon/swarm-claim-supervisor/index.js"; // myrmidon(1.6-SWARM-CLAIM-B)
 import { instanceSettingsService } from "./services/instance-settings.js";
 import { openApiRoutes } from "./routes/openapi.js";
 import {
@@ -860,6 +862,7 @@ export async function createApp(
   api.use(myrmidonEvalsRoutes(db)); // myrmidon(1.6-EVALS): reference-task evals (judge runs, scores, verdict)
   api.use(myrmidonTracingHealthRoutes(db)); // myrmidon(TRACING-HEALTH): LLM tracing health check
   api.use(myrmidonCtoChatRoutes(db)); // myrmidon(1.6-CTO-CHAT-B): board chat planner (owner text -> proposed epic)
+  api.use(myrmidonSwarmSupervisorRoutes(db)); // myrmidon(1.6-SWARM-CLAIM-B): supervisor view, rebalance, pilot report
   api.use(ui2LanguageRoutes(db)); // myrmidon(UI2-I18N): per-user UI language preference
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
