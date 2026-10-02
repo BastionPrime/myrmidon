@@ -234,11 +234,17 @@ export function createSwarmSupervisorReleasePort(
   const base = createSwarmSupervisorDbPort(db, env);
   return {
     ...base,
-    async releaseClaim(companyId, claimId, _reason, now) {
+    async releaseClaim(companyId, claimId, reason, now) {
       const releasedAt = new Date(now).toISOString();
+      // The fallback keeps part A's release-history invariant: the reason is
+      // written next to releasedAt, so the supervisor view can tell a
+      // supervisor release from an expired lease. Once part A's store is
+      // importable (after its merge) this whole fallback goes away and the
+      // dynamic `releaseClaim` import becomes the only release path.
+      const releasedReason = reason || SUPERVISOR_RELEASE_REASON;
       const rows = await db.execute(sql`
         UPDATE issue_claims
-        SET released_at = ${releasedAt}
+        SET released_at = ${releasedAt}, released_reason = ${releasedReason}
         WHERE company_id = ${companyId}
           AND id = ${claimId}
           AND released_at IS NULL
