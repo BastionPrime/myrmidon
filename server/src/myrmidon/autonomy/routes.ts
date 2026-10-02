@@ -88,8 +88,6 @@ function actorFromRequest(req: Request): AutonomyActorRef {
   return { type: "system", id: "system" };
 }
 
-const ACTIVITY_ACTOR_TYPE = { board: "user", agent: "agent", system: "system" } as const;
-
 /**
  * Resolve the company for a pathless route: the `companyId` query parameter
  * first, then the caller's single active company membership. The same rule as
@@ -123,15 +121,7 @@ export function myrmidonAutonomyRoutes(db: Db) {
     store: dbAutonomyStore(db),
     listChangeLog: dbAutonomyChangeLog(db),
     logActivity: async (input) => {
-      await logActivity({
-        companyId: input.companyId,
-        actorType: ACTIVITY_ACTOR_TYPE[input.actorType] ?? "system",
-        actorId: input.actorId,
-        action: input.action,
-        entityType: input.entityType,
-        entityId: input.entityId,
-        details: input.details,
-      } as Parameters<typeof logActivity>[1]);
+      await logActivity(db, input);
     },
   });
 }

@@ -57,6 +57,7 @@ interface AutonomyChangeDetails {
   summary?: unknown;
   matrixVersion?: unknown;
   regulationId?: unknown;
+  action?: unknown;
 }
 
 function changeLogEntry(
