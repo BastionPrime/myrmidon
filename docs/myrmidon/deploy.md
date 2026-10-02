@@ -98,6 +98,41 @@ restores the board-only behavior (not for a release: the 01.10 incident was exac
 split). The settings are in [SETTINGS.md](SETTINGS.md); an example is in
 [`deploy.env.example`](../../scripts/myrmidon/deploy/deploy.env.example).
 
+### Upgrading from 1.4.0 to 1.5.0
+
+The 1.5.0 additions are additive on the host side: no new migrations to run by
+hand and no changes to the deploy script — the upgrade is the image switch of
+the release components, as in the 1.4.0 procedure above.
+
+What changes for operators:
+
+- **Set the bridge pepper before the first connector pairing.**
+  `MYRMIDON_BROWSER_BRIDGE_PEPPER` is the HMAC pepper for pairing codes and
+  bridge tokens; unset, the process takes a random pepper per start (one log
+  warning) and every paired device must pair again after each restart. Set it
+  once in the board's environment before issuing the first pairing code. See
+  [SETTINGS.md](SETTINGS.md) and
+  [guides/browser-bridge-gateway.md](guides/browser-bridge-gateway.md).
+- **The connector panel appears in Company settings → Connectors.** The bridge
+  state lives in `instance_settings.general.browserBridge` (domains, signing
+  policy); existing instances start with an empty allowlist and the default
+  signing policy (`enabled`, mode `auto`, no daily limit) — nothing pairs and
+  nothing is signed until an operator configures it. Panel writes need the
+  instance admin role. See
+  [guides/connector-panel.md](guides/connector-panel.md).
+- **The OCR path stays closed until configured.** Without
+  `MYRMIDON_OCR_BASE_URL` and `MYRMIDON_OCR_KEY_SECRET` the `ocr.pdf` tool
+  answers a stable `ocr_disabled` refusal and no request leaves the board; bots
+  that never call it are unaffected. To open the path, set the contour address,
+  the secret name and (for LiteLLM) the model — see [SETTINGS.md](SETTINGS.md)
+  and [guides/ocr.md](guides/ocr.md).
+- **External MCP connectors need no fork change.** An instance that already
+  runs `PAPERCLIP_DEPLOYMENT_MODE=authenticated` with
+  `PAPERCLIP_DEPLOYMENT_EXPOSURE=private` accepts private-network connector
+  containers; do not flip exposure to `public` while one is connected. The
+  connect/grant runbook is
+  [guides/external-mcp-connectors.md](guides/external-mcp-connectors.md).
+
 ### Upgrading from 1.3.2 to 1.4.0
 
 Deploy the board, dockergate and fleetd images from the same 1.4.0 tag together — with

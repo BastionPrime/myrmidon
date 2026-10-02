@@ -8,6 +8,54 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
+## 1.5.0
+
+### Client connectors (the browser bridge)
+
+- The client connector gateway (EXTCASE-B): the board accepts an outbound
+  WebSocket connection (`/bridge/v1`, JSON-RPC 2.0) from a browser extension on
+  a client PC — the transport for platforms that exist only in the client's
+  browser behind a local signing key. Pairing is a one-shot 15-minute code
+  exchanged for a device-bound bridge token (only HMAC digests are stored,
+  peppered by `MYRMIDON_BROWSER_BRIDGE_PEPPER`); revocation is fail-closed and
+  drops the live socket. Every action is gated by the declared capability set
+  and the company domain allowlist (checked at the gateway and again in the
+  extension) and journaled — one row per action in the company activity log,
+  page content never journaled. Signing follows the operator policy
+  (`general.browserBridge.signing`: `enabled` / `auto` / `manual` / `types`)
+  with a one-call emergency off; the signed bytes and the PIN never leave the
+  client PC — the journal holds the document hash. Guide:
+  [guides/browser-bridge-gateway.md](guides/browser-bridge-gateway.md).
+- The connector panel (EXTCASE-PANEL), Company settings → Connectors: the
+  device list with online status and capabilities, one-shot pairing codes shown
+  once, revocation with confirmation, the domain allowlist, the signing policy
+  with a daily signature limit per UTC day (the gateway refuses before the
+  device is asked, `dailyLimitReached`) and the emergency stop, plus the bridge
+  journal with filters (device, method, outcome, signatures only) and the
+  document hash per signature. Guide:
+  [guides/connector-panel.md](guides/connector-panel.md).
+
+### OCR path
+
+- `ocr.pdf` for every bot (EXT-CASE-OCR): a PDF received as a mail attachment
+  or downloaded through the bridge is recognized into text in the bot
+  workspace, with a structural excerpt for tender documentation (requirements,
+  deadlines, positions). Backends: RAGFlow (MCP) or an OpenAI-compatible
+  gateway (LiteLLM), selected by `MYRMIDON_OCR_BACKEND`; refusals carry stable
+  codes and happen before the backend is contacted (size and page ceilings).
+  The journal holds metadata only — never the text or the bytes. Guide:
+  [guides/ocr.md](guides/ocr.md).
+
+### External MCP connectors
+
+- Any standards-compliant HTTP MCP server now plugs in without fork code
+  through the vendor's generic connection surface (Apps → Connect an app →
+  Connect your own MCP server, or Apps → Advanced → Paste a config):
+  credentials become company secrets, per-agent grants default to deny, and
+  tools arrive namespaced `mcp.<connection>:<tool>`. The operator runbook —
+  entry points, grants, health checks, rotation:
+  [guides/external-mcp-connectors.md](guides/external-mcp-connectors.md).
+
 ## 1.4.0
 
 Everything merged between the 1.3.2 and 1.4.0 tags. Deploy this release's board,
