@@ -425,3 +425,8 @@ or above 0.02; `unknown` on probe failure. The evidence fields `deliveryRatio`
 and `legacyRejections` are additive parts of the JSON contract for the part D
 dedup key; fields without a source stay null and never block the computation.
 
+Part D (the board surface) reads the same settings — no new rows. The
+attention signal reuses the report: the feed raises one high-severity
+`tracing_health` card while the state is `degraded` (dedup per state+reason,
+exit on ok/idle), and the Costs page shows the "LLM tracing" status card.
+

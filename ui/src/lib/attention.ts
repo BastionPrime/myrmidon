@@ -60,6 +60,8 @@ const SOURCE_META: Record<AttentionSourceKind, SourceMeta> = {
   failed_run: { label: "Failed run" },
   budget_alert: { label: "Budget" },
   agent_error_alert: { label: "Agent error" },
+  // myrmidon(TRACING-HEALTH): LLM tracing degraded signal (operator-facing).
+  tracing_health: { label: "LLM tracing" },
 };
 
 export function sourceMeta(kind: AttentionSourceKind): SourceMeta {
@@ -127,6 +129,8 @@ export function attentionKind(item: AttentionItem): AttentionKind {
     case "blocker_attention":
     case "recovery_action":
     case "budget_alert":
+    // myrmidon(TRACING-HEALTH): degraded tracing blocks work observability.
+    case "tracing_health":
       return "blocking";
     case "approval":
     case "issue_thread_interaction":

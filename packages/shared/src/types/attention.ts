@@ -18,6 +18,8 @@ export const ATTENTION_SOURCE_KINDS = [
   "failed_run",
   "budget_alert",
   "agent_error_alert",
+  // myrmidon(TRACING-HEALTH): LLM tracing degraded signal for operators.
+  "tracing_health",
 ] as const;
 
 export type AttentionSourceKind = (typeof ATTENTION_SOURCE_KINDS)[number];

@@ -280,6 +280,12 @@ async function sourceIssueId(
         .then((rows) => rows[0] ?? null);
       return { exists: Boolean(row), issueId: null };
     }
+    // myrmidon(TRACING-HEALTH): a computed instance-wide signal — no row to
+    // look up, and no agent or issue behind it. The read gate below keeps
+    // this source board-only.
+    case "tracing_health": {
+      return { exists: true, issueId: null };
+    }
   }
 }
 
@@ -312,6 +318,8 @@ export async function canReadDecisionSource(
 
   // Join requests, unlinked approvals, and budget incidents are board-only
   // governance data. Same-company existence is deliberately not authority.
+  // myrmidon(TRACING-HEALTH): the tracing health card follows the same rule
+  // — instance-wide platform health is operator context, never agent data.
   if (actor.type !== "board") return false;
   return (await authz.decide({
     actor,

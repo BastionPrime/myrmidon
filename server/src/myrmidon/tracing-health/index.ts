@@ -16,3 +16,10 @@ export {
 } from "./domain.js";
 export { readTracingHealthSettings } from "./probes.js";
 export type { TracingHealthSettings } from "./probes.js";
+export { TRACING_HEALTH_SOURCE_KIND, tracingHealthAttentionItem, tracingHealthAttentionItems } from "./attention.js";
+export {
+  createTracingHealthAttentionProbe,
+  myrmidonTracingHealthAttentionProbe,
+  probeTracingHealthReport,
+} from "./attention-probe.js";
+export type { TracingHealthProbeDeps } from "./attention-probe.js";

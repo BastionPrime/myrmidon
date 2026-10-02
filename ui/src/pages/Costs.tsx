@@ -14,6 +14,8 @@ import { budgetsApi } from "../api/budgets";
 import { costsApi } from "../api/costs";
 import { GatewayCostsTab } from "../components/myrmidon/litellm-costs/GatewayCostsTab"; // myrmidon(M2-A)
 import { GatewayKeysTab } from "../components/myrmidon/litellm-costs/GatewayKeysTab"; // myrmidon(M2-B)
+// myrmidon(TRACING-HEALTH): the "LLM tracing" status card (Gateway tab)
+import { TracingStatusCard } from "../components/myrmidon/tracing/TracingStatusCard";
 import { BillerSpendCard } from "../components/BillerSpendCard";
 import { BudgetIncidentCard } from "../components/BudgetIncidentCard";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
@@ -1090,6 +1092,7 @@ export function Costs({
         </TabsContent>
 
         <TabsContent value="gateway" className="mt-4 space-y-4"> {/* myrmidon(M2-A) */}
+          <TracingStatusCard /> {/* myrmidon(TRACING-HEALTH) */}
           <GatewayCostsTab companyId={companyId} from={from || undefined} to={to || undefined} />
         </TabsContent>
 

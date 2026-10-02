@@ -63,10 +63,18 @@ import { canonicalizeStoredResolverPolicy } from "./issue-thread-interaction-res
 import { decisionQueueService } from "./decision-queues.js";
 // myrmidon(AUTO-RESUME): escalates the agent error card after the board gave up resuming
 import { readAutoResumeAttentionState } from "../myrmidon/auto-resume.js";
+// myrmidon(TRACING-HEALTH): LLM tracing degraded signal for the operator role
+import {
+  myrmidonTracingHealthAttentionProbe,
+  createTracingHealthAttentionProbe,
+  type TracingHealthProbeDeps,
+} from "../myrmidon/tracing-health/attention-probe.js";
+import { tracingHealthAttentionItems } from "../myrmidon/tracing-health/attention.js";
 import {
   decisionRetentionService,
   DEFAULT_DECISION_SHELF_DAYS,
 } from "./decision-retention.js";
+import { logger } from "../middleware/logger.js";
 
 const ATTENTION_SOURCE_KINDS: AttentionSourceKind[] = [
   "approval",
@@ -80,6 +88,7 @@ const ATTENTION_SOURCE_KINDS: AttentionSourceKind[] = [
   "failed_run",
   "budget_alert",
   "agent_error_alert",
+  "tracing_health",
 ];
 
 const SEVERITY_RANK: Record<AttentionSeverity, number> = {
@@ -100,7 +109,10 @@ const SOURCE_RANK: Record<AttentionSourceKind, number> = {
   issue_thread_interaction: 7,
   review: 8,
   productivity_review: 9,
-  join_request: 10,
+  "join_request": 10,
+  // myrmidon(TRACING-HEALTH): platform health sits at the bottom of the
+  // source ordering — it is never more urgent than work items, but present.
+  "tracing_health": 11,
 };
 
 const PENDING_INTERACTION_STATUSES = ["pending"] as const;
@@ -165,6 +177,14 @@ type AttentionListOptions = AttentionFeedQuery & {
 type AttentionServiceOptions = {
   openDecisionLimit?: number;
   now?: () => number;
+  /**
+   * myrmidon(TRACING-HEALTH): the tracing health probe the feed runs. The
+   * default wires the real gateway/ClickHouse probes with a TTL cache;
+   * tests inject a fake report. null disables the generator entirely.
+   */
+  tracingHealthProbe?: {
+    report(now?: Date): Promise<import("../myrmidon/tracing-health/domain.js").TracingHealthReport>;
+  } | null;
 };
 
 function emptyCounts(): Record<AttentionSourceKind, number> {
@@ -1073,6 +1093,11 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
     Math.max(Math.trunc(serviceOptions.openDecisionLimit ?? OPEN_DECISION_DEFAULT_LIMIT), 1),
     OPEN_DECISION_MAX_LIMIT,
   );
+  // myrmidon(TRACING-HEALTH): the tracing health probe backing the degraded
+  // card; lazily created so the default wiring only runs where the feed runs.
+  const tracingHealthProbe = serviceOptions.tracingHealthProbe === undefined
+    ? { report: async () => myrmidonTracingHealthAttentionProbe(db).report() }
+    : serviceOptions.tracingHealthProbe;
   return {
     list: async (companyId: string, options: AttentionListOptions = {}): Promise<AttentionFeed> => {
       if (options.all && !options.queue && !options.allowUnscopedAll) {
@@ -1879,6 +1904,25 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
             images: [],
           },
         }));
+      }
+
+      // myrmidon(TRACING-HEALTH): LLM tracing degraded signal. Entry rule:
+      // state = degraded only — idle/unknown never page the operator. Dedup
+      // per state+reason rides the dedupKey (see myrmidon/tracing-health/
+      // attention.ts): a same-state refresh re-emits the same id, a reason
+      // change opens a new card, ok/idle emits nothing (the previous card
+      // falls out of the feed — it is computed, not stored). A failing or
+      // absent probe yields "unknown" and stays silent; the generator never
+      // breaks the feed.
+      if (tracingHealthProbe) {
+        try {
+          const tracingReport = await tracingHealthProbe.report(new Date(now));
+          for (const item of tracingHealthAttentionItems(tracingReport, companyId)) {
+            add(item);
+          }
+        } catch (error) {
+          logger.warn({ err: error, companyId }, "tracing health attention probe failed");
+        }
       }
 
       const deduped = new Map<string, AttentionItem>();
