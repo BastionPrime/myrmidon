@@ -1,0 +1,500 @@
+/*
+ * Myrmidon UI-2.0 token layer — `--myr-*` design-system tokens.
+ * myrmidon(UI-0a): source of truth for the UI-2.0 shell theme. Values follow the
+ * owner's design system (canvas "Myrmidon 2.0 — интерфейс", page "Design
+ * decisions 02.10", board comment 02.10) — see ui/public/fonts/myr2/README.md
+ * for the font provenance. This file defines ONLY tokens (DESIGN.md: the token
+ * layer is the single source of visual values); components under ui/src/ui2/
+ * consume `--myr-*` via Tailwind @theme mapping in this file. It is imported by
+ * index.css (no parallel token pipeline).
+ *
+ * Placeholder policy: tokens marked "placeholder" were not in the resolved
+ * design-decision comment; the operator's design session owns their final
+ * values. The resolved ones (02.10): warn #8A5300 / #E6B450, edge #74849A
+ * (owner rejected #8595A8 for failing 3:1), navy-deep #13294B, dark surface
+ * #111922.
+ */
+
+@font-face {
+  font-family: "Saira";
+  src: url("/fonts/myr2/saira-latin-400.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Saira";
+  src: url("/fonts/myr2/saira-latin-ext-400.woff2") format("woff2");
+  unicode-range: U+0100-02AF, U+0300-0301, U+0303-0304, U+0306-0307, U+030A, U+030D-030F, U+0311, U+0312, U+0314-0315, U+0316, U+0317, U+0318, U+0319, U+031A, U+031B, U+0323, U+0324, U+0325, U+0327, U+0328, U+0329, U+032C, U+032D, U+032F, U+0330, U+0332, U+0337, U+0338, U+033B, U+033C, U+033D, U+0341, U+0342, U+0343, U+0345, U+0347, U+0348, U+0349, U+034A, U+034B, U+034C, U+034D, U+034E, U+0350, U+0351, U+0353, U+0356, U+0357, U+035A, U+035B, U+035D, U+035F, U+0361, U+0363, U+0364, U+0365, U+0366, U+0367, U+0368, U+0369, U+036A, U+036B, U+036C, U+036D, U+036E, U+036F, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Saira";
+  src: url("/fonts/myr2/saira-latin-500.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "Saira";
+  src: url("/fonts/myr2/saira-latin-ext-500.woff2") format("woff2");
+  unicode-range: U+0100-02AF, U+0300-0301, U+0303-0304, U+0306-0307, U+030A, U+030D-030F, U+0311, U+0312, U+0314-0315, U+0316, U+0317, U+0318, U+0319, U+031A, U+031B, U+0323, U+0324, U+0325, U+0327, U+0328, U+0329, U+032C, U+032D, U+032F, U+0330, U+0332, U+0337, U+0338, U+033B, U+033C, U+033D, U+0341, U+0342, U+0343, U+0345, U+0347, U+0348, U+0349, U+034A, U+034B, U+034C, U+034D, U+034E, U+0350, U+0351, U+0353, U+0356, U+0357, U+035A, U+035B, U+035D, U+035F, U+0361, U+0363, U+0364, U+0365, U+0366, U+0367, U+0368, U+0369, U+036A, U+036B, U+036C, U+036D, U+036E, U+036F, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "Saira";
+  src: url("/fonts/myr2/saira-latin-600.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: "Saira";
+  src: url("/fonts/myr2/saira-latin-ext-600.woff2") format("woff2");
+  unicode-range: U+0100-02AF, U+0300-0301, U+0303-0304, U+0306-0307, U+030A, U+030D-030F, U+0311, U+0312, U+0314-0315, U+0316, U+0317, U+0318, U+0319, U+031A, U+031B, U+0323, U+0324, U+0325, U+0327, U+0328, U+0329, U+032C, U+032D, U+032F, U+0330, U+0332, U+0337, U+0338, U+033B, U+033C, U+033D, U+0341, U+0342, U+0343, U+0345, U+0347, U+0348, U+0349, U+034A, U+034B, U+034C, U+034D, U+034E, U+0350, U+0351, U+0353, U+0356, U+0357, U+035A, U+035B, U+035D, U+035F, U+0361, U+0363, U+0364, U+0365, U+0366, U+0367, U+0368, U+0369, U+036A, U+036B, U+036C, U+036D, U+036E, U+036F, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: "Saira";
+  src: url("/fonts/myr2/saira-latin-700.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "Saira";
+  src: url("/fonts/myr2/saira-latin-ext-700.woff2") format("woff2");
+  unicode-range: U+0100-02AF, U+0300-0301, U+0303-0304, U+0306-0307, U+030A, U+030D-030F, U+0311, U+0312, U+0314-0315, U+0316, U+0317, U+0318, U+0319, U+031A, U+031B, U+0323, U+0324, U+0325, U+0327, U+0328, U+0329, U+032C, U+032D, U+032F, U+0330, U+0332, U+0337, U+0338, U+033B, U+033C, U+033D, U+0341, U+0342, U+0343, U+0345, U+0347, U+0348, U+0349, U+034A, U+034B, U+034C, U+034D, U+034E, U+0350, U+0351, U+0353, U+0356, U+0357, U+035A, U+035B, U+035D, U+035F, U+0361, U+0363, U+0364, U+0365, U+0366, U+0367, U+0368, U+0369, U+036A, U+036B, U+036C, U+036D, U+036E, U+036F, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+/* Exo 2 — Cyrillic display fallback for RU (Saira has no Cyrillic subset;
+ * design decision 02.10: "Saira 500/700 for EN, Exo 2 500/600/700 for RU,
+ * switched by language as a whole"). */
+@font-face {
+  font-family: "Exo 2";
+  src: url("/fonts/myr2/exo2-cyrillic-500.woff2") format("woff2");
+  unicode-range: U+0400-045F, U+0462-0463, U+046A, U+0470-0471, U+0474-0475, U+047A-047B, U+0482, U+0485-0486, U+048C-048F, U+0490-0491, U+0493-0494, U+0495-0496, U+0497-0498, U+0499-049A, U+049B-04C5, U+04C6, U+04C9, U+04CA, U+04CB-04CC, U+04CE, U+04CF, U+04D0-04D1, U+04D2-04D3, U+04D4-04D5, U+04D6-04D7, U+04D8-04D9, U+04DA-04DB, U+04DC-04DD, U+04DE-04DF, U+04E0-04E1, U+04E2-04E3, U+04E4-04E5, U+04E6-04E7, U+04E8-04E9, U+04EA-04EB, U+04EC-04ED, U+04EE-04EF, U+04F0-04F1, U+04F2-04F3, U+04F4-04F5, U+04F6-04F7, U+04F8-04F9, U+04FA-04FB, U+04FC-04FD, U+04FE-04FF, U+0500-050F, U+0510-0511, U+0512-0513, U+0514, U+0516, U+051A, U+051B, U+0523, U+0525, U+0527, U+1C80-1C88, U+1D2B, U+1D78, U+1E00-1E00, U+1E01-1EF3, U+20B4, U+20B6, U+2116;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "Exo 2";
+  src: url("/fonts/myr2/exo2-cyrillic-ext-500.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C88, U+1D2B, U+1D78, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "Exo 2";
+  src: url("/fonts/myr2/exo2-cyrillic-700.woff2") format("woff2");
+  unicode-range: U+0400-045F, U+0462-0463, U+046A, U+0470-0471, U+0474-0475, U+047A-047B, U+0482, U+0485-0486, U+048C-048F, U+0490-0491, U+0493-0494, U+0495-0496, U+0497-0498, U+0499-049A, U+049B-04C5, U+04C6, U+04C9, U+04CA, U+04CB-04CC, U+04CE, U+04CF, U+04D0-04D1, U+04D2-04D3, U+04D4-04D5, U+04D6-04D7, U+04D8-04D9, U+04DA-04DB, U+04DC-04DD, U+04DE-04DF, U+04E0-04E1, U+04E2-04E3, U+04E4-04E5, U+04E6-04E7, U+04E8-04E9, U+04EA-04EB, U+04EC-04ED, U+04EE-04EF, U+04F0-04F1, U+04F2-04F3, U+04F4-04F5, U+04F6-04F7, U+04F8-04F9, U+04FA-04FB, U+04FC-04FD, U+04FE-04FF, U+0500-050F, U+0510-0511, U+0512-0513, U+0514, U+0516, U+051A, U+051B, U+0523, U+0525, U+0527, U+1C80-1C88, U+1D2B, U+1D78, U+1E00-1E00, U+1E01-1EF3, U+20B4, U+20B6, U+2116;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "Exo 2";
+  src: url("/fonts/myr2/exo2-cyrillic-ext-700.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C88, U+1D2B, U+1D78, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+/* Inter — UI text. The vendor's InterVariable already covers latin; these
+ * subsets add locale coverage for the ui2 tree without touching vendor
+ * @font-face rules. */
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-latin-400.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-latin-500.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-latin-600.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-latin-700.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-latin-ext-400.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-latin-ext-500.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-latin-ext-600.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-latin-ext-700.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-cyrillic-400.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-cyrillic-500.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-cyrillic-600.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-cyrillic-700.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-cyrillic-ext-400.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C88, U+1D2B, U+1D78, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-cyrillic-ext-500.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C88, U+1D2B, U+1D78, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-cyrillic-ext-600.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C88, U+1D2B, U+1D78, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/myr2/inter-cyrillic-ext-700.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C88, U+1D2B, U+1D78, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+/* JetBrains Mono — logs, identifiers, costs. */
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-latin-400.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-latin-500.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-latin-700.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-latin-ext-400.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-latin-ext-500.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-latin-ext-700.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-cyrillic-400.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-cyrillic-500.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-cyrillic-700.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-cyrillic-ext-400.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C88, U+1D2B, U+1D78, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-cyrillic-ext-500.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C88, U+1D2B, U+1D78, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/myr2/jbmono-cyrillic-ext-700.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C88, U+1D2B, U+1D78, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+/*
+ * Token values. Light theme on :root; dark on .dark (the vendor theme class).
+ * All --myr-* values are hex or color-mix() compositions of other --myr-*
+ * tokens — no raw literals inside components (check-token-gates stays clean).
+ */
+:root {
+  /* Surfaces */
+  --myr-surface: #f6f8fa;            /* app background (light) */
+  --myr-surface-raised: #ffffff;     /* cards, top bar */
+  --myr-surface-sunk: #eceff3;       /* sunk wells, table headers — placeholder, from boards */
+  --myr-inverse-surface: #13294b;    /* navy chip / emphasis plate (inverse text) */
+
+  /* Ink */
+  --myr-ink: #16202b;                /* primary text (light) */
+  --myr-ink-muted: #5c6b7a;          /* secondary text */
+
+  /* Brand */
+  --myr-emblem: #13294b;             /* ant mark, logo strokes (navy) */
+  --myr-navy-deep: #13294b;          /* primary action, selected rail item */
+  --myr-navy-hover: #1c3a66;         /* navy hover — resolved 02.10 */
+  --myr-navy-edge: #74849a;          /* navy-mode hairline/edge (resolved: 3:1 pass) */
+  --myr-on-navy: #ffffff;            /* text on navy surfaces */
+  --myr-navy-t: color-mix(in srgb, var(--myr-navy-deep) 10%, transparent); /* navy tint (selection bg) */
+
+  /* Structure */
+  --myr-cell: #ffffff;               /* table cell background */
+  --myr-hairline: #d9dee5;           /* 1px separators (light) */
+  --myr-edge: #74849a;               /* strong edges (resolved 02.10, not #8595A8) */
+
+  /* Signals (state = icon shape first, color second) */
+  --myr-signal-live: #1c7a3d;        /* green "live/ok" */
+  --myr-signal-warn: #8a5300;        /* amber warning text (resolved 02.10) */
+  --myr-signal-halt: #b3261e;        /* red "stop/attention" */
+  --myr-warn-bar: #e6b450;           /* amber bar/fill (resolved 02.10) */
+  --myr-signal-live-t: color-mix(in srgb, var(--myr-signal-live) 10%, transparent);
+  --myr-signal-warn-t: color-mix(in srgb, var(--myr-signal-warn) 12%, transparent);
+  --myr-signal-halt-t: color-mix(in srgb, var(--myr-signal-halt) 10%, transparent);
+
+  /* Interaction */
+  --myr-accent: #74849a;             /* focus ring / accent — resolved 02.10 */
+  --myr-sel: color-mix(in srgb, var(--myr-navy-deep) 8%, transparent); /* selected row bg */
+  --myr-focus-ring: 2px solid var(--myr-accent); /* focus ring = 2px accent + 2px offset */
+  --myr-focus-ring-offset: 2px;
+
+  /* Numbers / dimensions */
+  --myr-rail-width: 232px;           /* left rail (Nav piece) */
+  --myr-rail-item-h: 40px;
+  --myr-topbar-height: 56px;
+  --myr-phone-topbar-height: 56px;   /* phone header with logo + status (board spec) */
+  --myr-phone-tabbar-height: 60px;   /* touch targets >= 44px, tab items 60px */
+  --myr-radius-sm: 4px;
+  --myr-radius-md: 8px;
+  --myr-space-1: 8px;
+  --myr-space-2: 16px;
+  --myr-space-3: 24px;
+  --myr-space-4: 32px;
+
+  /* Type */
+  --myr-font-display: "Saira", "Exo 2", ui-sans-serif, system-ui, sans-serif;
+  --myr-font-ui: "Inter", "InterVariable", ui-sans-serif, system-ui, sans-serif;
+  --myr-font-mono: "JetBrains Mono", ui-monospace, monospace;
+  /* The MYRMIDON wordmark stays Saira in every language (design 02.10):
+   * --myr-font-wordmark is consumed by the lockup wrapper so the wordmark
+   * never follows the RU display switch. */
+  --myr-font-wordmark: "Saira", ui-sans-serif, system-ui, sans-serif;
+  --myr-text-hero: 28px;             /* screen titles (Saira 700) */
+  --myr-text-title: 18px;            /* card titles */
+  --myr-text-body: 14px;             /* default UI text */
+  --myr-text-mono: 13px;             /* log/id/cost strings */
+  --myr-text-nano: 11px;             /* rail labels, chips */
+}
+
+.dark {
+  --myr-surface: #111922;            /* dark app background (resolved: #111922) */
+  --myr-surface-raised: #18222e;
+  --myr-surface-sunk: #0d141b;
+  --myr-inverse-surface: #13294b;
+
+  --myr-ink: #e8edf2;
+  --myr-ink-muted: #8fa0b0;
+
+  --myr-emblem: #ffffff;             /* white ant mark on dark */
+  --myr-navy-deep: #13294b;
+  --myr-navy-hover: #24457a;
+  --myr-navy-edge: #74849a;
+  --myr-on-navy: #ffffff;
+
+  --myr-cell: #18222e;
+  --myr-hairline: #2a3644;
+  --myr-edge: #74849a;
+
+  --myr-signal-live: #3fae6a;
+  --myr-signal-warn: #e6b450;        /* dark: lighter amber for contrast */
+  --myr-signal-halt: #ef6b5e;
+  --myr-warn-bar: #e6b450;
+}
+
+/*
+ * ui2 shell base class: applied by the shell root so the theme composes with
+ * the vendor theme without leaking --myr-* semantics into vendor components.
+ * Fonts resolve here so ui2 typography does not rely on vendor --font-sans.
+ */
+.myr-ui2 {
+  background: var(--myr-surface);
+  color: var(--myr-ink);
+  font-family: var(--myr-font-ui);
+  font-size: var(--myr-text-body);
+}
+
+/* Display type: language-switched per design 02.10 — Saira for EN, Exo 2 for
+ * RU, switched by language as a whole. The contract with UI-0b: its provider
+ * sets [lang="ru"] on the ui2 root; this rule swaps the display font stack.
+ * The unicode-range fallback still covers mixed-script edge cases, and the
+ * wordmark var is untouched (logo stays Saira). */
+.myr-ui2[lang="ru"] {
+  --myr-font-display: "Exo 2", "Saira", ui-sans-serif, system-ui, sans-serif;
+}
+
+.myr-display {
+  font-family: var(--myr-font-display);
+}
+
+.myr-wordmark {
+  font-family: var(--myr-font-wordmark);
+}
+
+.myr-mono {
+  font-family: var(--myr-font-mono);
+  font-size: var(--myr-text-mono);
+}
