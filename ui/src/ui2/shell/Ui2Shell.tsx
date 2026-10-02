@@ -4,23 +4,34 @@
 // nested routes render through <Outlet/>, so every existing page keeps
 // working (the shell runs in parallel with 1.5, OPE-3550). `children` is
 // accepted for direct composition (Storybook stories); when both are absent
-// the outlet renders the routes.
+// the outlet renders the routes. Settings routes get the internal 10-section
+// side panel (screen-map §3.1); the `lang` prop keys the RU display-font
+// switch (UI-0b contract).
 import type { ReactNode } from "react";
-import { Outlet } from "@/lib/router";
+import { Outlet, useLocation } from "@/lib/router";
 import { useIsMobileViewport } from "../useIsMobileViewport";
 import { Ui2Rail } from "./Ui2Rail";
 import { Ui2TopBar } from "./Ui2TopBar";
+import { Ui2SettingsSidebar } from "./Ui2SettingsSidebar";
 import { Ui2PhoneHeader, Ui2PhoneTabBar } from "./Ui2PhoneNav";
 
-export function Ui2Shell({ children }: { children?: ReactNode }) {
+function isSettingsPath(pathname: string): boolean {
+  const segment = pathname.split("/").filter(Boolean).slice(1)[0]?.toLowerCase();
+  return segment === "company";
+}
+
+export function Ui2Shell({ children, lang }: { children?: ReactNode; lang?: string }) {
   const isMobile = useIsMobileViewport();
+  const location = useLocation();
   const content = children ?? <Outlet />;
+  const rootProps = lang ? { lang } : {};
 
   if (isMobile) {
     return (
       <div
         className="myr-ui2"
         style={{ display: "flex", flexDirection: "column", minHeight: "100dvh" }}
+        {...rootProps}
       >
         <Ui2PhoneHeader />
         <main style={{ flex: 1, minWidth: 0, paddingBottom: "var(--myr-phone-tabbar-height)" }}>
@@ -34,11 +45,18 @@ export function Ui2Shell({ children }: { children?: ReactNode }) {
   }
 
   return (
-    <div className="myr-ui2" style={{ display: "flex", minHeight: "100dvh" }}>
+    <div
+      className="myr-ui2"
+      style={{ display: "flex", minHeight: "100dvh" }}
+      {...rootProps}
+    >
       <Ui2Rail />
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <Ui2TopBar />
-        <main style={{ flex: 1, minWidth: 0, padding: "var(--myr-space-2)" }}>{content}</main>
+        <div style={{ flex: 1, minWidth: 0, display: "flex" }}>
+          {isSettingsPath(location.pathname) ? <Ui2SettingsSidebar /> : null}
+          <main style={{ flex: 1, minWidth: 0, padding: "var(--myr-space-2)" }}>{content}</main>
+        </div>
       </div>
     </div>
   );

@@ -11,6 +11,8 @@ import { Ui2Rail } from "@/ui2/shell/Ui2Rail";
 import { Ui2TopBar } from "@/ui2/shell/Ui2TopBar";
 import { Ui2PhoneHeader, Ui2PhoneTabBar } from "@/ui2/shell/Ui2PhoneNav";
 import { Ui2CommanderPalette } from "@/ui2/shell/Ui2CommanderPalette";
+import { Ui2SettingsSidebar } from "@/ui2/shell/Ui2SettingsSidebar";
+import { Ui2PlaceholderScreen } from "@/ui2/screens/Ui2PlaceholderScreen";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
@@ -124,6 +126,24 @@ export const PhoneBars: Story = {
     <div style={{ display: "flex", flexDirection: "column", gap: 16, background: "var(--myr-surface)" }}>
       <Ui2PhoneHeader />
       <Ui2PhoneTabBar />
+    </div>
+  ),
+};
+
+export const SettingsSidebar: Story = {
+  parameters: { viewport: { defaultViewport: "desktop" } },
+  render: () => (
+    <div style={{ display: "flex", height: 640, background: "var(--myr-surface)" }}>
+      <Ui2SettingsSidebar />
+    </div>
+  ),
+};
+
+export const PlaceholderScreen: Story = {
+  parameters: { viewport: { defaultViewport: "desktop" } },
+  render: () => (
+    <div style={{ padding: "var(--myr-space-3)", background: "var(--myr-surface)", minHeight: 480 }}>
+      <Ui2PlaceholderScreen />
     </div>
   ),
 };

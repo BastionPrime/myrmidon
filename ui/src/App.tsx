@@ -114,8 +114,9 @@ import {
 import { filterHiddenInstanceSettingsPath, normalizeRememberedInstanceSettingsPath } from "./lib/instance-settings";
 import { useCloudInstance } from "./hooks/useCloudInstance";
 import { useStreamlinedUiEnabled } from "./hooks/useStreamlinedUiEnabled";
-import { useMyrmidonUi2Enabled } from "./ui2/useMyrmidonUi2Enabled"; // myrmidon(UI-0a)
-import { Ui2Shell } from "./ui2/shell/Ui2Shell"; // myrmidon(UI-0a)
+import { useMyrmidonUi2Enabled } from "./ui2/useMyrmidonUi2Enabled"; // myrmidon(UI2-SHELL)
+import { Ui2Root } from "./ui2/Ui2Root"; // myrmidon(UI2-SHELL)
+import { ui2PlaceholderRoutes } from "./ui2/routes"; // myrmidon(UI2-SHELL)
 import { cloudStackCreateUrl } from "./lib/cloudLinks";
 import { navigateTopLevel } from "@/lib/browserNavigation";
 
@@ -755,13 +756,14 @@ function NoCompaniesStartPage() {
 
 export function App() {
   const { enabled: streamlinedUiEnabled, loaded: streamlinedUiLoaded } = useStreamlinedUiEnabled();
-  // myrmidon(UI-0a): UI-2.0 shell behind the instance flag enableMyrmidonUi2.
-  // While loading the flag keeps the vendor shell (no flash); when on, the
-  // ui2 frame replaces the vendor Layout for the whole company route tree —
-  // the routes and pages themselves stay shared with 1.5 (OPE-3550).
-  const { enabled: myrmidonUi2Enabled } = useMyrmidonUi2Enabled();
+  const { enabled: myrmidonUi2Enabled } = useMyrmidonUi2Enabled(); // myrmidon(UI2-SHELL)
+  // myrmidon(UI2-SHELL): mount the ui2 shell behind the instance flag
+  // enableMyrmidonUi2 (plus the personal ?ui=1|2 override). While loading or
+  // off the vendor shell renders unchanged (no flash); when on, the ui2 frame
+  // replaces the vendor Layout for the whole company route tree — the routes
+  // and pages themselves stay shared with 1.5 (OPE-3550).
   const boardShell = myrmidonUi2Enabled ? (
-    <Ui2Shell /> /* myrmidon(UI-0a) */
+    <Ui2Root /> /* myrmidon(UI2-SHELL) */
   ) : streamlinedUiEnabled ? (
     <Layout />
   ) : (
@@ -857,6 +859,11 @@ export function App() {
           <Route path="execution-workspaces/:workspaceId/issues" element={<UnprefixedExecutionWorkspaceRedirect />} />
           <Route path="execution-workspaces/:workspaceId/routines" element={<UnprefixedExecutionWorkspaceRedirect />} />
           <Route path=":companyPrefix" element={boardShell}>
+            {/* myrmidon(UI2-SHELL): the ui2 route table takes precedence for
+                its six flagged screens under the ui2 shell; the vendor routes
+                below keep serving everything else. UI-0c replaces the
+                placeholder components per entry in ui2/routes.tsx. */}
+            {myrmidonUi2Enabled ? ui2PlaceholderRoutes() : null}
             {boardRoutes(streamlinedUiEnabled)}
           </Route>
           <Route path="*" element={<NotFoundPage scope="global" />} />

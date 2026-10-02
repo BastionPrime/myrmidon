@@ -4,8 +4,8 @@
 /* myrmidon(UI-0a): UI-2.0 token layer — --myr-* design-system tokens and the
    self-hosted Saira/Exo 2/Inter/JetBrains Mono subsets for the ui2 tree.
    Imported here (not a parallel pipeline) per DESIGN.md's single-token-source
-   rule. Values documented in ui/src/ui2/tokens.css. */
-@import "./ui2/tokens.css";
+   rule. Values documented in ui/src/ui2/theme/tokens.css. */
+@import "./ui2/theme/tokens.css";
 
 @font-face {
   font-family: "InterVariable";
@@ -2876,6 +2876,7 @@ span.paperclip-mention-chip[data-mention-kind="external-object"] {
    * allow ui/src/pages/ProjectWorkspaceDetail.test.tsx — mock project color fixture
    * allow ui/src/pages/Projects.test.tsx — mock project color fixture
    * allow ui/src/pages/Routines.test.tsx — mock routine/label color fixtures
+   * allow ui/src/ui2/ui2-shell.myrmidon.test.ts — guard asserts the design-decision 02.10 token hexes (warn #8A5300/#E6B450, edge #74849A, navy #13294B, dark surface #111922) are present verbatim in tokens.css; the literals ARE the pinned expected data, not rendered values
    ── end allowlist ── */
 
 /* Agent settings composition, shared with Storybook. */

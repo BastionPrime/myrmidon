@@ -429,6 +429,10 @@
   --myr-font-display: "Saira", "Exo 2", ui-sans-serif, system-ui, sans-serif;
   --myr-font-ui: "Inter", "InterVariable", ui-sans-serif, system-ui, sans-serif;
   --myr-font-mono: "JetBrains Mono", ui-monospace, monospace;
+  /* The MYRMIDON wordmark stays Saira in every language (design 02.10):
+   * --myr-font-wordmark is consumed by the lockup wrapper so the wordmark
+   * never follows the RU display switch. */
+  --myr-font-wordmark: "Saira", ui-sans-serif, system-ui, sans-serif;
   --myr-text-hero: 28px;             /* screen titles (Saira 700) */
   --myr-text-title: 18px;            /* card titles */
   --myr-text-body: 14px;             /* default UI text */
@@ -473,11 +477,21 @@
   font-size: var(--myr-text-body);
 }
 
-/* Display type: language-switched per design 02.10 — Saira for EN (latin
- * subsets cover it), Exo 2 picks up Cyrillic automatically per unicode-range
- * when the active language is Russian and the glyph is Cyrillic. */
+/* Display type: language-switched per design 02.10 — Saira for EN, Exo 2 for
+ * RU, switched by language as a whole. The contract with UI-0b: its provider
+ * sets [lang="ru"] on the ui2 root; this rule swaps the display font stack.
+ * The unicode-range fallback still covers mixed-script edge cases, and the
+ * wordmark var is untouched (logo stays Saira). */
+.myr-ui2[lang="ru"] {
+  --myr-font-display: "Exo 2", "Saira", ui-sans-serif, system-ui, sans-serif;
+}
+
 .myr-display {
   font-family: var(--myr-font-display);
+}
+
+.myr-wordmark {
+  font-family: var(--myr-font-wordmark);
 }
 
 .myr-mono {
