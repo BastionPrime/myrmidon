@@ -360,6 +360,13 @@ import {
   evaluateIssueRewakeThrottle,
   isThrottleCandidateIssueRewake,
 } from "./issue-rewake-throttle.js";
+// myrmidon(WAKE-GUARD): admission-side half of TASK-PR-SYNC — skips a run for a
+// task whose delivering PRs are all merged and settles it instead.
+import {
+  createTaskPrSyncWakeGuard,
+  readTaskPrSyncWakeGuardEnabled,
+  TASK_PR_SYNC_WAKE_SKIP_REASON,
+} from "../myrmidon/task-pr-sync/wake-guard.js";
 import {
   logActivity,
   publishPluginDomainEvent,
@@ -9102,6 +9109,8 @@ export function heartbeatService(
 ) {
   let shutdownInProgress = false;
   const instanceSettings = instanceSettingsService(db);
+  // myrmidon(WAKE-GUARD): one cache per server process; see wake-guard.ts.
+  const taskPrSyncWakeGuard = createTaskPrSyncWakeGuard();
   const getCurrentUserRedactionOptions = async () => ({
     enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
   });
@@ -27353,6 +27362,60 @@ export function heartbeatService(
             }
             // admission.kind === "proceed": no active run absorbed this wake,
             // so fall through to the ordinary queue path below.
+          }
+
+          // myrmidon(WAKE-GUARD): an event-free wake for a task whose pull
+          // request work products are all terminal with at least one merged
+          // would only race the settle sweep (TASK-PR-SYNC part C). Skip it
+          // with the vendor's skipped-wakeup-request mechanism and let the
+          // sweep close the task; human comment and interaction wakes carry
+          // events and are never suppressed. Guarded by the same event-free
+          // predicate the vendor's rewake throttle applies, so a wake that
+          // bypasses the throttle can never be skipped here.
+          if (
+            readTaskPrSyncWakeGuardEnabled() &&
+            isThrottleCandidateIssueRewake({
+              reason,
+              wakeCommentId: wakeCommentId ?? null,
+              requestedByActorType: opts.requestedByActorType ?? null,
+              forceFreshSession:
+                enrichedContextSnapshot.forceFreshSession === true,
+              hasExplicitResume: Boolean(explicitResumeSession),
+            }) &&
+            issue.status !== "done" &&
+            issue.status !== "cancelled"
+          ) {
+            const wakeGuardNow = new Date();
+            // Sync fast path first: a cached decision answers without a DB hit.
+            const cachedDecision = taskPrSyncWakeGuard.peek(issue.id);
+            const suppress =
+              cachedDecision ??
+              (await taskPrSyncWakeGuard.shouldSuppressWake(issue.id, tx as unknown as Db));
+            if (suppress) {
+              await tx.insert(agentWakeupRequests).values({
+                ...durableReceiptFields,
+                companyId: agent.companyId,
+                agentId,
+                source,
+                triggerDetail,
+                reason: TASK_PR_SYNC_WAKE_SKIP_REASON,
+                payload: {
+                  ...(payload ?? {}),
+                  issueId,
+                  heartbeatSkip: {
+                    reason: TASK_PR_SYNC_WAKE_SKIP_REASON,
+                    requestedReason: reason,
+                    cached: cachedDecision !== null,
+                  },
+                },
+                status: "skipped",
+                requestedByActorType: opts.requestedByActorType ?? null,
+                requestedByActorId: opts.requestedByActorId ?? null,
+                idempotencyKey: opts.idempotencyKey ?? null,
+                finishedAt: wakeGuardNow,
+              });
+              return { kind: "skipped" as const };
+            }
           }
 
           // PAP-13775: no live run holds the lock, so this wake would start a
