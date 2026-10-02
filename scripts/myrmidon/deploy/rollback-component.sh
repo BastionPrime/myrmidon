@@ -41,11 +41,25 @@ repo="${MYR_COMPONENT_REPOSITORIES[$component]:-}"
 COMPONENT_SERVICE_VAR="$(printf 'MYR_%s_COMPOSE_SERVICE' "$component" | tr '[:lower:]' '[:upper:]')"
 COMPONENT_OVERRIDE_VAR="$(printf 'MYR_%s_OVERRIDE_FILE' "$component" | tr '[:lower:]' '[:upper:]')"
 COMPONENT_HEALTH_URL_VAR="$(printf 'MYR_%s_HEALTH_URL' "$component" | tr '[:lower:]' '[:upper:]')"
+COMPONENT_HOST_VAR="$(printf 'MYR_%s_HOST' "$component" | tr '[:lower:]' '[:upper:]')"
 COMPONENT_SERVICE="${!COMPONENT_SERVICE_VAR:-$component}"
 COMPONENT_OVERRIDE_NAME="${!COMPONENT_OVERRIDE_VAR:-docker-compose.myrmidon-$component.yml}"
 COMPONENT_HEALTH_URL="${!COMPONENT_HEALTH_URL_VAR:-}"
+COMPONENT_HOST="${!COMPONENT_HOST_VAR:-local}"
 COMPONENT_OVERRIDE_PATH="$COMPOSE_DIR/$COMPONENT_OVERRIDE_NAME"
 COMPONENT_PREVIOUS_FILE="$STATE_DIR/previous-$component-image"
+
+# HOST-TARGETING (the 02.10 two-host follow-up): the rollback must target the
+# SAME host the rollout targeted. A rollback that ignored MYR_<COMPONENT>_HOST
+# would pull the image and recreate the service on the deploy host — the exact
+# 1.4.0 fleetd incident (paperclip-fleetd-1 created on the board host, no
+# config there, container exits, removed by hand). The helpers are shared with
+# rollout-component.sh through lib.sh (component_host_*).
+if [[ "$COMPONENT_HOST" == "skip" ]]; then
+  log "SKIP: $component is not managed by this deploy (MYR_${component^^}_HOST=skip); roll it back by its own procedure there"
+  exit 0
+fi
+component_host_parse "$component" "$COMPONENT_HOST"
 
 if [[ -n "$to_image" ]]; then
   ref="$to_image"
@@ -57,7 +71,7 @@ fi
 [[ "$ref" =~ ^[A-Za-z0-9./_:@-]+$ ]] || die "rollback target is not an image reference: $ref"
 
 current_ref=""
-[[ -f "$COMPONENT_OVERRIDE_PATH" ]] && current_ref="$(sed -nE 's/^[[:space:]]*image:[[:space:]]*([^[:space:]#]+).*/\1/p' "$COMPONENT_OVERRIDE_PATH" | head -n1)"
+current_ref="$(component_host_cat_override | sed -nE 's/^[[:space:]]*image:[[:space:]]*([^[:space:]#]+).*/\1/p' | head -n1)"
 
 if ! check_ci_image_for_repo "$repo" "$ref"; then
   log "WARNING: $component rollback target is not a verified CI image: $CI_CHECK_REASON"
@@ -65,7 +79,7 @@ if ! check_ci_image_for_repo "$repo" "$ref"; then
 fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  log "dry run: nothing will be changed. Plan:"
+  log "dry run: nothing will be changed. Plan (${COMPONENT_HOST%%:*} target${COMPONENT_REMOTE:+, ssh $COMPONENT_REMOTE}):"
   plan "1. docker pull $ref"
   plan "2. set image in $COMPONENT_OVERRIDE_PATH (from ${current_ref:-<none>}); docker compose up -d --no-deps $COMPONENT_SERVICE"
   plan "3. health: ${COMPONENT_HEALTH_URL:-<unset>}"
@@ -73,16 +87,11 @@ if [[ "$DRY_RUN" == "1" ]]; then
 fi
 
 log "1/3 pull $ref"
-docker pull --quiet "$ref" >/dev/null || die "cannot pull $ref"
+component_host_docker pull --quiet "$ref" >/dev/null || die "cannot pull $ref"
 
 log "2/3 switch image to $ref"
-{
-  echo "# Managed by scripts/myrmidon/deploy. Only the image line changes."
-  echo "services:"
-  echo "  $COMPONENT_SERVICE:"
-  echo "    image: $ref"
-} >"$COMPONENT_OVERRIDE_PATH"
-compose up -d --no-deps "$COMPONENT_SERVICE" || die "compose up failed for $COMPONENT_SERVICE"
+component_host_write_override "$ref"
+component_host_compose up -d --no-deps "$COMPONENT_SERVICE" || die "compose up failed for $COMPONENT_SERVICE"
 record_history "rollback-$component" "$ref"
 if [[ -n "$current_ref" && "$current_ref" != "$ref" ]]; then
   printf '%s\n' "$current_ref" >"$COMPONENT_PREVIOUS_FILE"

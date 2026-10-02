@@ -98,6 +98,64 @@ restores the board-only behavior (not for a release: the 01.10 incident was exac
 split). The settings are in [SETTINGS.md](SETTINGS.md); an example is in
 [`deploy.env.example`](../../scripts/myrmidon/deploy/deploy.env.example).
 
+A component does not have to run on the deploy host (`MYR_<COMPONENT>_HOST`, the 02.10
+follow-ups): `local` (the default) rolls it in this host's compose project — the rollout proves
+the service is part of that project first (`docker compose config --services`) and refuses BEFORE
+pulling or writing anything when it is not (fail-closed); `remote:<user>@<host>`
+rolls it on another host — docker and compose run through ssh (key auth, no password prompt),
+the override file is written there under the same relative path, and the health URL is probed
+from the deploy host, so give the address the deploy host reaches, not a remote localhost;
+`skip` declares the component not managed by this deploy (its own procedure rolls it out
+elsewhere) — the rollout then prints a loud SKIP and still verifies the digest passes the
+CI-image gate. The 1.4.0 production install hit exactly this: fleetd lives on the second host,
+the rollout created `paperclip-fleetd-1` on the board host, it exited at once (no
+`/etc/myrmidon-fleetd/config.json` there) and the operator removed it by hand — point
+`MYR_FLEETD_HOST` at the host fleetd actually runs on.
+
+When your installation runs a component from a compose file of its own (dockergate of the
+1.4.0 production install runs from `myrmidon/compose.yml`, not from a
+`docker-compose.myrmidon-dockergate.yml` override), set `MYR_<COMPONENT>_COMPOSE_SERVICE`
+and `MYR_<COMPONENT>_OVERRIDE_FILE` so the rollout's service recreate targets the service
+that actually runs, and the override file it writes is the one your compose stack reads:
+one service, one image line, one source of the image. The override the rollout writes
+contains only the image line, so a service defined in your own compose file keeps its
+volumes, sockets and networks; the override only pins which image it runs.
+
+### Upgrading from 1.4.0 to 1.5.0
+
+The 1.5.0 additions are additive on the host side: no new migrations to run by
+hand and no changes to the deploy script — the upgrade is the image switch of
+the release components, as in the 1.4.0 procedure above.
+
+What changes for operators:
+
+- **Set the bridge pepper before the first connector pairing.**
+  `MYRMIDON_BROWSER_BRIDGE_PEPPER` is the HMAC pepper for pairing codes and
+  bridge tokens; unset, the process takes a random pepper per start (one log
+  warning) and every paired device must pair again after each restart. Set it
+  once in the board's environment before issuing the first pairing code. See
+  [SETTINGS.md](SETTINGS.md) and
+  [guides/browser-bridge-gateway.md](guides/browser-bridge-gateway.md).
+- **The connector panel appears in Company settings → Connectors.** The bridge
+  state lives in `instance_settings.general.browserBridge` (domains, signing
+  policy); existing instances start with an empty allowlist and the default
+  signing policy (`enabled`, mode `auto`, no daily limit) — nothing pairs and
+  nothing is signed until an operator configures it. Panel writes need the
+  instance admin role. See
+  [guides/connector-panel.md](guides/connector-panel.md).
+- **The OCR path stays closed until configured.** Without
+  `MYRMIDON_OCR_BASE_URL` and `MYRMIDON_OCR_KEY_SECRET` the `ocr.pdf` tool
+  answers a stable `ocr_disabled` refusal and no request leaves the board; bots
+  that never call it are unaffected. To open the path, set the contour address,
+  the secret name and (for LiteLLM) the model — see [SETTINGS.md](SETTINGS.md)
+  and [guides/ocr.md](guides/ocr.md).
+- **External MCP connectors need no fork change.** An instance that already
+  runs `PAPERCLIP_DEPLOYMENT_MODE=authenticated` with
+  `PAPERCLIP_DEPLOYMENT_EXPOSURE=private` accepts private-network connector
+  containers; do not flip exposure to `public` while one is connected. The
+  connect/grant runbook is
+  [guides/external-mcp-connectors.md](guides/external-mcp-connectors.md).
+
 ### Upgrading from 1.3.2 to 1.4.0
 
 Deploy the board, dockergate and fleetd images from the same 1.4.0 tag together — with
@@ -211,7 +269,10 @@ Order:
    are `blocked` with an update since the deploy started, and re-reads the maintenance state. A
    blocked issue in the deploy window, an unreadable board or a window that did not retire
    prints `degraded: ...` and the run ends with `DEPLOY DEGRADED`; it does not fail a switched
-   and healthy deploy. Without the two settings the check is skipped with a log line.
+   and healthy deploy. Without the two settings the check is skipped with a log line — set
+   both for a release deploy: `BOARD_API_URL` is the API root with the `/api` suffix (the
+   check reads `$BOARD_API_URL/companies/$BOARD_COMPANY_ID/issues?status=blocked&...`), and
+   `BOARD_COMPANY_ID` is the company UUID the fleet works for.
 9. The release components roll out in the same run (see
    [Deploy the board and the release components together](#deploy-the-board-and-the-release-components-together)):
    one `rollout-component.sh` per component — pull by digest, the component override file,
@@ -351,7 +412,10 @@ scripts/myrmidon/deploy/rollback-component.sh --config /path/to/deploy.env --com
 
 It restores the image the component's rollout remembered as previous (`$STATE_DIR/
 previous-<component>-image`, or an explicit `--to-image <ref>`), recreates the service and
-re-runs that component's health probe (skipped with a warning when the probe is unset). Like
+re-runs that component's health probe (skipped with a warning when the probe is unset).
+The rollback honors `MYR_<COMPONENT>_HOST` exactly like the rollout: a `remote:<user>@<host>`
+component is pulled, switched and recreated on that host through ssh, a `skip` component is
+left to its own procedure (a loud SKIP). Like
 `rollback.sh` it is the emergency path: an unverified target warns but does not block.
 Rolling the board back does not roll the components back, and rolling a component back does
 not touch the board: after a DEGRADED deploy the output names exactly which side failed and
