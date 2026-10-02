@@ -60,6 +60,8 @@ const SOURCE_META: Record<AttentionSourceKind, SourceMeta> = {
   failed_run: { label: "Failed run" },
   budget_alert: { label: "Budget" },
   agent_error_alert: { label: "Agent error" },
+  // myrmidon(SUB): label for the stack-update source added with the stack registry release check.
+  stack_update: { label: "Stack update" },
 };
 
 export function sourceMeta(kind: AttentionSourceKind): SourceMeta {

@@ -1,0 +1,64 @@
+# Shared image-generation MCP service for container bots.
+# `bots` (the Docker network the bot containers live on) must already exist: it is the same
+# network as the bots use (MYRMIDON_BOT_NETWORK).
+#
+# Before `up`: create ./config/bots.json (see README) and the secret file ./secrets/gateway_token
+# (the model-gateway key, any non-empty string the gateway accepts). The `spool` volume is a named
+# volume: the image creates /spool owned by uid 10001, so Docker initialises the volume with that
+# owner on first use. A named volume has no size limit of its own; see the `spool` volume below.
+#
+# The facade needs a route to IMAGE_GATEWAY_BASE_URL. The gateway is outside this compose project:
+# attach the `bots` network to it, or point IMAGE_GATEWAY_BASE_URL at a proxy that reaches it.
+
+name: image-tools
+
+networks:
+  bots:
+    external: true
+    name: myrmidon-bots
+
+volumes:
+  # Everything the bots generate lives here (48 h TTL). Two limits protect the host: the service
+  # refuses new data past IMAGE_SPOOL_MAX_BYTES and when less than IMAGE_SPOOL_MIN_FREE_BYTES is free
+  # on this filesystem. The second one only helps if the volume is not the host's root disk, so put
+  # the spool on its own size-limited filesystem (a dedicated partition, an LV, or a loop-mounted
+  # image) and use the driver_opts form.
+  spool: {}
+  # spool:
+  #   driver: local
+  #   driver_opts: {type: none, o: bind, device: /srv/image-spool}
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  pids_limit: 256
+
+services:
+  image-mcp:  # the only service the bots can reach: http://image-mcp:8080/mcp
+    <<: *hardening
+    image: ghcr.io/itkadr-git/myrmidon-image-mcp:${IMAGE_TAG:-main}
+    user: "10001:10001"
+    networks: [bots]
+    environment:
+      IMAGE_BOTS_FILE: /config/bots.json
+      IMAGE_GATEWAY_BASE_URL: http://example-host:4000
+      IMAGE_GATEWAY_TOKEN_FILE: /run/secrets/gateway_token
+      # The model allow-list is service configuration, never bot code. Edit it in one place.
+      IMAGE_MODELS: qwen-image-3.0,qwen-image-3.0-pro,qwen-image-edit-max,wan2.7-image,wan2.7-image-pro,z-image-turbo
+      IMAGE_SIZES: 1024x1024,1328x1328
+      IMAGE_ALLOWED_HOSTS: image-mcp,image-mcp:8080  # Host header values the MCP endpoint accepts
+      IMAGE_SPOOL_MAX_BYTES: "34359738368"  # 32 GiB for all bots together; keep below the spool filesystem size
+      IMAGE_SPOOL_MIN_FREE_BYTES: "2147483648"  # refuse writes when the spool filesystem has less free
+    secrets: [gateway_token]
+    volumes:
+      - ./config:/config:ro
+      - spool:/spool
+    tmpfs: ["/tmp:size=64m"]
+    mem_limit: 512m
+    cpus: 1.0
+
+secrets:
+  gateway_token:
+    file: ./secrets/gateway_token

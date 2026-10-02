@@ -8,6 +8,149 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
+## 1.5.0
+
+### Client connectors (the browser bridge)
+
+- The client connector gateway (EXTCASE-B): the board accepts an outbound
+  WebSocket connection (`/bridge/v1`, JSON-RPC 2.0) from a browser extension on
+  a client PC — the transport for platforms that exist only in the client's
+  browser behind a local signing key. Pairing is a one-shot 15-minute code
+  exchanged for a device-bound bridge token (only HMAC digests are stored,
+  peppered by `MYRMIDON_BROWSER_BRIDGE_PEPPER`); revocation is fail-closed and
+  drops the live socket. Every action is gated by the declared capability set
+  and the company domain allowlist (checked at the gateway and again in the
+  extension) and journaled — one row per action in the company activity log,
+  page content never journaled. Signing follows the operator policy
+  (`general.browserBridge.signing`: `enabled` / `auto` / `manual` / `types`)
+  with a one-call emergency off; the signed bytes and the PIN never leave the
+  client PC — the journal holds the document hash. Guide:
+  [guides/browser-bridge-gateway.md](guides/browser-bridge-gateway.md).
+- The connector panel (EXTCASE-PANEL), Company settings → Connectors: the
+  device list with online status and capabilities, one-shot pairing codes shown
+  once, revocation with confirmation, the domain allowlist, the signing policy
+  with a daily signature limit per UTC day (the gateway refuses before the
+  device is asked, `dailyLimitReached`) and the emergency stop, plus the bridge
+  journal with filters (device, method, outcome, signatures only) and the
+  document hash per signature. Guide:
+  [guides/connector-panel.md](guides/connector-panel.md).
+- The signing host contract: a generic, client-free native-messaging contract
+  for local signing helpers (`extension/src/native-host-contract.ts`) — a
+  closed `actionType` enum (`sign` / `sign_and_submit` / `sign_attachment`), a
+  document payload of bytes or a SHA-256 digest, a closed error-code set, and
+  validators both sides compile against. A concrete helper (token middleware
+  binding, PIN storage) is deployment-specific and lives outside the public
+  fork. Guide:
+  [guides/signing-host-contract.md](guides/signing-host-contract.md).
+
+### OCR path
+
+- `ocr.pdf` for every bot (EXT-CASE-OCR): a PDF received as a mail attachment
+  or downloaded through the bridge is recognized into text in the bot
+  workspace, with a structural excerpt for tender documentation (requirements,
+  deadlines, positions). Backends: RAGFlow (MCP) or an OpenAI-compatible
+  gateway (LiteLLM), selected by `MYRMIDON_OCR_BACKEND`; refusals carry stable
+  codes and happen before the backend is contacted (size and page ceilings).
+  The journal holds metadata only — never the text or the bytes. Guide:
+  [guides/ocr.md](guides/ocr.md).
+
+### External MCP connectors
+
+- Any standards-compliant HTTP MCP server now plugs in without fork code
+  through the vendor's generic connection surface (Apps → Connect an app →
+  Connect your own MCP server, or Apps → Advanced → Paste a config):
+  credentials become company secrets, per-agent grants default to deny, and
+  tools arrive namespaced `mcp.<connection>:<tool>`. The operator runbook —
+  entry points, grants, health checks, rotation:
+  [guides/external-mcp-connectors.md](guides/external-mcp-connectors.md).
+
+## 1.4.0
+
+Everything merged between the 1.3.2 and 1.4.0 tags. Deploy this release's board,
+dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-board-and-the-release-components-together)).
+
+### Memory and isolation
+
+- "Memory" tab on the agent card (MEMORY-UI, plan 1.4 item 1): view, export (JSON)
+  and removal of the entries of the agent's memory bank — resolved by the same bank
+  rule the memory plugin fork applies. Removing one entry is reversible (invalidation
+  with a reason); clearing the whole bank sits behind a typed confirmation; every
+  action writes an activity log row. The section is enabled by the
+  `MYRMIDON_HINDSIGHT_API_URL` + `MYRMIDON_HINDSIGHT_KEY_SECRET` pair.
+  Guide: [guides/agent-memory-card.md](guides/agent-memory-card.md) (#258, #265).
+
+### Cloud storage
+
+- CLOUD-CONNECTOR part B: the owner connects a cloud from the panel — the connector
+  builds the provider's authorization URL with a single-use state and PKCE, exchanges
+  the code, and keeps the resulting token bundle in a company secret of the instance
+  secret store. Only the secret id stays in the connector's own state, so no bot ever
+  holds a cloud token and the token value never travels through the panel API (#252).
+
+### Deploy and reliability
+
+- Automatic rollback by health for the board and the bot fleet (R5-C). A failed
+  health check after a deploy no longer leaves the board or the touched bots on the
+  broken image. Board: the job moves to `rolling_back` and the host executor runs
+  `rollback.sh` to the image the deploy remembered before the switch; the job ends
+  `auto_rolled_back` (maintenance window closed) or `failed_rollback` (window kept
+  for the operator). Bots: a failed canary or wave bot moves the rollout to
+  `rolling_back`; every bot that received the new image gets its own card image
+  re-applied, one at a time, and the rollout ends `rolled_back` with the original
+  failure reason kept. Switches (both on by default): `MYRMIDON_DEPLOY_AUTO_ROLLBACK`
+  for the board, `MYRMIDON_BOT_CANARY_AUTO_ROLLBACK` for the fleet; the host side
+  of the board switch is `AUTO_ROLLBACK` in `deploy.env`, both sides must agree.
+  Unattended auto-update stays off (`MYRMIDON_DEPLOY_AUTO_UPDATE=0`); see
+  [SETTINGS.md](SETTINGS.md) (#261).
+- Heartbeat: a queued-run start that re-enters the agent start lock no longer waits
+  for itself. The lock body now runs in an async-context frame per agent, so a
+  nested start from the same chain skips the wait and no longer stalls for
+  `AGENT_START_LOCK_STALE_MS` (30 s) on every cancellation that promotes a queued
+  run (#174).
+- RELEASE-GATE: the board and the release's component images deploy together,
+  enforced by the deploy script itself. `deploy.sh` resolves the dockergate and
+  fleetd digests of the SAME release (the `myr-vX.Y.Z` tag from the board image
+  version label, else the `sha-<short>` tag of its commit) and refuses a release
+  whose components are missing from the registry before anything changes — the
+  01.10 incident deployed the board alone while production dockergate still
+  rejected the new `maxConcurrentRuns` marker key and every bot apply was denied
+  for ~40 minutes. Each component now rolls out in the same run with its own
+  health probe (`MYR_<COMPONENT>_HEALTH_URL`), and a post-deploy smoke
+  (`bot-apply-smoke.sh`) waits for at least one bot container to re-apply, else
+  the deploy reports DEGRADED with the rollback commands
+  (`rollback-component.sh` per component). CI gained the applied-marker contract:
+  the markers `serializeAppliedMarker()` writes are emitted from the server code
+  of every commit and fed through the dockergate validator, so a marker the
+  validator would deny turns CI red before any image exists (#276).
+- AUTO-RESUME: the board itself resumes an agent left in `error` by a failed
+  run — a sweep on the scheduler tick with a backoff of 1, 5 and 15 minutes,
+  reusing the pause/resume wake chain so the resumed agent also wakes the work
+  it was stranded on. After `MYRMIDON_AUTO_RESUME_MAX_ATTEMPTS` (default 3)
+  failed resumes the board stops and escalates the agent's `agent_error_alert`
+  card on the attention desk to severity `critical`; the operator's resume
+  re-arms the counter. State lives in `agents.metadata.myrmidon_auto_resume`
+  (no migration), every action writes an activity log row
+  (`agent.auto_resume_issued` / `agent.auto_resume_exhausted`). Settings:
+  `MYRMIDON_AUTO_RESUME_*` in [SETTINGS.md](SETTINGS.md); guide:
+  [guides/auto-resume.md](guides/auto-resume.md) (#272).
+
+### Telegram
+
+- Telegram DM run status and inline split (U1). In a bridged Telegram DM
+  (`MYRMIDON_TELEGRAM_DM_CONVERSATIONS`) a run can now show its "working on
+  it" status as one editable message instead of milestone silence: the status
+  is posted once when the run is queued, the same provider message is edited
+  in place as the phase changes, and the run's final answer replaces it —
+  the failure, admin-attention and completion milestones still publish, and
+  the `/stop` terminal milestone stays suppressed. Separately, a long
+  structured Markdown answer that the vendor sends as one `.md` attachment
+  can split inline into ordered parts at paragraph/line/word boundaries.
+  Both behaviors are opt-in and off by default:
+  `MYRMIDON_TELEGRAM_DM_STATUS` and `MYRMIDON_TELEGRAM_SPLIT_MAX_PARTS` (a
+  document needing more parts than the cap stays an attachment); see
+  [SETTINGS.md](SETTINGS.md) and the guide
+  [guides/telegram-dm-status.md](guides/telegram-dm-status.md) (#267, #313).
+
 ## 1.3.2
 
 Everything merged between the 1.3.1 and 1.3.2 tags. Deploy this release's dockergate image
@@ -24,6 +167,30 @@ together with the board.
 - Every drift writes an activity line naming the field and both values
   (`bot container template drift detected`, `details.fields`), so it is diagnosable from the log
   alone instead of costing another incident (#253).
+- The state-DB descriptor probe on the gateway write path is bounded: the WAL/SHM generation
+  check now has a budget, so a slow or stuck filesystem no longer stalls every bot write (#240).
+- Bot image development variant: a third build target with a repository-cycle toolchain is
+  available for development work (#238).
+
+### Interface
+
+- Live browser screen console core: the owner watches and drives the live browser that bots
+  authorize in. Registry, screen sessions with safe timers, a two-contour bot pause, the
+  session journal and site-data cleanup. See [guides/browsers.md](guides/browsers.md) (#210).
+- Access hub server core: the server module for the Access section (secrets, grants, rotation,
+  SSH keys) is merged. See [guides/access-hub.md](guides/access-hub.md) (#235).
+- Stack registry guide: the seeded component list, `GET /api/myrmidon/stack` and
+  `POST /api/myrmidon/stack/refresh`, the cache and the Docker socket setting. See
+  [guides/stack-registry.md](guides/stack-registry.md) (#243).
+- Access-hub guide aligned with the merged server module (#249).
+
+### Cloud storage
+
+- Owner-authorized cloud storage with per-agent folder grants: the owner connects one account
+  per provider, keeps a list of reachable folders and grants them to an agent, a caste or
+  everyone with a read-only or read-write mode. OneDrive provider and API under
+  `/api/myrmidon/cloud-connector`. See [guides/cloud-files-connector.md](guides/cloud-files-connector.md)
+  (#245).
 
 ## 1.3.1
 

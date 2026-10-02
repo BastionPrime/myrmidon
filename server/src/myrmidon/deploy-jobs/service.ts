@@ -10,6 +10,19 @@
 // terminal with the reason on the job; the operator's tools are the exit and
 // the rollback, exactly as with a script deploy.
 //
+// R5-C (auto-rollback by health): with MYRMIDON_DEPLOY_AUTO_ROLLBACK on (the
+// default) a failed health check is NOT terminal. The job moves to
+// `rolling_back`, the host executor switches the board back to the locally
+// remembered previous image (the same rollback.sh, emergency path, CI check
+// as a warning only), and the job ends:
+//   - `auto_rolled_back` when the previous image is healthy again — the
+//     window leaves, the board serves traffic, no human took part;
+//   - `failed_rollback` when the rollback itself fails — the window STAYS ON
+//     for the operator, the same contract as a failed health check before.
+// With MYRMIDON_DEPLOY_AUTO_ROLLBACK=0 a failed health check ends
+// `failed_health` with the window on, exactly as before: the rollback stays
+// the operator's tool.
+//
 // Invariants the service keeps:
 //
 // - at most one non-terminal job exists (assertNoActiveJob under the row lock);
@@ -19,8 +32,13 @@
 //   and left when the job ends, whichever way it ends;
 // - maintenance_on → running only after the window reported state `on`;
 // - running → succeeded only when the host reported the new version/commit
-//   healthy; otherwise failed_health, and the window stays open for the
-//   rollback (the same contract as deploy.sh step 7/8).
+//   healthy; otherwise failed_health (no auto-rollback) or rolling_back
+//   (auto-rollback); with the auto-rollback on the executor reports the
+//   rollback phases directly (rolling-back/rolled-back/rollback-failed), and
+//   running follows them too — a tick that missed health-failed must not
+//   hang the job until the step timeout;
+// - rolling_back → auto_rolled_back only when the host reported the rollback
+//   done; a rollback failure is failed_rollback with the window left on.
 
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
@@ -82,10 +100,19 @@ export interface DeployMaintenancePort {
   status(): Promise<{ instance: { id: string; state: string } | null }>;
 }
 
-/** What the host executor reports (written by deploy.sh --from-job). */
+/** What the host executor reports (written by deploy-from-job.sh). */
 export interface HostReport {
   jobId: string;
-  phase: "claimed" | "switching" | "switched" | "health-ok" | "health-failed" | "error";
+  phase:
+    | "claimed"
+    | "switching"
+    | "switched"
+    | "health-ok"
+    | "health-failed"
+    | "rolling-back"
+    | "rolled-back"
+    | "rollback-failed"
+    | "error";
   version?: string | null;
   commit?: string | null;
   detail?: string | null;
@@ -403,19 +430,155 @@ export function deployJobsService(db: Db, deps: DeployJobServiceDeps) {
           const detail = healthy
             ? `new image healthy: version ${health?.version ?? "<none>"}, commit ${health?.commit?.slice(0, 12) ?? "<none>"}`
             : `host reported health-ok but /api/health disagrees: got version ${health?.version ?? "<none>"}, commit ${health?.commit?.slice(0, 12) ?? "<none>"}`;
+          if (!healthy && settings.autoRollback) {
+            // R5-C: a failed health check with the automatic rollback on is
+            // not terminal — the host executor rolls the image back next.
+            await startAutoRollback(job, detail, report);
+            return;
+          }
           await finish(job.id, nextStatus, detail, report);
           return;
         }
         if (report.phase === "health-failed" || report.phase === "error") {
           const detail = `host executor failed: ${report.phase}${report.detail ? ` — ${report.detail}` : ""}`;
+          if (settings.autoRollback) {
+            // R5-C: same trigger — the new image is running but not healthy,
+            // roll back to the locally remembered previous one.
+            await startAutoRollback(job, detail, report);
+            return;
+          }
           await finish(job.id, "failed_health", detail, report);
+          return;
+        }
+        // R5-C review fix: with AUTO_ROLLBACK on (the executor default) a
+        // failed deploy never reports health-failed — the executor goes
+        // straight to the rollback phases. The board must follow them from
+        // `running` too: its tick can miss the intermediate phases entirely
+        // (the rollback takes seconds, the tick is 5 s), and a job left in
+        // `running` with a finished report hangs until the step timeout
+        // aborts it with a false outcome.
+        if (report.phase === "rolling-back") {
+          const detail = `host executor: rolling back automatically${report.detail ? ` (${report.detail})` : ""}`;
+          await startAutoRollback(job, detail, report);
+          return;
+        }
+        if (report.phase === "rolled-back") {
+          const detail = `rolled back to the previous image${report.detail ? ` (${report.detail})` : ""}`;
+          if (!settings.autoRollback) {
+            // Desync: the host rolled back with the board switch off. The
+            // deploy still failed its health check — record it as such.
+            await finish(job.id, "failed_health", `${detail}: the host executor rolled back with the board switch off`, report);
+            return;
+          }
+          // The executor already closed the window itself (rollback.sh
+          // leaves maintenance); finishRollback mirrors that for the case
+          // the board never saw the intermediate phases.
+          await startAutoRollback(job, detail, report);
+          const fresh = (await store.read()).jobs.find((j) => j.id === job.id);
+          if (fresh && fresh.status === "rolling_back") {
+            await finishRollback(job.id, "auto_rolled_back", detail, report);
+          }
+          return;
+        }
+        if (report.phase === "rollback-failed") {
+          const reason = `the deploy failed and its rollback failed: ${report.detail ?? report.phase}`;
+          const detail = `the automatic rollback failed: ${report.detail ?? report.phase}; maintenance stays on for the operator`;
+          await startAutoRollback(job, reason, report);
+          const fresh = (await store.read()).jobs.find((j) => j.id === job.id);
+          if (fresh && fresh.status === "rolling_back") {
+            await finishRollback(job.id, "failed_rollback", detail, report);
+          }
           return;
         }
         return; // claimed/switching/switched: still in progress
       }
+      case "rolling_back": {
+        // The host executor drives the rollback (rollback.sh, the remembered
+        // previous image) and reports it; the board follows the report.
+        const report = await deps.readHostReport(job.id).catch(() => null);
+        if (!report) return;
+        if (report.phase === "rolling-back") return; // in progress
+        if (report.phase === "rolled-back") {
+          const detail = `rolled back to the previous image${report.detail ? ` (${report.detail})` : ""}: ${job.failureReason ?? "the new image failed its health check"}`;
+          await finishRollback(job.id, "auto_rolled_back", detail, report);
+          return;
+        }
+        if (report.phase === "rollback-failed" || report.phase === "error") {
+          const detail = `the automatic rollback failed: ${report.detail ?? report.phase}; maintenance stays on for the operator. ${job.failureReason ?? ""}`.trim();
+          await finishRollback(job.id, "failed_rollback", detail, report);
+          return;
+        }
+        return; // a stale earlier phase: wait for the rollback verdict
+      }
       default:
         return;
     }
+  }
+
+  /**
+   * R5-C: move a failed-health job to `rolling_back` and let the host
+   * executor roll the board back. The failure reason of the deploy stays on
+   * the job — `rolling_back` is the recovery of THAT failure, not a separate
+   * job. The window stays on: it covers the rollback switch too.
+   */
+  async function startAutoRollback(job: DeployJob, reason: string, report: HostReport): Promise<void> {
+    const at = now();
+    const { result } = await write((doc) => {
+      const current = doc.jobs.find((j) => j.id === job.id);
+      if (!current || current.status !== "running") return { next: null, result: null as DeployJob | null };
+      const next = appendStep(
+        {
+          ...current,
+          status: "rolling_back",
+          failureReason: reason,
+          healthVersion: report.version ?? current.healthVersion,
+          healthCommit: report.commit ?? current.healthCommit,
+          updatedAt: at.toISOString(),
+        },
+        "rolling_back",
+        `health check failed; rolling back automatically (${reason})`,
+        at,
+      );
+      return { next: updateJob(doc, job.id, next), result: next };
+    });
+    if (!result) return;
+    await auditFor(result, "rolling_back", { actorType: "system", actorId: "myrmidon-deploy-jobs" }, { reason });
+  }
+
+  /** End a job whose rollback ran: success leaves the window, failure keeps it. */
+  async function finishRollback(
+    jobId: string,
+    status: Extract<DeployJobStatus, "auto_rolled_back" | "failed_rollback">,
+    detail: string,
+    report: HostReport,
+  ) {
+    const at = now();
+    const { result } = await write((doc) => {
+      const job = doc.jobs.find((j) => j.id === jobId);
+      if (!job || job.status !== "rolling_back") return { next: null, result: null as DeployJob | null };
+      const next = appendStep(
+        {
+          ...job,
+          status,
+          // A successful rollback resolved the failed health check; a failed
+          // rollback keeps the deploy's reason and adds its own on top.
+          failureReason: status === "failed_rollback" ? detail : job.failureReason,
+          updatedAt: at.toISOString(),
+        },
+        status,
+        detail,
+        at,
+      );
+      const retired = retireJob({ ...doc, jobs: doc.jobs.map((j) => (j.id === jobId ? next : j)) }, jobId, at);
+      return { next: retired, result: next };
+    });
+    if (!result) return;
+    if (status === "auto_rolled_back") {
+      await deps.maintenance.exit("deploy rolled back automatically").catch((err) => {
+        logger.error({ err, jobId }, "failed to leave maintenance after the automatic rollback");
+      });
+    }
+    await auditFor(result, status, { actorType: "system", actorId: "myrmidon-deploy-jobs" }, { detail });
   }
 
   async function finish(jobId: string, status: Extract<DeployJobStatus, "succeeded" | "failed_health">, detail: string, report: HostReport) {

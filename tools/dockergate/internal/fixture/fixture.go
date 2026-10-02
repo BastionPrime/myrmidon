@@ -160,3 +160,34 @@ func Script(t testing.TB, name string) string {
 
 // ArchiveBytes returns the bytes of a recorded tar.
 func ArchiveBytes(t testing.TB, a Archive) []byte { return Read(t, a.File) }
+
+// Marker is one applied marker emitted by contract/emit-marker-contract.mjs.
+type Marker struct {
+	ID       string `json:"id"`
+	File     string `json:"file"`
+	HasLimit bool   `json:"hasLimit"`
+}
+
+// MarkerContract is marker-contract.json.
+type MarkerContract struct {
+	Index []Marker `json:"index"`
+}
+
+// MarkerContractAll reads marker-contract.json.
+func MarkerContractAll(t testing.TB) *MarkerContract {
+	t.Helper()
+	var mc MarkerContract
+	if err := json.Unmarshal(Read(t, "marker-contract.json"), &mc); err != nil {
+		t.Fatalf("marker contract: %v", err)
+	}
+	if len(mc.Index) == 0 {
+		t.Fatal("marker contract is empty: the emitter did not run or produced no markers")
+	}
+	return &mc
+}
+
+// MarkerBytes returns the bytes of one emitted marker.
+func MarkerBytes(t testing.TB, m Marker) []byte {
+	t.Helper()
+	return Read(t, m.File)
+}

@@ -3392,7 +3392,7 @@ registry.registerPath({
   tags: ["agents"],
   summary: "Wake up an agent",
   description:
-    "Board failed-run retries supply failedRunId with reason retry_failed_run. Paperclip derives the exact request and current authorization; a chat retry may return a durable queued/deferred receipt before a run exists. Caller task/comment markers and fresh-session overrides do not authorize replay.",
+    "Board failed-run retries supply failedRunId with reason retry_failed_run. Paperclip derives the exact request and current authorization; a chat retry may return a durable queued/deferred receipt before a run exists. Caller task/comment markers and fresh-session overrides do not authorize replay. issueId is the documented first-class task binding: a manual wake without one binds to the agent's top ready task (the same ordering the idle-pickup scheduler uses) or is refused with 409 wakeup_requires_ready_task, so a wake never starts an issue-less run. (myrmidon WAKE-BIND)",
   request: {
     params: z.object({ id: z.string() }),
     body: jsonBody(wakeAgentSchema),

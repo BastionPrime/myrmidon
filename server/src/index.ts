@@ -57,6 +57,7 @@ import {
 import { getOperatorSettingDefaults } from "./services/setting-defaults.js";
 import { setupEnvironmentCustomImageTerminalWebSocketServer } from "./realtime/environment-custom-image-terminal-ws.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
+import { startBrowserBridge } from "./myrmidon/browser-bridge/index.js"; // myrmidon(EXTCASE-B)
 import { setupRunnerPrpWebSocketServer } from "./realtime/runner-prp-ws.js";
 import { cloudActorHeaderSourceFromHeaders, resolveCloudTenantActor } from "./middleware/auth.js";
 import {
@@ -128,9 +129,13 @@ import { startDeployJobs } from "./myrmidon/deploy-jobs/index.js"; // myrmidon(R
 import { startRuntimeLimits } from "./myrmidon/runtime-limits/index.js"; // myrmidon(C0)
 import { startBotContainers, stopBotContainers } from "./myrmidon/bot-containers/startup.js"; // myrmidon(W2a)
 import { startLitellmCostSweep, stopLitellmCostSweep } from "./myrmidon/litellm-costs/startup.js"; // myrmidon(M2-A)
+import { startTracingAttentionSweep, stopTracingAttentionSweep } from "./myrmidon/tracing-health/attention-sweep.js"; // myrmidon(TRACING-HEALTH)
 import { startBotCanary, stopBotCanary } from "./myrmidon/bot-containers/canary-index.js"; // myrmidon(R5-B)
+import { startStackCheckSweep } from "./myrmidon/stack-registry/index.js"; // myrmidon(SUB)
 import { interactionContinuationOutboxService } from "./myrmidon/interaction-continuation-outbox.js"; // myrmidon(O1)
 import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
+import { createRunStallSweepFromHeartbeat } from "./myrmidon/run-stall/index.js"; // myrmidon(RUN-STALL)
+import { createTaskPrSyncScheduler } from "./myrmidon/task-pr-sync/index.js"; // myrmidon(TASK-PR-SYNC)
 import {
   createPendingInteractionWakeSweep,
   readPendingInteractionWakeContextSnapshot,
@@ -993,6 +998,10 @@ async function startServerWithDatabaseTeardown(
     },
   });
 
+  // myrmidon(EXTCASE-B): the browser extension dials in at /bridge/v1; the board
+  // never dials the client PC. Attached next to the other websocket lanes.
+  startBrowserBridge(db, server);
+
   setStartupRecoveryPhase("recovering");
   // Bind the shared HTTP/PRP listener before native startup recovery. A
   // runnerd process that survived a controller crash is already reconnecting
@@ -1169,6 +1178,18 @@ async function startServerWithDatabaseTeardown(
     }
   };
   const executionControlSweepsInFlight = new Set<string>();
+  // myrmidon(RUN-STALL): progress-based run liveness. A run whose own recorded
+  // progress (output, run events, useful actions) has not moved for the stall
+  // threshold is interrupted as resumable, its task goes back to todo and the
+  // assignee is woken. Like its neighbours it needs the heartbeat service, so a
+  // process that does not schedule runs does not run this pass.
+  const runStallSweep = heartbeat
+    ? createRunStallSweepFromHeartbeat({
+        db: db as any,
+        heartbeat,
+        issues: issueService(db as any),
+      })
+    : null;
   const executionControlSweeps = [
     ["finalization", () => reconcileAbandonedExecutionControl(db)],
     ["replacement", () => heartbeat ? reconcileSafeNativeReplacements(db, new Date(), { verifyStoppedSession: run => verifyStoppedNativeSessionForReplacement(db, run) }) : undefined],
@@ -1176,6 +1197,7 @@ async function startServerWithDatabaseTeardown(
     ["status_delivery", () => deliverExecutionStatuses(db)],
     ["automatic_disposition", () => settleUnrecoverableExecutions(db)],
     ["local_ai_login_cleanup", () => localAiLoginService(db).reapExpired()],
+    ["run_stall", () => runStallSweep?.sweep()],
   ] as const;
   const sweepExecutionControl = () => {
     if (heartbeatSchedulerStopped) return;
@@ -1297,6 +1319,32 @@ async function startServerWithDatabaseTeardown(
     }).catch((err) => {
       logger.error({ err }, "pending interaction wake sweep failed");
     }));
+  };
+  // myrmidon(TASK-PR-SYNC): links each task to the pull requests that deliver it
+  // through the work-products surface, refreshes their state from GitHub through
+  // the existing resolver, and settles the task (status done, one comment with the
+  // PR refs / merge sha / time) once every PR is merged — or returns it to the
+  // assignee when a PR was closed without merging.
+  const scheduleTaskPrSyncSweep = createTaskPrSyncScheduler({ db: db as any, track: trackHeartbeatSchedulerWork });
+  // myrmidon(AUTO-RESUME): resumes an agent left in `error` once its 1/5/15 min
+  // backoff step is due; the per-agent maintenance gate lives in the sweeper.
+  // Runs on the same mutually-exclusive scheduler paths as the other
+  // independent sweeps: the enabled tick owns it, and the disabled path starts
+  // its own runtime for it, so there is never a second instance of the sweep.
+  const scheduleAutoResumeSweep = () => {
+    if (heartbeatSchedulerStopped) return;
+    // Some vendor test doubles for the heartbeat service are partial and omit
+    // this method; skip the pass instead of crashing the startup path.
+    if (typeof environmentLeaseCleanupHeartbeat.sweepAutoResume !== "function") return;
+    trackHeartbeatSchedulerWork(environmentLeaseCleanupHeartbeat.sweepAutoResume(new Date())
+      .then((result) => {
+        if (result.resumed > 0 || result.exhausted > 0) {
+          logger.warn(result, "auto-resume swept errored agents");
+        }
+      })
+      .catch((err) => {
+        logger.error({ err }, "auto-resume sweep failed");
+      }));
   };
   const githubConnectionEvents = githubConnectionEventService(db as any, {
     wakeup: environmentLeaseCleanupHeartbeat.wakeup,
@@ -1499,7 +1547,9 @@ async function startServerWithDatabaseTeardown(
     startDeployJobs(db as any); // myrmidon(R5-A): resume an interface deploy job; no-op unless MYRMIDON_DEPLOY_ENABLED
     startBotContainers(db as any); // myrmidon(W2a): bot container sweep and the card's "Apply now" runtime; a no-op unless MYRMIDON_BOT_CONTAINERS is on
     startLitellmCostSweep(db as any); // myrmidon(M2-A): gateway spend sweep; a no-op unless MYRMIDON_LITELLM_* is set
+    startTracingAttentionSweep(db as any); // myrmidon(TRACING-HEALTH): keep the "LLM tracing" operator signal fresh; a no-op unless the tracing settings are on
     startBotCanary(db as any); // myrmidon(R5-B): resume an open bot image rollout; a no-op unless MYRMIDON_BOT_CANARY is on
+    startStackCheckSweep(db as any); // myrmidon(SUB): scheduled stack release check; a no-op unless MYRMIDON_STACK_CHECK_INTERVAL_SEC is set
     const heartbeatSchedulingSuppression = await heartbeat.resolveSchedulingSuppression();
 
     // Reap orphaned runs before timer ticks start so wakeups cannot coalesce
@@ -1740,6 +1790,8 @@ async function startServerWithDatabaseTeardown(
         scheduleSetupTokenReaperSweep();
         scheduleEnvironmentLeaseCleanupSweep();
         schedulePendingInteractionWakeSweep(); // myrmidon(P12)
+        scheduleTaskPrSyncSweep(); // myrmidon(TASK-PR-SYNC)
+        scheduleAutoResumeSweep(); // myrmidon(AUTO-RESUME)
 
         if (heartbeatSchedulerStopped) return;
         trackHeartbeatSchedulerWork(routines
@@ -1916,6 +1968,7 @@ async function startServerWithDatabaseTeardown(
       scheduleExternalObjectRefreshSweep(new Date());
       scheduleEnvironmentLeaseCleanupSweep();
       schedulePendingInteractionWakeSweep(); // myrmidon(P12)
+      scheduleAutoResumeSweep(); // myrmidon(AUTO-RESUME)
       scheduleGitHubConnectionEventPoll();
       scheduleGitHubConnectionContinuitySweep();
     });
@@ -2037,6 +2090,7 @@ async function startServerWithDatabaseTeardown(
     clearInterval(executionControlInterval);
     stopBotContainers(); // myrmidon(W2a)
     stopLitellmCostSweep(); // myrmidon(M2-A)
+    stopTracingAttentionSweep(); // myrmidon(TRACING-HEALTH)
     stopBotCanary(); // myrmidon(R5-B)
     if (heartbeatSchedulerInterval) {
       clearInterval(heartbeatSchedulerInterval);

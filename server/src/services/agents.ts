@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, gte, inArray, lt, ne, or, sql } from "drizzle-orm";
+import { resolveStatusOnResume } from "../myrmidon/pause-drain.js";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -968,10 +969,13 @@ export function agentService(db: Db) {
         throw conflict("Pending approval agents cannot be resumed");
       }
 
+      // myrmidon(L3c): a drained operator pause leaves the live run going, so
+      // resume must not report "idle" over it (see resolveStatusOnResume).
+      const resumedStatus = await resolveStatusOnResume(db, id);
       const updated = await db
         .update(agents)
         .set({
-          status: "idle",
+          status: resumedStatus,
           pauseReason: null,
           pausedAt: null,
           errorReason: null,

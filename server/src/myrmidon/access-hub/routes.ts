@@ -27,12 +27,14 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { companySecrets } from "@paperclipai/db";
+import { and, eq } from "drizzle-orm";
+import { agents, companySecretBindings, companySecrets } from "@paperclipai/db";
 import { conflict, notFound, unprocessable } from "../../errors.js";
 import { validate } from "../../middleware/validate.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "../../routes/authz.js";
 import { logActivity } from "../../services/activity-log.js";
 import { accessHubService } from "./service.js";
+import { secretService } from "../../services/secrets.js";
 import {
   MAX_HOSTS,
   mutateAccessHubHosts,
@@ -42,9 +44,13 @@ import {
   type AccessHubHostsChange,
 } from "./host-registry.js";
 import type { AccessHubHost } from "./types.js";
-import { createFakeDeployPort, type DeployPort } from "./ssh-deploy.js";
+import { createFakeDeployPort, type DeployPort, type DeployInput } from "./ssh-deploy.js";
+import { createSshDeployPort, type AdminKeySource } from "./ssh-ops.js";
+import { restartBoundContainers, rotationRestartRuntime, type BotRestartAgent } from "./rotation-restart.js";
 
 export const ACCESS_HUB_ENABLED_ENV = "MYRMIDON_ACCESS_HUB_ENABLED";
+/** Name of the company secret holding the board's private admin ssh key. */
+export const ACCESS_HUB_SSH_ADMIN_KEY_SECRET_ENV = "MYRMIDON_ACCESS_HUB_SSH_ADMIN_KEY_SECRET";
 
 export function isAccessHubEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[ACCESS_HUB_ENABLED_ENV]?.trim().toLowerCase();
@@ -126,6 +132,12 @@ export interface AccessHubRoutesDeps {
   }>;
   /** Companies that reference access-hub metadata (for host journal rows). */
   listHostReferencingCompanies?: (db: Db) => Promise<string[]>;
+  /** The admin key source for the real ssh port (part C). Injected by
+   * tests; production reads the company secret named by the env var. */
+  adminKeySource?: AdminKeySource;
+  /** Part C: the rotation-restart runner. Injected by tests; production
+   * wires applyBotContainerNow through the registered bot runtime. */
+  restartBound?: (secretId: string) => Promise<Array<{ agentId: string; kind: string }>>;
 }
 
 /**
@@ -154,6 +166,46 @@ export function accessHubRoutes(db: Db, deps: AccessHubRoutesDeps = {}) {
         .selectDistinct({ companyId: companySecrets.companyId })
         .from(companySecrets);
       return rows.map((row) => row.companyId);
+    });
+  /** Part C: rotation → restart of the bound agents' containers through the
+   * board's own reconciler path. Tests inject a fake; production resolves the
+   * binding rows and drives applyBotContainerNow through the registered
+   * bot-container runtime. */
+  const restartBound: (secretId: string) => Promise<Array<{ agentId: string; kind: string }>> =
+    deps.restartBound ??
+    (async (secretId: string) => {
+      const rows = await db
+        .select({ targetId: companySecretBindings.targetId })
+        .from(companySecretBindings)
+        .where(eq(companySecretBindings.secretId, secretId));
+      const agentIds = [...new Set(rows.map((row) => row.targetId).filter((id) => id !== null))];
+      const runtime = rotationRestartRuntime(envNow());
+      const outcomes: Array<{ agentId: string; kind: string }> = [];
+      for (const agentId of agentIds) {
+        const agent = await db
+          .select({
+            id: agents.id,
+            adapterType: agents.adapterType,
+            adapterConfig: agents.adapterConfig,
+          })
+          .from(agents)
+          .where(eq(agents.id, agentId))
+          .limit(1)
+          .then((list) => list[0] ?? null);
+        if (!agent) continue;
+        try {
+          const result = await runtime.applyNow({
+            agentId: agent.id,
+            companyId: "",
+            adapterType: agent.adapterType,
+            adapterConfig: (agent.adapterConfig ?? {}) as Record<string, unknown>,
+          });
+          outcomes.push({ agentId: agent.id, kind: result.kind });
+        } catch {
+          outcomes.push({ agentId: agent.id, kind: "error" });
+        }
+      }
+      return outcomes;
     });
 
   /** 409 with a stable error code while the flag is off. Read endpoints still
@@ -224,6 +276,62 @@ export function accessHubRoutes(db: Db, deps: AccessHubRoutesDeps = {}) {
     );
   }
 
+  /** Part C: journal one ssh operation. The note is the port's own
+   * human-readable line (host NAME, never address/user/key material); the
+   * details carry the fingerprint — an identifier, not a secret. */
+  async function journalSshOperation(
+    req: Request,
+    companyId: string,
+    action: "access_hub.ssh.deployed" | "access_hub.ssh.revoked" | "access_hub.ssh.dry_run",
+    input: { hostId: string; hostName: string; secretId: string; secretName: string; fingerprint: string },
+    result: { outcome: string; note: string | null },
+  ): Promise<void> {
+    const actor = actorOf(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.agentId ? "agent" : "user",
+      actorId: actor.agentId ?? actor.userId ?? "board",
+      action,
+      entityType: "secret",
+      entityId: input.secretId,
+      details: {
+        hostId: input.hostId,
+        hostName: input.hostName,
+        secretName: input.secretName,
+        fingerprint: input.fingerprint,
+        outcome: result.outcome,
+        note: result.note,
+      },
+    }).catch(() => undefined);
+  }
+
+  /** The company-bound admin key source: resolves the secret named by
+   * MYRMIDON_ACCESS_HUB_SSH_ADMIN_KEY_SECRET through the existing secret
+   * service. The value is used, never stored or logged by this route. */
+  function companyAdminKeySource(companyId: string): AdminKeySource {
+    return {
+      adminKey: async () => {
+        const name = envNow()[ACCESS_HUB_SSH_ADMIN_KEY_SECRET_ENV]?.trim();
+        if (!name) return null;
+        const row = await db
+          .select({ id: companySecrets.id })
+          .from(companySecrets)
+          .where(and(eq(companySecrets.companyId, companyId), eq(companySecrets.name, name)))
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (!row) return null;
+        const value = await secretService(db).resolveSecretValue(companyId, row.id, "latest", {
+          // The board's own admin channel: a system consumer, no binding context.
+          consumerType: "system",
+          consumerId: "myrmidon-access-hub",
+          actorType: "system",
+          actorId: "myrmidon-access-hub",
+        });
+        return value ?? null;
+      },
+    };
+  }
+
   // ---- status ----
 
   router.get("/myrmidon/access-hub/status", (req, res) => {
@@ -270,7 +378,13 @@ export function accessHubRoutes(db: Db, deps: AccessHubRoutesDeps = {}) {
     const companyId = resolveCompanyId(req);
     requireEnabled();
     const result = await svc.rotateSshKey(companyId, req.params.secretId as string, actorOf(req));
-    res.json(result);
+    // Part C: rotation → the board's own container apply path. The profile
+    // compiler resolves this secret's bindings; a changed value changes the
+    // compiled profile, so applyBotContainerNow drains and restarts each
+    // bound agent's container inside its maintenance window. No second
+    // restart mechanism exists here — the outcomes are the reconcile kinds.
+    const restart = await restartBound(req.params.secretId as string).catch(() => []);
+    res.json({ ...result, restartedContainers: restart });
   });
 
   router.post(
@@ -421,26 +535,65 @@ export function accessHubRoutes(db: Db, deps: AccessHubRoutesDeps = {}) {
     res.json({ hosts });
   });
 
-  // ---- ssh deploy (fake in part A; part C swaps the port) ----
+  // ---- ssh operations (part C: the real port over child_process ssh) ----
 
-  router.post("/myrmidon/access-hub/hosts/:hostId/deploy/:secretId", async (req, res) => {
+  /** Load host+secret, build the input with the public part, run one port op. */
+  async function runSshOperation(
+    req: Request,
+    res: { json: (body: unknown) => void },
+    op: "deploy" | "revoke" | "dryRun",
+  ): Promise<void> {
     const companyId = resolveCompanyId(req);
     requireEnabled();
-    const [hosts, secret] = await Promise.all([
+    const hostId = req.params.hostId as string;
+    const secretId = req.params.secretId as string;
+    const [hosts, secretRow] = await Promise.all([
       readHosts(db),
-      svc.getSecret(companyId, req.params.secretId as string),
+      svc.getSecret(companyId, secretId),
     ]);
-    const host = hosts.find((item) => item.id === req.params.hostId);
-    if (!host) throw notFound("Host not found");
-    if (!secret.ssh) throw unprocessable("Secret is not typed as an ssh key");
-    const result = await deploy.deploy({
+    const host = hosts.find((item) => item.id === hostId);
+    if (!host || !host.enabled) throw notFound("Host not found");
+    if (!secretRow.ssh) throw unprocessable("Secret is not typed as an ssh key");
+
+    // The public part lives in providerMetadata (part A's storage decision);
+    // the ssh metadata view exposes only the fingerprint, so read the row.
+    const publicKey = await svc.getSshPublicKey(companyId, secretId);
+    const port = deps.deploy ?? createSshDeployPort(companyAdminKeySource(companyId), { env: envNow() });
+    const input: DeployInput = {
       hostId: host.id,
       address: host.address,
       targetUser: host.targetUser,
-      fingerprint: secret.ssh.fingerprint ?? "",
-      publicKey: "",
-    });
+      fingerprint: secretRow.ssh.fingerprint ?? "",
+      publicKey: publicKey ?? "",
+      secretId,
+    };
+    const result = await port[op](input);
+    await journalSshOperation(
+      req,
+      companyId,
+      op === "deploy" ? "access_hub.ssh.deployed" : op === "revoke" ? "access_hub.ssh.revoked" : "access_hub.ssh.dry_run",
+      {
+        hostId: host.id,
+        hostName: host.name,
+        secretId,
+        secretName: secretRow.name,
+        fingerprint: secretRow.ssh.fingerprint ?? "",
+      },
+      result,
+    );
     res.json(result);
+  }
+
+  router.post("/myrmidon/access-hub/hosts/:hostId/deploy/:secretId", async (req, res) => {
+    await runSshOperation(req, res, "deploy");
+  });
+
+  router.post("/myrmidon/access-hub/hosts/:hostId/revoke/:secretId", async (req, res) => {
+    await runSshOperation(req, res, "revoke");
+  });
+
+  router.post("/myrmidon/access-hub/hosts/:hostId/dry-run/:secretId", async (req, res) => {
+    await runSshOperation(req, res, "dryRun");
   });
 
   return router;
