@@ -25,6 +25,7 @@ import {
 } from "../components/agent-config-primitives";
 import { InstanceGeneralSettings } from "./InstanceGeneralSettings";
 import { FleetConsolePanel } from "../components/myrmidon/FleetConsolePanel"; // myrmidon(SC1)
+import { TracingHealthCard } from "../components/myrmidon/tracing-health/TracingHealthCard"; // myrmidon(TRACING-HEALTH)
 
 export function CompanySettings() {
   const {
@@ -334,6 +335,8 @@ export function CompanySettings() {
       />
 
       <FleetConsolePanel /> {/* myrmidon(SC1) */}
+
+      <TracingHealthCard /> {/* myrmidon(TRACING-HEALTH): "LLM tracing" status card (part D) */}
 
       <InstanceGeneralSettings embedded />
 
