@@ -680,6 +680,159 @@ describe("deploy.sh: drain-interrupt enter body", () => {
   });
 });
 
+describe("lib.sh: async maintenance exit and post-deploy fleet check", () => {
+  // Runs the real lib.sh functions against a fake `curl` that answers the
+  // maintenance status from a file the test controls. No registry, board or
+  // server is touched.
+  function libSandbox() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myrmidon-lib-"));
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    // curl answers the maintenance URL from maintenance.json. With a
+    // `flip-on-read` file present, the answer switches to retired after the
+    // first read, so a test can exercise "wait, then retire".
+    const fakeCurl = `#!/usr/bin/env bash
+echo "curl $*" >> "$SANDBOX/calls.log"
+case "$*" in *"-X POST"*) if [ -e "$SANDBOX/post-fails" ]; then echo 'curl: (22) The requested URL returned error' >&2; exit 22; fi ;; esac
+url="$*"
+case "$url" in
+  *maintenance*)
+    cat "$SANDBOX/maintenance.json" 2>/dev/null || echo '{"active":false,"instance":null,"windows":[]}'
+    if [ -e "$SANDBOX/flip-on-read" ]; then rm -f "$SANDBOX/flip-on-read"; echo '{"active":false,"instance":null,"windows":[]}' > "$SANDBOX/maintenance.json"; fi ;;
+  *issues*) cat "$SANDBOX/issues.json" 2>/dev/null || echo '[]' ;;
+  *) echo '{"status":"ok"}' ;;
+esac
+`;
+    fs.writeFileSync(path.join(bin, "curl"), fakeCurl, { mode: 0o755 });
+    const config = path.join(dir, "lib-test.env");
+    fs.writeFileSync(
+      config,
+      [
+        `COMPOSE_DIR=${dir}`,
+        "COMPOSE_SERVICE=server",
+        "HEALTH_URL=http://127.0.0.1:3100/api/health",
+        "POLL_INTERVAL_SEC=0",
+        "MAINTENANCE_MODE=api",
+        "MAINTENANCE_API_URL=http://127.0.0.1:3100/api/myrmidon/maintenance",
+        "MAINTENANCE_EXIT_WAIT_SEC=2",
+        "",
+      ].join("\n"),
+    );
+    return { dir, bin, config };
+  }
+
+  // Sources lib.sh the way deploy.sh does and calls one function.
+  function callLib(sb, functionCall) {
+    const libScript = path.join(sb.dir, "call-lib.sh");
+    fs.writeFileSync(libScript, `source "$MYR_SCRIPT_DIR/lib.sh"; load_config "$LIB_CONFIG"; ${functionCall}\n`, { mode: 0o755 });
+    const result = spawnSync(bashPath(), [libScript], {
+      env: {
+        ...process.env,
+        PATH: `${sb.bin}:${process.env.PATH}`,
+        SANDBOX: sb.dir,
+        LIB_CONFIG: sb.config,
+        MYR_SCRIPT_DIR: HERE,
+      },
+      encoding: "utf8",
+    });
+    return { code: result.status, out: `${result.stdout}${result.stderr}` };
+  }
+
+  it("wait_for_maintenance_off returns 0 at once when the instance window is retired", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    const { code, out } = callLib(sb, "wait_for_maintenance_off");
+    assert.equal(code, 0, out);
+  });
+
+  it("wait_for_maintenance_off waits while the window is `leaving`, then succeeds", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    // The first read answers `leaving`, then the answer switches to retired.
+    fs.writeFileSync(path.join(sb.dir, "flip-on-read"), "");
+    const { code, out } = callLib(sb, "wait_for_maintenance_off");
+    assert.equal(code, 0, out);
+    assert.match(read(path.join(sb.dir, "calls.log")), /maintenance/);
+  });
+
+  it("wait_for_maintenance_off fails after MAINTENANCE_EXIT_WAIT_SEC when the window never retires", () => {
+    const sb = libSandbox();
+    // No `flip-on-read`: every read keeps reporting the `leaving` window.
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    const { code, out } = callLib(sb, "wait_for_maintenance_off");
+    assert.notEqual(code, 0);
+    assert.match(out, /still 'leaving' after 2s/);
+  });
+
+  it("maintenance_exit posts the exit and returns 0 once the window retires", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "flip-on-read"), "");
+    const { code, out } = callLib(sb, "maintenance_exit");
+    assert.equal(code, 0, out);
+    assert.match(read(path.join(sb.dir, "calls.log")), /-X POST/);
+  });
+
+  it("maintenance_exit fails when the exit POST fails (abort semantics unchanged)", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "on" }, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "post-fails"), "");
+    const { code } = callLib(sb, "maintenance_exit");
+    assert.notEqual(code, 0);
+    // The wait never runs after a failed POST: the only call is the POST.
+    assert.equal(read(path.join(sb.dir, "calls.log")).trim().split("\n").length, 1);
+  });
+
+  it("post_deploy_fleet_check passes when no issue is blocked and the window retired", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 0, out);
+    assert.match(out, /no blocked issues in the deploy window, maintenance retired/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when an issue became blocked in the window", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([{ id: "i1", status: "blocked" }]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1);
+    assert.match(out, /degraded: 1 blocked issue/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when the board answers an unexpected shape", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    // A body that is neither an array nor {issues: []}: the check cannot count
+    // it, so it reports degraded instead of passing.
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify({ error: "boom" }));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1, out);
+    assert.match(out, /degraded: board issue list unreadable/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when the window did not retire", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1);
+    assert.match(out, /degraded: maintenance window did not retire after exit/);
+  });
+
+  it("post_deploy_fleet_check is skipped without BOARD_API_URL/BOARD_COMPANY_ID", () => {
+    const sb = libSandbox();
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 0, out);
+    assert.match(out, /skipping the fleet check/);
+  });
+});
+
 describe("rollback.sh", () => {
   it("returns to the previous digest without restoring the database", () => {
     const sb = sandbox();

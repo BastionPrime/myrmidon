@@ -183,7 +183,19 @@ Order:
    the server service is recreated.
 7. The `/api/health` check (`verify-health.sh`): `status` is `ok`, the version and commit
    match.
-8. Leaving maintenance mode.
+8. Leaving maintenance mode. The `exit` call returns as soon as the server marks the window
+   `leaving` (the leave tail — resuming the queue, the exit hook, retiring the window — runs on
+   the server's maintenance tick), and the script then waits for the window to retire: it polls
+   `GET /api/myrmidon/maintenance` until the instance state is `off` (no instance window),
+   bounded by `MAINTENANCE_EXIT_WAIT_SEC` (default 120 s). A timeout is logged loudly and does
+   **not** fail an otherwise switched and healthy deploy: the window stays `leaving`, which
+   already reopens admission. A failed `exit` call itself still aborts, because the window would
+   stay `on`. The same step runs the post-deploy fleet check (`myrmidon(POST-DEPLOY-CHECK)`):
+   with `BOARD_API_URL` and `BOARD_COMPANY_ID` set, the script asks the board for issues that
+   are `blocked` with an update since the deploy started, and re-reads the maintenance state. A
+   blocked issue in the deploy window, an unreadable board or a window that did not retire
+   prints `degraded: ...` and the run ends with `DEPLOY DEGRADED`; it does not fail a switched
+   and healthy deploy. Without the two settings the check is skipped with a log line.
 9. The release components roll out in the same run (see
    [Deploy the board and the release components together](#deploy-the-board-and-the-release-components-together)):
    one `rollout-component.sh` per component — pull by digest, the component override file,

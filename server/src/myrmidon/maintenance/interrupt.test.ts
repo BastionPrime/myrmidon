@@ -167,7 +167,10 @@ describeEmbeddedPostgres("maintenance interrupt_and_retry", () => {
       .update(agents)
       .set({ adapterConfig: { command: process.execPath, args: ["-e", FAST] } })
       .where(eq(agents.id, agentId));
+    // myrmidon(EXIT-ASYNC): exit returns at `leaving`; the tick finishes the
+    // leave and resumes the queued retry.
     await svc.exit({ type: "instance" }, ADMIN);
+    await svc.tick();
     await waitFor(async () => (await run(retries[0]!.id)).status === "succeeded");
     expect(await holds(issueId)).toEqual([]);
     const actions = await db.select({ action: activityLog.action }).from(activityLog);
@@ -239,6 +242,9 @@ describeEmbeddedPostgres("maintenance interrupt_and_retry", () => {
         .where(eq(agents.id, seed.agentId));
     }
     await svc.exit({ type: "instance" }, ADMIN);
+    // myrmidon(EXIT-ASYNC): exit returns at `leaving`; the tick finishes the
+    // leave and resumes the queued retries.
+    await svc.tick();
     await waitFor(
       async () => (await Promise.all(retryIds.map((id) => run(id)))).every((r) => r.status === "succeeded"),
       30_000,
