@@ -153,7 +153,6 @@ A track writes only into its own section. A row is added in the same PR as the s
 |---|---|---|---|---|
 | `MYRMIDON_WORKSPACE_PNPM_STORE_DIR` | WORKSPACE-HYGIENE | unset — `<repository root>/.paperclip/pnpm-store` | Absolute path of the shared pnpm store into which `provision-worktree.sh` installs packages and from which they are imported into the workspace `node_modules` with hard links (`--config.package-import-method=hardlink`): one store for all workspaces of one repository instead of a full copy of packages per branch. The repository root is taken from `PAPERCLIP_WORKSPACE_REPO_ROOT` (then `PAPERCLIP_WORKSPACE_BASE_CWD`) — the default path lies on the same volume as the workspaces, so hardlink import works | A relative path in this variable is resolved from the same anchor. Store and workspace on different filesystems — installation falls back to vendor behavior (pnpm's own default store) with a warning to stderr |
 | `MYRMIDON_WORKSPACE_PNPM_STORE` | WORKSPACE-HYGIENE | `1` (enabled) | Master switch of the shared store: `0`/`false`/`no`/`off` — `provision-worktree.sh` runs `pnpm install` with vendor argv without store flags | Disabling returns the previous disk usage (a full copy of `node_modules` per workspace) |
-
 ## P12 — the deferred addressee-wake sweeper
 
 | Variable | Function | Default | What it does | How to disable / special |
