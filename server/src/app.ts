@@ -116,6 +116,7 @@ import { agentInstructionsRevisionsRoutes } from "./myrmidon/agent-instructions-
 import { myrmidonFleetConsoleRoutes } from "./myrmidon/fleet-console/index.js"; // myrmidon(SC1)
 import { myrmidonCloudConnectorRoutes } from "./myrmidon/cloud-connector/index.js"; // myrmidon(CLOUD-CONNECTOR)
 import { accessHubRoutes } from "./myrmidon/access-hub/routes.js"; // myrmidon(SEC1)
+import { ui2LanguageRoutes } from "./myrmidon/ui2-language/routes.js"; // myrmidon(UI2-I18N)
 import { myrmidonAgentMemoryRoutes } from "./myrmidon/agent-memory/index.js"; // myrmidon(MEMORY-UI)
 import {
   myrmidonBrowserBridgePublicRoutes,
@@ -849,6 +850,7 @@ export async function createApp(
   api.use(myrmidonBrowserBridgeRoutes(db)); // myrmidon(EXTCASE-B): bridge panel (codes, devices, allowlist)
   api.use(myrmidonOcrRoutes(db)); // myrmidon(EXT-CASE-OCR): company OCR MCP endpoint (ocr.pdf)
   api.use(myrmidonTracingHealthRoutes(db)); // myrmidon(TRACING-HEALTH): LLM tracing health check
+  api.use(ui2LanguageRoutes(db)); // myrmidon(UI2-I18N): per-user UI language preference
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }
