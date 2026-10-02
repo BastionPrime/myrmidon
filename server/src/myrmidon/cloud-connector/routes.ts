@@ -1,7 +1,8 @@
 // myrmidon(CLOUD-CONNECTOR): routes.
 //
 //   GET    /api/myrmidon/cloud-connector/accounts        — owner
-//   POST   /api/myrmidon/cloud-connector/accounts        — owner
+//   POST   /api/myrmidon/cloud-connector/oauth/:provider/start — owner
+//   GET    /api/myrmidon/cloud-connector/oauth/callback  — board (single-use state)
 //   DELETE /api/myrmidon/cloud-connector/accounts/:id    — owner
 //   GET    /api/myrmidon/cloud-connector/roots           — owner (also agents, read-only)
 //   POST   /api/myrmidon/cloud-connector/roots           — owner
@@ -19,7 +20,7 @@
 
 import { Router, type Request } from "express";
 import {
-  cloudAccountCreateSchema,
+  cloudConnectStartSchema,
   cloudGrantPutSchema,
   cloudRootCreateSchema,
   cloudToolCallSchema,
@@ -28,7 +29,7 @@ import {
 import { forbidden, HttpError, unauthorized } from "../../errors.js";
 import { validate } from "../../middleware/validate.js";
 import { assertAuthenticated } from "../../routes/authz.js";
-import type { CloudAgentIdentity } from "./types.js";
+import { cloudAgentIdentity } from "./identity.js";
 import type { CloudConnectorService } from "./service.js";
 
 function toHttpError(error: unknown): unknown {
@@ -57,26 +58,48 @@ function assertCloudOwner(req: Request, companyId: string | null): string {
   return req.actor.userId ?? "board";
 }
 
-/** Agent identity for a tool call: the caller is the agent, never a proxy. */
-function agentIdentity(req: Request): CloudAgentIdentity {
-  assertAuthenticated(req);
-  if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized("Agent access required");
-  return { agentId: req.actor.agentId, caste: null };
-}
-
 export function cloudConnectorRoutes(deps: { service: CloudConnectorService }) {
   const router = Router();
   const { service } = deps;
 
   router.get("/myrmidon/cloud-connector/accounts", async (req, res) => {
-    assertCloudOwner(req, companyIdOf(req));
-    res.json({ accounts: await service.listAccounts() });
+    const companyId = companyIdOf(req);
+    assertCloudOwner(req, companyId);
+    res.json({ accounts: await service.listAccounts(companyId ?? undefined) });
   });
 
-  router.post("/myrmidon/cloud-connector/accounts", validate(cloudAccountCreateSchema), async (req, res) => {
-    const actor = assertCloudOwner(req, companyIdOf(req));
+  router.post(
+    "/myrmidon/cloud-connector/oauth/:providerId/start",
+    validate(cloudConnectStartSchema),
+    async (req, res) => {
+      const companyId = String(req.body.companyId);
+      const userId = assertCloudOwner(req, companyId);
+      try {
+        const started = await service.beginConnect({
+          providerId: req.params.providerId as CloudProviderId,
+          companyId,
+          userId,
+          displayName: req.body.displayName,
+        });
+        res.json(started);
+      } catch (error) {
+        throw toHttpError(error);
+      }
+    },
+  );
+
+  // The cloud sends the owner's browser here: the single-use state is the proof
+  // that this callback belongs to the connect that owner started.
+  router.get("/myrmidon/cloud-connector/oauth/callback", async (req, res) => {
+    assertAuthenticated(req);
+    if (req.actor.type !== "board") throw forbidden("Owner access required");
+    const errorCode = typeof req.query.error === "string" ? req.query.error : null;
+    if (errorCode) throw new HttpError(400, `the cloud refused the authorization (${errorCode})`);
+    const code = typeof req.query.code === "string" ? req.query.code : null;
+    const state = typeof req.query.state === "string" ? req.query.state : null;
+    if (!code || !state) throw new HttpError(400, "code and state are required");
     try {
-      res.status(201).json({ account: await service.connectAccount(req.body, actor) });
+      res.json({ account: await service.completeConnect({ state, code }) });
     } catch (error) {
       throw toHttpError(error);
     }
@@ -91,9 +114,10 @@ export function cloudConnectorRoutes(deps: { service: CloudConnectorService }) {
     assertAuthenticated(req);
     if (req.actor.type === "none") throw unauthorized();
     const providerId = typeof req.query.providerId === "string" ? (req.query.providerId as CloudProviderId) : undefined;
-    const roots = await service.listRoots(providerId);
+    const companyId = companyIdOf(req) ?? undefined;
+    const roots = await service.listRoots(providerId, companyId);
     if (req.actor.type === "agent") {
-      const access = await service.accessFor({ agentId: req.actor.agentId ?? "", caste: null });
+      const access = await service.accessFor(await cloudAgentIdentity(service, req));
       const allowed = new Set(access.map((entry) => entry.root.id));
       res.json({ roots: roots.filter((root) => allowed.has(root.id)) });
       return;
@@ -102,7 +126,7 @@ export function cloudConnectorRoutes(deps: { service: CloudConnectorService }) {
   });
 
   router.post("/myrmidon/cloud-connector/roots", validate(cloudRootCreateSchema), async (req, res) => {
-    const actor = assertCloudOwner(req, companyIdOf(req));
+    const actor = assertCloudOwner(req, String(req.body.companyId));
     try {
       res.status(201).json({ root: await service.createRoot(req.body, actor) });
     } catch (error) {
@@ -143,7 +167,13 @@ export function cloudConnectorRoutes(deps: { service: CloudConnectorService }) {
     }
     try {
       res.json({
-        listing: await service.tree(providerId as CloudProviderId, root, typeof req.query.path === "string" ? req.query.path : ""),
+        listing: await service.tree(
+          providerId as CloudProviderId,
+          root,
+          typeof req.query.path === "string" ? req.query.path : "",
+          200,
+          companyIdOf(req) ?? undefined,
+        ),
       });
     } catch (error) {
       throw toHttpError(error);
@@ -157,7 +187,7 @@ export function cloudConnectorRoutes(deps: { service: CloudConnectorService }) {
   });
 
   router.post("/myrmidon/cloud-connector/call", validate(cloudToolCallSchema), async (req, res) => {
-    const identity = agentIdentity(req);
+    const identity = await cloudAgentIdentity(service, req);
     res.json({ result: await service.callTool(identity, req.body) });
   });
 

@@ -13,6 +13,7 @@ import { OneDriveProvider } from "./onedrive.js";
 const OWN_ROOT: CloudRoot = {
   id: "root-work",
   providerId: "onedrive",
+  companyId: "company-a",
   name: "work",
   kind: "own",
   description: "",
