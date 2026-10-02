@@ -46,6 +46,14 @@ chat-bound tasks). The owner's reply is recorded against the same card on the
 board, and the task's run continues as if the card had been answered from the
 board UI.
 
+The card keeps belonging to its own task — the owner's Telegram DM has a
+different task of its own (the conversation issue), and the card is only
+projected into that conversation. The board resolves a tap on a button by the
+card's interaction id across the company's tasks (the same-task lookup is
+tried first), so the answer always lands on the task the card was created on,
+never on the conversation's own task. All company and actor checks are
+unchanged.
+
 ## When no delivery happens
 
 If any condition above is not met, the card stays on the board only. In
@@ -73,4 +81,5 @@ opens a DM": delivery is best-effort at the moment the card is enqueued.
 - Call site: `server/src/services/chat-interaction-publications.ts`
   (marker `myrmidon(U2)`, after the vendor binding lookup).
 - Binding search: `server/src/myrmidon/owner-delivery/telegram-owner-bindings.ts`.
+- Callback resolution: `server/src/myrmidon/owner-delivery/callback-interaction-lookup.ts`.
 - Behaviour record: [../DIVERGENCE.md](../DIVERGENCE.md), row U2.
