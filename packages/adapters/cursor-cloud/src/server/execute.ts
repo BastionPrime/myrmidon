@@ -26,7 +26,7 @@ import {
   renderTemplate,
 } from "@paperclipai/adapter-utils/server-utils";
 // myrmidon(B1c): product name in the runtime notes; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/adapter-utils";
 
 type CursorCloudSession = {
   cursorAgentId: string;

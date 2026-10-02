@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 // myrmidon(B1c): product name in the runtime note; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/adapter-utils";
 import { inferOpenAiCompatibleBiller, type AdapterExecutionContext, type AdapterExecutionResult } from "@paperclipai/adapter-utils";
 import {
   adapterExecutionTargetIsRemote,

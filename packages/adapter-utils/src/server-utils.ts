@@ -1,8 +1,8 @@
 import type { ExecutionContinuationEnvelope } from "@paperclipai/shared";
 // myrmidon(B1c): product name in wake-prompt headers; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/shared";
 // myrmidon(B1c): short alias for template literals below.
-import { PRODUCT_NAME as PN } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME as PN } from "@paperclipai/shared";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs, type Dirent } from "node:fs";

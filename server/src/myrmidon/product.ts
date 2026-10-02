@@ -12,7 +12,7 @@
 // or database identifiers — those stay untouched for vendor compatibility
 // (see NOTICE and docs/myrmidon/CONVENTIONS.md §8).
 
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/shared";
 
 export { PRODUCT_NAME };
 

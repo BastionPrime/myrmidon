@@ -72,7 +72,7 @@ export {
 // myrmidon(B1c): re-export the shared product-name constant so adapter
 // packages that already depend on adapter-utils can use it without adding a
 // direct dependency on @paperclipai/shared.
-export { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+export { PRODUCT_NAME } from "@paperclipai/shared";
 export { buildSandboxNpmInstallCommand } from "./sandbox-install-command.js";
 export {
   buildAdapterEnvConfig,

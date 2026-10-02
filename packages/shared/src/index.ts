@@ -1,3 +1,5 @@
+// myrmidon(B1c): product name constant, see myrmidon-product.ts.
+export { PRODUCT_NAME } from "./myrmidon-product.js";
 export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
 export {
   RUNNER_GOAL_MAX_OBJECTIVE_CHARS,

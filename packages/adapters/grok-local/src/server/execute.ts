@@ -55,7 +55,7 @@ import { copyBackGrokAuth } from "./grok-auth-copyback.js";
 import { resolveManagedGrokHomeDir, stageGrokHomeForSync } from "./grok-home.js";
 import { isGrokUnknownSessionError, parseGrokJsonl } from "./parse.js";
 // myrmidon(B1c): product name in the runtime notes; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/adapter-utils";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 

@@ -18,7 +18,7 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 // myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/adapter-utils";
 
 function resolveClaudeSkillsHome(config: Record<string, unknown>) {
   const env =

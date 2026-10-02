@@ -50,7 +50,7 @@ export interface SandboxProbeDiagnosticFields {
   errorClass?: string | null;
 }
 // myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/adapter-utils";
 
 /**
  * Read the class name of a thrown value for a safe probe diagnostic. The

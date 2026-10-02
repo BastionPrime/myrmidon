@@ -79,7 +79,7 @@ function firstNonEmptyLine(text: string): string {
   );
 }
 // myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/adapter-utils";
 
 function parseModelProvider(model: string | null): string | null {
   if (!model) return null;

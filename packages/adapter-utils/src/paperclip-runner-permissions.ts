@@ -16,7 +16,7 @@ export const PAPERCLIP_RUNNER_DEFAULT_MODELS = {
   opencode: "openrouter/deepseek/deepseek-v4-flash-0731",
 } as const;
 // myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/shared";
 
 export interface PaperclipRunnerPermissionOption<
   TMode extends string = string,

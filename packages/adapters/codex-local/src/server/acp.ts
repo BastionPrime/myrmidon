@@ -60,7 +60,7 @@ export interface CodexEngineSelection {
   unavailableReason?: string;
 }
 // myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/adapter-utils";
 
 type CodexEngineResolutionInput =
   Pick<AdapterExecutionContext, "config"> &

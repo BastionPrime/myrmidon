@@ -33,7 +33,7 @@ interface SkillFrontmatter {
   metadata?: Record<string, unknown>;
 }
 // myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/adapter-utils";
 
 function parseSkillFrontmatter(content: string): SkillFrontmatter {
   const match = content.match(/^---\s*\n([\s\S]*?)\n---/);

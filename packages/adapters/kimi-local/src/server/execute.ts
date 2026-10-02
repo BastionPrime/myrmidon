@@ -67,7 +67,7 @@ import {
 } from "./acp.js";
 import { firstNonEmptyLine } from "./utils.js";
 // myrmidon(B1c): product name in the runtime notes; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
+import { PRODUCT_NAME } from "@paperclipai/adapter-utils";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
