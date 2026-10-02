@@ -2815,7 +2815,7 @@ export function agentRoutes(
   // agent's CURRENT state (the caller just wrote it); a failure to record is
   // logged, never fatal to the edit itself.
   async function recordInstructionsRevisionAfterChange(
-    targetAgent: { id: string; companyId: string },
+    targetAgentId: string,
     input: {
       source: AgentInstructionsRevisionSource;
       changedFiles?: string[];
@@ -2823,8 +2823,8 @@ export function agentRoutes(
     },
   ): Promise<void> {
     try {
-      const agent = await svc.getById(targetAgent.id);
-      if (!agent || agent.companyId !== targetAgent.companyId) return;
+      const agent = await svc.getById(targetAgentId);
+      if (!agent) return;
       const exported = await instructions.exportFiles(agent);
       await recordAgentInstructionsRevision(db, agent, {
         source: input.source,
@@ -2840,7 +2840,7 @@ export function agentRoutes(
       });
     } catch (error) {
       logger.warn(
-        { error, agentId: targetAgent.id, source: input.source },
+        { error, agentId: targetAgentId, source: input.source },
         "failed to record an instructions revision",
       );
     }
@@ -5064,7 +5064,7 @@ export function agentRoutes(
     const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
     // myrmidon(H2): a bundle-level change (mode, root, entry file) reshapes the
     // bundle; snapshot the resulting state as a revision.
-    await recordInstructionsRevisionAfterChange({ ...existing, adapterConfig }, {
+    await recordInstructionsRevisionAfterChange(existing.id, {
       source: "instructions_bundle_patch",
       actor,
     });
@@ -5135,7 +5135,7 @@ export function agentRoutes(
     });
     // myrmidon(H2): record the changed bundle as a revision so any earlier
     // instructions state can be restored (single source with history).
-    await recordInstructionsRevisionAfterChange(existing, {
+    await recordInstructionsRevisionAfterChange(existing.id, {
       source: "instructions_bundle_file_put",
       changedFiles: [result.file.path],
       actor,
@@ -5193,7 +5193,7 @@ export function agentRoutes(
     const actor = getActorInfo(req);
     const result = await instructions.deleteFile(existing, relativePath);
     // myrmidon(H2): the deletion changed the bundle; keep the revision trail.
-    await recordInstructionsRevisionAfterChange(existing, {
+    await recordInstructionsRevisionAfterChange(existing.id, {
       source: "instructions_bundle_file_delete",
       changedFiles: [relativePath],
       actor,

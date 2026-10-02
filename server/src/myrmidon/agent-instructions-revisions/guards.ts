@@ -24,6 +24,7 @@ import type { Db } from "@paperclipai/db";
 type AgentRow = {
   id: string;
   companyId: string;
+  name: string;
   adapterConfig: unknown;
 };
 

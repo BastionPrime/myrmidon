@@ -29,7 +29,7 @@ type RouteActor = {
   userId?: string | null;
   agentId?: string | null;
   runId?: string | null;
-  agentApiKeyId?: string | null;
+  keyId?: string | null;
 };
 
 /** The actor of an activity row, the same normalization getActorInfo applies:
@@ -174,7 +174,7 @@ export function agentInstructionsRevisionsRoutes(db: Db): Router {
       actorId: actorIdOf(req),
       agentId: req.actor?.agentId ?? null,
       runId: req.actor?.runId ?? null,
-      agentApiKeyId: req.actor?.agentApiKeyId ?? null,
+      agentApiKeyId: req.actor?.type === "agent" ? req.actor.keyId ?? null : null,
       action: INSTRUCTIONS_REVISION_ROLLBACK_ACTION,
       entityType: "agent",
       entityId: agent.id,
