@@ -177,6 +177,98 @@ check_ci_image_for_repo() {
   commit_is_reviewed "$revision"
 }
 
+# The boot unit (one boot path). The board container is started at boot by a
+# systemd unit; the incident of 01.10 was exactly a unit that read a *different*
+# compose file than the one deploy.sh maintains, so an old vendor image replaced
+# the board for 7 minutes. verify_boot_unit() refuses a deploy unless the unit
+# points at the same compose files (COMPOSE_DIR + COMPOSE_FILES + the override)
+# this deploy manages, and can install the canonical unit from the template.
+# Settings (all optional, see deploy.env.example; read by load_config):
+#   SYSTEMD_UNIT_NAME     default paperclip.service
+#   SYSTEMD_UNIT_DIR      default /etc/systemd/system (sandboxable for stands)
+#   SYSTEMD_UNIT_INSTALL  1 = install the canonical unit from the template when
+#                         none exists yet (needs root); unset = verify only.
+#                         A unit that exists but does not match is ALWAYS a
+#                         refusal, even with SYSTEMD_UNIT_INSTALL=1: repairing a
+#                         foreign unit silently is how the incident happened.
+
+# Fills the paperclip.service template: __COMPOSE_DIR__, __COMPOSE_FILE_ARGS__
+# (the colon-separated COMPOSE_FILES expanded into -f arguments plus the
+# override file) and __COMPOSE_SERVICE__.
+render_boot_unit() {
+  local -a files=()
+  local f
+  IFS=':' read -r -a _boot_files <<<"$COMPOSE_FILES"
+  for f in "${_boot_files[@]}"; do files+=("$COMPOSE_DIR/$f"); done
+  files+=("$OVERRIDE_PATH")
+  local file_args=""
+  for f in "${files[@]}"; do file_args+="${file_args:+ }-f $f"; done
+  sed -e "s|__COMPOSE_DIR__|$COMPOSE_DIR|g" \
+    -e "s|__COMPOSE_FILE_ARGS__|$file_args|g" \
+    -e "s|__COMPOSE_SERVICE__|$COMPOSE_SERVICE|g" \
+    "$MYR_SCRIPT_DIR/paperclip.service.template"
+}
+
+# The install path of the unit (absolute).
+boot_unit_path() { printf '%s/%s\n' "${SYSTEMD_UNIT_DIR%/}" "$SYSTEMD_UNIT_NAME"; }
+
+# Checks the installed unit against the compose set this deploy manages.
+# Returns 0 and sets BOOT_UNIT_OK=1 when the unit is the canonical one (its
+# ExecStart names exactly COMPOSE_DIR, every COMPOSE_FILES entry and the
+# override, in any order, with no other compose file); returns 1 with
+# BOOT_UNIT_REASON set otherwise. Missing unit, uninstalled systemd or a
+# foreign unit are all "not verified": the deploy refuses.
+verify_boot_unit() {
+  BOOT_UNIT_OK=0 BOOT_UNIT_REASON=""
+  local unit expected
+  unit="$(boot_unit_path)"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    BOOT_UNIT_REASON="systemctl is not available: the boot unit $SYSTEMD_UNIT_NAME cannot be verified; install it from scripts/myrmidon/deploy/paperclip.service.template or set SYSTEMD_UNIT_INSTALL=1 on a host with systemd"
+    return 1
+  fi
+  if [[ ! -f "$unit" ]]; then
+    if [[ "$SYSTEMD_UNIT_INSTALL" == "1" && "$DRY_RUN" != "1" ]]; then
+      install_boot_unit || return 1
+    else
+      BOOT_UNIT_REASON="the boot unit $unit does not exist; install it (SYSTEMD_UNIT_INSTALL=1 or copy scripts/myrmidon/deploy/paperclip.service.template) so the board starts from the compose files this deploy manages"
+      return 1
+    fi
+  fi
+  expected="$(render_boot_unit)"
+  if [[ "$(cat "$unit")" != "$expected" ]]; then
+    BOOT_UNIT_REASON="the boot unit $unit does not match the canonical unit for COMPOSE_DIR=$COMPOSE_DIR (COMPOSE_FILES=$COMPOSE_FILES + $COMPOSE_OVERRIDE_FILE): it may start the board from other compose files, as on 01.10. Fix: SYSTEMD_UNIT_INSTALL=1 on the unit host, or make the unit match scripts/myrmidon/deploy/paperclip.service.template. The deploy is refused while the unit differs (nothing was changed)"
+    return 1
+  fi
+  BOOT_UNIT_OK=1
+  return 0
+}
+
+# Installs the canonical unit (needs write access to SYSTEMD_UNIT_DIR, i.e.
+# root on a real host) and reloads systemd. Existing foreign unit: refusal.
+install_boot_unit() {
+  local unit
+  unit="$(boot_unit_path)"
+  if [[ -f "$unit" ]]; then
+    BOOT_UNIT_REASON="refusing to overwrite the existing unit $unit with the canonical one automatically: a foreign unit is exactly the 01.10 incident; remove or fix it by hand, then deploy"
+    return 1
+  fi
+  if ! mkdir -p "$SYSTEMD_UNIT_DIR" 2>/dev/null; then
+    BOOT_UNIT_REASON="cannot create $SYSTEMD_UNIT_DIR (need root to install the boot unit $SYSTEMD_UNIT_NAME); install it by hand from scripts/myrmidon/deploy/paperclip.service.template"
+    return 1
+  fi
+  local tmp
+  tmp="$(mktemp "$SYSTEMD_UNIT_DIR/.paperclip.XXXXXX")" || { BOOT_UNIT_REASON="cannot write to $SYSTEMD_UNIT_DIR"; return 1; }
+  render_boot_unit >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$unit" || { rm -f "$tmp"; BOOT_UNIT_REASON="cannot install the unit at $unit"; return 1; }
+  if command -v systemctl >/dev/null 2>&1; then
+    run systemctl daemon-reload || log "WARNING: systemctl daemon-reload failed; run it by hand"
+    run systemctl enable "$SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || log "WARNING: could not enable $SYSTEMD_UNIT_NAME; run: systemctl enable $SYSTEMD_UNIT_NAME"
+  fi
+  log "boot unit installed: $unit (from paperclip.service.template; After=docker.service, reads the compose files of this deploy)"
+  return 0
+}
+
 # Loads the settings file (see deploy.env.example) and applies defaults.
 load_config() {
   local file="$1"
@@ -216,6 +308,9 @@ load_config() {
   : "${RUNS_WAIT_TIMEOUT_SEC:=1800}"
   : "${ALLOW_UNKNOWN_RUNS:=0}"
   : "${POLL_INTERVAL_SEC:=5}"
+  : "${SYSTEMD_UNIT_NAME:=paperclip.service}"
+  : "${SYSTEMD_UNIT_DIR:=/etc/systemd/system}"
+  : "${SYSTEMD_UNIT_INSTALL:=}"
   case "$MAINTENANCE_MODE" in
     api|hook|pause) ;;
     *) die "MAINTENANCE_MODE must be api, hook or pause (got $MAINTENANCE_MODE)" ;;
@@ -722,4 +817,196 @@ tracing_check() {
 
   log "tracing: callbacks ok (OTLP only)"
   return 0
+}
+
+# --- TRACING-HEALTH: delivery and image pins ---------------------------------
+# The installer sends a test request through the gateway and waits for an OTEL
+# event in `events_core`. Without that event the install is NOT complete, and a
+# silent success is exactly what the incident was about. The same window
+# carries the delivery ratio: OTEL events against LiteLLM SpendLogs requests,
+# refused below 50 %. Parts 1 and 2 of the deploy-side tracing guard.
+#
+#   MYRMIDON_TRACING_DELIVERY_COMMAND     prints two integers for the window:
+#                                         "<otel events> <spend requests>"
+#   MYRMIDON_TRACING_DELIVERY_WINDOW_SEC  the window the command reads; 900
+#                                         (15 min) by default, exported to it
+#   MYRMIDON_TRACING_LANGFUSE_IMAGE       Langfuse image reference of the bundle
+#   MYRMIDON_TRACING_GATEWAY_IMAGE        gateway (LiteLLM) image reference
+# The two image settings must carry a full X.Y.Z tag or a digest: a major or
+# minor tag moves under the deployment and is not a pin.
+
+# Prints a non-negative integer from a piece of text, or nothing.
+tracing_integer_of() {
+  local value="$1"
+  value="${value//[[:space:]]/}"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' ""
+  fi
+  return 0
+}
+
+# Reads the two counts of the delivery command ("<events> <requests>") with the
+# window exported to it. Prints "<events> <requests>", or nothing when the
+# command is unreadable or does not print two integers.
+tracing_delivery_counts() {
+  local command="$1" window="$2" out events requests
+  [[ -n "$command" ]] || return 0
+  out="$(MYRMIDON_TRACING_DELIVERY_WINDOW_SEC="$window" bash -c "$command" 2>/dev/null)" || out=""
+  events=""
+  requests=""
+  read -r events requests <<<"$out" || true
+  events="$(tracing_integer_of "${events:-}")"
+  requests="$(tracing_integer_of "${requests:-}")"
+  if [[ -z "$events" || -z "$requests" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+  printf '%s %s\n' "$events" "$requests"
+}
+
+# The delivery check. Returns 1 (after a log line) when the install must be
+# treated as failed: unreadable counts, no OTEL event while the gateway served
+# requests, or a ratio below 50 %. Returns 0 when the install is proven, and
+# also 0 with a log line when the window holds no gateway request at all
+# (nothing to measure yet).
+tracing_delivery_check() {
+  local command="${1:-}" window="${2:-900}" counts events requests percent
+  if [[ -z "$command" ]]; then
+    log "tracing: no MYRMIDON_TRACING_DELIVERY_COMMAND configured; the delivery check is skipped"
+    return 0
+  fi
+  counts="$(tracing_delivery_counts "$command" "$window")"
+  if [[ -z "$counts" ]]; then
+    log "tracing: REFUSED: the delivery command did not print the two integers of the ${window}s window (OTEL events, SpendLogs requests); the tracing install cannot be proven complete"
+    return 1
+  fi
+  read -r events requests <<<"$counts"
+  if ((requests == 0)); then
+    log "tracing: no gateway request in the last ${window}s; the delivery ratio is not measurable yet"
+    return 0
+  fi
+  if ((events == 0)); then
+    log "tracing: REFUSED: no OTEL event arrived in the last ${window}s while the gateway served $requests request(s); the tracing install is not complete (events_core is empty for the window)"
+    return 1
+  fi
+  percent=$((events * 100 / requests))
+  if ((events * 2 < requests)); then
+    log "tracing: REFUSED: the delivery ratio is ${percent}% (${events} OTEL events against ${requests} gateway requests in ${window}s), below the 50% floor"
+    return 1
+  fi
+  log "tracing: delivery ok: ${percent}% (${events} OTEL events against ${requests} gateway requests in ${window}s)"
+  return 0
+}
+
+# Explains why an image reference is not pinned, or prints nothing when it is
+# (a full X.Y.Z tag, or a digest). A major or minor tag, `latest`, or no tag at
+# all moves under the deployment and is not a pin.
+tracing_image_pin_problem() {
+  local ref="$1" tag
+  [[ -n "$ref" ]] || return 0
+  if [[ "$ref" == *@sha256:* ]]; then
+    valid_digest "sha256:${ref#*@sha256:}" && return 0
+    printf '%s\n' "$ref carries @sha256: without 64 lowercase hex characters"
+    return 0
+  fi
+  if [[ "$ref" != *:* ]]; then
+    printf '%s\n' "$ref has no tag: an untagged reference resolves to latest, which is not a pin"
+    return 0
+  fi
+  tag="${ref##*:}"
+  if [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9._-]+)?$ ]]; then
+    return 0
+  fi
+  printf '%s\n' "$ref is pinned by '$tag', which is not a full X.Y.Z version: a major or minor tag moves; pin it by X.Y.Z or by digest"
+}
+
+# The image-pin check: both images must be pinned when they are configured.
+# Returns 1 with a log line on the first unpinned reference, 0 otherwise.
+tracing_check_image_pins() {
+  local langfuse_image="${1:-}" gateway_image="${2:-}" problem
+  problem="$(tracing_image_pin_problem "$langfuse_image")"
+  if [[ -n "$problem" ]]; then
+    log "tracing: REFUSED: the Langfuse image is not pinned: $problem"
+    return 1
+  fi
+  problem="$(tracing_image_pin_problem "$gateway_image")"
+  if [[ -n "$problem" ]]; then
+    log "tracing: REFUSED: the gateway image is not pinned: $problem"
+    return 1
+  fi
+  if [[ -n "$langfuse_image$gateway_image" ]]; then
+    log "tracing: image pins ok (langfuse='${langfuse_image:-<unset>}', gateway='${gateway_image:-<unset>}')"
+  fi
+  return 0
+}
+
+# HOST-TARGETING (the 02.10 two-host follow-up): shared component-host helpers.
+# rollout-component.sh and rollback-component.sh both source lib.sh and both
+# must act on the SAME host: a rollback that ignores MYR_<COMPONENT>_HOST would
+# recreate the component on the deploy host — the exact 1.4.0 fleetd incident.
+# The caller sets COMPONENT_REMOTE (empty = local) and COMPONENT_SERVICE first.
+component_host_ssh_opts=(-o BatchMode=yes -o ConnectTimeout=10)
+component_host_docker() {
+  if [[ -n "$COMPONENT_REMOTE" ]]; then
+    # shellcheck disable=SC2029
+    ssh "${component_host_ssh_opts[@]}" "$COMPONENT_REMOTE" docker "$@"
+  else
+    docker "$@"
+  fi
+}
+component_host_compose() {
+  local args=(compose --project-directory "$COMPOSE_DIR")
+  local f
+  IFS=':' read -r -a _ch_files <<<"$COMPOSE_FILES"
+  for f in "${_ch_files[@]}"; do args+=(-f "$COMPOSE_DIR/$f"); done
+  args+=(-f "$COMPONENT_OVERRIDE_PATH")
+  component_host_docker "${args[@]}" "$@"
+}
+component_host_cat_override() {
+  if [[ -n "$COMPONENT_REMOTE" ]]; then
+    # shellcheck disable=SC2029
+    ssh "${component_host_ssh_opts[@]}" "$COMPONENT_REMOTE" cat "$COMPONENT_OVERRIDE_PATH" 2>/dev/null || true
+  else
+    cat "$COMPONENT_OVERRIDE_PATH" 2>/dev/null || true
+  fi
+}
+# True when $COMPONENT_SERVICE is defined by the compose files of the target
+# host (docker compose config --services). The fail-closed pre-check: a
+# component with no trace on the target host is a misconfiguration (the 1.4.0
+# fleetd incident), not something to create from nothing.
+component_host_service_exists() {
+  component_host_compose config --services 2>/dev/null | grep -qx "$COMPONENT_SERVICE"
+}
+component_host_write_override() {
+  local target_ref="$1"
+  if [[ -n "$COMPONENT_REMOTE" ]]; then
+    # shellcheck disable=SC2029
+    ssh "${component_host_ssh_opts[@]}" "$COMPONENT_REMOTE" \
+      "mkdir -p '$COMPOSE_DIR' && printf '%s\n' '# Managed by scripts/myrmidon/deploy. Only the image line changes.' 'services:' '  $COMPONENT_SERVICE:' '    image: $target_ref' > '$COMPONENT_OVERRIDE_PATH'"
+  else
+    {
+      echo "# Managed by scripts/myrmidon/deploy. Only the image line changes."
+      echo "services:"
+      echo "  $COMPONENT_SERVICE:"
+      echo "    image: $target_ref"
+    } >"$COMPONENT_OVERRIDE_PATH"
+  fi
+}
+# Parses MYR_<COMPONENT>_HOST into COMPONENT_REMOTE/COMPONENT_SKIP, die() on a
+# malformed value. Usage: component_host_parse <component> <host-value>.
+component_host_parse() {
+  local component="$1" value="${2:-local}"
+  COMPONENT_REMOTE="" COMPONENT_SKIP=0
+  case "$value" in
+    local) ;;
+    skip) COMPONENT_SKIP=1 ;;
+    remote:*)
+      COMPONENT_REMOTE="${value#remote:}"
+      [[ "$COMPONENT_REMOTE" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]] \
+        || die "MYR_${component^^}_HOST must be local, skip or remote:<user>@<host>, got '$value'"
+      ;;
+    *) die "MYR_${component^^}_HOST must be local, skip or remote:<user>@<host>, got '$value'" ;;
+  esac
 }

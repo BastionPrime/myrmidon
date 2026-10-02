@@ -66,6 +66,21 @@ import { readAutoResumeAttentionState } from "../myrmidon/auto-resume.js";
 // myrmidon(SUB): upstream stack releases surface in the attention feed
 import { buildStackAttentionCards } from "../myrmidon/stack-registry/attention.js";
 import { readStackDocument } from "../myrmidon/stack-registry/store.js";
+// myrmidon(TRACING-HEALTH): the "LLM tracing" red state raises one operator card (part D)
+import { readTracingHealthAttentionSignal } from "../myrmidon/tracing-health/attention.js";
+
+/**
+ * myrmidon(TRACING-HEALTH): a stable UUID for the synthetic "LLM tracing"
+ * subject. The attention enrichment joins subject ids against uuid columns
+ * (agents.id), so a readable string id breaks the feed query; a deterministic
+ * uuid-shaped id (zero-prefixed, hex-safe derivation of the company id)
+ * keeps the card joinable, unique per company and stable across reads.
+ */
+function tracingHealthSubjectId(companyId: string): string {
+  const hex = companyId.replaceAll("-", "").replaceAll(/[^0-9a-f]/gi, "0").padEnd(24, "0").slice(0, 24);
+  const body = `00000000${hex}`.padEnd(32, "0").slice(0, 32);
+  return `${body.slice(0, 8)}-${body.slice(8, 12)}-${body.slice(12, 16)}-${body.slice(16, 20)}-${body.slice(20, 32)}`;
+}
 import {
   decisionRetentionService,
   DEFAULT_DECISION_SHELF_DAYS,
@@ -1922,6 +1937,54 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           detail: {
             kind: "generic",
             summaryExcerpt: card.summaryExcerpt,
+            images: [],
+          },
+        }));
+      }
+
+      // myrmidon(TRACING-HEALTH): the "LLM tracing" non-ok state raises ONE
+      // card on the operator desk, deduped by state — the parent ticket's
+      // rule is "signal to the operator role, never the owner", and the
+      // attention desk is the operator surface (the same delivery the
+      // AUTO-RESUME escalation uses). The signal comes from the process-level
+      // registry the tracing signal sweep records (attention-sweep.ts); the
+      // feed never calls the probes itself.
+      const tracingSignal = readTracingHealthAttentionSignal(companyId);
+      if (tracingSignal) {
+        add(createItem({
+          companyId,
+          sourceKind: "agent_error_alert",
+          subject: {
+            kind: "agent",
+            id: tracingHealthSubjectId(companyId),
+            companyId,
+            title: tracingSignal.title,
+            identifier: null,
+            status: tracingSignal.state,
+            href: `/${prefix}/settings`,
+            metadata: {
+              tracingHealth: true,
+              state: tracingSignal.state,
+              severity: tracingSignal.severity,
+            },
+          },
+          whyNow: tracingSignal.whyNow,
+          decisionVerbs: decisionVerbs(
+            { id: "inspect", label: "Inspect", description: "Inspect the tracing pipeline." },
+            { id: "dismiss", label: "Dismiss", description: "Dismiss this alert." },
+          ),
+          inlineResolvable: true,
+          entryRule: "the LLM tracing health check reports degraded or unknown",
+          exitRule: "the check reports ok or idle (the signal registry clears) or the row is dismissed.",
+          dedupKey: tracingSignal.dedupKey,
+          severity: tracingSignal.severity,
+          activityAt: tracingSignal.activityAt,
+          createdAt: tracingSignal.activityAt,
+          updatedAt: tracingSignal.activityAt,
+          relatedIssue: null,
+          detail: {
+            kind: "generic",
+            summaryExcerpt: excerpt(tracingSignal.whyNow),
             images: [],
           },
         }));

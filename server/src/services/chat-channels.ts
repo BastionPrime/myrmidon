@@ -34388,10 +34388,12 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   // myrmidon(U1): resolves the provider message of this run's earlier DM
   // status publication (`run:<id>:dmstatus:<endpoint>`) so the delivery lane
   // edits that exact message when the status changes (queued -> working).
-  // The row must still be that run's status row (the idempotency key is the
-  // unique authority), and its outbound link must not have been consumed by
-  // a final answer — providerProgressLaneConsumed already guards that for
-  // the ordinary milestone lane and the same proof applies here.
+  // Unlike the ordinary milestone lane, the SAME durable row is re-opened
+  // (enqueue coalesces queued and working into one row), so the publication
+  // currently being delivered carries its own providerMessageId — no
+  // `ne(id)` self-exclusion here, and the re-opened pending/streaming states
+  // must count as the replace candidate. The outbound-link guard below still
+  // proves a final answer has not consumed the lane.
   async function dmStatusPublicationToReplace(
     publication: typeof chatPublications.$inferSelect,
   ): Promise<string | null> {
@@ -34412,13 +34414,18 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           eq(chatPublications.companyId, publication.companyId),
           eq(chatPublications.endpointId, publication.endpointId),
           eq(chatPublications.conversationId, publication.conversationId),
-          eq(chatPublications.state, "published"),
+          inArray(chatPublications.state, [
+            "pending",
+            "retry",
+            "streaming",
+            "published",
+            "delivery_unknown",
+          ]),
           isNotNull(chatPublications.providerMessageId),
           eq(
             chatPublications.idempotencyKey,
             `run:${runId}:dmstatus:${publication.endpointId}`,
           ),
-          ne(chatPublications.id, publication.id),
         ),
       )
       .orderBy(desc(chatPublications.createdAt), desc(chatPublications.id))

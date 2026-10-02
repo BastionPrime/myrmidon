@@ -62,7 +62,15 @@ case "$1" in
     else
       cat "$file"
     fi ;;
-  compose) exit "\${COMPOSE_FAILS:-0}" ;;
+  compose)
+    case "$*" in
+      *--services)
+        # The compose project's declared services (for the HOST-TARGETING
+        # fail-closed pre-check): the sandbox's base compose file declares
+        # server + dockergate + fleetd, mirroring a real release stack.
+        printf 'server\ndockergate\nfleetd\n' ;;
+      *) exit "\${COMPOSE_FAILS:-0}" ;;
+    esac ;;
 esac
 `;
 
@@ -76,6 +84,27 @@ case "$1" in
   merge-base) exit 0 ;;
   ls-remote) cat "$SANDBOX/git-tags" ;;
 esac
+`;
+
+// HOST-TARGETING: the fake ssh either passes the remote command to the local
+// fake docker/cat (so the test sees the exact remote command line in the
+// calls log) or fails outright (sshFails: no key, unreachable host).
+const FAKE_SSH = `#!/usr/bin/env bash
+echo "ssh $*" >> "$SANDBOX/calls.log"
+if [ -e "$SANDBOX/ssh-fails" ]; then echo "ssh: connect failed" >&2; exit 255; fi
+# Drop the ssh options, keep user@host, then run the rest locally (with
+# bash -c when the remote command came as one string).
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift 2 ;;
+    *) break ;;
+  esac
+done
+target="$1"; shift
+if [ "$#" -eq 1 ]; then
+  exec bash -c "$1"
+fi
+exec "$@"
 `;
 
 // The fake board: health, the company agents list, and per-agent
@@ -121,6 +150,7 @@ function sandbox({
   composeFails = "0",
   origin = ORIGIN,
   tags = "",
+  sshFails = false,
 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myrmidon-release-gate-"));
   const bin = path.join(dir, "bin");
@@ -130,7 +160,9 @@ function sandbox({
   fs.writeFileSync(path.join(bin, "docker"), FAKE_DOCKER, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "curl"), FAKE_CURL, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "git"), FAKE_GIT, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "ssh"), FAKE_SSH, { mode: 0o755 });
   fs.writeFileSync(path.join(dir, "calls.log"), "");
+  if (sshFails) fs.writeFileSync(path.join(dir, "ssh-fails"), "");
   const lbls = registryLabels === undefined ? labels() : registryLabels;
   fs.writeFileSync(
     path.join(dir, "imagetools.json"),
@@ -178,6 +210,15 @@ function sandbox({
   } else if (current) {
     fs.writeFileSync(override, `services:\n  server:\n    image: ${CI_IMAGE}@${current}\n`);
   }
+  // myrmidon(BOOT-PATH): deploy.sh verifies the boot unit; give the sandbox the canonical
+  // one in a sandbox dir (the same template the deploy scripts ship).
+  const unitDir = path.join(dir, "systemd");
+  fs.mkdirSync(unitDir, { recursive: true });
+  const unit = fs.readFileSync(path.join(HERE, "paperclip.service.template"), "utf8")
+    .replaceAll("__COMPOSE_DIR__", composeDir)
+    .replaceAll("__COMPOSE_FILE_ARGS__", `-f ${composeDir}/docker-compose.yml -f ${composeDir}/docker-compose.myrmidon-image.yml`)
+    .replaceAll("__COMPOSE_SERVICE__", "server");
+  fs.writeFileSync(path.join(unitDir, "paperclip.service"), unit);
   const config = path.join(dir, "deploy.env");
   fs.writeFileSync(
     config,
@@ -194,6 +235,7 @@ function sandbox({
       `MAINTENANCE_ENTER_COMMAND='echo enter >> ${path.join(dir, "maintenance.log")}'`,
       `MAINTENANCE_EXIT_COMMAND='echo exit >> ${path.join(dir, "maintenance.log")}'`,
       "RUNNING_RUNS_COMMAND='echo 0'",
+      `SYSTEMD_UNIT_DIR=${unitDir}`,
       `BOARD_API_URL=http://127.0.0.1:3100/api`,
       ...(smokeCompany ? [`MYRMIDON_DEPLOY_SMOKE_COMPANY=${smokeCompany}`] : []),
       "MYRMIDON_DEPLOY_SMOKE_TIMEOUT_SEC=2",
@@ -333,6 +375,52 @@ describe("rollout-component.sh", () => {
     assert.match(out, /unknown component: nonsense/);
   });
 
+  it("HOST=skip: a component not managed by this deploy exits 0 with a loud SKIP, and rolls nothing", () => {
+    const sb = sandbox();
+    fs.appendFileSync(sb.config, "MYR_FLEETD_HOST=skip\n");
+    const { code, out } = run(sb, "rollout-component.sh", ["--component", "fleetd", "--digest", FD]);
+    assert.equal(code, 0, out);
+    assert.match(out, /SKIP: fleetd is not managed by this deploy/);
+    // The image was still CI-verified (read-only) but nothing was pulled or recreated.
+    assert.match(calls(sb), /buildx imagetools inspect ghcr\.io\/itkadr-git\/myrmidon-fleetd/);
+    assert.doesNotMatch(calls(sb), /docker pull/);
+    assert.doesNotMatch(calls(sb), /up -d/);
+  });
+
+  it("HOST=remote:<user>@<host>: docker and compose run through ssh, the override is written remotely", () => {
+    const sb = sandbox();
+    fs.appendFileSync(sb.config, "MYR_FLEETD_HOST=remote:root@vm-exec\n");
+    const { code, out } = run(sb, "rollout-component.sh", ["--component", "fleetd", "--digest", FD]);
+    assert.equal(code, 0, out);
+    // The pull and the compose recreate went through ssh to the remote host.
+    assert.match(calls(sb), /ssh -o BatchMode=yes -o ConnectTimeout=10 root@vm-exec docker pull --quiet ghcr\.io\/itkadr-git\/myrmidon-fleetd/);
+    assert.match(calls(sb), /ssh -o BatchMode=yes -o ConnectTimeout=10 root@vm-exec docker compose .* up -d --no-deps fleetd/);
+    // The override write went through ssh as a single remote command (the
+    // fake ssh runs it locally, so the file appearing proves the write path:
+    // what was logged is the ssh line with the printf inside).
+    assert.match(calls(sb), /image: ghcr\.io\/itkadr-git\/myrmidon-fleetd@/);
+    // The local compose call (no ssh prefix) never ran from the script
+    // itself: the fake ssh executes the remote command locally, so bare
+    // docker lines in the log are the fake ssh's own exec — every line the
+    // script produced is pinned by the two ssh assertions above.
+  });
+
+  it("HOST=remote:<user>@<host>: a broken ssh (no key / unreachable) fails the component rollout, not silently", () => {
+    const sb = sandbox({ sshFails: true });
+    fs.appendFileSync(sb.config, "MYR_FLEETD_HOST=remote:root@vm-exec\n");
+    const { code, out } = run(sb, "rollout-component.sh", ["--component", "fleetd", "--digest", FD]);
+    assert.notEqual(code, 0);
+    assert.match(out, /cannot pull|compose up failed|not a service of the compose project/);
+  });
+
+  it("rejects a malformed MYR_<COMPONENT>_HOST value", () => {
+    const sb = sandbox();
+    fs.appendFileSync(sb.config, "MYR_FLEETD_HOST=elsewhere\n");
+    const { code, out } = run(sb, "rollout-component.sh", ["--component", "fleetd", "--digest", FD]);
+    assert.notEqual(code, 0);
+    assert.match(out, /MYR_FLEETD_HOST must be local, skip or remote:/);
+  });
+
   it("refuses a component image that is not in the registry, changing nothing", () => {
     const sb = sandbox({ componentsMissing: true });
     const { code, out } = run(sb, "rollout-component.sh", ["--component", "dockergate", "--digest", DG]);
@@ -362,6 +450,20 @@ describe("rollout-component.sh", () => {
       `ghcr.io/itkadr-git/myrmidon-dockergate@${OLD}`,
     );
   });
+
+  it("refuses a local rollout when the component is not a service of the compose project (fail-closed pre-check, nothing pulled)", () => {
+    const sb = sandbox();
+    // A component nobody declares: neither the fake compose --services list
+    // (server/dockergate/fleetd) nor an override file.
+    fs.appendFileSync(sb.config, "MYR_DOCKERGATE_COMPOSE_SERVICE=nonexistent-gate\n");
+    const { code, out } = run(sb, "rollout-component.sh", ["--component", "dockergate", "--digest", DG]);
+    assert.notEqual(code, 0);
+    assert.match(out, /not a service of the compose project/);
+    assert.match(out, /nonexistent-gate missing/);
+    // Fail-closed BEFORE the pull and the override write.
+    assert.doesNotMatch(calls(sb), /docker pull ghcr\.io\/itkadr-git\/myrmidon-dockergate/);
+    assert.ok(!fs.existsSync(path.join(sb.composeDir, "docker-compose.myrmidon-dockergate.yml")));
+  });
 });
 
 describe("rollback-component.sh", () => {
@@ -379,6 +481,32 @@ describe("rollback-component.sh", () => {
       read(path.join(sb.composeDir, "docker-compose.myrmidon-dockergate.yml")),
       new RegExp(`image: ghcr.io/itkadr-git/myrmidon-dockergate@${OLD}`),
     );
+  });
+
+  it("HOST=remote:<user>@<host>: the rollback goes through ssh to the same host as the rollout (no local recreate)", () => {
+    const sb = sandbox();
+    fs.appendFileSync(sb.config, "MYR_FLEETD_HOST=remote:root@vm-exec\n");
+    // A rollout first: through ssh, it remembers the previous image.
+    fs.writeFileSync(
+      path.join(sb.composeDir, "docker-compose.myrmidon-fleetd.yml"),
+      `services:\n  fleetd:\n    image: ghcr.io/itkadr-git/myrmidon-fleetd@${OLD}\n`,
+    );
+    assert.equal(run(sb, "rollout-component.sh", ["--component", "fleetd", "--digest", FD]).code, 0);
+    const { code, out } = run(sb, "rollback-component.sh", ["--component", "fleetd"]);
+    assert.equal(code, 0, out);
+    // Every docker/compose call the rollback made went through ssh to the remote host.
+    const log = calls(sb);
+    assert.match(log, /ssh -o BatchMode=yes -o ConnectTimeout=10 root@vm-exec docker pull --quiet ghcr\.io\/itkadr-git\/myrmidon-fleetd/);
+    assert.match(log, /ssh -o BatchMode=yes -o ConnectTimeout=10 root@vm-exec docker compose .* up -d --no-deps fleetd/);
+  });
+
+  it("HOST=skip: the rollback exits 0 with a loud SKIP, touching nothing", () => {
+    const sb = sandbox();
+    fs.appendFileSync(sb.config, "MYR_FLEETD_HOST=skip\n");
+    const { code, out } = run(sb, "rollback-component.sh", ["--component", "fleetd"]);
+    assert.equal(code, 0, out);
+    assert.match(out, /SKIP: fleetd is not managed by this deploy/);
+    assert.doesNotMatch(calls(sb), /docker pull/);
   });
 
   it("dies with a clear message when no previous component image is recorded", () => {

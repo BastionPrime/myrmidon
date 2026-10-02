@@ -98,6 +98,29 @@ restores the board-only behavior (not for a release: the 01.10 incident was exac
 split). The settings are in [SETTINGS.md](SETTINGS.md); an example is in
 [`deploy.env.example`](../../scripts/myrmidon/deploy/deploy.env.example).
 
+A component does not have to run on the deploy host (`MYR_<COMPONENT>_HOST`, the 02.10
+follow-ups): `local` (the default) rolls it in this host's compose project — the rollout proves
+the service is part of that project first (`docker compose config --services`) and refuses BEFORE
+pulling or writing anything when it is not (fail-closed); `remote:<user>@<host>`
+rolls it on another host — docker and compose run through ssh (key auth, no password prompt),
+the override file is written there under the same relative path, and the health URL is probed
+from the deploy host, so give the address the deploy host reaches, not a remote localhost;
+`skip` declares the component not managed by this deploy (its own procedure rolls it out
+elsewhere) — the rollout then prints a loud SKIP and still verifies the digest passes the
+CI-image gate. The 1.4.0 production install hit exactly this: fleetd lives on the second host,
+the rollout created `paperclip-fleetd-1` on the board host, it exited at once (no
+`/etc/myrmidon-fleetd/config.json` there) and the operator removed it by hand — point
+`MYR_FLEETD_HOST` at the host fleetd actually runs on.
+
+When your installation runs a component from a compose file of its own (dockergate of the
+1.4.0 production install runs from `myrmidon/compose.yml`, not from a
+`docker-compose.myrmidon-dockergate.yml` override), set `MYR_<COMPONENT>_COMPOSE_SERVICE`
+and `MYR_<COMPONENT>_OVERRIDE_FILE` so the rollout's service recreate targets the service
+that actually runs, and the override file it writes is the one your compose stack reads:
+one service, one image line, one source of the image. The override the rollout writes
+contains only the image line, so a service defined in your own compose file keeps its
+volumes, sockets and networks; the override only pins which image it runs.
+
 ### Upgrading from 1.4.0 to 1.5.0
 
 The 1.5.0 additions are additive on the host side: no new migrations to run by
@@ -218,19 +241,22 @@ Order:
    the server service is recreated.
 7. The `/api/health` check (`verify-health.sh`): `status` is `ok`, the version and commit
    match.
-7b. The LLM tracing guard (`tracing-check.sh`, TRACING-HEALTH): the gateway must carry the
-   OTLP-only callback set. The script compares the intended list the bundle generates (one
-   source of truth, `tracing_intended_callbacks()` in `lib.sh`) with the effective callbacks
-   — the union of `MYRMIDON_TRACING_CALLBACKS_COMMAND` (the live gateway or its database)
-   and the `callbacks:` list of `MYRMIDON_TRACING_GATEWAY_CONFIG` — and refuses the legacy
-   `langfuse` callback while the Langfuse server is v4
-   (`GET <MYRMIDON_TRACING_LANGFUSE_URL>/api/public/health` reports 4.x) or while the version
-   cannot be proven (the release bundle pins it in `MYRMIDON_TRACING_LANGFUSE_VERSION`). v4
-   in `events_only` mode rejects the legacy `/api/public/ingestion` endpoint: about 12k
-   rejected events per hour and burned gateway CPU while everything looked healthy. A
-   refusal fails the deploy like a failed health check (maintenance stays on, the rollback
-   command is printed) and there is no flag that skips it. Without any `MYRMIDON_TRACING_*`
-   setting the check logs a skip and the deploy continues.
+7b. The LLM tracing guard (`tracing-check.sh`, TRACING-HEALTH), three checks, each skipped when its
+   settings are absent:
+   - the callback set is the OTLP-only one: a legacy `langfuse` callback is refused while the Langfuse
+     server is v4 (`GET <MYRMIDON_TRACING_LANGFUSE_URL>/api/public/health` reports 4.x) or while the
+     version cannot be proven (the bundle pins it in `MYRMIDON_TRACING_LANGFUSE_VERSION`);
+   - the install delivers: `MYRMIDON_TRACING_DELIVERY_COMMAND` prints the OTEL event count of
+     `events_core` and the LiteLLM SpendLogs request count over
+     `MYRMIDON_TRACING_DELIVERY_WINDOW_SEC` (15 min by default); zero events with traffic, a ratio
+     below 50 %, or unreadable counts are refused;
+   - `MYRMIDON_TRACING_LANGFUSE_IMAGE` and `MYRMIDON_TRACING_GATEWAY_IMAGE` carry a full `X.Y.Z` tag or
+     a digest (a major tag such as `langfuse/langfuse:4` is refused).
+   v4 in `events_only` mode rejects the legacy `/api/public/ingestion` endpoint: about 12k rejected
+   events per hour and burned gateway CPU while everything looked healthy. A refusal fails the deploy
+   like a failed health check (maintenance stays on, the rollback command is printed) and there is no
+   flag that skips it. Without any `MYRMIDON_TRACING_*` setting the step logs a skip and the deploy
+   continues.
 8. Leaving maintenance mode. The `exit` call returns as soon as the server marks the window
    `leaving` (the leave tail — resuming the queue, the exit hook, retiring the window — runs on
    the server's maintenance tick), and the script then waits for the window to retire: it polls
@@ -243,7 +269,10 @@ Order:
    are `blocked` with an update since the deploy started, and re-reads the maintenance state. A
    blocked issue in the deploy window, an unreadable board or a window that did not retire
    prints `degraded: ...` and the run ends with `DEPLOY DEGRADED`; it does not fail a switched
-   and healthy deploy. Without the two settings the check is skipped with a log line.
+   and healthy deploy. Without the two settings the check is skipped with a log line — set
+   both for a release deploy: `BOARD_API_URL` is the API root with the `/api` suffix (the
+   check reads `$BOARD_API_URL/companies/$BOARD_COMPANY_ID/issues?status=blocked&...`), and
+   `BOARD_COMPANY_ID` is the company UUID the fleet works for.
 9. The release components roll out in the same run (see
    [Deploy the board and the release components together](#deploy-the-board-and-the-release-components-together)):
    one `rollout-component.sh` per component — pull by digest, the component override file,
@@ -262,6 +291,87 @@ DEGRADED line, and the rollback of the board and of each component is the operat
 
 `--dry-run` changes nothing (does not pull the image, does not dump, does not touch files)
 and prints the plan. The image check (step 0) does run in it: it only reads.
+
+## One boot path (systemd unit)
+
+The board container must be started at boot from **the same compose files the
+deploy scripts manage**. The 01.10 incident: a vendor-era `paperclip.service`
+ran `docker compose up -d` with the vendor compose file, and for 7 minutes the
+board ran the old `paperclip:2026.916.1` image on a database already migrated
+to 1.3.0.
+
+`deploy.sh` verifies this **before anything changes** (step 0, alongside the
+CI-image check, also in `--dry-run`): the unit `paperclip.service` must start
+the server with `docker compose --project-directory <COMPOSE_DIR>` and exactly
+the `-f` files this deploy manages (`COMPOSE_FILES` plus the override). A unit
+that reads another compose file, another directory, or misses the override file
+is a refusal — nothing is pulled, dumped or switched. There is no flag that
+skips it (`--force` does not skip it either).
+
+- The canonical unit ships as
+  [`paperclip.service.template`](../../scripts/myrmidon/deploy/paperclip.service.template):
+  `After=docker.service` (the nginx lesson: nothing that needs the docker
+  bridge address may start before docker), `Wants=network-online.target`, and
+  `ExecStart` naming the compose files of the installation. Install it once:
+  either copy the filled template to `/etc/systemd/system/paperclip.service`
+  by hand, or set `SYSTEMD_UNIT_INSTALL=1` in the settings file (the deploy
+  then installs it when it does not exist yet; needs root).
+- `SYSTEMD_UNIT_INSTALL=1` **never overwrites an existing unit**: a foreign
+  unit is a refusal, because silently replacing an unknown boot path is how
+  the incident happened. Remove or fix the foreign unit by hand, then deploy.
+- The unit references the compose **files**, not a digest: a new deploy writes
+  the new digest into the override file and the next boot picks it up with no
+  unit edit.
+- The settings file can point `SYSTEMD_UNIT_DIR` elsewhere (a stand VM, a
+  sandbox); the check is the same.
+
+## Post-boot check
+
+A systemd oneshot `myrmidon-post-boot.service` (template:
+[`myrmidon-post-boot.service.template`](../../scripts/myrmidon/deploy/myrmidon-post-boot.service.template))
+runs after `docker.service`, `paperclip.service` and `nginx.service` and calls
+[`post-boot-check.sh`](../../scripts/myrmidon/deploy/post-boot-check.sh) with
+the same settings file the deploy uses. It checks:
+
+1. the board `/api/health` reports `status: ok` **and** the running server
+   container matches the image pinned in the override file (a boot that
+   resurrected a different image is a failure);
+2. the dockergate container runs the image recorded in `DOCKERGATE_EXPECT_IMAGE`
+   (empty: the check is off with a log line);
+3. every `myrmidon-bot-*` container is running, and dockergate shows no deny
+   lines since boot (`DOCKERGATE_LOGS_COMMAND`);
+4. nginx, LiteLLM, RAGFlow and Hindsight answer their check URLs (each URL
+   unset: the check is off with a log line — nothing is silently skipped);
+5. the DNS names other services use resolve on the docker network
+   (`DNS_CHECK_NAMES`, default `mysql es01 paperclip-server-1` — the RAGFlow
+   lesson);
+6. `systemctl --failed` is empty.
+
+Every failure is listed (not just the first), the script exits 1 and the unit
+shows as failed in `systemctl --failed`. The machine-readable report goes to
+`$STATE_DIR/post-boot-check.json` — for the on-duty role's board issue, never
+to the owner directly.
+
+## Reboot rehearsal on the stand VM
+
+Before a production release, prove the boot path on the stand VM
+(`myrmidon-stand`, see [The release staging host](#the-release-staging-host)):
+
+1. install the units: the canonical `paperclip.service` and
+   `myrmidon-post-boot.service` (fill `__DEPLOY_ENV__` with the settings file
+   path; `SYSTEMD_UNIT_INSTALL=1` installs the first one via a deploy);
+2. run a deploy by digest (or a fresh install), let the board come up healthy;
+3. reboot the VM;
+4. after the boot settles, read the outcome: `systemctl --no-pager status
+   myrmidon-post-boot.service` (must be `active (exited)`) and
+   `$STATE_DIR/post-boot-check.json` (`ok: true`), plus `systemctl --failed`
+   (must be empty).
+
+Pass: the post-boot check reports green. A wrong boot path (a unit reading
+another compose file) is caught earlier: the deploy itself refuses. Attach the
+rehearsal log (the check output plus the JSON report) to the release task; for
+the Myrmidon release notes it is the acceptance record that the release
+survives a reboot.
 
 ## Rollback
 
@@ -302,7 +412,10 @@ scripts/myrmidon/deploy/rollback-component.sh --config /path/to/deploy.env --com
 
 It restores the image the component's rollout remembered as previous (`$STATE_DIR/
 previous-<component>-image`, or an explicit `--to-image <ref>`), recreates the service and
-re-runs that component's health probe (skipped with a warning when the probe is unset). Like
+re-runs that component's health probe (skipped with a warning when the probe is unset).
+The rollback honors `MYR_<COMPONENT>_HOST` exactly like the rollout: a `remote:<user>@<host>`
+component is pulled, switched and recreated on that host through ssh, a `skip` component is
+left to its own procedure (a loud SKIP). Like
 `rollback.sh` it is the emergency path: an unverified target warns but does not block.
 Rolling the board back does not roll the components back, and rolling a component back does
 not touch the board: after a DEGRADED deploy the output names exactly which side failed and

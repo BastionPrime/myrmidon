@@ -116,6 +116,7 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MYR_DOCKERGATE_HEALTH_URL` | RELEASE-GATE | unset | REQUIRED health probe of dockergate in the joint rollout: the value goes to curl verbatim (URL + arguments, e.g. `--unix-socket /run/myrmidon-dockergate/engine.sock http://localhost/_ping`) | Unset — the component rollout refuses after the switch (fail-closed): no success is reported without a check |
 | `MYR_FLEETD_HEALTH_URL` | RELEASE-GATE | unset | The same for fleetd (e.g. `http://127.0.0.1:8080/v1/bots` with the auth header) | Unset — refuses after the switch, like dockergate |
 | `MYR_DOCKERGATE_COMPOSE_SERVICE` / `MYR_DOCKERGATE_OVERRIDE_FILE` | RELEASE-GATE | `dockergate` / `docker-compose.myrmidon-dockergate.yml` | Service name and override file of dockergate in `$COMPOSE_DIR` when an installation differs | Override variables; for fleetd the same with `FLEETD` |
+| `MYR_DOCKERGATE_HOST` / `MYR_FLEETD_HOST` | RELEASE-GATE (02.10 follow-ups) | `local` | Where the component actually runs: `local` — this host's compose project (the rollout proves the service is part of it via `docker compose config --services` and refuses before pulling or writing anything when it is not, fail-closed); `remote:<user>@<host>` — the service runs on another host (fleetd on the second host): docker/compose through ssh (key auth), the override is written there, the health URL is probed from the deploy host; `skip` — the component is not managed by this deploy (its own procedure rolls it out elsewhere), the rollout logs a loud SKIP and still CI-checks the digest | The 1.4.0 rollout created `paperclip-fleetd-1` on the board host (no config there, exited, removed by hand): point fleetd at the host it really runs on |
 | `MYRMIDON_DEPLOY_SMOKE` | RELEASE-GATE | `1` (on) | Post-deploy smoke: within the timeout at least one bot container must re-apply (its status is `running`), else the deploy reports DEGRADED and prints the rollback commands | `0` — the smoke does not run at all (not for a release) |
 | `MYRMIDON_DEPLOY_SMOKE_COMPANY` | RELEASE-GATE | unset | UUID of the company whose agents the smoke polls (the agents list is per-company) | Unset — the smoke is skipped with a warning in the `deploy.sh` output |
 | `MYRMIDON_DEPLOY_SMOKE_AGENT` | RELEASE-GATE | unset | UUID of one specific agent for the smoke instead of polling all bots of the company | Unset — all `hermes_gateway` agents of the company are polled |
@@ -136,6 +137,10 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MYRMIDON_TRACING_CALLBACKS_COMMAND` | TRACING-HEALTH | unset | Deploy-script setting: command printing the effective callbacks of the live gateway (or its database), one per line or comma/space separated. Read together with the config file and the union is checked, because the file and the gateway database disagree and the database only adds callbacks | Unset together with the config file — refuses like above. To stop checking tracing at all, unset every `MYRMIDON_TRACING_*` setting |
 | `MYRMIDON_TRACING_CALLBACKS_FILE` | TRACING-HEALTH | `$STATE_DIR/tracing-callbacks.txt` | The generated file with the callback list the bundle installs — the ONE source of truth, written from `tracing_intended_callbacks()` in `lib.sh` (`tracing-check.sh --write-intended`); the check reads the same file | Missing file — the function itself answers. The file is never a hand-written second list: the gateway config and the check are rendered from it |
 | `MYRMIDON_TRACING_TOKEN_FILE` | TRACING-HEALTH | unset | Token file for a Langfuse deployment whose health route is behind auth. The value is not logged | Unset — the probe is anonymous |
+| `MYRMIDON_TRACING_DELIVERY_COMMAND` | TRACING-HEALTH | unset | Deploy-script setting: command printing two integers for the delivery window — the OTEL event count in `events_core` (ClickHouse) and the LiteLLM SpendLogs request count. The installer sends a test request and waits for an event, so **zero events with traffic is a refusal, not a silent success**; a delivery ratio below 50 % and unreadable counts are refused too. The window is exported to the command as `MYRMIDON_TRACING_DELIVERY_WINDOW_SEC` | Unset — the delivery check is skipped with a log line. Part C measures the same ratio live on the board, same semantics |
+| `MYRMIDON_TRACING_DELIVERY_WINDOW_SEC` | TRACING-HEALTH | `900` (15 min) | The window those two counts cover, in seconds, and the value the delivery command receives | Non-numeric or ≤0 — the default |
+| `MYRMIDON_TRACING_LANGFUSE_IMAGE` | TRACING-HEALTH | unset | Image reference of the Langfuse server the bundle pins: it must carry a full `X.Y.Z` tag or a digest. A major or minor tag (for example `langfuse/langfuse:4`) moves under the deployment and is not a pin | Unset — the pin check is skipped. Set to a major/minor tag, `latest` or an untagged name — refused |
+| `MYRMIDON_TRACING_GATEWAY_IMAGE` | TRACING-HEALTH | unset | The same pin rule for the gateway (LiteLLM) image of the bundle: full `X.Y.Z` tag or digest | Unset — skipped; anything that is not a full version or a digest — refused |
 
 ## Track 6 — security and models
 
@@ -161,7 +166,7 @@ A track writes only into its own section. A row is added in the same PR as the s
 
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
-| `MYRMIDON_INFRA_INTERRUPT_CODES` | L1 | `agent_paused,process_lost,server_shutdown_interrupted,issue_reassigned` | List of run error codes (comma-separated) for which `legacyExecutionNeedsReconciliation` does not set the `legacy_execution_requires_reconciliation` lock, an agent pause does not escalate the task immediately, and the periodic stranded-task resolution does not escalate it while the agent is merely paused — all within the shared retry budget (2, the same as the rest of the function's content) and **only when the run was claimed by a conversation adapter** (`CONVERSATION_ADAPTER_TYPES`, `conversation-continuation.ts`) **or an adapter with its own idempotency key** (`IDEMPOTENT_INFRA_INTERRUPT_ADAPTER_TYPES`, currently empty) — and only while the provider stop is not in the "requested, unconfirmed" state (`resultJson.executionCancellation.state === 'requested'`: the vendor lock remains). For the rest (`process`, `http`, `openclaw_gateway`, unknown adapter) this list of codes does not apply — the vendor lock remains, their run must not be retried blindly (risk of executing an external action twice) | Empty or `off` — vendor behavior (the lock is always set). A custom list replaces the default entirely, does not add to it. The adapter filter cannot be disabled by the list itself |
+| `MYRMIDON_INFRA_INTERRUPT_CODES` | L1 | `agent_paused,process_lost,server_shutdown_interrupted,issue_reassigned` | List of run error codes (comma-separated) for which `legacyExecutionNeedsReconciliation` does not set the `legacy_execution_requires_reconciliation` lock, an agent pause does not escalate the task immediately, and the periodic stranded-task resolution does not escalate it while the agent is merely paused — all within the shared retry budget (2, the same as the rest of the function's content) and **only when the run was claimed by a conversation adapter** (`CONVERSATION_ADAPTER_TYPES`, `conversation-continuation.ts`) **or an adapter with its own idempotency key** (`IDEMPOTENT_INFRA_INTERRUPT_ADAPTER_TYPES`, currently empty; `hermes_gateway` is relieved through the conversation-adapter route instead — its own predecessor overlap guard stops a still-live previous run before creating a new one, so it needs no idempotency key of its own) — and only while the provider stop is not in the "requested, unconfirmed" state (`resultJson.executionCancellation.state === 'requested'`: the vendor lock remains). For the rest (`process`, `http`, `openclaw_gateway`, unknown adapter) this list of codes does not apply — the vendor lock remains, their run must not be retried blindly (risk of executing an external action twice) | Empty or `off` — vendor behavior (the lock is always set). A custom list replaces the default entirely, does not add to it. The adapter filter cannot be disabled by the list itself |
 
 ## G1 — bot container image (bot runtime image)
 
@@ -395,3 +400,50 @@ change after the give-up (an operator action) re-arms the counter.
 | `MYRMIDON_AUTO_RESUME_MAX_ATTEMPTS` | AUTO-RESUME | `3` | Failed resumes in one streak before the board gives up and raises the operator card; the agent is then left in `error` until an operator acts | Non-numeric, `0`, negative — the default |
 | `MYRMIDON_AUTO_RESUME_INTERVAL_SEC` | AUTO-RESUME | `60` | How often (sec) the sweep looks for due agents; the sweep runs on the scheduler tick and this gate keeps it per-minute | Values below 10 — 10. Non-numeric, `0`, negative — the default |
 | `MYRMIDON_AUTO_RESUME_WINDOW_MS` | AUTO-RESUME | `3600000` (1 h) | A streak whose last failure is older than this is treated as a new episode (the attempt counter restarts) | Non-numeric, `0`, negative — the default |
+
+## 1.5 — TRACING-HEALTH: LLM tracing health check
+
+Settings of `server/src/myrmidon/tracing-health/` — `GET /api/myrmidon/tracing/health`.
+The check shares the gateway address and key with the M2-A cost collection
+(`MYRMIDON_LITELLM_BASE_URL` + `MYRMIDON_LITELLM_KEY_SECRET`, see the Bot
+containers section above); only the Langfuse ClickHouse endpoints are new rows.
+All off by default.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_TRACING_CLICKHOUSE_URL` | TRACING-HEALTH | unset (off) | Address of the Langfuse ClickHouse HTTP interface (`http(s)://…:8123`) over which the health check counts the trace events of the window in `events_core` (Langfuse v4 `events_only` mode: the `traces`/`observations` tables stay empty, the data lives in ClickHouse — counting them is wrong by design). The address is not stored in the open repository; the value is set by the deployment | Set together with the two `MYRMIDON_LITELLM_*` gateway settings; without all three the check is off and `GET /api/myrmidon/tracing/health` answers 503 `{enabled: false}` |
+| `MYRMIDON_TRACING_CLICKHOUSE_USER` | TRACING-HEALTH | unset | ClickHouse user for the health check queries | Unset — the query goes without user/password parameters |
+| `MYRMIDON_TRACING_CLICKHOUSE_PASSWORD` | TRACING-HEALTH | unset | ClickHouse password of that user | Sent as a request parameter of the ClickHouse HTTP interface and never logged, stored or returned in the response |
+| `MYRMIDON_TRACING_CLICKHOUSE_DATABASE` | TRACING-HEALTH | `default` | Database of the Langfuse tables (`events_core`, `langfuse_ingestion_rejections`) | — |
+| `MYRMIDON_TRACING_WINDOW_SEC` | TRACING-HEALTH | `900` (15 min) | Length of the health check window: events in ClickHouse and gateway requests are counted over the last N seconds | From 60 to 3600; non-integer or out of bounds — the default. A window with no gateway traffic is the state `idle` (OK with a reason), not an alarm: the check must not cry wolf on quiet periods |
+| `MYRMIDON_TRACING_HEALTH_TTL_SEC` | TRACING-HEALTH | `60` | Cache TTL of the report: the probes run at most once per TTL; inside it the previous report is served (checkedAt shows when it was actually measured) | From 5 to 3600; non-integer or out of bounds — the default. Any probe failure is the state `unknown` with a reason in the JSON contract, never a 500 |
+| `MYRMIDON_TRACING_SIGNAL_INTERVAL_SEC` | TRACING-HEALTH | `300` | Period (sec) of the operator-signal sweep (part D): the board itself polls the tracing health report and records the attention signal + the state-transition journal row, so the operator desk is fresh even when nobody has the status card open. A steady state writes nothing — one row per transition only | From 60 to 86400; non-integer or out of bounds — the default. Off together with the check itself: no tracing settings — no timer, no query |
+
+Health semantics (the operator's 02.10 findings, baked into the domain):
+`idle` without gateway traffic; `degraded` when events are missing while traffic
+flowed, when the delivery ratio (OTEL events in `events_core` per gateway
+request) is below 0.5, when any "Rejected … legacy" ingestion rejection landed
+in the window (the incident signature), or when the callback error rate is at
+or above 0.02; `unknown` on probe failure. The evidence fields `deliveryRatio`
+and `legacyRejections` are additive parts of the JSON contract for the part D
+dedup key; fields without a source stay null and never block the computation.
+
+
+## TASK-PR-SYNC — a task settles once its pull requests merge
+
+A task whose `work_product` of type `pull_request` merged used to stay busy until
+someone noticed. The scheduler tick now runs a pass that refreshes each PR's
+state through the existing GitHub resolver and closes the task (`done`, one
+comment with the PR refs / merge sha / time, an activity row) when every PR has
+reached a terminal state and at least one merged and no post-deploy gate is still
+open. When none of them merged, the task goes back to its assignee (`in_progress`
+plus a comment) unless a newer comment already answered the closure. The sweep
+reads the same work-products surface the board uses; it adds no token or
+credential.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_TASK_PR_SYNC_ENABLED` | TASK-PR-SYNC | `1` (on) | Master switch of the delivering-PR sweep: on — a task is linked to its PRs and settled when they all merge | `0`/`false`/`off`/`no` — disable (tasks stay busy until closed by hand). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
+| `MYRMIDON_TASK_PR_SYNC_POLL_SEC` | TASK-PR-SYNC | `60` | Minimum spacing between two passes; the scheduler queue itself ticks more often | Values below 15 or non-numeric or fractional — the default (60) |
+| `MYRMIDON_TASK_PR_SYNC_BATCH_MAX` | TASK-PR-SYNC | `50` | How many candidate tasks one pass inspects at most (each task costs one GitHub resolve per PR) | From 1 to 500; values outside the range or non-numeric — the default |
+| `MYRMIDON_TASK_PR_SYNC_SETTLE_DISABLED` | TASK-PR-SYNC | unset (settling on) | Instance-wide lever to make the sweep read and log but never flip a task to `done` — for a deliberate post-deploy hold on every task at once. A task with its own post-deploy gate is already deferred per task (a pending card, a pending approval, or a monitor scheduled for the future) | `1`/`true`/`on`/`yes` — settling off; anything else — settling on. The per-task gate check cannot be disabled by this switch |

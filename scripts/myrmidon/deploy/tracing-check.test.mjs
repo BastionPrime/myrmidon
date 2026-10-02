@@ -67,6 +67,7 @@ function checkSandbox({
   effectiveCallbacks,
   gatewayConfig,
   intendedFile,
+  delivery,
 } = {}) {
   const dir = tmpdir("myrmidon-tracing-");
   const bin = path.join(dir, "bin");
@@ -99,6 +100,9 @@ esac
   if (intendedFile !== undefined) {
     fs.writeFileSync(path.join(dir, "intended.txt"), intendedFile);
   }
+  if (delivery !== undefined) {
+    fs.writeFileSync(path.join(dir, "delivery-counts"), `${delivery}\n`);
+  }
   return { dir, bin };
 }
 
@@ -116,6 +120,10 @@ function configFor(sandbox) {
 
 function intendedFor(sandbox) {
   return path.join(sandbox.dir, "intended.txt");
+}
+
+function deliveryCommandFor(sandbox) {
+  return `cat ${path.join(sandbox.dir, "delivery-counts")}`;
 }
 
 describe("tracing-check.sh", () => {
@@ -208,7 +216,99 @@ describe("tracing-check.sh", () => {
     const sb = checkSandbox({});
     const { code, out } = check(sb, []);
     assert.equal(code, 0, out);
-    assert.match(out, /the callback check is skipped/);
+    assert.match(out, /the tracing checks are skipped/);
+  });
+
+  it("refuses an install that delivered no OTEL event while the gateway served requests", () => {
+    const sb = checkSandbox({ effectiveCallbacks: [OTLP], delivery: "0 240" });
+    const { code, out } = check(sb, [
+      "--langfuse-url", LANGFUSE_URL,
+      "--callbacks-command", commandFor(sb),
+      "--delivery-command", deliveryCommandFor(sb),
+    ]);
+    assert.notEqual(code, 0);
+    assert.match(out, /no OTEL event arrived/);
+    assert.match(out, /the tracing install is not complete/);
+  });
+
+  it("passes a delivery ratio at or above the floor", () => {
+    const sb = checkSandbox({ effectiveCallbacks: [OTLP], delivery: "900 1000" });
+    const { code, out } = check(sb, [
+      "--langfuse-url", LANGFUSE_URL,
+      "--callbacks-command", commandFor(sb),
+      "--delivery-command", deliveryCommandFor(sb),
+    ]);
+    assert.equal(code, 0, out);
+    assert.match(out, /delivery ok: 90%/);
+  });
+
+  it("refuses a delivery ratio below 50 %", () => {
+    const sb = checkSandbox({ effectiveCallbacks: [OTLP], delivery: "100 1000" });
+    const { code, out } = check(sb, [
+      "--langfuse-url", LANGFUSE_URL,
+      "--callbacks-command", commandFor(sb),
+      "--delivery-command", deliveryCommandFor(sb),
+    ]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /below the 50% floor/);
+    assert.match(out, /10%/);
+  });
+
+  it("does not refuse an idle window with no gateway request", () => {
+    const sb = checkSandbox({ effectiveCallbacks: [OTLP], delivery: "0 0" });
+    const { code, out } = check(sb, [
+      "--langfuse-url", LANGFUSE_URL,
+      "--callbacks-command", commandFor(sb),
+      "--delivery-command", deliveryCommandFor(sb),
+    ]);
+    assert.equal(code, 0, out);
+    assert.match(out, /not measurable yet/);
+  });
+
+  it("refuses unreadable delivery counts instead of assuming success", () => {
+    const sb = checkSandbox({ effectiveCallbacks: [OTLP], delivery: "not a number" });
+    const { code, out } = check(sb, [
+      "--langfuse-url", LANGFUSE_URL,
+      "--callbacks-command", commandFor(sb),
+      "--delivery-command", deliveryCommandFor(sb),
+    ]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /did not print the two integers/);
+  });
+
+  it("refuses a Langfuse image pinned by a major or minor tag", () => {
+    const major = checkSandbox({ effectiveCallbacks: [OTLP], delivery: "900 1000" });
+    const majorRun = check(major, [
+      "--langfuse-image", "langfuse/langfuse:4",
+      "--callbacks-command", commandFor(major),
+      "--delivery-command", deliveryCommandFor(major),
+    ]);
+    assert.notEqual(majorRun.code, 0, majorRun.out);
+    assert.match(majorRun.out, /is not a full X\.Y\.Z version/);
+
+    const minor = checkSandbox({ effectiveCallbacks: [OTLP], delivery: "900 1000" });
+    const minorRun = check(minor, ["--gateway-image", "ghcr.io/example/gateway:1.2"]);
+    assert.notEqual(minorRun.code, 0, minorRun.out);
+    assert.match(minorRun.out, /the gateway image is not pinned/);
+  });
+
+  it("accepts a full version tag and a digest for both images", () => {
+    const sb = checkSandbox({ effectiveCallbacks: [OTLP], delivery: "900 1000" });
+    const { code, out } = check(sb, [
+      "--langfuse-image", "langfuse/langfuse:4.2.1",
+      "--gateway-image", `ghcr.io/example/gateway@sha256:${"f".repeat(64)}`,
+      "--callbacks-command", commandFor(sb),
+      "--delivery-command", deliveryCommandFor(sb),
+    ]);
+    assert.equal(code, 0, out);
+    assert.match(out, /image pins ok/);
+  });
+
+  it("refuses an untagged image reference", () => {
+    const sb = checkSandbox({ effectiveCallbacks: [OTLP], delivery: "900 1000" });
+    const { code, out } = check(sb, ["--langfuse-image", "langfuse/langfuse"]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /has no tag/);
   });
 
   it("refuses the legacy callback in the intended list the bundle itself carries", () => {
@@ -266,7 +366,14 @@ case "$1" in
         if [ -e "$SANDBOX/registry-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
         cat "$SANDBOX/imagetools.json" ;;
     esac ;;
-  compose) exit 0 ;;
+  compose)
+    case "$*" in
+      *--services)
+        # HOST-TARGETING: the declared services of the sandbox's compose
+        # project (the fail-closed pre-check reads them).
+        printf 'server\\ndockergate\\nfleetd\\n' ;;
+      *) exit 0 ;;
+    esac ;;
 esac
 `;
 
@@ -348,6 +455,15 @@ function deploySandbox({ langfuseHealth = { status: "OK", version: "4.2.1" }, tr
     path.join(composeDir, "docker-compose.myrmidon-image.yml"),
     `services:\n  server:\n    image: ${CI_IMAGE}@${OLD}\n`,
   );
+  // myrmidon(BOOT-PATH): deploy.sh verifies the boot unit; give the sandbox the canonical
+  // one in a sandbox dir (the same template the deploy scripts ship).
+  const unitDir = path.join(dir, "systemd");
+  fs.mkdirSync(unitDir, { recursive: true });
+  const unit = fs.readFileSync(path.join(HERE, "paperclip.service.template"), "utf8")
+    .replaceAll("__COMPOSE_DIR__", composeDir)
+    .replaceAll("__COMPOSE_FILE_ARGS__", `-f ${composeDir}/docker-compose.yml -f ${composeDir}/docker-compose.myrmidon-image.yml`)
+    .replaceAll("__COMPOSE_SERVICE__", "server");
+  fs.writeFileSync(path.join(unitDir, "paperclip.service"), unit);
 
   const lines = [
     `COMPOSE_DIR=${composeDir}`,
@@ -362,6 +478,7 @@ function deploySandbox({ langfuseHealth = { status: "OK", version: "4.2.1" }, tr
     `MAINTENANCE_ENTER_COMMAND='echo enter >> ${path.join(dir, "maintenance.log")}'`,
     `MAINTENANCE_EXIT_COMMAND='echo exit >> ${path.join(dir, "maintenance.log")}'`,
     "RUNNING_RUNS_COMMAND='echo 0'",
+    `SYSTEMD_UNIT_DIR=${unitDir}`,
     "MYR_DOCKERGATE_HEALTH_URL=http://127.0.0.1:3100/dockergate/health",
     "MYR_FLEETD_HEALTH_URL=http://127.0.0.1:3100/fleetd/health",
     "MYRMIDON_DEPLOY_SMOKE=0",
@@ -372,6 +489,16 @@ function deploySandbox({ langfuseHealth = { status: "OK", version: "4.2.1" }, tr
       `MYRMIDON_TRACING_LANGFUSE_URL=${LANGFUSE_URL}`,
       `MYRMIDON_TRACING_CALLBACKS_COMMAND='cat ${path.join(dir, "effective-callbacks")}'`,
     );
+    if (tracing.delivery !== undefined) {
+      fs.writeFileSync(path.join(dir, "delivery-counts"), `${tracing.delivery}\n`);
+      lines.push(`MYRMIDON_TRACING_DELIVERY_COMMAND='cat ${path.join(dir, "delivery-counts")}'`);
+    }
+    if (tracing.langfuseImage !== undefined) {
+      lines.push(`MYRMIDON_TRACING_LANGFUSE_IMAGE=${tracing.langfuseImage}`);
+    }
+    if (tracing.gatewayImage !== undefined) {
+      lines.push(`MYRMIDON_TRACING_GATEWAY_IMAGE=${tracing.gatewayImage}`);
+    }
   }
   lines.push("");
   const config = path.join(dir, "deploy.env");
@@ -414,6 +541,24 @@ describe("deploy.sh tracing guard", () => {
     const sb = deploySandbox();
     const { code, out } = runDeploy(sb, ["--digest", NEW]);
     assert.equal(code, 0, out);
-    assert.match(out, /the callback check is skipped/);
+    assert.match(out, /the tracing checks are skipped/);
+  });
+
+  it("refuses the deploy when the gateway delivers no OTEL event", () => {
+    const sb = deploySandbox({ tracing: { effectiveCallbacks: [OTLP], delivery: "0 480" } });
+    const { code, out } = runDeploy(sb, ["--digest", NEW]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /no OTEL event arrived/);
+    assert.equal(maintenance(sb), "enter\n");
+  });
+
+  it("refuses the deploy when the Langfuse image is pinned by a major tag", () => {
+    const sb = deploySandbox({
+      tracing: { effectiveCallbacks: [OTLP], delivery: "900 1000", langfuseImage: "langfuse/langfuse:4" },
+    });
+    const { code, out } = runDeploy(sb, ["--digest", NEW]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /is not a full X\.Y\.Z version/);
+    assert.equal(maintenance(sb), "enter\n");
   });
 });
