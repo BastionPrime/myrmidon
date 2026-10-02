@@ -27,6 +27,23 @@ version file to edit. Base Paperclip version is in the image label
   [guides/cto-chat-planner.md](guides/cto-chat-planner.md). The portal chat
   screen (part A) ships separately and calls the same route.
 
+### Reference-task evals (EVALS-A part A)
+
+- The evals path: a seeded corpus of neutral reference tasks for the pilot
+  role `engineer`, an LLM judge behind the company's LLM gateway (a free
+  DashScope model by default, one chat-completions call per task, strict JSON
+  parsing — an unparseable response scores zero with a `parseError` flag, not
+  invented points), per-task rubric scoring with the CI pass rate folded in
+  for `code` tasks, and a promote/confirm/regress verdict where a drop beyond
+  the threshold is only actionable after a confirmation run repeats it. The
+  judge never executes code. Scores live in `myrmidon_eval_runs`; the optional
+  Langfuse export is off by default and never blocks local scoring. Reads are
+  company-scoped, run mutations need a board actor, and an unconfigured
+  contour answers `503` with the names of the missing settings. The verdict
+  seam for the skill lifecycle (`candidate → verified → deprecated`, with
+  rollback) is exposed as `POST …/evals/verdict`; the merged lifecycle module
+  does not wire it to the board yet. Guide: [guides/reference-task-evals.md](guides/reference-task-evals.md).
+
 ## 1.5.0
 
 ### Tracing health (TRACING-HEALTH)
