@@ -77,6 +77,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/agent-memory-card.md](guides/agent-memory-card.md) | Вкладка «Memory» карточки агента: просмотр, выгрузка и удаление записей банка памяти, журнал |
 | [guides/browsers.md](guides/browsers.md) | Раздел «Браузеры» в настройках: экран живого браузера, пауза ботов на время сессии, журнал, очистка данных сайта |
 | [guides/stack-registry.md](guides/stack-registry.md) | Реестр компонентов стека: API, проба Docker, кэш, настройка сокета |
+| [guides/tracing-health.md](guides/tracing-health.md) | Здоровье LLM-трейсинга: карточка «LLM tracing» в настройках компании, состояния, сигнал оператору, журнал переходов |
 | [guides/bridge-extension.md](guides/bridge-extension.md) | Браузерный мост, расширение (часть C): read-only действия в браузере клиентского ПК, сопряжение кодом, сборка и load-unpacked |
 | [guides/browser-bridge-gateway.md](guides/browser-bridge-gateway.md) | Браузерный мост, шлюз (EXTCASE-B): исходящее WSS-соединение расширения, сопряжение кодом, allowlist, политика подписи, журнал |
 | [guides/connector-panel.md](guides/connector-panel.md) | Панель коннекторов (Company settings → Connectors): устройства, выдача кодов, allowlist, политика подписи, журнал |

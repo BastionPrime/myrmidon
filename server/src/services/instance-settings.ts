@@ -45,6 +45,8 @@ import { preserveBotCanaryGeneralKey } from "../myrmidon/bot-containers/canary-s
 import { preserveCloudConnectorGeneralKey } from "../myrmidon/cloud-connector/store.js";
 // myrmidon(SEC1): keep the access-hub host registry across vendor writes of `general`
 import { preserveAccessHubHostsGeneralKey } from "../myrmidon/access-hub/host-registry.js";
+// myrmidon(1.6-AUTONOMY): keep the autonomy matrix and regulations across vendor writes of `general`
+import { preserveAutonomyGeneralKey } from "../myrmidon/autonomy/store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -571,6 +573,7 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
             ...preserveBotCanaryGeneralKey(current.general), // myrmidon(R5-B)
             ...preserveAccessHubHostsGeneralKey(current.general), // myrmidon(SEC1)
             ...preserveCloudConnectorGeneralKey(current.general), // myrmidon(CLOUD-CONNECTOR)
+            ...preserveAutonomyGeneralKey(current.general), // myrmidon(1.6-AUTONOMY)
           },
           updatedAt: now,
         })
