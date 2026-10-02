@@ -105,6 +105,7 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MYRMIDON_ACCESS_HUB_ENABLED` | SEC1 | `false` | Включает раздел «Доступы»: API `/api/myrmidon/access-hub/*` (типизация секретов, генерация ssh-ключей, реестр хостов, журнал, выдача/отзыв доступов). Выключен — чтения отвечают `enabled: false`, мутации 409, хранилище не трогается | `1`/`true`/`yes`/`on` — включить. Значение выката задаётся отдельно, в закрытом `myrmidon-deploy` |
 | `MYRMIDON_ACCESS_HUB_SSH_TIMEOUT_MS` | SEC1 | `30000` | Потолок времени одной ssh-операции access-hub (deploy/revoke/dryRun: чтение и запись authorized_keys) на один хост, включая connect и drain команды; по истечении процесс ssh завершается, операция отвечает `not_deployed` с человеческой причиной (значений ключа в ней нет) | Нечисловое, меньше 1000 или больше 300000 — умолчание |
 | `MYRMIDON_ACCESS_HUB_SSH_ADMIN_KEY_SECRET` | SEC1 | не задана | Имя существующего секрета компании (админский root-ключ), значением которого доска ходит по ssh на хосты реестра при раскладке/отзыве ключей. Не задана — ssh-операции отвечают `not_deployed` с причиной «admin ssh key secret is not configured», остальной access-hub работает | Имя секрета; значением должен быть приватный ключ в PEM (PKCS#8). Значение секрета не логируется и не возвращается |
+
 | `MYRMIDON_DEPLOY_ENABLED` | R5-A | `0` (off) | Allows board deploys from the UI: without it write routes answer 503, reads work | `1` — enable. The default is off |
 | `MYRMIDON_DEPLOY_HEALTH_URL` | R5-A | unset | Address of the board's own `/api/health` as the board container sees it: the job uses it to verify the version/commit after the switch | Unset — the final health check is impossible, the job will not close as successful |
 | `MYRMIDON_DEPLOY_REPORTS_DIR` | R5-A | unset | Directory of host-runner reports (the deploy `$STATE_DIR`), mounted into the board container read-only | Unset — the board does not see runner reports, the job does not move past `maintenance_on` |
@@ -137,7 +138,7 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MYRMIDON_TRACING_CALLBACKS_FILE` | TRACING-HEALTH | `$STATE_DIR/tracing-callbacks.txt` | The generated file with the callback list the bundle installs — the ONE source of truth, written from `tracing_intended_callbacks()` in `lib.sh` (`tracing-check.sh --write-intended`); the check reads the same file | Missing file — the function itself answers. The file is never a hand-written second list: the gateway config and the check are rendered from it |
 | `MYRMIDON_TRACING_TOKEN_FILE` | TRACING-HEALTH | unset | Token file for a Langfuse deployment whose health route is behind auth. The value is not logged | Unset — the probe is anonymous |
 | `MYRMIDON_TRACING_DELIVERY_COMMAND` | TRACING-HEALTH | unset | Deploy-script setting: command printing two integers for the delivery window — the OTEL event count in `events_core` (ClickHouse) and the LiteLLM SpendLogs request count. The installer sends a test request and waits for an event, so **zero events with traffic is a refusal, not a silent success**; a delivery ratio below 50 % and unreadable counts are refused too. The window is exported to the command as `MYRMIDON_TRACING_DELIVERY_WINDOW_SEC` | Unset — the delivery check is skipped with a log line. Part C measures the same ratio live on the board, same semantics |
-| `MYRMIDON_TRACING_DELIVERY_WINDOW_SEC` | TRACING-HEALTH | `900` (15 min) | The window those two counts cover, in seconds, and the value the delivery command receives | Unset or empty — the default. The value is passed to the delivery command as-is; no validation is performed |
+| `MYRMIDON_TRACING_DELIVERY_WINDOW_SEC` | TRACING-HEALTH | `900` (15 min) | The window those two counts cover, in seconds, and the value the delivery command receives | Non-numeric or ≤0 — the default |
 | `MYRMIDON_TRACING_LANGFUSE_IMAGE` | TRACING-HEALTH | unset | Image reference of the Langfuse server the bundle pins: it must carry a full `X.Y.Z` tag or a digest. A major or minor tag (for example `langfuse/langfuse:4`) moves under the deployment and is not a pin | Unset — the pin check is skipped. Set to a major/minor tag, `latest` or an untagged name — refused |
 | `MYRMIDON_TRACING_GATEWAY_IMAGE` | TRACING-HEALTH | unset | The same pin rule for the gateway (LiteLLM) image of the bundle: full `X.Y.Z` tag or digest | Unset — skipped; anything that is not a full version or a digest — refused |
 
@@ -495,3 +496,18 @@ database hit per wake.
 |---|---|---|---|---|
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_ENABLED` | WAKE-GUARD | `1` (on) | Master switch of the wake guard: on — an event-free wake to a settle-pending task is skipped instead of dispatching a run | `0`/`false`/`off`/`no` — disable (wakes dispatch runs as before). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_TTL_SEC` | WAKE-GUARD | `60` | How long a suppress decision stays cached for one task (matches the sweep's default poll); the cache holds at most 1000 issues, least-recently-used eviction | From 1 to 3600; non-numeric, non-positive or above the cap — the default (60) |
+
+## 1.6 — BASELINE: frozen metric snapshots
+
+The server part of BASELINE computes, for an arbitrary window and per project
+and per agent role, the cycle time, the time in review, the return rate, the
+blocked time with its top causes, the runs per task and the LLM cost per task
+from the board's own history
+(`GET /api/myrmidon/companies/:companyId/baseline/metrics?from&to`). The
+periodic job below freezes the last 14 days into `baseline_metric_snapshots`,
+so a pilot after the autonomy changes can be compared against the number the
+board produced before them.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_BASELINE_INTERVAL_SEC` | 1.6-BASELINE | unset (off) | Period (sec) of the snapshot job: every tick recomputes the last 14 days per company and appends one frozen row to `baseline_metric_snapshots` | Unset or empty — no timer, no query. Set to an integer from 60 to 604800; an unreadable or out-of-range value keeps the job on with the daily default (86400) |
