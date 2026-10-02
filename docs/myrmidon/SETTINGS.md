@@ -495,3 +495,36 @@ database hit per wake.
 |---|---|---|---|---|
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_ENABLED` | WAKE-GUARD | `1` (on) | Master switch of the wake guard: on — an event-free wake to a settle-pending task is skipped instead of dispatching a run | `0`/`false`/`off`/`no` — disable (wakes dispatch runs as before). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_TTL_SEC` | WAKE-GUARD | `60` | How long a suppress decision stays cached for one task (matches the sweep's default poll); the cache holds at most 1000 issues, least-recently-used eviction | From 1 to 3600; non-numeric, non-positive or above the cap — the default (60) |
+
+## 1.6 — AUTONOMY-MATRIX (Part A: matrix, enforcement, regulations API)
+
+The "Autonomy matrix" module (`server/src/myrmidon/autonomy/`, contract —
+`packages/shared/src/myrmidon-autonomy.ts`). The matrix maps role x action class to
+allowed / approval_required / forbidden; per-role regulations live in the same
+JSON store with draft -> approved revisions. Storage: no new DB table — the whole
+state sits under `instance_settings.general.myrmidonAutonomy` (the instance-settings
+JSON pattern), so vendor writes of `general` must preserve our key
+(`preserveAutonomyGeneralKey`, mounted in `server/src/services/instance-settings.ts`).
+
+API surface (company resolved by the access-hub rule: query `companyId`, else the
+caller's single active membership, 422 on ambiguity; reads company access,
+mutations board):
+
+- `GET /api/myrmidon/autonomy` -> `{ matrix, regulations, changeLog }`
+- `PATCH /api/myrmidon/autonomy/matrix` body `{ expectedVersion?, rules, defaults }` -> `{ matrix }` (409 on version mismatch)
+- `POST /api/myrmidon/autonomy/regulations` `{ role, title, bodyMarkdown }` -> regulation (draft, revision 1)
+- `PATCH /api/myrmidon/autonomy/regulations/:id` `{ title?, bodyMarkdown? }` -> new revision
+- `POST /api/myrmidon/autonomy/regulations/:id/approve` -> draft -> approved
+- `POST /api/myrmidon/autonomy/regulations/:id/revisions/:rev/restore` -> re-promote a past revision
+
+Change log: `activity_log` rows with actions `myrmidon.autonomy.*`, served as a ready
+array in the GET response. Factory default: every cell `allowed` (zero behavior change
+until an operator edits; a conservative preset is a follow-up). Enforcement seam:
+`server/src/myrmidon/autonomy/gate.ts` (`autonomyGate`) consults `resolveAutonomy` at the
+action point — forbidden refuses with a clear error, approval_required maps to the
+existing toolActionRequests + approval-card conveyor, allowed passes. Regulations UI
+(Part B) edits the matrix through this API.
+
+No environment variables, no new secrets. Remove: the autonomy tree, the export line in
+`packages/shared/src/index.ts`, the two marker lines in `app.ts`/`instance-settings.ts`
+and this section.
