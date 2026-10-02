@@ -123,10 +123,6 @@ import {
 } from "./myrmidon/browser-bridge/index.js"; // myrmidon(EXTCASE-B)
 // myrmidon(EXT-CASE-OCR): the OCR path (PDF -> text in the bot's workspace)
 import { myrmidonOcrRoutes } from "./myrmidon/ocr/index.js";
-import {
-  myrmidonBrowserBridgePublicRoutes,
-  myrmidonBrowserBridgeRoutes,
-} from "./myrmidon/browser-bridge/index.js"; // myrmidon(EXTCASE-B)
 // myrmidon(TRACING-HEALTH): LLM tracing health check (GET /api/myrmidon/tracing/health)
 import { myrmidonTracingHealthRoutes } from "./myrmidon/tracing-health/index.js"; // myrmidon(TRACING-HEALTH)
 import { instanceSettingsService } from "./services/instance-settings.js";
@@ -852,7 +848,6 @@ export async function createApp(
   api.use(accessHubRoutes(db)); // myrmidon(SEC1): access-hub routes
   api.use(myrmidonBrowserBridgeRoutes(db)); // myrmidon(EXTCASE-B): bridge panel (codes, devices, allowlist)
   api.use(myrmidonOcrRoutes(db)); // myrmidon(EXT-CASE-OCR): company OCR MCP endpoint (ocr.pdf)
-  api.use(myrmidonBrowserBridgeRoutes(db)); // myrmidon(EXTCASE-B): bridge panel (codes, devices, allowlist)
   api.use(myrmidonTracingHealthRoutes(db)); // myrmidon(TRACING-HEALTH): LLM tracing health check
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
