@@ -146,7 +146,7 @@ codes `-32010 notPaired`, `-32011 revoked`, `-32012 capabilityUnsupported`,
 `-32013 domainNotAllowed`, `-32014 deviceOffline`, `-32015 timeout`,
 `-32016 pairingCodeInvalid`, `-32017 pairingCodeExpired`,
 `-32018 protocolVersionUnsupported`, `-32019 confirmationNotGranted`,
-`-32020 signingDisabled`, `-32021 dailyLimitReached`
+`-32020 signingDisabled`, `-32021 downloadTooLarge`, `-32022 dailyLimitReached`
 (`BROWSER_BRIDGE_ERROR_CODES` in the contract).
 
 ## Settings summary

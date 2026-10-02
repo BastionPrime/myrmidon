@@ -338,6 +338,7 @@ export const BROWSER_BRIDGE_ERROR_CODES = {
   signingDisabled: -32020,
   dailyLimitReached: -32022,
   downloadTooLarge: -32021,
+  dailyLimitReached: -32022,
 } as const;
 
 export type BrowserBridgeErrorCode =
