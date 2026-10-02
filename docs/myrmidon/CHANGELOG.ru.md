@@ -34,6 +34,15 @@
   с фильтрами (устройство, метод, результат, только подписи) и хэшем документа
   у каждой подписи. Руководство:
   [guides/connector-panel.ru.md](guides/connector-panel.ru.md).
+- Контракт хелпера подписи: генерический, свободный от клиентской
+  специфики контракт native messaging для локальных помощников подписи
+  (`extension/src/native-host-contract.ts`) — закрытый enum `actionType`
+  (`sign` / `sign_and_submit` / `sign_attachment`), payload документа в виде
+  байтов или SHA-256 дайджеста, закрытое множество кодов ошибок и валидаторы,
+  против которых компилируются обе стороны. Конкретный помощник (привязка
+  middleware токена, хранение PIN) специфичен для развёртывания и живёт вне
+  публичного форка. Руководство:
+  [guides/signing-host-contract.ru.md](guides/signing-host-contract.ru.md).
 
 ### Путь OCR
 

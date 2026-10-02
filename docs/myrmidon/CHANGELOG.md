@@ -34,6 +34,14 @@ version file to edit. Base Paperclip version is in the image label
   journal with filters (device, method, outcome, signatures only) and the
   document hash per signature. Guide:
   [guides/connector-panel.md](guides/connector-panel.md).
+- The signing host contract: a generic, client-free native-messaging contract
+  for local signing helpers (`extension/src/native-host-contract.ts`) — a
+  closed `actionType` enum (`sign` / `sign_and_submit` / `sign_attachment`), a
+  document payload of bytes or a SHA-256 digest, a closed error-code set, and
+  validators both sides compile against. A concrete helper (token middleware
+  binding, PIN storage) is deployment-specific and lives outside the public
+  fork. Guide:
+  [guides/signing-host-contract.md](guides/signing-host-contract.md).
 
 ### OCR path
 

@@ -123,10 +123,11 @@ the extension keeps its own copy and checks before touching any browser API.
   10 000.
 
 The signature itself never crosses the board: the extension talks to a local
-helper over native messaging, the helper drives the token middleware, and the
-private key and PIN stay on the client PC. What returns is a status
-(`signed` / `refused`) and the SHA-256 of the signed document — the journal row
-carries the hash, never the bytes.
+helper over native messaging (the message contract:
+[signing-host-contract.md](signing-host-contract.md)), the helper drives the
+token middleware, and the private key and PIN stay on the client PC. What
+returns is a status (`signed` / `refused`) and the SHA-256 of the signed
+document — the journal row carries the hash, never the bytes.
 
 ## The journal
 
