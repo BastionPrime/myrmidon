@@ -117,6 +117,7 @@ import { myrmidonFleetConsoleRoutes } from "./myrmidon/fleet-console/index.js"; 
 import { myrmidonCloudConnectorRoutes } from "./myrmidon/cloud-connector/index.js"; // myrmidon(CLOUD-CONNECTOR)
 import { accessHubRoutes } from "./myrmidon/access-hub/routes.js"; // myrmidon(SEC1)
 import { ui2LanguageRoutes } from "./myrmidon/ui2-language/routes.js"; // myrmidon(UI2-I18N)
+import { myrmidonForagingRoutes } from "./myrmidon/foraging/index.js"; // myrmidon(1.6-FORAGE)
 import { myrmidonAgentMemoryRoutes } from "./myrmidon/agent-memory/index.js"; // myrmidon(MEMORY-UI)
 import {
   myrmidonBrowserBridgePublicRoutes,
@@ -851,6 +852,7 @@ export async function createApp(
   api.use(myrmidonOcrRoutes(db)); // myrmidon(EXT-CASE-OCR): company OCR MCP endpoint (ocr.pdf)
   api.use(myrmidonTracingHealthRoutes(db)); // myrmidon(TRACING-HEALTH): LLM tracing health check
   api.use(ui2LanguageRoutes(db)); // myrmidon(UI2-I18N): per-user UI language preference
+  api.use(myrmidonForagingRoutes(db)); // myrmidon(1.6-FORAGE): source registry, findings and the manual sweep
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }

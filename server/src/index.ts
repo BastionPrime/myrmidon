@@ -129,6 +129,7 @@ import { startDeployJobs } from "./myrmidon/deploy-jobs/index.js"; // myrmidon(R
 import { startRuntimeLimits } from "./myrmidon/runtime-limits/index.js"; // myrmidon(C0)
 import { startBotContainers, stopBotContainers } from "./myrmidon/bot-containers/startup.js"; // myrmidon(W2a)
 import { startLitellmCostSweep, stopLitellmCostSweep } from "./myrmidon/litellm-costs/startup.js"; // myrmidon(M2-A)
+import { startForagingSweep, stopForagingSweep } from "./myrmidon/foraging/startup.js"; // myrmidon(1.6-FORAGE)
 import { startTracingAttentionSweep, stopTracingAttentionSweep } from "./myrmidon/tracing-health/attention-sweep.js"; // myrmidon(TRACING-HEALTH)
 import { startBotCanary, stopBotCanary } from "./myrmidon/bot-containers/canary-index.js"; // myrmidon(R5-B)
 import { startStackCheckSweep } from "./myrmidon/stack-registry/index.js"; // myrmidon(SUB)
@@ -1547,6 +1548,7 @@ async function startServerWithDatabaseTeardown(
     startDeployJobs(db as any); // myrmidon(R5-A): resume an interface deploy job; no-op unless MYRMIDON_DEPLOY_ENABLED
     startBotContainers(db as any); // myrmidon(W2a): bot container sweep and the card's "Apply now" runtime; a no-op unless MYRMIDON_BOT_CONTAINERS is on
     startLitellmCostSweep(db as any); // myrmidon(M2-A): gateway spend sweep; a no-op unless MYRMIDON_LITELLM_* is set
+    startForagingSweep(db as any); // myrmidon(1.6-FORAGE): source comparison sweep; a no-op unless MYRMIDON_FORAGING_ENABLED=1
     startTracingAttentionSweep(db as any); // myrmidon(TRACING-HEALTH): keep the "LLM tracing" operator signal fresh; a no-op unless the tracing settings are on
     startBotCanary(db as any); // myrmidon(R5-B): resume an open bot image rollout; a no-op unless MYRMIDON_BOT_CANARY is on
     startStackCheckSweep(db as any); // myrmidon(SUB): scheduled stack release check; a no-op unless MYRMIDON_STACK_CHECK_INTERVAL_SEC is set
@@ -2090,6 +2092,7 @@ async function startServerWithDatabaseTeardown(
     clearInterval(executionControlInterval);
     stopBotContainers(); // myrmidon(W2a)
     stopLitellmCostSweep(); // myrmidon(M2-A)
+    stopForagingSweep(); // myrmidon(1.6-FORAGE)
     stopTracingAttentionSweep(); // myrmidon(TRACING-HEALTH)
     stopBotCanary(); // myrmidon(R5-B)
     if (heartbeatSchedulerInterval) {
