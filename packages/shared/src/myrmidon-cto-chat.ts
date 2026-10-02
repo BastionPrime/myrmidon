@@ -111,9 +111,11 @@ export const ctoChatPlanRequestSchema = z.object({
 });
 export type CtoChatPlanRequest = z.infer<typeof ctoChatPlanRequestSchema>;
 
-/** The planner's answer: the route returns it as `{ proposal }`. */
+/** The planner's answer: the route returns it as `{ proposal, payload }`. */
 export const ctoChatPlanResponseSchema = z.object({
   proposal: ctoChatPlanSchema,
+  /** The ready `suggest_tasks` payload for the approval card. */
+  payload: z.unknown(),
 });
 export type CtoChatPlanResponse = z.infer<typeof ctoChatPlanResponseSchema>;
 

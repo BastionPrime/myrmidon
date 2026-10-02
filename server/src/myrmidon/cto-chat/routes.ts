@@ -14,8 +14,11 @@
 // still typing, and it keeps task creation on the card's own acceptance path.
 //
 // Shapes:
-//   200 { proposal: { planId, epic, epicClientKey, tasks[] } }
-//   400 body fails ctoChatPlanRequestSchema (repo convention)
+//   200 { proposal: { planId, epic, epicClientKey, tasks[] }, payload: the
+//        ready suggest_tasks payload for the approval card }
+//   400 body fails ctoChatPlanRequestSchema (repo convention); planner errors
+//        other than "not configured" (empty/too long message, backend
+//        failed/unreachable, invalid model output) also surface as 400
 //   503 the planner is not configured, or its model key is not available
 //
 // `hostIssueId` is optional and only selects the task the caller wants the

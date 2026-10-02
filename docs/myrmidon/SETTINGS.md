@@ -499,7 +499,7 @@ database hit per wake.
 
 ## 1.6 — CTO-CHAT B (the board chat planner: owner text -> proposed epic)
 
-The planner behind the CTO chat (epic OPE-3590, part B): the owner's free text
+The planner behind the CTO chat (the 1.6 CTO-CHAT epic, part B): the owner's free text
 (`POST /api/myrmidon/cto-chat/plan`, body `{ "text": "..." }`, or the same call
 from the Telegram DM bridge) becomes a proposed epic with child tasks and
 per-task acceptance criteria. The proposal is a plan only: it validates against
@@ -513,6 +513,6 @@ missing settings (names only, never values), and not a single request goes out.
 |---|---|---|---|---|
 | `MYRMIDON_CTO_CHAT_BASE_URL` | 1.6-CTO-CHAT-B | unset (planner closed) | Address of the OpenAI-compatible LLM gateway (e.g. LiteLLM) the planner calls for one completion. Together with `MYRMIDON_CTO_CHAT_KEY_SECRET` it opens the path; without either the route answers 503 `planner_disabled` naming the missing settings | Empty/unset — the path is closed |
 | `MYRMIDON_CTO_CHAT_KEY_SECRET` | 1.6-CTO-CHAT-B | unset | **Name** of the company secret holding the gateway API key (not the value). The value is read on every call for the calling company; it never appears in the setting, logs, errors or the journal | Empty/unset — the path is closed. The secret is created by the company's operator in the "Secrets" section |
-| `MYRMIDON_CTO_CHAT_MODEL` | 1.6-CTO-CHAT-B | `dashscope-qwen-flash` | The model name sent to the gateway for the planning completion | Empty/unset — the default; an unknown name fails at the gateway and the route answers 502 `planner_backend_failed` |
+| `MYRMIDON_CTO_CHAT_MODEL` | 1.6-CTO-CHAT-B | `dashscope-qwen-flash` | The model name sent to the gateway for the planning completion | Empty/unset — the default; an unknown name fails at the gateway and the route answers 400 `backend_failed` |
 | `MYRMIDON_CTO_CHAT_TIMEOUT_SEC` | 1.6-CTO-CHAT-B | `90` | Timeout of the planning request (raised to at least 5, capped at 600) | Non-numeric, `0`, negative or above the cap — the default (90) |
 | `MYRMIDON_CTO_CHAT_MAX_TASKS` | 1.6-CTO-CHAT-B | `8` | Ceiling on child tasks in one proposal (a proposal can never be unbounded work); the hard absolute cap is 20 | Non-numeric, `0`, negative or above 20 — the default (8) |
