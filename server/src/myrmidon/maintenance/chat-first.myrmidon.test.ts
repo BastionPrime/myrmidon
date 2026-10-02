@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  activityLog,
   agentWakeupRequests,
   agents,
   companies,
@@ -114,11 +115,13 @@ describeEmbeddedPostgres("chat-first: the queued-run start path", () => {
 
   afterEach(async () => {
     await heartbeatService(db).drainActiveRunExecutions();
-    // FK-safe order: issues first (their executionRunId is set-null), then run
-    // events, then runs, then wakeups (runs reference them).
+    // FK-safe order (mirrors interrupt.test.ts): issues first, then activity
+    // and run events, detach retry chains, then runs, then wakeups.
     await db.delete(issues);
     for (let attempt = 0; attempt < 5; attempt += 1) {
+      await db.delete(activityLog);
       await db.delete(heartbeatRunEvents);
+      await db.update(heartbeatRuns).set({ retryOfRunId: null });
       try {
         await db.delete(heartbeatRuns);
         break;
