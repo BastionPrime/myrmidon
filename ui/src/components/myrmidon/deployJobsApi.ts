@@ -14,8 +14,11 @@ export type DeployJobStatus =
   | "maintenance_on"
   | "maintenance_failed"
   | "running"
+  | "rolling_back"
   | "succeeded"
   | "failed_health"
+  | "failed_rollback"
+  | "auto_rolled_back"
   | "aborted";
 
 export interface DeployJobStep {
@@ -103,10 +106,16 @@ export function describeDeployStatus(status: DeployJobStatus): string {
       return "Maintenance window failed";
     case "running":
       return "Switching the image";
+    case "rolling_back":
+      return "Rolling back to the previous image";
     case "succeeded":
       return "Deployed";
     case "failed_health":
       return "Health check failed";
+    case "failed_rollback":
+      return "Automatic rollback failed";
+    case "auto_rolled_back":
+      return "Rolled back automatically";
     case "aborted":
       return "Aborted";
     default:

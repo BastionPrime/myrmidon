@@ -4,6 +4,11 @@
 // and GitHub endpoints stay at their public values, and no board action is
 // possible until MYRMIDON_DEPLOY_ENABLED=1 — an instance that never opted in
 // answers "not enabled" instead of guessing a host layout.
+//
+// R5-C adds two switches read here: MYRMIDON_DEPLOY_AUTO_ROLLBACK (on by
+// default — rolling a failed deploy back IS the feature) and
+// MYRMIDON_DEPLOY_AUTO_UPDATE (off by default — unattended deploys wait for
+// the staging stand, STAND).
 
 function readInt(env: NodeJS.ProcessEnv, name: string, fallback: number, min: number, max: number): number {
   const raw = env[name]?.trim();
@@ -37,6 +42,21 @@ export interface DeployJobsSettings {
   githubHeaders: Record<string, string> | null;
   /** Registry inspect base (a proxy), or null for the default ghcr.io. */
   registryInspectUrl: string | null;
+  /**
+   * R5-C: roll the board back to the locally remembered previous image when
+   * the health check of a deploy fails. On by default: it is the feature's
+   * own behavior (an automatic deploy must not leave the board stuck on a
+   * broken image); MYRMIDON_DEPLOY_AUTO_ROLLBACK=0 restores the manual
+   * "window stays open for the operator" contract.
+   */
+  autoRollback: boolean;
+  /**
+   * R5-C: allow deploys to start WITHOUT a per-deploy confirmation in the
+   * interface. Off by default and stays off until the release scenario has
+   * run on the staging stand (STAND): an unattended auto-update without a
+   * stand is the risk the plan calls out.
+   */
+  autoUpdate: boolean;
 }
 
 function readHeaders(env: NodeJS.ProcessEnv, name: string): Record<string, string> | null {
@@ -66,5 +86,7 @@ export function readDeployJobsSettings(env: NodeJS.ProcessEnv = process.env): De
     healthTimeoutMs: readInt(env, "MYRMIDON_DEPLOY_HEALTH_TIMEOUT_SEC", 300, 10, 3600) * 1000,
     githubHeaders: readHeaders(env, "MYRMIDON_DEPLOY_GITHUB_HEADERS_JSON"),
     registryInspectUrl: env.MYRMIDON_DEPLOY_REGISTRY_INSPECT_URL?.trim() || null,
+    autoRollback: readBool(env, "MYRMIDON_DEPLOY_AUTO_ROLLBACK", true),
+    autoUpdate: readBool(env, "MYRMIDON_DEPLOY_AUTO_UPDATE", false),
   };
 }
