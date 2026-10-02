@@ -143,6 +143,9 @@ const ProductionCompanyActivity = lazy(() =>
 const ProductionCosts = lazy(() =>
   import("./pages/Costs.production").then((module) => ({ default: module.Costs })),
 );
+const ProductionQuality = lazy(() =>
+  import("./pages/Quality.production").then((module) => ({ default: module.Quality })), // myrmidon(1.6-BASELINE): quality page
+);
 const ProductionOrgChart = lazy(() =>
   import("./pages/OrgChart.production").then((module) => ({ default: module.OrgChart })),
 );
@@ -418,6 +421,7 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
       ) : (
         <>
           <Route path="costs" element={<ProductionSurface><ProductionCosts /></ProductionSurface>} />
+          <Route path="quality" element={<ProductionSurface><ProductionQuality /></ProductionSurface>} /> {/* myrmidon(1.6-BASELINE) */}
           <Route path="audit" element={<Navigate to="/activity?mode=agents" replace />} />
         </>
       )}
