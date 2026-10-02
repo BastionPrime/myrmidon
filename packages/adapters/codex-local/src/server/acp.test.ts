@@ -622,7 +622,7 @@ describe("codex_local ACP lane", () => {
     );
   });
 
-  it("explains the Paperclip server credential boundary when ACP auth is missing", async () => {
+  it("explains the Myrmidon server credential boundary when ACP auth is missing", async () => {
     const root = await makeTempRoot("paperclip-codex-acp-missing-auth-");
     const commandPath = path.join(root, "bin", "codex-acp");
     const sharedCodexHome = path.join(root, "shared-codex-home");
@@ -660,7 +660,7 @@ describe("codex_local ACP lane", () => {
       expect.objectContaining({
         code: "codex_acp_credentials_missing",
         level: "warn",
-        message: expect.stringContaining("Paperclip server"),
+        message: expect.stringContaining("Myrmidon server"),
         hint: expect.stringContaining("separate Codex/chat session"),
       }),
     );

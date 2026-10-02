@@ -60,7 +60,7 @@ describe("readConfigFile", () => {
     fs.writeFileSync(configPath, "{");
 
     expect(() => readConfigFile()).toThrow(
-      new RegExp(`Invalid Paperclip config at ${escapeRegExp(configPath)}: failed to read or parse JSON`),
+      new RegExp(`Invalid Myrmidon config at ${escapeRegExp(configPath)}: failed to read or parse JSON`),
     );
   });
 

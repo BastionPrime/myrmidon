@@ -382,7 +382,7 @@ describeEmbeddedPostgres("plugin install auto-build route", () => {
       .send({ packageName: fixture.packageRoot, isLocalPath: true });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain("does not appear to be a Paperclip plugin (no manifest found)");
+    expect(res.body.error).toContain("does not appear to be a Myrmidon plugin (no manifest found)");
     expect(res.body.error).toContain(`pnpm --filter ${fixture.packageName} build`);
     expect(existsSync(path.join(fixture.distDir, "manifest.js"))).toBe(false);
     expect(mockLifecycle.load).not.toHaveBeenCalled();
@@ -399,7 +399,7 @@ describeEmbeddedPostgres("plugin install auto-build route", () => {
       .send({ packageName: fixture.packageRoot, isLocalPath: true });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain("does not appear to be a Paperclip plugin (no manifest found)");
+    expect(res.body.error).toContain("does not appear to be a Myrmidon plugin (no manifest found)");
     expect(res.body.error).toContain(path.relative(REPO_ROOT, fixture.packageRoot));
     expect(res.body.error).toContain("pnpm install --ignore-workspace --no-lockfile && pnpm build");
     expect(existsSync(path.join(fixture.distDir, "manifest.js"))).toBe(false);

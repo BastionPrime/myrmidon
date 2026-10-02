@@ -40,7 +40,7 @@ describe("grok local skill sync", () => {
 
     expect(snapshot.mode).toBe("ephemeral");
     expect(snapshot.warnings).toContain(
-      'Desired skill "unknown-skill" is not available from the Paperclip skills directory.',
+      'Desired skill "unknown-skill" is not available from the Myrmidon skills directory.',
     );
     expect(snapshot.entries).toContainEqual(expect.objectContaining({
       key: "unknown-skill",
