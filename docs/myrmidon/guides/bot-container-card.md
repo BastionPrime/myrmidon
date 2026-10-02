@@ -64,6 +64,26 @@ container: the profile is recompiled from the current card and written to the
 container. Use it after editing the card when you do not want to wait for the
 next periodic reconcile.
 
+The pass — whether started by **Apply now** or by the periodic sweep — re-reads
+the agent's card at pass time, inside the per-bot lock, and builds the spec
+from that fresh card rather than from a snapshot taken earlier. A card edit
+followed by **Apply now** cannot be undone by a reconcile pass that started
+before the edit: passes of the same bot are ordered by the lock, and the later
+pass sees the card as it is at that moment, so the applied template is always
+the current one.
+
+A card that can no longer be read at pass time fails the pass (**error**)
+instead of silently falling back to the older snapshot; the next pass retries.
+A card that has stopped qualifying for a container (containers switched off,
+a different adapter, invalid limits) makes the pass **not applicable** — the
+same answer as if such a card had been passed to **Apply now**.
+
+The bot image canary drives its rollout image through this same pass: the
+rollout's image replaces the card's image for that pass (`specImage`), while
+limits and mounts still come from the freshly read card — the override
+survives the fresh read. See [design/bot-canary.md](../design/bot-canary.md)
+(Russian).
+
 ## Status and errors
 
 The section shows the container's state as a label: **Running**, **Stopped**,

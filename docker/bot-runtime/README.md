@@ -26,7 +26,9 @@ Docker socket, no host mounts, and no media tools. (The optional Node.js variant
   and imports `hermes_state`.
 - `hermes-agent`, pinned to a git tag (`HERMES_VERSION`/`HERMES_GIT_REF`
   build args, default `0.21.5` / `v2026.9.24`), installed **editable** from
-  a clean clone of `https://github.com/NousResearch/hermes-agent` — see
+  a clean clone of our fork `https://github.com/BastionPrime/hermes-agent`
+  (the fork mirrors upstream tags byte-for-byte; our own hermes changes and
+  pin bumps land there as reviewed commits) — see
   "Why editable, not pip install" below. hermes tags releases by date
   (`vYYYY.M.D`); `v2026.9.24` is the tag we confirmed (via the GitHub API
   and `git ls-remote --tags`, checking `pyproject.toml` on every recent
@@ -144,8 +146,77 @@ npm's cache goes to `/scratch`.
 
 The workflow builds the default image with an explicit `target: runtime`, so adding a
 stage to the Dockerfile can never silently change what `myrmidon-hermes` is. A plain
-`docker build docker/bot-runtime` (no `--target`) would produce the Node.js variant,
-since it is the last stage; always pass `--target`.
+`docker build docker/bot-runtime` (no `--target`) would produce the last stage in the
+file — the development variant, below; always pass `--target`.
+
+## Variant for the development team
+
+`Dockerfile` has a third final stage, `runtime-dev`, built `FROM runtime` and published as
+`ghcr.io/itkadr-git/myrmidon-hermes-dev` by the same workflow with the same gating (push to
+`main` and `myr-v*` tags only; a pull request builds and checks it, never pushes).
+
+It exists for the company's development-team bots. A bot container has no Docker of its
+own: dockergate refuses arbitrary containers on purpose, so the team cannot open a
+throwaway `node:24` container the way it does on a separate sandbox host. This variant
+puts the same toolchain inside the bot image, so a full repository cycle — install,
+typecheck, test, `git push` — runs from the container.
+
+What it adds (everything else — uid/gid `10001:10001`, the read-only root, the three
+volumes, the entrypoint, the health check and the inherited
+`myrmidon.bot-runtime.contract="1"` label — is identical; the variant only adds the label
+`io.github.itkadr-git.myrmidon.variant="dev"`):
+
+- **Node.js 24 LTS** from the official `nodejs.org` tarball, pinned by exact version and
+  sha256 (`NODE24_VERSION` / `NODE24_SHA256`), with the npm that ships in it, under
+  `/opt/node24`. The repository requires Node 24 (its CI lane and `CONVENTIONS.md` §13).
+- **pnpm** at the repository's pinned `packageManager` version (`PNPM_VERSION`), installed
+  with that npm into a sealed `/opt/pnpm` — not into `/scratch`, because dockergate refuses
+  an image whose `PATH` holds a writable-volume element. `corepack` is not used: it is not
+  available on the base image.
+- **Go** from the official `go.dev` tarball, pinned by version and sha256 (`GO_VERSION` /
+  `GO_SHA256`), under `/opt/go`. The repository's `tools/dockergate` and `tools/fleetd` are
+  Go modules with their own CI lanes (`gofmt`, `go vet`, `go test`).
+- **Rust** via the version-pinned, checksum-verified rustup installer under
+  `/opt/rustup` + `/opt/cargo`, with the compiler channel taken from
+  `packages/paperclip-runner/rust-toolchain.toml` (`RUST_CHANNEL`) — the same single owner
+  the repository's own build Dockerfile reads. A guard test fails if the two drift.
+- **Build tools**: `gcc`, `g++`, `make`, `pkg-config`, `libc6-dev` (native addons and
+  `node-gyp`; the base already carries `python3`), plus `git`, `gh`, `jq`, `zstd`, `unzip`,
+  `xz-utils`, `openssh-client`, `ripgrep`.
+- **Docker CLI, client only** (`DOCKER_CLI_VERSION`/`DOCKER_CLI_SHA256`): only the `docker`
+  binary is copied out of the static release tarball into `/opt/docker-cli/bin`. The tarball
+  also ships `dockerd`, `containerd` and `runc`, and none of them enter the image — the bot
+  container runs no engine, on purpose. The engine the team uses is the sandbox VM's,
+  reached over mutual TLS (see `docs/myrmidon/dockergate.md`).
+
+Every downloaded toolchain is pinned by exact version and verified by sha256 before use; a
+mismatch fails the build, the same rule the Node.js variant states above.
+
+**Where things write.** The root filesystem is read-only at run time and the bot's writable
+directories are exactly its three volumes, so:
+
+- the pnpm store defaults to `/data/hermes/.pnpm-store` (the durable `hermes` volume) via
+  `npm_config_store_dir`. To share one store across the team, an operator can instead mount
+  a host directory under `/data` (the bot-extra-mounts feature) and point the store there —
+  a shared *writable* store is not part of this change;
+- `RUSTUP_HOME`/`CARGO_HOME` stay sealed under `/opt` and `cargo` writes its target dir into
+  the checked-out workspace;
+- Go's build cache defaults under `$HOME` (`/data/hermes`), the durable volume.
+
+**PATH never holds a writable volume.** The dev stage assembles `PATH` from `/opt` and
+`/usr` only (`/opt/node24/bin`, `/opt/pnpm/bin`, `/opt/go/bin`, `/opt/cargo/bin`,
+`/opt/docker-cli/bin`, the inherited venv and system paths). This is the same constraint the
+Node.js variant documents above: the dockergate image check
+(`tools/dockergate/internal/policy/image.go`) rejects an image whose `PATH` element is under
+`/data`, `/workspace`, `/scratch` or `/tmp`, and also rejects one carrying an `ENV` or
+`BASH_ENV` variable name — the dev variant introduces neither.
+
+Checks: the last build step runs `node`, `pnpm`, `go`, `cargo`, `rustc`, `gh`, `jq`, `zstd`,
+`git` and `docker` as uid `10001` in the finished stage and asserts no `PATH` element is under
+a writable root. On pull requests the workflow repeats the toolchain run on the finished image
+with `--read-only`, `--user 10001:10001` and `tmpfs` in place of the volumes, checks the
+contract label and the image user before that, and fails if `dockerd` is present — the image
+carries the client only.
 
 ## Sealed image: lazy installs and the write-safe root
 

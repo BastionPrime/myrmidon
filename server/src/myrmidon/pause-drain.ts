@@ -357,3 +357,25 @@ export async function resumeAgentAfterPause(
 
   return { queuedRunsPromoted: promoted.length, strandedIssuesWoken };
 }
+
+/**
+ * Status an agent gets when an operator resumes it (L3c).
+ *
+ * A drained pause (L3) leaves the agent's live run going, and
+ * `finalizeAgentStatus` deliberately skips a paused agent, so nothing updates
+ * the status while the run finishes. Resume used to write "idle"
+ * unconditionally: the board then showed an idle agent that still owned a
+ * running run, every new wake was deferred behind that run with no visible
+ * reason, and the run looked like a ghost. Resume must keep the same
+ * invariant `finalizeAgentStatus` follows: a running run means "running".
+ */
+export async function resolveStatusOnResume(
+  db: Pick<Db, "select">,
+  agentId: string,
+): Promise<"running" | "idle"> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(heartbeatRuns)
+    .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.status, "running")));
+  return Number(row?.count ?? 0) > 0 ? "running" : "idle";
+}

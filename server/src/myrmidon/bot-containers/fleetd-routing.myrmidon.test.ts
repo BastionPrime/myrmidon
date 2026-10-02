@@ -37,7 +37,7 @@ function recordingDriver(name: string): BotContainerDriver & { calls: string[] }
     },
     async templateDrift(s) {
       calls.push(`${name}:templateDrift:${s.botKey}`);
-      return false;
+      return { drifted: false, fields: [] };
     },
     async create(s) {
       calls.push(`${name}:create:${s.botKey}`);

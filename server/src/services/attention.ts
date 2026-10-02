@@ -61,6 +61,26 @@ import { isProspectiveBlockedTransition } from "./routable-blocked.js";
 import { evaluateAgentInvokability, type AgentOrgRow } from "./agent-invokability.js";
 import { canonicalizeStoredResolverPolicy } from "./issue-thread-interaction-resolution.js";
 import { decisionQueueService } from "./decision-queues.js";
+// myrmidon(AUTO-RESUME): escalates the agent error card after the board gave up resuming
+import { readAutoResumeAttentionState } from "../myrmidon/auto-resume.js";
+// myrmidon(SUB): upstream stack releases surface in the attention feed
+import { buildStackAttentionCards } from "../myrmidon/stack-registry/attention.js";
+import { readStackDocument } from "../myrmidon/stack-registry/store.js";
+// myrmidon(TRACING-HEALTH): the "LLM tracing" red state raises one operator card (part D)
+import { readTracingHealthAttentionSignal } from "../myrmidon/tracing-health/attention.js";
+
+/**
+ * myrmidon(TRACING-HEALTH): a stable UUID for the synthetic "LLM tracing"
+ * subject. The attention enrichment joins subject ids against uuid columns
+ * (agents.id), so a readable string id breaks the feed query; a deterministic
+ * uuid-shaped id (zero-prefixed, hex-safe derivation of the company id)
+ * keeps the card joinable, unique per company and stable across reads.
+ */
+function tracingHealthSubjectId(companyId: string): string {
+  const hex = companyId.replaceAll("-", "").replaceAll(/[^0-9a-f]/gi, "0").padEnd(24, "0").slice(0, 24);
+  const body = `00000000${hex}`.padEnd(32, "0").slice(0, 32);
+  return `${body.slice(0, 8)}-${body.slice(8, 12)}-${body.slice(12, 16)}-${body.slice(16, 20)}-${body.slice(20, 32)}`;
+}
 import {
   decisionRetentionService,
   DEFAULT_DECISION_SHELF_DAYS,
@@ -78,6 +98,7 @@ const ATTENTION_SOURCE_KINDS: AttentionSourceKind[] = [
   "failed_run",
   "budget_alert",
   "agent_error_alert",
+  "stack_update",
 ];
 
 const SEVERITY_RANK: Record<AttentionSeverity, number> = {
@@ -99,6 +120,7 @@ const SOURCE_RANK: Record<AttentionSourceKind, number> = {
   review: 8,
   productivity_review: 9,
   join_request: 10,
+  stack_update: 11,
 };
 
 const PENDING_INTERACTION_STATUSES = ["pending"] as const;
@@ -1819,6 +1841,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           errorReason: agents.errorReason,
           createdAt: agents.createdAt,
           updatedAt: agents.updatedAt,
+          metadata: agents.metadata,
         })
         .from(agents)
         .where(and(eq(agents.companyId, companyId), eq(agents.status, "error")))
@@ -1826,6 +1849,14 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
 
       for (const agent of erroredAgents) {
         const dedupKey = `agent_error:${agent.id}`;
+        // myrmidon(AUTO-RESUME): the board tries to resume an errored agent on
+        // its own with a 1/5/15 min backoff. Once it gave up (the attempt cap
+        // is reached and recorded in the agent's metadata), the card escalates
+        // from "the agent is in error" to "the board stopped retrying and an
+        // operator must intervene". It stays the same card per agent (same
+        // dedupKey), so the desk never shows two rows for one agent.
+        const autoResume = readAutoResumeAttentionState(agent.metadata);
+        const autoResumeExhausted = autoResume?.exhausted === true;
         add(createItem({
           companyId,
           sourceKind: "agent_error_alert",
@@ -1837,9 +1868,17 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
             identifier: null,
             status: agent.status,
             href: `/${prefix}/agents/${agent.id}`,
-            metadata: { role: agent.role, errorReason: agent.errorReason },
+            metadata: {
+              role: agent.role,
+              errorReason: agent.errorReason,
+              ...(autoResumeExhausted
+                ? { autoResumeExhausted: true, autoResumeAttempts: autoResume?.failures ?? 0 }
+                : {}),
+            },
           },
-          whyNow: "Agent is in error status and needs operator action or dismissal.",
+          whyNow: autoResumeExhausted
+            ? `Automatic resume gave up after ${autoResume?.failures ?? 0} attempt(s); an operator must intervene.`
+            : "Agent is in error status and needs operator action or dismissal.",
           decisionVerbs: decisionVerbs(
             { id: "inspect", label: "Inspect", description: "Inspect the agent error." },
             { id: "dismiss", label: "Dismiss", description: "Dismiss this alert." },
@@ -1848,7 +1887,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           entryRule: "agents.status = 'error'",
           exitRule: "Agent leaves error status or the row is dismissed.",
           dedupKey,
-          severity: "high",
+          severity: autoResumeExhausted ? "critical" : "high",
           activityAt: toIso(agent.updatedAt),
           createdAt: toIso(agent.createdAt),
           updatedAt: toIso(agent.updatedAt),
@@ -1857,6 +1896,95 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
             kind: "agent_error",
             agentName: agent.name,
             failureReasonExcerpt: excerpt(agent.errorReason),
+            images: [],
+          },
+        }));
+      }
+
+      // myrmidon(SUB): the scheduled stack release check writes its result into
+      // the stack cache; a component that lags behind upstream (or got a new
+      // release) surfaces here. The feed recomputes on every list, so the data
+      // stays in the registry cache and never in an attention table.
+      const stackDocument = await readStackDocument(db);
+      for (const card of buildStackAttentionCards(stackDocument)) {
+        add(createItem({
+          companyId,
+          sourceKind: "stack_update",
+          subject: {
+            kind: "stack_component",
+            id: card.component,
+            companyId,
+            title: card.title,
+            identifier: null,
+            status: null,
+            href: null,
+            metadata: card.metadata,
+          },
+          whyNow: card.whyNow,
+          decisionVerbs: decisionVerbs(
+            { id: "review", label: "Review update", description: "Open the stack update and plan the upgrade." },
+            { id: "dismiss", label: "Dismiss", description: "Dismiss this stack update until the next release." },
+          ),
+          inlineResolvable: true,
+          entryRule: "an upstream release is newer than the cached local version, or a new release appeared since the last check.",
+          exitRule: "the component is updated to the latest release, the local version catches up, or the row is dismissed.",
+          dedupKey: card.dedupKey,
+          severity: card.severity,
+          activityAt: card.activityAt,
+          createdAt: card.activityAt,
+          updatedAt: card.activityAt,
+          relatedIssue: null,
+          detail: {
+            kind: "generic",
+            summaryExcerpt: card.summaryExcerpt,
+            images: [],
+          },
+        }));
+      }
+
+      // myrmidon(TRACING-HEALTH): the "LLM tracing" non-ok state raises ONE
+      // card on the operator desk, deduped by state — the parent ticket's
+      // rule is "signal to the operator role, never the owner", and the
+      // attention desk is the operator surface (the same delivery the
+      // AUTO-RESUME escalation uses). The signal comes from the process-level
+      // registry the tracing signal sweep records (attention-sweep.ts); the
+      // feed never calls the probes itself.
+      const tracingSignal = readTracingHealthAttentionSignal(companyId);
+      if (tracingSignal) {
+        add(createItem({
+          companyId,
+          sourceKind: "agent_error_alert",
+          subject: {
+            kind: "agent",
+            id: tracingHealthSubjectId(companyId),
+            companyId,
+            title: tracingSignal.title,
+            identifier: null,
+            status: tracingSignal.state,
+            href: `/${prefix}/settings`,
+            metadata: {
+              tracingHealth: true,
+              state: tracingSignal.state,
+              severity: tracingSignal.severity,
+            },
+          },
+          whyNow: tracingSignal.whyNow,
+          decisionVerbs: decisionVerbs(
+            { id: "inspect", label: "Inspect", description: "Inspect the tracing pipeline." },
+            { id: "dismiss", label: "Dismiss", description: "Dismiss this alert." },
+          ),
+          inlineResolvable: true,
+          entryRule: "the LLM tracing health check reports degraded or unknown",
+          exitRule: "the check reports ok or idle (the signal registry clears) or the row is dismissed.",
+          dedupKey: tracingSignal.dedupKey,
+          severity: tracingSignal.severity,
+          activityAt: tracingSignal.activityAt,
+          createdAt: tracingSignal.activityAt,
+          updatedAt: tracingSignal.activityAt,
+          relatedIssue: null,
+          detail: {
+            kind: "generic",
+            summaryExcerpt: excerpt(tracingSignal.whyNow),
             images: [],
           },
         }));

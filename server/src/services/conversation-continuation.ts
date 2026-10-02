@@ -10,6 +10,13 @@ import { jsonTextUuid } from "../myrmidon/db-hot-path/json-uuid.js";
 export const CONVERSATION_ADAPTER_TYPES = [
   "claude_local", "codex_local", "cursor", "gemini_local", "opencode_local",
   "pi_local", "grok_local", "kimi_local", "hermes_local",
+  // myrmidon(RECOVERY-HERMES-GATEWAY): the gateway adapter holds a provider
+  // session and hands it a fresh turn the same way the local adapters do, so
+  // an interrupted or failed run is continued rather than held for
+  // reconciliation. It earns that here because the adapter itself refuses to
+  // start a second turn while the previous attempt's gateway run is still
+  // live (see gateway/server/execute.ts).
+  "hermes_gateway",
 ] as const;
 
 export function isConversationAdapter(adapterType: string): boolean {

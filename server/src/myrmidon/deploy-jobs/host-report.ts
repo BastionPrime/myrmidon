@@ -7,6 +7,12 @@
 // directory the scripts write to), and this module reads the file from there.
 // No exec, no docker socket: the channel is one JSON file per job, host →
 // board only. The board never writes into it.
+//
+// R5-C adds the rollback phases: after a failed health check the executor
+// (with the automatic rollback on) reports `rolling-back` while it switches
+// the image back to the locally remembered previous one, then `rolled-back`
+// (the previous image is healthy again) or `rollback-failed` (the rollback
+// itself failed — the window stays on for the operator).
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,7 +22,17 @@ export interface HostReportReader {
   (jobId: string): Promise<HostReport | null>;
 }
 
-const PHASES = new Set(["claimed", "switching", "switched", "health-ok", "health-failed", "error"]);
+const PHASES = new Set([
+  "claimed",
+  "switching",
+  "switched",
+  "health-ok",
+  "health-failed",
+  "rolling-back",
+  "rolled-back",
+  "rollback-failed",
+  "error",
+]);
 
 function parseReport(raw: unknown, jobId: string): HostReport | null {
   if (typeof raw !== "object" || raw === null) return null;

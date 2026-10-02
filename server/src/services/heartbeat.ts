@@ -360,6 +360,13 @@ import {
   evaluateIssueRewakeThrottle,
   isThrottleCandidateIssueRewake,
 } from "./issue-rewake-throttle.js";
+// myrmidon(WAKE-GUARD): admission-side half of TASK-PR-SYNC — skips a run for a
+// task whose delivering PRs are all merged and settles it instead.
+import {
+  createTaskPrSyncWakeGuard,
+  readTaskPrSyncWakeGuardEnabled,
+  TASK_PR_SYNC_WAKE_SKIP_REASON,
+} from "../myrmidon/task-pr-sync/wake-guard.js";
 import {
   logActivity,
   publishPluginDomainEvent,
@@ -637,6 +644,8 @@ import {
   createIdlePickupSweeper,
   idlePickupForAgent,
 } from "../myrmidon/idle-pickup.js";
+// myrmidon(AUTO-RESUME): the board resumes an agent left in `error` with backoff
+import { createAutoResumeSweeper } from "../myrmidon/auto-resume.js";
 import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
 // myrmidon(S2-hostcred): a run never inherits the host's GitHub credentials
 import {
@@ -657,6 +666,14 @@ import {
   appendCrossChannelDelta,
   buildCrossChannelContext,
 } from "../myrmidon/agent-chat-bridge/cross-channel.js";
+
+// myrmidon(M3): owner signal on a budget hard-stop (see budget-signal.ts)
+import {
+  budgetSignalEnabled,
+  deliverBudgetHardStopSignal,
+  type BudgetHardStopSignalInput as BudgetSignalInput,
+  type BudgetSignalPorts,
+} from "../myrmidon/budget-signal.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -9092,6 +9109,8 @@ export function heartbeatService(
 ) {
   let shutdownInProgress = false;
   const instanceSettings = instanceSettingsService(db);
+  // myrmidon(WAKE-GUARD): one cache per server process; see wake-guard.ts.
+  const taskPrSyncWakeGuard = createTaskPrSyncWakeGuard();
   const getCurrentUserRedactionOptions = async () => ({
     enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
   });
@@ -9159,6 +9178,13 @@ export function heartbeatService(
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
   const issuesSvc = issueService(db);
+  // myrmidon(M3): comment-writing port for the budget hard-stop signal.
+  const budgetSignalPorts: BudgetSignalPorts = {
+    addComment: (issueId, body, actor, options) =>
+      issuesSvc.addComment(issueId, body, actor, options),
+    now: () => new Date(),
+    log: logger,
+  };
   const treeControlSvc = issueTreeControlService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const environmentsSvc = environmentService(db);
@@ -9179,6 +9205,14 @@ export function heartbeatService(
   };
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
+    // myrmidon(M3): owner signal on a budget hard-stop — delivered into the
+    // interrupted issue threads, deduped per incident, off via
+    // MYRMIDON_BUDGET_SIGNAL_MODE=off.
+    signalBudgetHardStop:
+      budgetSignalEnabled(runtimeEnv)
+        ? (input: BudgetSignalInput) =>
+            deliverBudgetHardStopSignal(db, budgetSignalPorts, input).then(() => undefined)
+        : undefined,
   };
   const budgets = budgetService(db, budgetHooks);
   const recovery = recoveryService(db, {
@@ -17992,6 +18026,36 @@ export function heartbeatService(
     isAgentInvokable: async (agent) => {
       // The sweeper passes a narrow org row; resolve the full agent row the
       // invokability evaluator reads (status, reportsTo chain) by id.
+      const full = await getAgent(agent.id);
+      if (!full || full.companyId !== agent.companyId) return false;
+      const invokability = await getAgentInvokability(full);
+      return invokability.invokable;
+    },
+    isAgentUnderMaintenance: (agentId) => isAgentUnderMaintenance(db, agentId),
+  });
+
+  // myrmidon(AUTO-RESUME): the periodic pass that brings an agent left in
+  // `error` back, with a 1/5/15 min backoff and a give-up card to the operator
+  // after the attempt cap. It reuses the L3 resume wake chain, so a resumed
+  // agent also wakes the work it was stranded on. Settings and the pure policy
+  // live in myrmidon/auto-resume.ts; state is kept in agents.metadata.
+  const autoResumeSweeper = createAutoResumeSweeper({
+    db,
+    resumeWake: (agentId) => pauseResumeWakeAgent({ db, startNextQueuedRunForAgent, enqueueWakeup }, agentId),
+    logActivity: async (input) => {
+      await logActivity(db, {
+        companyId: input.companyId,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        agentId: input.agentId,
+        runId: input.runId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        details: input.details,
+      });
+    },
+    isAgentInvokable: async (agent) => {
       const full = await getAgent(agent.id);
       if (!full || full.companyId !== agent.companyId) return false;
       const invokability = await getAgentInvokability(full);
@@ -27300,6 +27364,60 @@ export function heartbeatService(
             // so fall through to the ordinary queue path below.
           }
 
+          // myrmidon(WAKE-GUARD): an event-free wake for a task whose pull
+          // request work products are all terminal with at least one merged
+          // would only race the settle sweep (TASK-PR-SYNC part C). Skip it
+          // with the vendor's skipped-wakeup-request mechanism and let the
+          // sweep close the task; human comment and interaction wakes carry
+          // events and are never suppressed. Guarded by the same event-free
+          // predicate the vendor's rewake throttle applies, so a wake that
+          // bypasses the throttle can never be skipped here.
+          if (
+            readTaskPrSyncWakeGuardEnabled() &&
+            isThrottleCandidateIssueRewake({
+              reason,
+              wakeCommentId: wakeCommentId ?? null,
+              requestedByActorType: opts.requestedByActorType ?? null,
+              forceFreshSession:
+                enrichedContextSnapshot.forceFreshSession === true,
+              hasExplicitResume: Boolean(explicitResumeSession),
+            }) &&
+            issue.status !== "done" &&
+            issue.status !== "cancelled"
+          ) {
+            const wakeGuardNow = new Date();
+            // Sync fast path first: a cached decision answers without a DB hit.
+            const cachedDecision = taskPrSyncWakeGuard.peek(issue.id);
+            const suppress =
+              cachedDecision ??
+              (await taskPrSyncWakeGuard.shouldSuppressWake(issue.id, tx as unknown as Db));
+            if (suppress) {
+              await tx.insert(agentWakeupRequests).values({
+                ...durableReceiptFields,
+                companyId: agent.companyId,
+                agentId,
+                source,
+                triggerDetail,
+                reason: TASK_PR_SYNC_WAKE_SKIP_REASON,
+                payload: {
+                  ...(payload ?? {}),
+                  issueId,
+                  heartbeatSkip: {
+                    reason: TASK_PR_SYNC_WAKE_SKIP_REASON,
+                    requestedReason: reason,
+                    cached: cachedDecision !== null,
+                  },
+                },
+                status: "skipped",
+                requestedByActorType: opts.requestedByActorType ?? null,
+                requestedByActorId: opts.requestedByActorId ?? null,
+                idempotencyKey: opts.idempotencyKey ?? null,
+                finishedAt: wakeGuardNow,
+              });
+              return { kind: "skipped" as const };
+            }
+          }
+
           // PAP-13775: no live run holds the lock, so this wake would start a
           // fresh adapter session. If this agent's recent runs on this issue
           // keep succeeding without any issue-visible progress and the wake
@@ -29155,6 +29273,11 @@ export function heartbeatService(
     // myrmidon(IDLE-PICKUP): periodic idle-pickup pass, exposed for the
     // scheduler tick in index.ts and for tests and operators
     sweepIdlePickup: (now?: Date) => idlePickupSweeper.sweep(now),
+
+    // myrmidon(AUTO-RESUME): resumes an agent left in `error` once its backoff
+    // step is due; logic in myrmidon/auto-resume.ts. Called by the scheduler
+    // tick in server/src/index.ts on its own single-flight queue.
+    sweepAutoResume: (now?: Date) => autoResumeSweeper.sweep(now),
     // Override-aware scheduling-suppression check (honors the worktree
     // run-execution experimental setting). Callers outside the service that
     // gate on suppression should prefer this over the env-only resolver.

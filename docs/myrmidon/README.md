@@ -67,12 +67,24 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | Файл | О чём |
 |---|---|
 | [guides/run-limits.md](guides/run-limits.md) | Лимиты допуска прогонов: четыре лимита, источники значений, изменение из UI и API |
+| [guides/run-stall.md](guides/run-stall.md) | Обнаружение зависших прогонов: что считается прогрессом, прерывание `run_stalled`, возврат задачи в `todo`, настройки |
 | [guides/workspace-cleanup.md](guides/workspace-cleanup.md) | Очистка рабочих копий после слияния и сигнал о застрявшей копии |
 | [guides/cloud-files-connector.md](guides/cloud-files-connector.md) | Коннектор Microsoft 365 для ботов-контейнеров: настройка и журнал |
 | [guides/maintenance-banner.md](guides/maintenance-banner.md) | Как баннер обслуживания группирует окна агентов |
 | [guides/access-hub.md](guides/access-hub.md) | Хаб доступов в настройках: секреты парка, выдача агентам, ротация, SSH-ключи, журнал |
 | [guides/emergency-stop.md](guides/emergency-stop.md) | Аварийная остановка прогонов, которые осушаемая пауза оставила дорабатывать |
 | [guides/bot-container-card.md](guides/bot-container-card.md) | Раздел «Container» карточки агента: настройки контейнера, лимит одновременных прогонов, статус |
+| [guides/agent-memory-card.md](guides/agent-memory-card.md) | Вкладка «Memory» карточки агента: просмотр, выгрузка и удаление записей банка памяти, журнал |
+| [guides/browsers.md](guides/browsers.md) | Раздел «Браузеры» в настройках: экран живого браузера, пауза ботов на время сессии, журнал, очистка данных сайта |
+| [guides/stack-registry.md](guides/stack-registry.md) | Реестр компонентов стека: API, проба Docker, кэш, настройка сокета |
+| [guides/bridge-extension.md](guides/bridge-extension.md) | Браузерный мост, расширение (часть C): read-only действия в браузере клиентского ПК, сопряжение кодом, сборка и load-unpacked |
+| [guides/browser-bridge-gateway.md](guides/browser-bridge-gateway.md) | Браузерный мост, шлюз (EXTCASE-B): исходящее WSS-соединение расширения, сопряжение кодом, allowlist, политика подписи, журнал |
+| [guides/connector-panel.md](guides/connector-panel.md) | Панель коннекторов (Company settings → Connectors): устройства, выдача кодов, allowlist, политика подписи, журнал |
+| [guides/ocr.md](guides/ocr.md) | Путь OCR: PDF в текст в workspace бота — инструмент `ocr.pdf`, бэкенды, лимиты, журнал |
+| [guides/owner-telegram-cards.md](guides/owner-telegram-cards.md) | Доставка карточек вопросов и согласований владельцу задачи в Telegram-личку с агентом-автором (U2) |
+| [guides/external-mcp-connectors.md](guides/external-mcp-connectors.md) | Внешние MCP-коннекторы: подключение любого HTTP MCP-сервера без кода форка — вердикт разведки, две точки входа, гранты агентам, регламент и проверка здоровья |
+| [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) | История ревизий инструкций агента: снимки, откат, журнал |
+| [guides/auto-resume.md](guides/auto-resume.md) | Автовозобновление агента из `error`: бэкофф 1/5/15, карточка оператору после потолка попыток, настройки |
 
 ## Сборка и запуск
 

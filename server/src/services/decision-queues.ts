@@ -26,6 +26,8 @@ import type {
   DecisionTriage,
 } from "@paperclipai/shared";
 import { notFound, unprocessable } from "../errors.js";
+// myrmidon(SUB): the stack registry keeps its components in instance settings, not a table
+import { readStackDocument } from "../myrmidon/stack-registry/store.js";
 import { logActivity } from "./activity-log.js";
 import {
   authorizationService,
@@ -279,6 +281,12 @@ async function sourceIssueId(
         .where(and(eq(budgetIncidents.companyId, companyId), eq(budgetIncidents.id, sourceId)))
         .then((rows) => rows[0] ?? null);
       return { exists: Boolean(row), issueId: null };
+    }
+    // myrmidon(SUB): a stack component lives in the registry cache
+    // (instance_settings.general), so existence is read from there.
+    case "stack_update": {
+      const doc = await readStackDocument(db);
+      return { exists: doc.components.some((component) => component.name === sourceId), issueId: null };
     }
   }
 }

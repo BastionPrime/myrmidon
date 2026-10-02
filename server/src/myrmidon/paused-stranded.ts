@@ -44,9 +44,16 @@ export function isOperatorPausedAgent(
  * - any system pause reason (budget, archive, import, plugin note, unknown)
  *   and any other non-invokable state (terminated, pending approval, a broken
  *   reporting chain);
- * - an agent of another company or a missing agent;
- * - `in_review` issues: their participant is re-queued by the sweep itself
- *   once it is invokable again, and resume does not wake them.
+ * - an agent of another company or a missing agent.
+ *
+ * An `in_review` issue is exempt too. Its reviewer is re-queued by the sweep
+ * itself once the agent is invokable again (`enqueueStrandedIssueRecovery` on
+ * the review-participant path), so leaving it alone while the pause holds is
+ * "wait for the resume" there as well. The vendor block for it exists because
+ * the sweep assumes a non-invokable participant means an abandoned review;
+ * with an operator pause that assumption is false, and blocking the issue
+ * would make resume unable to wake it (a blocked issue is no longer the
+ * sweep's candidate).
  *
  * `drainsEnabled` defaults to the live setting; tests pass it explicitly.
  */
@@ -57,7 +64,6 @@ export function operatorPauseExemptsStrandedIssue(input: {
   drainsEnabled?: boolean;
 }): boolean {
   if (!(input.drainsEnabled ?? readPauseDrainsEnabled())) return false;
-  if (input.issueStatus === "in_review") return false;
   if (!input.agent || input.agent.companyId !== input.issueCompanyId) return false;
   return isOperatorPausedAgent(input.agent);
 }

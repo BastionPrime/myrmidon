@@ -52,6 +52,11 @@ type Container struct {
 		NanoCpus    *int64  `json:"NanoCpus"`
 		PidsLimit   *int64  `json:"PidsLimit"`
 		NetworkMode *string `json:"NetworkMode"`
+		// Binds is part of the container template: the driver's drift check
+		// compares the live bind list (the three bot volumes plus the card's
+		// read-only extra mounts) with the one a fresh create body builds.
+		// Dropping it here makes every bot look drifted on every pass.
+		Binds []string `json:"Binds"`
 	} `json:"HostConfig"`
 }
 
@@ -64,7 +69,10 @@ func (c *Container) Status() string {
 }
 
 // trimmedContainer is the answer to A2 (spec 6.3): the fields that
-// DockerInspect of the driver reads, and nothing else.
+// DockerInspect of the driver reads, and nothing else. The list is a contract
+// with the driver's template-drift check: it must carry every field that check
+// compares, HostConfig.Binds included (the contract tests of the gate and of
+// the driver guard it).
 type trimmedContainer struct {
 	ID     string `json:"Id"`
 	Image  string `json:"Image"`
@@ -78,10 +86,11 @@ type trimmedContainer struct {
 		Health   *health `json:"Health,omitempty"`
 	} `json:"State"`
 	HostConfig struct {
-		Memory      *int64  `json:"Memory,omitempty"`
-		NanoCpus    *int64  `json:"NanoCpus,omitempty"`
-		PidsLimit   *int64  `json:"PidsLimit,omitempty"`
-		NetworkMode *string `json:"NetworkMode,omitempty"`
+		Memory      *int64   `json:"Memory,omitempty"`
+		NanoCpus    *int64   `json:"NanoCpus,omitempty"`
+		PidsLimit   *int64   `json:"PidsLimit,omitempty"`
+		NetworkMode *string  `json:"NetworkMode,omitempty"`
+		Binds       []string `json:"Binds,omitempty"`
 	} `json:"HostConfig"`
 }
 
@@ -114,6 +123,7 @@ func (c *Container) Trimmed() []byte {
 	t.HostConfig.NanoCpus = c.HostConfig.NanoCpus
 	t.HostConfig.PidsLimit = c.HostConfig.PidsLimit
 	t.HostConfig.NetworkMode = c.HostConfig.NetworkMode
+	t.HostConfig.Binds = c.HostConfig.Binds
 	return encode(t)
 }
 

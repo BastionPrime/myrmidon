@@ -37,7 +37,7 @@ import {
 } from "./index.js";
 import { botProfileWiring } from "./profile-ports.js";
 import type { BotContainerActivitySink, BotMaintenancePort } from "./reconciler.js";
-import { getBotContainerRuntime, setBotContainerRuntime } from "./routes-wiring.js";
+import { botContainerAgentReader, getBotContainerRuntime, setBotContainerRuntime } from "./routes-wiring.js";
 
 export const BOT_RECONCILE_INTERVAL_ENV = "MYRMIDON_BOT_RECONCILE_INTERVAL_SEC";
 const MIN_RECONCILE_INTERVAL_SEC = 5;
@@ -82,6 +82,10 @@ export interface BotContainersStartupPorts {
   ): Pick<BotContainerRuntimeDeps, "compile" | "syncCard" | "releaseStrayGateways">;
   maintenancePort(db: Db): BotMaintenancePort;
   listAgents(db: Db): () => Promise<BotContainerAgent[]>;
+  /** One agent's card at the moment of a pass (index.ts `readAgent`): the sweep
+   *  lists the table once per tick, so each pass re-reads its own row instead of
+   *  reconciling the tick's snapshot. */
+  readAgent(db: Db): (agentId: string) => Promise<BotContainerAgent | null>;
   activitySink(): BotContainerActivitySink;
   registerRuntime(runtime: BotContainerRuntimeDeps | null): void;
   currentRuntime(): BotContainerRuntimeDeps | null;
@@ -95,6 +99,7 @@ const defaultPorts: BotContainersStartupPorts = {
   profileWiring: (db, opts) => botProfileWiring(db, opts),
   maintenancePort: (db) => realBotMaintenancePort(db),
   listAgents: (db) => listBotContainerAgents(db),
+  readAgent: (db) => botContainerAgentReader(db),
   activitySink: () => createBotContainerLogSink(),
   registerRuntime: setBotContainerRuntime,
   currentRuntime: getBotContainerRuntime,
@@ -157,6 +162,7 @@ function build(
       ...(releaseStrayGateways ? { releaseStrayGateways } : {}),
       maintenance: ports.maintenancePort(db),
       activity,
+      readAgent: ports.readAgent(db),
       network: driverConfig.network,
     };
     const stopSweep = ports.startReconciliation(ports.listAgents(db), runtime, { intervalMs, env });
