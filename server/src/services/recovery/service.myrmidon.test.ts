@@ -113,6 +113,25 @@ describeEmbeddedPostgres("reconcileStrandedAssignedIssues: infrastructure interr
     expect(issue!.status).toBe("in_progress");
   }, 30_000);
 
+  it("does not escalate a paused agent's stranded issue when the run was claimed by the gateway adapter", async () => {
+    // myrmidon(RECOVERY-HERMES-GATEWAY): the gateway adapter now qualifies for
+    // infrastructure-interrupt relief as a conversation adapter, so the sweep
+    // leaves the issue workable and the platform's bounded retry owns it —
+    // no legacy_execution_requires_reconciliation escalation to the board.
+    const { issueId } = await seedStrandedIssue({
+      errorCode: "agent_paused",
+      scheduledRetryAttempt: 0,
+      adapterType: "hermes_gateway",
+    });
+
+    const report = await heartbeatService(db).reconcileStrandedAssignedIssues();
+
+    expect(report.issueIds).not.toContain(issueId);
+    expect(await activeRecoveryActionsFor(issueId)).toHaveLength(0);
+    const [issue] = await db.select().from(issues).where(eq(issues.id, issueId));
+    expect(issue!.status).toBe("in_progress");
+  }, 30_000);
+
   it("still escalates to the board once the shared infra-interrupt retry budget is exhausted", async () => {
     const { issueId } = await seedStrandedIssue({ errorCode: "agent_paused", scheduledRetryAttempt: 2 });
 
