@@ -126,6 +126,23 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   `MYRMIDON_AUTO_RESUME_*` in [SETTINGS.md](SETTINGS.md); guide:
   [guides/auto-resume.md](guides/auto-resume.md) (#272).
 
+### Telegram
+
+- Telegram DM run status and inline split (U1). In a bridged Telegram DM
+  (`MYRMIDON_TELEGRAM_DM_CONVERSATIONS`) a run can now show its "working on
+  it" status as one editable message instead of milestone silence: the status
+  is posted once when the run is queued, the same provider message is edited
+  in place as the phase changes, and the run's final answer replaces it —
+  the failure, admin-attention and completion milestones still publish, and
+  the `/stop` terminal milestone stays suppressed. Separately, a long
+  structured Markdown answer that the vendor sends as one `.md` attachment
+  can split inline into ordered parts at paragraph/line/word boundaries.
+  Both behaviors are opt-in and off by default:
+  `MYRMIDON_TELEGRAM_DM_STATUS` and `MYRMIDON_TELEGRAM_SPLIT_MAX_PARTS` (a
+  document needing more parts than the cap stays an attachment); see
+  [SETTINGS.md](SETTINGS.md) and the guide
+  [guides/telegram-dm-status.md](guides/telegram-dm-status.md) (#267, #313).
+
 ## 1.3.2
 
 Everything merged between the 1.3.1 and 1.3.2 tags. Deploy this release's dockergate image
