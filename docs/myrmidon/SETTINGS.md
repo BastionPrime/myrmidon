@@ -576,3 +576,8 @@ missing settings (names only, never values), and not a single request goes out.
 | `MYRMIDON_CTO_CHAT_MODEL` | 1.6-CTO-CHAT-B | `dashscope-qwen-flash` | The model name sent to the gateway for the planning completion | Empty/unset — the default; an unknown name fails at the gateway and the route answers 400 `backend_failed` |
 | `MYRMIDON_CTO_CHAT_TIMEOUT_SEC` | 1.6-CTO-CHAT-B | `90` | Timeout of the planning request (raised to at least 5, capped at 600) | Non-numeric, `0`, negative or above the cap — the default (90) |
 | `MYRMIDON_CTO_CHAT_MAX_TASKS` | 1.6-CTO-CHAT-B | `8` | Ceiling on child tasks in one proposal (a proposal can never be unbounded work); the hard absolute cap is 20 | Non-numeric, `0`, negative or above 20 — the default (8) |
+
+The flow end to end — how the owner asks from the portal or the Telegram DM,
+what the proposal and the approval card look like, and what acceptance
+creates — is the operator guide
+[guides/cto-chat-planner.md](guides/cto-chat-planner.md).
