@@ -57,6 +57,7 @@ import {
 import { getOperatorSettingDefaults } from "./services/setting-defaults.js";
 import { setupEnvironmentCustomImageTerminalWebSocketServer } from "./realtime/environment-custom-image-terminal-ws.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
+import { startBrowserBridge } from "./myrmidon/browser-bridge/index.js"; // myrmidon(EXTCASE-B)
 import { setupRunnerPrpWebSocketServer } from "./realtime/runner-prp-ws.js";
 import { cloudActorHeaderSourceFromHeaders, resolveCloudTenantActor } from "./middleware/auth.js";
 import {
@@ -996,6 +997,10 @@ async function startServerWithDatabaseTeardown(
       return { userId: actor.userId, companyIds: actor.companyIds };
     },
   });
+
+  // myrmidon(EXTCASE-B): the browser extension dials in at /bridge/v1; the board
+  // never dials the client PC. Attached next to the other websocket lanes.
+  startBrowserBridge(db, server);
 
   setStartupRecoveryPhase("recovering");
   // Bind the shared HTTP/PRP listener before native startup recovery. A

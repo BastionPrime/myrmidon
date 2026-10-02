@@ -246,6 +246,35 @@ describe("BridgeConnection after ready", () => {
     made.connection.close();
   });
 
+  it("passes the request id to the dispatcher and cancels it on browser.cancel", async () => {
+    const seen: Array<string | number> = [];
+    const cancelled: Array<string | number> = [];
+    const made = await connected({
+      dispatchAction: async (_method: string, _params: unknown, requestId: string | number) => {
+        seen.push(requestId);
+        return { ok: true as const, result: null };
+      },
+      onCancel: (requestId: string | number) => cancelled.push(requestId),
+    });
+    made.sockets.sockets[0].receive(JSON.stringify({ jsonrpc: "2.0", id: "gw-5", method: "browser.read" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen).toEqual(["gw-5"]);
+    // The cancellation is a notification: no id, so no answer is sent for it.
+    const sentBefore = made.sockets.sockets[0].sent.length;
+    made.sockets.sockets[0].receive(JSON.stringify({ jsonrpc: "2.0", method: "browser.cancel", params: { id: "gw-5" } }));
+    expect(cancelled).toEqual(["gw-5"]);
+    expect(made.sockets.sockets[0].sent).toHaveLength(sentBefore);
+    made.connection.close();
+  });
+
+  it("ignores a notification that is not a cancellation", async () => {
+    const cancelled: Array<string | number> = [];
+    const made = await connected({ onCancel: (requestId: string | number) => cancelled.push(requestId) });
+    made.sockets.sockets[0].receive(JSON.stringify({ jsonrpc: "2.0", method: "something.else", params: { id: "gw-5" } }));
+    expect(cancelled).toEqual([]);
+    made.connection.close();
+  });
+
   it("marks the connection closed when the gateway drops it", async () => {
     const phases: string[] = [];
     const made = await connected({ onPhaseChange: (phase: string) => phases.push(phase) });

@@ -47,6 +47,7 @@ export function jsonRpcError(
 export type ParseIncomingResult =
   | { kind: "request"; request: JsonRpcRequestFrame }
   | { kind: "response"; response: JsonRpcResponseFrame }
+  | { kind: "notification"; method: string; params: unknown }
   | { kind: "invalid"; reply: JsonRpcErrorFrame };
 
 /**
@@ -77,8 +78,12 @@ export function parseIncoming(raw: string): ParseIncomingResult {
     return { kind: "invalid", reply: jsonRpcError(id, BROWSER_BRIDGE_ERROR_CODES.invalidRequest, "invalid request") };
   }
   if (id === null) {
-    // A notification is not used by the bridge; answer with invalid request.
-    return { kind: "invalid", reply: jsonRpcError(null, BROWSER_BRIDGE_ERROR_CODES.invalidRequest, "invalid request") };
+    // A notification: no id, so nobody waits for an answer. The bridge uses
+    // exactly one — `browser.cancel`, the gateway's word that it gave up on an
+    // action whose human-confirmation budget (180 s) expired. The caller
+    // matches it by params.id and drops that pending step; an unknown method
+    // is ignored.
+    return { kind: "notification", method: candidate.method, params: candidate.params };
   }
   if (candidate.method === BRIDGE_READY_METHOD && "result" in candidate) {
     // `bridge.ready` travels as a response-looking frame with a method name;

@@ -258,6 +258,15 @@ vi.mock("../realtime/live-events-ws.js", () => ({
   setupLiveEventsWebSocketServer: vi.fn(),
 }));
 
+// myrmidon(EXTCASE-B): server startup only has to schedule the bridge; the
+// module's own suite covers its behaviour, and the real module would reach for
+// the secret service this suite deliberately does not mock.
+vi.mock("../myrmidon/browser-bridge/index.js", () => ({
+  startBrowserBridge: vi.fn(),
+  myrmidonBrowserBridgeRoutes: vi.fn(() => ({ use: vi.fn() })),
+  myrmidonBrowserBridgePublicRoutes: vi.fn(() => ({ use: vi.fn() })),
+}));
+
 vi.mock("../services/index.js", () => ({
   backfillLegacyToolOAuthTokens: vi.fn(async () => ({
     scannedConnections: 0,
