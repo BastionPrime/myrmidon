@@ -74,7 +74,7 @@ is not wired to an HTTP endpoint yet.
 |---|---|---|
 | `MYRMIDON_RUN_STALL_ENABLED` | on | Master switch. `0`/`false`/`off`/`no` disables the sweep (vendor behavior: a silent run lives until the hard run timeout). Unset or unrecognized — enabled |
 | `MYRMIDON_RUN_STALL_THRESHOLD_SEC` | `1200` (20 min) | Silence window after which a running run with no recorded progress is interrupted. Range 60–86400; out of range or non-numeric — the default |
-| `MYRMIDON_RUN_STALL_CHECK_INTERVAL_SEC` | `60` | Minimum spacing between two scan passes. Below 15 — 15; non-numeric — the default |
+| `MYRMIDON_RUN_STALL_CHECK_INTERVAL_SEC` | `60` | Minimum spacing between two scan passes. Below 15 or non-numeric — the default (60) |
 | `MYRMIDON_RUN_STALL_PAGE_SIZE` | `50` | How many running runs one pass inspects at most. Range 1–200; out of range or non-numeric — the default |
 
 Details and the full settings table: [../SETTINGS.md](../SETTINGS.md).
