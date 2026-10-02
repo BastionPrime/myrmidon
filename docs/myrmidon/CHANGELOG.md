@@ -110,6 +110,35 @@ version file to edit. Base Paperclip version is in the image label
   instead of dispatching a run that would only race the settle. Operator
   guide: [guides/task-pr-sync.md](guides/task-pr-sync.md).
 
+### Container GitHub access (CONTAINER-GITHUB-WRITE)
+
+- An agent in a bot container can push to GitHub through the board's managed
+  credentials (#363): when a run's GitHub identity is board-managed (the
+  default, see `MYRMIDON_HOST_GITHUB_CREDENTIALS` in
+  [SETTINGS.md](SETTINGS.md)), the heartbeat mints a run-bound
+  `github_credentials` capability, and the `hermes_gateway` adapter now
+  carries it to the container — the pair rides the `/v1/runs` request body
+  (`github_broker`), is bound to that run alone (contextvars, never the
+  process env shared by the gateway's concurrent runs) and reaches every
+  terminal and `execute_code` subprocess of the run as
+  `PAPERCLIP_GITHUB_BROKER_URL`/`PAPERCLIP_GITHUB_BROKER_TOKEN`. Inside the
+  container, the dev image's `git` credential helper (URL-scoped to
+  `github.com` over https, `ssh://git@github.com/…` remotes rewritten to
+  https) and its `gh` wrapper resolve the credential on each invocation
+  through the board's `POST /runtime-tools/github/credentials` broker and
+  exec the real `git`/`gh`; the wrappers walk up to 6 broker address
+  candidates (`PAPERCLIP_GITHUB_BROKER_URL` → `PAPERCLIP_API_URL` →
+  `PAPERCLIP_RUNTIME_API_URL` → `PAPERCLIP_RUNTIME_API_CANDIDATES_JSON`
+  items) and never print the token. A run without a capability — or a card
+  whose GitHub identity is not board-managed — gets both names stripped and
+  the wrappers fail open, exactly as before this change. A static
+  `GH_TOKEN`/`GITHUB_TOKEN` inherited from the image profile no longer
+  shadows the credential: while a capability is bound, those names are
+  blanked in the run's subprocesses. This closes the gap that motivated
+  `MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST` (see SETTINGS.md): the
+  allowlist remains a fallback for dev bots on machines where the board's
+  broker address is genuinely unreachable.
+
 ## 1.4.0
 
 Everything merged between the 1.3.2 and 1.4.0 tags. Deploy this release's board,
