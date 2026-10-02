@@ -338,3 +338,15 @@ the key itself is a company secret, not an environment variable.
 |---|---|---|---|---|
 | `MYRMIDON_HINDSIGHT_API_URL` | MEMORY-UI | unset (off) | Base address of the shared memory (hindsight) service as the board server sees it; the tab's list, export, delete and clear calls go there | Unset, empty or not an `http(s)://` URL — the section is off: status answers `enabled: false`, data routes answer 503. Read per request, no restart needed. The address is not logged |
 | `MYRMIDON_HINDSIGHT_KEY_SECRET` | MEMORY-UI | unset (off) | Name of the company secret holding the memory service API key (self-hosted deployments with no auth may name a missing secret — the calls then go without a token) | Unset or empty — off, same as above. The key value is read only for the duration of a call, never written to the log or an API response |
+
+## 1.4 — agent instructions revisions (H2)
+
+The revision history of an agent's instructions bundle
+(`server/src/myrmidon/agent-instructions-revisions/`): every bundle edit is
+snapshotted into the `agent_instructions_revisions` table and any earlier
+revision can be restored from the agent card. No new variables: the feature is
+always on and needs no configuration. Recorded here per the registry rule.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| — | H2 | — (always on) | Instructions bundle revisions are recorded on every file put/delete and bundle patch, and `POST /api/agents/:id/instructions-revisions/:revisionId/rollback` restores a revision (the restore itself becomes a new revision). No settings | Not configurable: this is a corrective feature with no deployment-specific values. Rollback of an external bundle is refused (422) until the agent switches to a managed bundle |
