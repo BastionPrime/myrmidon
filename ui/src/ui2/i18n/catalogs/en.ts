@@ -333,6 +333,8 @@ export const en = {
         aria: "Tell the Commander (Ctrl K)",
         placeholder: "Tell the Commander…",
         stubNote: "Stub: the message is not sent yet. It opens the existing chat; the Commander conversation arrives with the 1.6 chat update.",
+        // myrmidon(1.6-CTO-CHAT-A): palette carries the draft to the real screen.
+        carryNote: "The draft opens in the Commander chat, where the board proposes an epic from your text.",
         openChat: "Open chat",
       },
       nav: {
@@ -346,6 +348,20 @@ export const en = {
         placeholderBody: "The 2.0 layout for this area is not wired yet; the working screen below keeps the flow.",
         placeholderLegacyLink: "Back to the current layout",
       },
+  },
+  // myrmidon(1.6-CTO-CHAT-A): the Commander chat screen — free-text planning
+  // entry (screen-map §4.3).
+  commanderChat: {
+    title: "Commander chat",
+    subtitle:
+      "Describe what you want in plain text — the board proposes an epic with tasks for your approval.",
+    loading: "Loading conversation…",
+    noAgent: "No Commander agent found in this company yet.",
+    placeholder: "Tell the Commander what to build…",
+    send: "Build a plan",
+    planAria: "Proposed plan",
+    epicLabel: "Epic",
+    resolving: "Applying your decision…",
   },
 };
 
@@ -672,6 +688,8 @@ export type Ui2Catalog = {
       aria: string;
       placeholder: string;
       stubNote: string;
+      // myrmidon(1.6-CTO-CHAT-A): palette carries the draft to the real screen.
+      carryNote: string;
       openChat: string;
     },
     nav: {
@@ -686,4 +704,16 @@ export type Ui2Catalog = {
       placeholderLegacyLink: string;
     },
   },
-};
+  // myrmidon(1.6-CTO-CHAT-A): the Commander chat screen — free-text planning
+  // entry (screen-map §4.3). Keys render only via useUi2T.
+  commanderChat: {
+    title: string;
+    subtitle: string;
+    loading: string;
+    noAgent: string;
+    placeholder: string;
+    send: string;
+    planAria: string;
+    epicLabel: string;
+    resolving: string;
+  };};
