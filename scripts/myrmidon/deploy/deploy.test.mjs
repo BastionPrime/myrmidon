@@ -29,8 +29,18 @@ case "$1" in
       *org.opencontainers.image.revision*) cat "$SANDBOX/label-revision" ;;
     esac ;;
   buildx)
-    if [ -e "$SANDBOX/registry-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
-    cat "$SANDBOX/imagetools.json" ;;
+    # RELEASE-GATE: the same registry answers the component repositories. A
+    # digest-format inspect gets the component digest file; the board and every
+    # CI check get the image JSON (with labels).
+    case "$4" in
+      *myrmidon-dockergate*|*myrmidon-fleetd*)
+        if [ -e "$SANDBOX/components-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
+        for a in "$@"; do case "$a" in *Manifest.Digest*) cat "$SANDBOX/component-digests.json" | jq -r --arg r "$4" '.[\$r]'; exit 0 ;; esac; done
+        cat "$SANDBOX/component-image.json" ;;
+      *)
+        if [ -e "$SANDBOX/registry-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
+        cat "$SANDBOX/imagetools.json" ;;
+    esac ;;
   compose) exit 0 ;;
 esac
 `;
@@ -95,6 +105,23 @@ function sandbox({
     JSON.stringify({ architecture: "amd64", os: "linux", config: { Env: ["A=1"], Labels: labels } }),
   );
   if (registryMissing) fs.writeFileSync(path.join(dir, "registry-missing"), "");
+  // RELEASE-GATE: component registry answers for the same commit.
+  fs.writeFileSync(
+    path.join(dir, "component-digests.json"),
+    JSON.stringify({
+      "ghcr.io/itkadr-git/myrmidon-dockergate:sha-0123456": `sha256:${"c".repeat(64)}`,
+      "ghcr.io/itkadr-git/myrmidon-fleetd:sha-0123456": `sha256:${"d".repeat(64)}`,
+    }),
+  );
+  fs.writeFileSync(
+    path.join(dir, "component-image.json"),
+    JSON.stringify({
+      architecture: "amd64",
+      os: "linux",
+      config: { Env: ["A=1"], Labels: { "org.opencontainers.image.revision": COMMIT, "org.opencontainers.image.source": SOURCE, "org.opencontainers.image.version": VERSION } },
+      manifest: { digest: `sha256:${"c".repeat(64)}` },
+    }),
+  );
   fs.writeFileSync(path.join(dir, "git-origin"), `${origin}\n`);
   fs.writeFileSync(path.join(dir, "git-ancestor-exit"), onMain ? "0" : "1");
   fs.writeFileSync(path.join(dir, "git-tags"), tags);
@@ -128,6 +155,10 @@ function sandbox({
       `MAINTENANCE_ENTER_COMMAND='echo enter >> ${path.join(dir, "maintenance.log")}'`,
       `MAINTENANCE_EXIT_COMMAND='echo exit >> ${path.join(dir, "maintenance.log")}'`,
       "RUNNING_RUNS_COMMAND='echo 0'",
+      // RELEASE-GATE: the release components answer their health probes here
+      // (the fake curl serves every URL with the health file).
+      "MYR_DOCKERGATE_HEALTH_URL=http://127.0.0.1:3100/dockergate/health",
+      "MYR_FLEETD_HEALTH_URL=http://127.0.0.1:3100/fleetd/health",
       "",
     ].join("\n"),
   );

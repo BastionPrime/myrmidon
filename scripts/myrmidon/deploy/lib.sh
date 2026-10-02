@@ -123,11 +123,27 @@ commit_is_reviewed() {
 # The whole check for one image reference (registry, labels, commit). Returns 0 when
 # the image is a CI image; otherwise sets CI_CHECK_REASON and returns 1.
 check_ci_image() {
-  local ref="$1" out err rc=0 labels revision image_source
-  CI_CHECK_REASON="" CI_IMAGE_REVISION="" CI_IMAGE_VERSION=""
-
+  # RELEASE-GATE: the reference-format half is board-specific (image_ref_problem
+  # speaks about the board repository); the registry/labels/commit half is the
+  # same for every component image, so it lives in check_ci_image_for_repo.
+  local ref="$1"
   if [[ "$ref" != *@* || "${ref%@*}" != "$MYR_CI_IMAGE" ]] || ! valid_digest "${ref#*@}"; then
     CI_CHECK_REASON="$(image_ref_problem "$ref")"
+    return 1
+  fi
+  check_ci_image_for_repo "$MYR_CI_IMAGE" "$ref"
+}
+
+# RELEASE-GATE (the 01.10 incident): the same CI-image proof for a component
+# image (dockergate, fleetd) of the release: in the registry, revision and
+# source labels set by the CI workflows, commit on origin/main or a myr-v* tag.
+# Takes the expected repository plus a repo@sha256:<64 hex> reference.
+check_ci_image_for_repo() {
+  local expected_repo="$1" ref="$2" out err rc=0 labels revision image_source
+  CI_CHECK_REASON="" CI_IMAGE_REVISION="" CI_IMAGE_VERSION=""
+
+  if [[ "$ref" != *@* || "${ref%@*}" != "$expected_repo" ]] || ! valid_digest "${ref#*@}"; then
+    CI_CHECK_REASON="$ref is not $expected_repo@sha256:<64 lowercase hex>"
     return 1
   fi
 
@@ -224,6 +240,12 @@ compose() {
   IFS=':' read -r -a _files <<<"$COMPOSE_FILES"
   for f in "${_files[@]}"; do args+=(-f "$COMPOSE_DIR/$f"); done
   args+=(-f "$OVERRIDE_PATH")
+  # RELEASE-GATE: the component override files (dockergate, fleetd) ride along
+  # when they exist, so one `docker compose` call sees the whole release stack.
+  local cf
+  for cf in "$COMPOSE_DIR"/docker-compose.myrmidon-dockergate.yml "$COMPOSE_DIR"/docker-compose.myrmidon-fleetd.yml; do
+    [[ -f "$cf" ]] && args+=(-f "$cf")
+  done
   docker "${args[@]}" "$@"
 }
 
