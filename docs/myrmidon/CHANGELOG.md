@@ -11,7 +11,7 @@ version file to edit. Base Paperclip version is in the image label
 ## 1.4.0
 
 Everything merged between the 1.3.2 and 1.4.0 tags. Deploy this release's board,
-dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-board-and-dockergate-together)).
+dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-board-and-the-release-components-together)).
 
 ### Memory and isolation
 
