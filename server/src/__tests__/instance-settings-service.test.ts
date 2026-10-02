@@ -56,6 +56,7 @@ describe("instance settings service", () => {
       enableSummaries: false,
       enableStatusCards: false,
       enableDecisions: false,
+      enableMyrmidonUi2: false, // myrmidon(UI-0a)
       enableGoalsSidebarLink: true,
       enableServerInfoDebugView: true,
       enablePaperclipDeveloperMode: true,
@@ -171,6 +172,23 @@ describe("instance settings service", () => {
     expect(
       normalizeExperimentalSettings({ enableStreamlinedLeftNavigation: true }).enableDecisions,
     ).toBe(false);
+  });
+
+  // myrmidon(UI-0a): the UI-2.0 shell flag is strictly opt-in — legacy rows
+  // and empty storage normalize to off in both branches of the normalizer.
+  it("defaults enableMyrmidonUi2 to false for empty and legacy stored settings and round-trips an explicit true", () => {
+    expect(normalizeExperimentalSettings(undefined).enableMyrmidonUi2).toBe(false);
+    expect(normalizeExperimentalSettings({}).enableMyrmidonUi2).toBe(false);
+    expect(
+      normalizeExperimentalSettings({ enableStreamlinedUi: true }).enableMyrmidonUi2,
+    ).toBe(false);
+    expect(
+      normalizeExperimentalSettings({ enableMyrmidonUi2: true }).enableMyrmidonUi2,
+    ).toBe(true);
+    const enabled = applyExperimentalSettingsPatch({}, { enableMyrmidonUi2: true });
+    expect(enabled.enableMyrmidonUi2).toBe(true);
+    const disabled = applyExperimentalSettingsPatch(enabled, { enableMyrmidonUi2: false });
+    expect(disabled.enableMyrmidonUi2).toBe(false);
   });
 
   it("defaults workspace branch repair settings to true for empty and legacy stored settings", () => {

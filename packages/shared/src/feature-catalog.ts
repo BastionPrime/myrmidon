@@ -224,6 +224,14 @@ export const INSTANCE_FEATURE_CATALOG: Record<InstanceFeatureKey, FeatureCatalog
     cloudDefault: false,
     selfHostedDefault: false,
   },
+  enableMyrmidonUi2: {
+    title: "Myrmidon UI 2.0 Shell",
+    description:
+      "Use the Myrmidon 2.0 shell (rail, top bar, phone bottom bar, Commander entry) for the board. Pages and data stay unchanged; turning this off restores the 1.x shell.",
+    tier: "preference",
+    cloudDefault: false,
+    selfHostedDefault: false,
+  },
   enableGoalsSidebarLink: {
     title: "Goals Sidebar Link",
     description: "Restore the Goals item in the main sidebar while the goals surface is being evaluated.",

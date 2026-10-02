@@ -751,9 +751,12 @@ fn codex_rejects_replay_of_a_completed_tool_call_id_in_the_same_turn() {
         })
         .expect("deliver the first semantic result");
 
-    let replay_error = (0..32)
-        .find_map(|_| provider.poll().err())
-        .expect("same-turn replay of the completed call id is rejected");
+    // The fake Codex replays the completed call id only after it has processed
+    // the tool response, and the replay frame crosses the pipe asynchronously.
+    // A fixed poll count races process scheduling under CI load (seen failing
+    // in run 36950212245: 32 polls consumed before the replay frame arrived),
+    // so wait for the rejection on a deadline like the sibling tests do.
+    let replay_error = wait_for_provider_error(&mut provider);
     assert!(
         replay_error
             .to_string()
