@@ -31,6 +31,7 @@ vi.mock("../middleware/logger.js", () => ({
 
 import {
   createIdlePickupSweeper,
+  findTopReadyIssueForAgent,
   idlePickupForAgent,
   IDLE_PICKUP_ENABLED_ENV,
   IDLE_PICKUP_INTERVAL_SEC_ENV,
@@ -627,6 +628,71 @@ describeEmbeddedPostgres("idlePickupForAgent (IDLE-PICKUP)", () => {
     void call;
     void foreignIssueId;
     expect(deps.enqueueWakeup).not.toHaveBeenCalled();
+  });
+
+  // The manual-wake binding (WAKE-BIND) reuses this ranking: a wake without an
+  // explicit issue must land on the same task the idle-pickup scheduler picks.
+  describe("findTopReadyIssueForAgent", () => {
+    it("returns the top ready task by the same ranking the sweep uses", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const lowId = await seedIssue({ companyId, agentId, priority: "low" });
+      const criticalId = await seedIssue({ companyId, agentId, priority: "critical" });
+      const mediumId = await seedIssue({ companyId, agentId, priority: "medium" });
+
+      const top = await findTopReadyIssueForAgent(db, { id: agentId, companyId });
+
+      expect(top?.id).toBe(criticalId);
+      void lowId;
+      void mediumId;
+    });
+
+    it("returns null when the agent has no ready task", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedIssue({ companyId, agentId, status: "done" });
+      await seedIssue({ companyId, agentId, status: "in_review" });
+
+      expect(await findTopReadyIssueForAgent(db, { id: agentId, companyId })).toBeNull();
+    });
+
+    it("skips a ready task already covered by a live run", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const runningId = await seedIssue({ companyId, agentId, priority: "critical", status: "in_progress" });
+      const nextId = await seedIssue({ companyId, agentId, priority: "low" });
+      await seedLiveRun({ companyId, agentId, issueId: runningId, status: "running" });
+
+      const top = await findTopReadyIssueForAgent(db, { id: agentId, companyId });
+
+      expect(top?.id).toBe(nextId);
+    });
+
+    it("skips a ready task already covered by a pending wake", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const coveredId = await seedIssue({ companyId, agentId, priority: "critical" });
+      const nextId = await seedIssue({ companyId, agentId, priority: "low" });
+      await db.insert(agentWakeupRequests).values({
+        companyId,
+        agentId,
+        source: "on_demand",
+        triggerDetail: "manual",
+        reason: "issue_assigned",
+        payload: { issueId: coveredId },
+        status: "queued",
+        requestedByActorType: "user",
+        requestedByActorId: null,
+      });
+
+      const top = await findTopReadyIssueForAgent(db, { id: agentId, companyId });
+
+      expect(top?.id).toBe(nextId);
+    });
+
+    it("returns null when the only ready task is already being worked", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const issueId = await seedIssue({ companyId, agentId, status: "in_progress" });
+      await seedLiveRun({ companyId, agentId, issueId, status: "queued" });
+
+      expect(await findTopReadyIssueForAgent(db, { id: agentId, companyId })).toBeNull();
+    });
   });
 });
 
