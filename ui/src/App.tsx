@@ -82,6 +82,8 @@ import { GatewaysList } from "./pages/apps/gateways/GatewaysList";
 import { GatewayDetail } from "./pages/apps/gateways/GatewayDetail";
 import { CompanySkills } from "./pages/CompanySkills";
 import { SkillStudio } from "./pages/SkillStudio";
+// myrmidon(1.6-SKILL-LIFE): the company skill lifecycle screen.
+import { SkillLifecycle } from "./pages/SkillLifecycle";
 import { Secrets } from "./pages/Secrets";
 import { AccessHubPage } from "./components/myrmidon/access-hub/AccessHubPage";
 import { BrowsersSettingsPage } from "./components/myrmidon/browsers/BrowsersSettingsPage"; // myrmidon(BROWSER-CONSOLE)
@@ -276,6 +278,7 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
       <Route path="skills/studio/new" element={<SkillStudio />} />
       <Route path="skills/studio/:skillId" element={<SkillStudio />} />
       <Route path="skills/:skillId/studio" element={<LegacySkillStudioRedirect />} />
+      <Route path="skills/lifecycle" element={<SkillLifecycle />} /> {/* myrmidon(1.6-SKILL-LIFE) */}
       <Route
         path="skills/*"
         element={streamlinedUiEnabled ? <CompanySkills /> : <ProductionSurface><ProductionCompanySkills /></ProductionSurface>}
@@ -834,6 +837,7 @@ export function App() {
           <Route path="skills/studio/new" element={<UnprefixedBoardRedirect />} />
           <Route path="skills/studio/:skillId" element={<UnprefixedBoardRedirect />} />
           <Route path="skills/:skillId/studio" element={<LegacySkillStudioRedirect />} />
+          <Route path="skills/lifecycle" element={<UnprefixedBoardRedirect />} />
           <Route path="skills/*" element={<UnprefixedBoardRedirect />} />
           <Route path="settings" element={<LegacySettingsRedirect />} />
           <Route path="settings/*" element={<LegacySettingsRedirect />} />
