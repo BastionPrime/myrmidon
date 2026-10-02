@@ -80,6 +80,8 @@ export interface EnterInput {
 }
 
 const SYSTEM_ACTOR: MaintenanceActor = { actorType: "system", actorId: "myrmidon-maintenance" };
+/** Interrupt passes one tick makes before leaving stubborn runs to the next tick. */
+const INTERRUPT_PASSES_PER_TICK = 3;
 
 export function maintenanceService(
   db: Db,
@@ -268,13 +270,34 @@ export function maintenanceService(
       });
       if (changed) await audit(window, "drain_timed_out", SYSTEM_ACTOR, { runningRuns: running.length });
     } else if (decision.kind === "interrupt") {
-      await interruptRuns(window, decision.runIds);
+      await interruptUntilSettled(window, decision.runIds);
     }
   }
 
-  async function interruptRuns(window: MaintenanceWindow, runIds: string[]) {
+  /**
+   * One interrupt pass works on the `running` snapshot taken before it, and a
+   * single run's interrupt can fail (it is logged, not thrown). Re-read the
+   * scope after each pass and interrupt what is still running and not yet
+   * recorded, so the tick returns only once every run it could interrupt has
+   * left `running` and is recorded on the window. Bounded: whatever still
+   * resists is left to the next tick.
+   */
+  async function interruptUntilSettled(window: MaintenanceWindow, runIds: string[]) {
+    if (!deps.heartbeat.interruptRunForMaintenance) return;
+    const recorded = new Set(window.interruptedRunIds);
+    let pending = runIds.filter((id) => !recorded.has(id));
+    for (let pass = 0; pass < INTERRUPT_PASSES_PER_TICK && pending.length > 0; pass += 1) {
+      for (const runId of await interruptRuns(window, pending)) recorded.add(runId);
+      const stillRunning = await runIdsInScope(window, ["running"]);
+      pending = stillRunning.filter((id) => !recorded.has(id));
+    }
+  }
+
+  /** Interrupt each run once; returns the ids recorded on the window. */
+  async function interruptRuns(window: MaintenanceWindow, runIds: string[]): Promise<string[]> {
     const interrupt = deps.heartbeat.interruptRunForMaintenance;
-    if (!interrupt) return;
+    if (!interrupt) return [];
+    const recorded: string[] = [];
     for (const runId of runIds) {
       if (window.interruptedRunIds.includes(runId)) continue;
       try {
@@ -290,6 +313,7 @@ export function maintenanceService(
             result: null,
           };
         });
+        recorded.push(runId);
         await audit(window, "run_interrupted", SYSTEM_ACTOR, { runId });
         if (!retryScheduled) await audit(window, "retry_not_scheduled", SYSTEM_ACTOR, { runId });
       } catch (err) {
@@ -297,6 +321,7 @@ export function maintenanceService(
         await audit(window, "interrupt_failed", SYSTEM_ACTOR, { runId, error: String(err) });
       }
     }
+    return recorded;
   }
 
   let tickInFlight: Promise<void> | null = null;

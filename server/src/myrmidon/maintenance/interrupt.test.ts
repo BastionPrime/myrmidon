@@ -192,18 +192,27 @@ describeEmbeddedPostgres("maintenance interrupt_and_retry", () => {
       30_000,
     );
 
-    const svc = maintenanceService(db, { heartbeat: maintenanceHeartbeatPort(heartbeatService(db)) });
-    // The grace is compressed for the test: the "drain, then interrupt"
-    // semantics and the resume after exit are what the replay proves.
+    // The window reads time from an injected clock, so the grace boundary is
+    // crossed by advancing the clock, not by sleeping against the wall clock
+    // (how long enter, the ticks and the database take no longer decides which
+    // side of the deadline a tick lands on).
+    const graceSec = 300;
+    let clock = Date.now();
+    const svc = maintenanceService(db, {
+      heartbeat: maintenanceHeartbeatPort(heartbeatService(db)),
+      now: () => new Date(clock),
+    });
     await svc.enter(
-      { scope: { type: "instance" }, reason: "deploy", drainTimeoutSec: 3, onTimeout: "interrupt_and_retry" },
+      { scope: { type: "instance" }, reason: "deploy", drainTimeoutSec: graceSec, onTimeout: "interrupt_and_retry" },
       ADMIN,
     );
     await svc.tick();
     // Inside the grace the window is still draining; nothing is interrupted yet.
+    clock += graceSec * 1000 - 1;
+    await svc.tick();
     expect((await svc.status()).instance).toMatchObject({ state: "entering", runningRuns: 5, interruptedRuns: 0 });
 
-    await new Promise((resolve) => setTimeout(resolve, 3_300));
+    clock += 1;
     await svc.tick();
     // The grace is over: every run is interrupted and leaves `running`.
     expect((await svc.status()).instance).toMatchObject({ interruptedRuns: 5, runningRuns: 0 });
