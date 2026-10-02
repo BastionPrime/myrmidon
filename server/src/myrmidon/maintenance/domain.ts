@@ -54,6 +54,19 @@ export interface MaintenanceDocument {
 
 export const MAINTENANCE_HISTORY_LIMIT = 20;
 
+/**
+ * myrmidon(CHAT-FIRST, OPE-3638): an agent-scoped maintenance window whose
+ * reason starts with this marker was opened by the bot-container reconciler
+ * to apply a profile update. The owner's external-chat turn for that agent
+ * outranks the update: a wake provenance check (chat context source and a
+ * user actor) may pass admission through such a window while it is still
+ * `entering` (draining), so the chat run starts at once; the reconciler's
+ * drain wait then never reaches zero, `withAgentPaused` exits the window in
+ * its finally, and the profile update is retried on the next sweep. Deploy
+ * and operator windows (any other reason) still block everything.
+ */
+export const BOT_PROFILE_WINDOW_REASON_PREFIX = "bot container ";
+
 export function emptyMaintenanceDocument(): MaintenanceDocument {
   return { version: 1, windows: [], history: [] };
 }

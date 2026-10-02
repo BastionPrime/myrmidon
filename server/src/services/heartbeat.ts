@@ -631,7 +631,12 @@ import {
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { serverVersion } from "../version.js";
 // myrmidon(R3): maintenance mode admission gate
-import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/maintenance/gate.js";
+import {
+  isAgentUnderMaintenance,
+  isChatWakeExemptFromBotProfileWindow,
+  isRunUnderMaintenance,
+  maintenanceWindowsForAgent,
+} from "../myrmidon/maintenance/gate.js";
 // myrmidon(D2): uuid-typed json comparisons for the board DB hot path. See
 // docs/myrmidon/DIVERGENCE.md.
 import { jsonTextUuid } from "../myrmidon/db-hot-path/json-uuid.js";
@@ -19384,7 +19389,30 @@ export function heartbeatService(
 
   async function startNextQueuedRunForAgent(agentId: string) {
     if ((await getSchedulingSuppression()).suppressed) return [];
-    if (await isAgentUnderMaintenance(db, agentId)) return []; // myrmidon(R3): queued runs wait for maintenance exit
+    // myrmidon(R3): queued runs wait for maintenance exit — except the
+    // CHAT-FIRST exemption below.
+    const maintenanceWindows = await maintenanceWindowsForAgent(db, agentId);
+    if (maintenanceWindows.length > 0) {
+      // myrmidon(CHAT-FIRST, OPE-3638): the bot's owner must never wait in
+      // chat behind the bot-container reconciler's profile-update window.
+      // Read the queued runs first: a user-authored external-chat wake is
+      // admitted through a single agent-scoped bot-profile window that is
+      // still `entering` (drain in progress, container untouched). The
+      // reconciler's drain wait then never reaches zero, its finally exits
+      // the window, and the profile update retries on the next sweep.
+      const queuedPeek = await db
+        .select({ contextSnapshot: heartbeatRuns.contextSnapshot, requestedByActorType: agentWakeupRequests.requestedByActorType })
+        .from(heartbeatRuns)
+        .leftJoin(agentWakeupRequests, eq(agentWakeupRequests.id, heartbeatRuns.wakeupRequestId))
+        .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.status, "queued")));
+      const chatExempt = queuedPeek.some((row) =>
+        isChatWakeExemptFromBotProfileWindow(maintenanceWindows, {
+          contextSource: readNonEmptyString(parseObject(row.contextSnapshot).source) ?? null,
+          requestedByActorType: row.requestedByActorType ?? null,
+        }),
+      );
+      if (!chatExempt) return [];
+    }
     const cutoff = await getWorktreeExecutionCutoff();
 
     return withAgentStartLock(agentId, async () => {
@@ -19635,8 +19663,12 @@ export function heartbeatService(
   ) {
     const attemptStartedAtMs = Date.now();
     let attestedQuestionResponseAtMs: number | null = null;
-    // myrmidon(R3): a maintenance window that opened after the claim releases the run like a task drain
-    if ((await getSchedulingSuppression()).suppressed || (await isRunUnderMaintenance(db, runId))) {
+    // myrmidon(R3): a maintenance window that opened after the claim releases the run like a task drain.
+    // myrmidon(CHAT-FIRST, OPE-3638): except the owner's chat turn admitted
+    // through a bot-profile `entering` window in startNextQueuedRunForAgent —
+    // releasing it here would put the owner back into the queue the exemption
+    // just let them out of.
+    if ((await getSchedulingSuppression()).suppressed) {
       try {
         await releaseRunClaimedJustBeforeSuppression(runId);
       } catch (err) {
@@ -19646,6 +19678,36 @@ export function heartbeatService(
         );
       }
       return;
+    } else if (await isRunUnderMaintenance(db, runId)) {
+      const runPeek = await db
+        .select({
+          contextSnapshot: heartbeatRuns.contextSnapshot,
+          agentId: heartbeatRuns.agentId,
+          requestedByActorType: agentWakeupRequests.requestedByActorType,
+        })
+        .from(heartbeatRuns)
+        .leftJoin(agentWakeupRequests, eq(agentWakeupRequests.id, heartbeatRuns.wakeupRequestId))
+        .where(eq(heartbeatRuns.id, runId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      const windows = runPeek ? await maintenanceWindowsForAgent(db, runPeek.agentId) : [];
+      const chatExempt = runPeek
+        ? isChatWakeExemptFromBotProfileWindow(windows, {
+            contextSource: readNonEmptyString(parseObject(runPeek.contextSnapshot).source) ?? null,
+            requestedByActorType: runPeek.requestedByActorType ?? null,
+          })
+        : false;
+      if (!chatExempt) {
+        try {
+          await releaseRunClaimedJustBeforeSuppression(runId);
+        } catch (err) {
+          logger.error(
+            { err, runId },
+            "failed to release run claimed just before task-drain suppression; the run row stays running, and the orphan reaper finalizes it and releases the issue lock on its next cycle",
+          );
+        }
+        return;
+      }
     }
 
     let legacyAdapterEntered = false;

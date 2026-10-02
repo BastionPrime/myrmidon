@@ -3,8 +3,10 @@
 
 import { eq, inArray } from "drizzle-orm";
 import { agents, heartbeatRuns, issues, type Db } from "@paperclipai/db";
+import { CHAT_PROVIDERS } from "@paperclipai/shared";
 import {
   blockingWindows,
+  BOT_PROFILE_WINDOW_REASON_PREFIX,
   departmentMembers,
   reportsToChain,
   windowCoversAgent,
@@ -117,6 +119,39 @@ export async function maintenanceWindowsForAgent(db: Runner, agentId: string): P
 export async function isAgentUnderMaintenance(db: Runner, agentId: string): Promise<boolean> {
   return (await maintenanceWindowsForAgent(db, agentId)).length > 0;
 }
+
+/**
+ * myrmidon(CHAT-FIRST, OPE-3638): the bot-container reconciler's per-agent
+ * profile-update window must not make the bot's owner wait in chat. Called
+ * from the queued-run start path with the run's own provenance: when the
+ * only window covering the agent is a bot-profile window still in `entering`
+ * (the reconciler is only draining, the container is untouched), a
+ * user-authored external-chat wake may start anyway. The reconciler notices
+ * (its drain never reaches zero), exits the window, and retries the profile
+ * update on the next sweep. Everything else — deploy, operator, `on`-state,
+ * non-chat, system-authored wakes — is blocked as before, so the container
+ * is never restarted underneath an already-admitted run.
+ */
+export function isChatWakeExemptFromBotProfileWindow(
+  windows: MaintenanceWindow[],
+  provenance: { contextSource: string | null; requestedByActorType: string | null },
+): boolean {
+  if (windows.length !== 1) return false;
+  const [window] = windows;
+  if (window.scope.type !== "agent") return false;
+  if (window.state !== "entering") return false;
+  if (!window.reason.startsWith(BOT_PROFILE_WINDOW_REASON_PREFIX)) return false;
+  // Only a human's own message in an external chat conversation is exempt;
+  // a system/automation wake still waits out the drain.
+  if (provenance.requestedByActorType !== "user") return false;
+  return CHAT_WAKE_SOURCES.has(provenance.contextSource ?? "");
+}
+
+/** Context sources of a user's external-chat turn (`chat:<provider>` and its recovery replay). */
+const CHAT_WAKE_SOURCES: ReadonlySet<string> = new Set([
+  ...CHAT_PROVIDERS.map((provider) => `chat:${provider}`),
+  ...CHAT_PROVIDERS.map((provider) => `chat:${provider}:recovery`),
+]);
 
 /** Admission check for a run id (executeRun re-check). */
 export async function isRunUnderMaintenance(db: Runner, runId: string): Promise<boolean> {

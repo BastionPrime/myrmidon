@@ -329,6 +329,51 @@ describe("reconcileBot", () => {
       expect(outcome.kind).toBe("error");
       expect(maintenance.exitCalls).toHaveLength(1);
     });
+
+    // myrmidon(CHAT-FIRST, OPE-3638): the owner's chat turn, admitted through
+    // the entering bot-profile window by the heartbeat admission gate, shows
+    // up here as a rising running-count mid-drain. The reconciler must defer
+    // the update and exit the window at once, not interrupt their turn at the
+    // drain deadline.
+    it("defers the update when the owner starts a chat turn mid-drain (running count rises)", async () => {
+      const driver = fakeDriver({ botKey: "agent-a", state: "running", restartHash: "restart-old", filesHash: "files-1" });
+      // 2 running at enter; drops to 1 (background work finishing); then the
+      // owner's chat turn starts and the count rises to 2 again.
+      const maintenance = fakeMaintenance([2, 2, 1, 1, 2]);
+      const activity = fakeActivity();
+      const outcome = await run(driver, maintenance, {
+        compile: async () => profile({ restartHash: "restart-new" }),
+        activity,
+      });
+      expect(outcome).toEqual({
+        kind: "deferred",
+        reason: "the bot owner is in a chat conversation; the profile update is deferred to a later pass",
+      });
+      // Nothing was applied and the window was exited immediately.
+      expect(driver.calls).toEqual(["status", "templateDrift"]);
+      expect(maintenance.exitCalls).toHaveLength(1);
+      expect(activity.records.some((r) => r.level === "error")).toBe(false);
+    });
+
+    it("a flat non-zero running count still waits out the drain (no false chat detection)", async () => {
+      let fakeNow = 0;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
+      try {
+        const driver = fakeDriver({ botKey: "agent-a", state: "running", restartHash: "restart-old", filesHash: "files-1" });
+        const maintenance = fakeMaintenance([3]); // constant 3, never rises
+        const outcome = await run(driver, maintenance, {
+          compile: async () => profile({ restartHash: "restart-new" }),
+          maintenanceDrainTimeoutSec: 5,
+          sleep: async (ms) => {
+            fakeNow += ms;
+          },
+        });
+        expect(outcome.kind).toBe("error");
+        expect(maintenance.exitCalls).toHaveLength(1);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
   });
 
   describe("unhealthy (Docker's own health check gave up)", () => {
