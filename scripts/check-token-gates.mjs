@@ -77,7 +77,10 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
 const UI_SRC = resolve(REPO_ROOT, "ui/src");
-const SCAN_DIRS = ["components", "pages"];
+// myrmidon(UI2-SHELL): ui2 is our clean-room tree and must obey the same
+// token-only rule as vendor components — extend the scan set so the gate
+// covers it (lead annex: extend the scope to ui/src/ui2).
+const SCAN_DIRS = ["components", "pages", "ui2"];
 const CSS_PATH = resolve(UI_SRC, "index.css");
 
 // ── Allowlist parsing ────────────────────────────────────────────────────

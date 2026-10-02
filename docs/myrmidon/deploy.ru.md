@@ -541,3 +541,15 @@ Digest доска проверяет сама — реестр и GitHub. Есл
   (`deploy.sh` без этого всё равно не выкатит: проверка образа обязательна);
 - на стенде нет новых ошибок в журнале сервера за время проверки;
 - откат на стенде прошёл и сервер после него здоров.
+
+**GitHub Release создаёт CI, а не человек.** Пуш тега `myr-vX.Y.Z` запускает
+workflow **Myrmidon release publish**
+([myrmidon-release.yml](https://github.com/itkadr-git/myrmidon/blob/main/.github/workflows/myrmidon-release.yml)):
+он дожидается успешного прогона `Myrmidon CI` и workflow образов этого тега,
+затем создаёт Release (Latest) с секцией `## X.Y.Z` из
+[CHANGELOG.md](CHANGELOG.md) и дайджестами образов компонентов, и помечает
+предыдущий выпуск «(superseded)». При упавшем CI Release не создаётся.
+Повторный запуск (например, после починки упавшего гейта или чтобы обновить
+текст): Actions → Myrmidon release publish → Run workflow → имя тега в поле
+`tag`; публикация идемпотентна — существующий Release обновляется, а не
+дублируется.
