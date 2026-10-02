@@ -225,6 +225,8 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       ...(parsed.data.workspaceHygiene ? { workspaceHygiene: parsed.data.workspaceHygiene } : {}),
       // myrmidon(C0): the stored run admission limits survive every general write
       ...(parsed.data.runLimits ? { runLimits: parsed.data.runLimits } : {}),
+      // myrmidon(EXTCASE-B): the stored browser-bridge allowlist survives every general write
+      ...(parsed.data.browserBridge ? { browserBridge: parsed.data.browserBridge } : {}),
     };
   }
   return {

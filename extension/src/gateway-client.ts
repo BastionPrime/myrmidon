@@ -19,6 +19,7 @@
 import { parseBridgeReadyResult, parseIncoming, jsonRpcRequest, jsonRpcSuccess, jsonRpcError } from "./jsonrpc";
 import {
   BROWSER_BRIDGE_ERROR_CODES,
+  BRIDGE_CANCEL_METHOD,
   BRIDGE_HELLO_METHOD,
   BRIDGE_PROTOCOL_VERSION,
   type JsonRpcResponseFrame,
@@ -50,9 +51,11 @@ export interface BridgeConnectionOptions {
   wsPath: string;
   sockets: WebSocketFactory;
   /** Handles an incoming browser.* request; returns the response payload. */
-  dispatchAction: (method: string, params: unknown) => Promise<ActionOutcome>;
+  dispatchAction: (method: string, params: unknown, requestId: string | number) => Promise<ActionOutcome>;
   onPhaseChange?: (phase: ConnectionPhase) => void;
   onAllowlistUpdate?: (domains: string[]) => void;
+  /** The gateway cancelled a request (its confirmation budget expired). */
+  onCancel?: (requestId: string | number) => void;
   /** Fail the handshake after this many ms without `bridge.ready`. */
   readyTimeoutMs: number;
   timers: TimerPort;
@@ -168,7 +171,25 @@ export class BridgeConnection {
       this.onGatewayResponse(incoming.response);
       return;
     }
+    if (incoming.kind === "notification") {
+      this.onGatewayNotification(incoming.method, incoming.params);
+      return;
+    }
     void this.onGatewayRequest(incoming.request.id, incoming.request.method, incoming.request.params);
+  }
+
+  /**
+   * Notifications carry no answer. The bridge sends exactly one kind: the
+   * gateway gave up on a request id (its budget expired) and the extension must
+   * drop that pending step — a person who never confirmed must not have a
+   * signing step fire later, after the bot stopped waiting.
+   */
+  private onGatewayNotification(method: string, params: unknown): void {
+    if (method !== BRIDGE_CANCEL_METHOD) return;
+    const id = (params as { id?: unknown } | null)?.id;
+    if (typeof id === "string" || typeof id === "number") {
+      this.options.onCancel?.(id);
+    }
   }
 
   private onGatewayResponse(response: JsonRpcResponseFrame): void {
@@ -211,7 +232,7 @@ export class BridgeConnection {
   }
 
   private async onGatewayRequest(id: string | number, method: string, params: unknown): Promise<void> {
-    const outcome = await this.options.dispatchAction(method, params);
+    const outcome = await this.options.dispatchAction(method, params, id);
     const frame = outcome.ok
       ? jsonRpcSuccess(id, outcome.result)
       : jsonRpcError(id, outcome.code, outcome.message, outcome.data);

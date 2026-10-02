@@ -31,7 +31,7 @@ const tsc = spawnSync(
 );
 if (tsc.status !== 0) process.exit(tsc.status ?? 1);
 
-for (const staticDir of ["popup", "options"]) {
+for (const staticDir of ["popup", "options", "confirm"]) {
   fs.cpSync(path.join(here, staticDir), path.join(outDir, staticDir), { recursive: true });
 }
 fs.copyFileSync(path.join(here, "manifest.json"), path.join(outDir, "manifest.json"));

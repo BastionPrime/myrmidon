@@ -12,6 +12,8 @@ import { shapeWithoutDefaults } from "./partial.js";
 import { workspaceHygieneLimitsSchema } from "../myrmidon-workspace-hygiene.js";
 // myrmidon(C0): run admission limits that can be changed while the server runs
 import { runLimitsSchema } from "../myrmidon-runtime-limits.js";
+// myrmidon(EXTCASE-B): the browser-bridge allowlist stored in the same general settings row
+import { browserBridgeSettingsSchema } from "../myrmidon-browser-bridge.js";
 
 function presetSchema<T extends readonly number[]>(presets: T, label: string) {
   return z.number().refine(
@@ -44,6 +46,9 @@ export const instanceGeneralSettingsSchema = z.object({
   // page and /api/myrmidon/runtime-limits; absent means "use the environment
   // variable, then the default" (see packages/shared/src/myrmidon-runtime-limits.ts).
   runLimits: runLimitsSchema.optional(),
+  // myrmidon(EXTCASE-B): browser-bridge allowlist changed from the bridge panel;
+  // absent means "no domain is allowed" (deny by default).
+  browserBridge: browserBridgeSettingsSchema.optional(),
 }).strict();
 
 export const patchInstanceGeneralSettingsSchema = z

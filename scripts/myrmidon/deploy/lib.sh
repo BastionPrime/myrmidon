@@ -941,3 +941,72 @@ tracing_check_image_pins() {
   fi
   return 0
 }
+
+# HOST-TARGETING (the 02.10 two-host follow-up): shared component-host helpers.
+# rollout-component.sh and rollback-component.sh both source lib.sh and both
+# must act on the SAME host: a rollback that ignores MYR_<COMPONENT>_HOST would
+# recreate the component on the deploy host — the exact 1.4.0 fleetd incident.
+# The caller sets COMPONENT_REMOTE (empty = local) and COMPONENT_SERVICE first.
+component_host_ssh_opts=(-o BatchMode=yes -o ConnectTimeout=10)
+component_host_docker() {
+  if [[ -n "$COMPONENT_REMOTE" ]]; then
+    # shellcheck disable=SC2029
+    ssh "${component_host_ssh_opts[@]}" "$COMPONENT_REMOTE" docker "$@"
+  else
+    docker "$@"
+  fi
+}
+component_host_compose() {
+  local args=(compose --project-directory "$COMPOSE_DIR")
+  local f
+  IFS=':' read -r -a _ch_files <<<"$COMPOSE_FILES"
+  for f in "${_ch_files[@]}"; do args+=(-f "$COMPOSE_DIR/$f"); done
+  args+=(-f "$COMPONENT_OVERRIDE_PATH")
+  component_host_docker "${args[@]}" "$@"
+}
+component_host_cat_override() {
+  if [[ -n "$COMPONENT_REMOTE" ]]; then
+    # shellcheck disable=SC2029
+    ssh "${component_host_ssh_opts[@]}" "$COMPONENT_REMOTE" cat "$COMPONENT_OVERRIDE_PATH" 2>/dev/null || true
+  else
+    cat "$COMPONENT_OVERRIDE_PATH" 2>/dev/null || true
+  fi
+}
+# True when $COMPONENT_SERVICE is defined by the compose files of the target
+# host (docker compose config --services). The fail-closed pre-check: a
+# component with no trace on the target host is a misconfiguration (the 1.4.0
+# fleetd incident), not something to create from nothing.
+component_host_service_exists() {
+  component_host_compose config --services 2>/dev/null | grep -qx "$COMPONENT_SERVICE"
+}
+component_host_write_override() {
+  local target_ref="$1"
+  if [[ -n "$COMPONENT_REMOTE" ]]; then
+    # shellcheck disable=SC2029
+    ssh "${component_host_ssh_opts[@]}" "$COMPONENT_REMOTE" \
+      "mkdir -p '$COMPOSE_DIR' && printf '%s\n' '# Managed by scripts/myrmidon/deploy. Only the image line changes.' 'services:' '  $COMPONENT_SERVICE:' '    image: $target_ref' > '$COMPONENT_OVERRIDE_PATH'"
+  else
+    {
+      echo "# Managed by scripts/myrmidon/deploy. Only the image line changes."
+      echo "services:"
+      echo "  $COMPONENT_SERVICE:"
+      echo "    image: $target_ref"
+    } >"$COMPONENT_OVERRIDE_PATH"
+  fi
+}
+# Parses MYR_<COMPONENT>_HOST into COMPONENT_REMOTE/COMPONENT_SKIP, die() on a
+# malformed value. Usage: component_host_parse <component> <host-value>.
+component_host_parse() {
+  local component="$1" value="${2:-local}"
+  COMPONENT_REMOTE="" COMPONENT_SKIP=0
+  case "$value" in
+    local) ;;
+    skip) COMPONENT_SKIP=1 ;;
+    remote:*)
+      COMPONENT_REMOTE="${value#remote:}"
+      [[ "$COMPONENT_REMOTE" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]] \
+        || die "MYR_${component^^}_HOST must be local, skip or remote:<user>@<host>, got '$value'"
+      ;;
+    *) die "MYR_${component^^}_HOST must be local, skip or remote:<user>@<host>, got '$value'" ;;
+  esac
+}
