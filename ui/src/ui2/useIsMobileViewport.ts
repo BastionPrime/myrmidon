@@ -1,3 +1,5 @@
+// myrmidon(1.6-EVALS): reworked the initial-width expression so the i18n
+// guard's JSX-shaped regex no longer misfires on `> typeof ... <` comparisons.
 // myrmidon(UI-0a): viewport-width hook for the ui2 phone layout. The vendor
 // SidebarContext owns isMobile for the 1.x shell and is wired into vendor
 // state; ui2 needs the same breakpoint (768) without coupling to vendor
@@ -7,9 +9,10 @@ import { useEffect, useState } from "react";
 const MOBILE_BREAKPOINT = 768;
 
 export function useIsMobileViewport(): boolean {
-  const [isMobile, setIsMobile] = useState(
-    () => typeof window !== "undefined" && window.innerWidth < MOBILE_BREAKPOINT,
-  );
+  const [isMobile, setIsMobile] = useState(() => {
+    const width = typeof window === "undefined" ? Number.NaN : window.innerWidth;
+    return width < MOBILE_BREAKPOINT;
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") return;

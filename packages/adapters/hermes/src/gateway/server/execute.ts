@@ -102,6 +102,18 @@ const HERMES_SESSION_KEY_HEADER_PATTERN = /(X-Hermes-Session-Key\s*[:=]\s*)([^\s
 const PAPERCLIP_SESSION_KEY_PATTERN =
   /\bpaperclip:(?:company:[A-Za-z0-9-]+:agent:[A-Za-z0-9-]+(?::(?:issue|run):[A-Za-z0-9-]+)?|run:[A-Za-z0-9-]+)\b/gi;
 
+// myrmidon(CONTAINER-GITHUB-WRITE): env names heartbeat.ts writes into
+// runtimeConfig.env (services/heartbeat.ts ~21995-22015) when the run's
+// GitHub credentials are board-managed. The gateway adapter is the only
+// transport that can carry them to a hermes gateway inside a bot container:
+// there is no run process to inherit them (the /v1/runs request body is the
+// whole handoff), so buildRunBody forwards this pair as the request's
+// `github_broker` field and the gateway patch binds it to that run's
+// contextvars — never to the process env, which concurrent runs share.
+const GITHUB_BROKER_URL_ENV_KEY = "PAPERCLIP_GITHUB_BROKER_URL";
+const GITHUB_BROKER_TOKEN_ENV_KEY = "PAPERCLIP_GITHUB_BROKER_TOKEN";
+
+
 const TERMINAL_STATUSES = new Set([
   "completed",
   "failed",
@@ -380,6 +392,24 @@ function buildModelOptions(config: Record<string, unknown>): Record<string, unkn
   return reasoningEffort ? { reasoning: { effort: reasoningEffort } } : undefined;
 }
 
+// myrmidon(CONTAINER-GITHUB-WRITE): the run-bound GitHub broker capability
+// (broker URL + `github_credentials` runtime-tools token) heartbeat wrote into
+// ctx.config.env. null when the run is in host-GitHub mode or the board has no
+// managed GitHub identity — the request then simply carries no `github_broker`
+// field, and the gateway runs without managed GitHub credentials, exactly as
+// before this change. Values are validated as strings; the URL is passed
+// through unchanged because it is board-configured (the same origin the bot
+// container already reaches for PAPERCLIP_API_URL), not agent-supplied.
+function buildGitHubBrokerField(
+  config: Record<string, unknown>,
+): { broker_url: string; capability: string } | undefined {
+  const env = parseObject(config.env);
+  const brokerUrl = asString(env[GITHUB_BROKER_URL_ENV_KEY], "").trim();
+  const capability = asString(env[GITHUB_BROKER_TOKEN_ENV_KEY], "").trim();
+  if (!brokerUrl || !capability) return undefined;
+  return { broker_url: brokerUrl, capability };
+}
+
 function buildRunBody(
   ctx: AdapterExecutionContext,
   sessionKey: string | null,
@@ -409,6 +439,14 @@ function buildRunBody(
   const model = nonEmpty(ctx.config.model);
   const provider = nonEmpty(ctx.config.provider);
   const modelOptions = buildModelOptions(ctx.config);
+  // myrmidon(CONTAINER-GITHUB-WRITE): the run-bound GitHub broker capability.
+  // Assigned after the payloadTemplate spread so a card cannot forge a
+  // capability: only the env the server itself wrote into runtimeConfig.env
+  // is forwarded, and the key is set unconditionally — `undefined` deletes a
+  // payloadTemplate-forged value and is dropped by JSON serialization — so
+  // an absent pair leaves the body without the field entirely (see
+  // buildGitHubBrokerField).
+  const githubBroker = buildGitHubBrokerField(ctx.config);
   return {
     ...payloadTemplate,
     input,
@@ -417,6 +455,7 @@ function buildRunBody(
     ...(model ? { model } : {}),
     ...(provider ? { provider } : {}),
     ...(modelOptions ? { model_options: modelOptions } : {}),
+    github_broker: githubBroker,
   };
 }
 
@@ -1453,6 +1492,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     sessionKey,
     runHeaders.Authorization,
     runHeaders["X-Hermes-Session-Key"],
+    // myrmidon(CONTAINER-GITHUB-WRITE): the GitHub broker capability rides the
+    // request body; any future body echo (error detail, debug log) must not
+    // print it. The body itself is only ever serialized into the POST, never
+    // logged (onMeta carries command/urls only), so this is belt-and-braces.
+    // Read from the same env buildRunBody forwards (parseObject accepts both
+    // a record and a JSON string), so the two stay in sync.
+    asString(parseObject(ctx.config.env)[GITHUB_BROKER_TOKEN_ENV_KEY], ""),
   ]);
 
   // myrmidon(G4): the instructions bundle Paperclip materializes for managed

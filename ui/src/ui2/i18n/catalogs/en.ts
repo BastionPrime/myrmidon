@@ -157,6 +157,196 @@ export const en = {
     monthsAgo: "{{count}}mo ago",
     updated: "Updated {{time}}",
   },
+  ui2: {
+      agent: {
+        overview: {
+          budget: {
+            none: "No budget",
+            title: "Budget",
+            utilization: "{{spent}} of {{budget}} used",
+          },
+          lastRun: "Last run",
+          missing: "Agent not found",
+          noRuns: "No runs yet",
+          runCost: "Cost",
+          runResult: "Result",
+          runTokens: "Tokens",
+          runs: {
+            empty: "No runs in this period",
+            title: "Runs",
+          },
+          spend: {
+            month: "Spend this month",
+          },
+          status: "Status",
+          title: "Agent overview",
+        },
+      },
+      common: {
+        emptyDoneSr: "No completed items",
+        emptyFilteredSr: "No items match the filters",
+        error: "Something went wrong",
+        retry: "Retry",
+        unknown: "Unknown",
+      },
+      costs: {
+        agents: {
+          agent: "Agent",
+          cost: "Cost",
+          empty: "No agent spend in this period",
+          runs: "Runs",
+          title: "Spend by agent",
+          tokens: "Tokens",
+          unnamed: "Unnamed agent",
+        },
+        incidents: {
+          keepPaused: "Keep paused",
+          raiseAndResume: "Raise and resume",
+          title: "Cost incidents",
+        },
+        policies: {
+          amount: "Amount",
+          empty: "No cost policies",
+          observed: "Observed: {{amount}}",
+          scope: "Scope",
+          scopeType: {
+            agent: "Agent",
+            company: "Company",
+            project: "Project",
+          },
+          title: "Cost policies",
+          window: {
+            calendar_month_utc: "Calendar month (UTC)",
+            lifetime: "Lifetime",
+          },
+        },
+        tile: {
+          budget: "Budget",
+          incidents: "Incidents",
+          pausedAgents: "Paused agents",
+          spent: "Spent",
+          utilization: "Utilization",
+        },
+        title: "Costs",
+      },
+      decisions: {
+        badge: "{{count}} decisions waiting",
+        card: {
+          age: "{{age}} ago",
+          decide: "Decide",
+          dismiss: "Dismiss",
+          expired: "Expired",
+          expires: "Expires {{time}}",
+          optionExecutes: "Executes on accept: {{action}}",
+          options: "Options",
+          preparedBy: "Prepared by {{who}}",
+          summary: "Summary",
+        },
+        empty: {
+          body: "Nothing waits for a decision right now.",
+          filtered: {
+            body: "No decisions match the current filters.",
+            title: "No matches",
+          },
+          title: "No decisions",
+        },
+        filter: {
+          all: "All",
+          external: "External",
+          money: "Money",
+          policies: "Policies",
+        },
+        subtitle: "Awaiting your choice",
+        title: "Decisions",
+      },
+      settings: {
+        language: {
+          note: "Agent output and identifiers are not translated.",
+          preview: {
+            decisionBody: "A decision card preview: options, expiry and the actor who prepared it.",
+            decisionTitle: "Decision card",
+            title: "Preview",
+          },
+          subtitle: "Interface language",
+          title: "Language and formats",
+        },
+        runs: {
+          off: "Runs are off",
+          reset: "Reset",
+          save: "Save",
+          saveError: "Could not save. The value stays applied until reload.",
+          source: {
+            default: "Default",
+            env: "Environment",
+            settings: "Settings",
+          },
+          subtitle: "How the dispatch of runs is configured",
+          title: "Runs",
+        },
+        system: {
+          changelog: {
+            actor: "Actor",
+            empty: "No changes recorded",
+            title: "Changelog",
+          },
+          channels: {
+            title: "Channels",
+            web: "Web",
+          },
+          denied: "Access denied",
+          deniedHint: "You do not have permission to view this screen.",
+          keys: {
+            created: "Created",
+            empty: "No keys",
+            expires: "Expires",
+            lastUsed: "Last used",
+            never: "Never",
+            revoked: "Revoked",
+            title: "Keys",
+          },
+          members: {
+            empty: "No members",
+            role: "Role",
+            status: "Status",
+            title: "Members",
+          },
+          subtitle: "Instance-wide settings",
+          title: "System",
+        },
+        navLabel: "Settings sections",
+      },
+      owner: "Owner",
+      ownerChannel: "Web",
+      nests: {
+        all: "All nests",
+      },
+      phone: {
+        status: "Owner · Web",
+      },
+      chip: {
+        colony: "{{active}} of {{total}}",
+        fleet: "Fleet",
+        fleetAttention: "Fleet: 1 attention",
+        forecast: "{{spend}} of {{budget}}",
+      },
+      commander: {
+        aria: "Tell the Commander (Ctrl K)",
+        placeholder: "Tell the Commander…",
+        stubNote: "Stub: the message is not sent yet. It opens the existing chat; the Commander conversation arrives with the 1.6 chat update.",
+        openChat: "Open chat",
+      },
+      nav: {
+        railLabel: "Main navigation",
+        badge: {
+          attention: "{{count}} items need attention",
+        },
+      },
+      screens: {
+        placeholderTitle: "This screen arrives with 2.0",
+        placeholderBody: "The 2.0 layout for this area is not wired yet; the working screen below keeps the flow.",
+        placeholderLegacyLink: "Back to the current layout",
+      },
+  },
 };
 
 export type Ui2Catalog = {
@@ -306,4 +496,194 @@ export type Ui2Catalog = {
     monthsAgo: string;
     updated: string;
   };
+  ui2: {
+      agent: {
+        overview: {
+          budget: {
+            none: string;
+            title: string;
+            utilization: string;
+          },
+          lastRun: string;
+          missing: string;
+          noRuns: string;
+          runCost: string;
+          runResult: string;
+          runTokens: string;
+          runs: {
+            empty: string;
+            title: string;
+          },
+          spend: {
+            month: string;
+          },
+          status: string;
+          title: string;
+        },
+      },
+      common: {
+        emptyDoneSr: string;
+        emptyFilteredSr: string;
+        error: string;
+        retry: string;
+        unknown: string;
+      },
+      costs: {
+        agents: {
+          agent: string;
+          cost: string;
+          empty: string;
+          runs: string;
+          title: string;
+          tokens: string;
+          unnamed: string;
+        },
+        incidents: {
+          keepPaused: string;
+          raiseAndResume: string;
+          title: string;
+        },
+        policies: {
+          amount: string;
+          empty: string;
+          observed: string;
+          scope: string;
+          scopeType: {
+            agent: string;
+            company: string;
+            project: string;
+          },
+          title: string;
+          window: {
+            calendar_month_utc: string;
+            lifetime: string;
+          },
+        },
+        tile: {
+          budget: string;
+          incidents: string;
+          pausedAgents: string;
+          spent: string;
+          utilization: string;
+        },
+        title: string;
+      },
+      decisions: {
+        badge: string;
+        card: {
+          age: string;
+          decide: string;
+          dismiss: string;
+          expired: string;
+          expires: string;
+          optionExecutes: string;
+          options: string;
+          preparedBy: string;
+          summary: string;
+        },
+        empty: {
+          body: string;
+          filtered: {
+            body: string;
+            title: string;
+          },
+          title: string;
+        },
+        filter: {
+          all: string;
+          external: string;
+          money: string;
+          policies: string;
+        },
+        subtitle: string;
+        title: string;
+      },
+      settings: {
+        language: {
+          note: string;
+          preview: {
+            decisionBody: string;
+            decisionTitle: string;
+            title: string;
+          },
+          subtitle: string;
+          title: string;
+        },
+        runs: {
+          off: string;
+          reset: string;
+          save: string;
+          saveError: string;
+          source: {
+            default: string;
+            env: string;
+            settings: string;
+          },
+          subtitle: string;
+          title: string;
+        },
+        system: {
+          changelog: {
+            actor: string;
+            empty: string;
+            title: string;
+          },
+          channels: {
+            title: string;
+            web: string;
+          },
+          denied: string;
+          deniedHint: string;
+          keys: {
+            created: string;
+            empty: string;
+            expires: string;
+            lastUsed: string;
+            never: string;
+            revoked: string;
+            title: string;
+          },
+          members: {
+            empty: string;
+            role: string;
+            status: string;
+            title: string;
+          },
+          subtitle: string;
+          title: string;
+        },
+        navLabel: string;
+      },
+    owner: string;
+    ownerChannel: string;
+    nests: {
+      all: string;
+    },
+    phone: {
+      status: string;
+    },
+    chip: {
+      colony: string;
+      fleet: string;
+      fleetAttention: string;
+      forecast: string;
+    },
+    commander: {
+      aria: string;
+      placeholder: string;
+      stubNote: string;
+      openChat: string;
+    },
+    nav: {
+      railLabel: string;
+      badge: {
+        attention: string;
+      },
+    },
+    screens: {
+      placeholderTitle: string;
+      placeholderBody: string;
+      placeholderLegacyLink: string;
+    },
+  },
 };
