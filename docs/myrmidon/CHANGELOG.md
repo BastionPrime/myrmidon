@@ -8,6 +8,25 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
+## 1.6.0
+
+### CTO chat planner (CTO-CHAT B)
+
+- The board chat planner: one owner message in free text
+  (`POST /api/myrmidon/cto-chat/plan`, or the same planning step entered from
+  the owner's Telegram DM bridge) becomes a proposed epic with child tasks and
+  per-task acceptance criteria. The proposal is shown as the board's existing
+  `suggest_tasks` approval card on the standing conversation task, and
+  accepting the card is what creates the issues — nothing exists before
+  acceptance, no assignee is inferred, and a rejected or expired card creates
+  nothing. The planner is off unless `MYRMIDON_CTO_CHAT_BASE_URL` and
+  `MYRMIDON_CTO_CHAT_KEY_SECRET` are set; the gateway key is a company secret
+  read per call and never logged. The default model is the free
+  `dashscope-qwen-flash`; one proposal is capped at 8 child tasks (hard
+  ceiling 20) and one planning call is never retried. Operator guide:
+  [guides/cto-chat-planner.md](guides/cto-chat-planner.md). The portal chat
+  screen (part A) ships separately and calls the same route.
+
 ## 1.5.0
 
 ### Tracing health (TRACING-HEALTH)
