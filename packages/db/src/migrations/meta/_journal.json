@@ -2010,6 +2010,13 @@
       "when": 1790935759888,
       "tag": "0289_nice_shiva",
       "breakpoints": true
+    },
+    {
+      "idx": 290,
+      "version": "7",
+      "when": 1790946608989,
+      "tag": "0290_wandering_dagger",
+      "breakpoints": true
     }
   ]
 }

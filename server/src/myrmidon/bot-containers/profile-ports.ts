@@ -61,6 +61,10 @@ import {
 import type { HermesProfileSkillFile } from "./profile-compiler.js";
 import type { BotContainerActivitySink } from "./reconciler.js";
 import type { CompiledProfile } from "./types.js";
+// myrmidon(1.6-WIKI): approved wiki regulations reach a bot through its compiled profile.
+import { loadRegulationWorkspaceFiles } from "../wiki-cortex/delivery.js";
+import { createWikiRegulationService } from "../wiki-cortex/service.js";
+import { createDbRegulationStore } from "../wiki-cortex/store.js";
 
 export { BOT_AGENT_API_KEY_NAME };
 
@@ -179,6 +183,7 @@ function toAgentRecord(row: {
   id: string;
   companyId: string;
   name: string;
+  role?: string;
   adapterType: string;
   adapterConfig: unknown;
   runtimeConfig: unknown;
@@ -190,6 +195,8 @@ function toAgentRecord(row: {
     adapterType: row.adapterType,
     adapterConfig: asRecord(row.adapterConfig),
     runtimeConfig: asRecord(row.runtimeConfig),
+    // myrmidon(1.6-WIKI): the role picks which approved regulations reach this agent.
+    ...(row.role ? { role: row.role } : {}),
   };
 }
 
@@ -210,6 +217,8 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
   const skills = companySkillService(db);
   const instructions = agentInstructionsService();
   const instanceSettings = instanceSettingsService(db);
+  // myrmidon(1.6-WIKI): the wiki regulations of the company, delivered through the profile.
+  const wikiRegulations = createWikiRegulationService(createDbRegulationStore(db));
   const resolveCardEnv = createCardEnvResolver(
     {
       resolveEnvBindings: (companyId, bindings, context) => secrets.resolveEnvBindings(companyId, bindings, context),
@@ -437,6 +446,12 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
           return (await instructions.readFile(agent, relativePath)).content;
         },
       });
+    },
+
+    // myrmidon(1.6-WIKI): the approved regulations of the agent's role, as workspace files
+    // for the container profile. An empty wiki produces no file at all.
+    async loadRegulations(agent, context) {
+      return loadRegulationWorkspaceFiles(wikiRegulations, { companyId: agent.companyId, role: agent.role }, context);
     },
   };
 }

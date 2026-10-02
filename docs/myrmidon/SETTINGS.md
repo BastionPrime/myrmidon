@@ -460,6 +460,19 @@ and `legacyRejections` are additive parts of the JSON contract for the part D
 dedup key; fields without a source stay null and never block the computation.
 
 
+## 1.6 — WIKI-CORTEX: company regulations in the wiki
+
+Regulation pages of `server/src/myrmidon/wiki-cortex/` — draft → approved
+lifecycle, revisions, rollback, the role resolver, and the delivery of
+`REGULATIONS.md` into the compiled bot profile. See
+`docs/myrmidon/guides/wiki-regulations.md` for the API and the wiki-maintainer
+runbook. No new variables: the feature is always on and needs no configuration.
+Recorded here per the registry rule.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| — | WIKI-CORTEX | — (always on) | `PUT /api/myrmidon/companies/:id/wiki-regulations/:slug` saves a draft revision; `POST …/approve` (board only) makes the newest revision the delivered text; `POST …/rollback` (board only) restores an earlier revision as a new one; `GET …/approved/:role` is the resolver the bot profile compile reads and renders into the agent's workspace `REGULATIONS.md` | Not configurable: no deployment-specific values. The delivered file never shadows a `REGULATIONS.md` the agent's own bundle ships (a warning is recorded instead) |
+
 ## TASK-PR-SYNC — a task settles once its pull requests merge
 
 A task whose `work_product` of type `pull_request` merged used to stay busy until
