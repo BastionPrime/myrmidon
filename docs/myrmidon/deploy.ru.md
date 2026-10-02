@@ -214,18 +214,22 @@ scripts/myrmidon/deploy/deploy.sh --config /path/to/deploy.env --digest sha256:<
 6. Новая строка `image:` в override и `docker compose up -d --no-deps <сервис>`: пересоздаётся
    только сервис сервера.
 7. Проверка `/api/health` (`verify-health.sh`): `status` = `ok`, версия и коммит совпадают.
-7b. Страж трассировки LLM (`tracing-check.sh`, TRACING-HEALTH): шлюз обязан нести набор колбэков
-   только OTLP. Скрипт сравнивает намеренный список, который генерирует бандл (единый источник
-   истины, `tracing_intended_callbacks()` в `lib.sh`), с фактическими колбэками — объединением
-   `MYRMIDON_TRACING_CALLBACKS_COMMAND` (живой шлюз или его база) и списка `callbacks:` из
-   `MYRMIDON_TRACING_GATEWAY_CONFIG` — и отвергает legacy-колбэк `langfuse`, пока сервер Langfuse
-   v4 (`GET <MYRMIDON_TRACING_LANGFUSE_URL>/api/public/health` отвечает 4.x) или пока версию не
-   удаётся подтвердить (релизный бандл закрепляет её в `MYRMIDON_TRACING_LANGFUSE_VERSION`). На
-   v4 в режиме `events_only` legacy-эндпоинт `/api/public/ingestion` отвергает события: около 12к
-   отвергнутых событий в час и сожжённый CPU шлюза при внешне здоровой картине. Отказ валит выкат
-   так же, как неуспешная проверка здоровья (режим обслуживания остаётся включён, печатается
-   команда отката), и флага, который этот отказ обходит, нет. Без единой настройки
-   `MYRMIDON_TRACING_*` проверка пишет «пропущено», и выкат продолжается.
+7b. Страж трассировки LLM (`tracing-check.sh`, TRACING-HEALTH), три проверки, каждая пропускается,
+   если её настроек нет:
+   - набор колбэков — только OTLP: legacy-колбэк `langfuse` отвергается, пока сервер Langfuse v4
+     (`GET <MYRMIDON_TRACING_LANGFUSE_URL>/api/public/health` отвечает 4.x) или пока версию не удаётся
+     подтвердить (бандл закрепляет её в `MYRMIDON_TRACING_LANGFUSE_VERSION`);
+   - установка доставляет: `MYRMIDON_TRACING_DELIVERY_COMMAND` печатает число OTEL-событий в
+     `events_core` и число запросов LiteLLM SpendLogs за `MYRMIDON_TRACING_DELIVERY_WINDOW_SEC` (по
+     умолчанию 15 мин); ноль событий при живом трафике, коэффициент ниже 50 % и нечитаемые числа
+     отвергаются;
+   - `MYRMIDON_TRACING_LANGFUSE_IMAGE` и `MYRMIDON_TRACING_GATEWAY_IMAGE` несут полный тег `X.Y.Z` или
+     дайджест (мажорный тег вида `langfuse/langfuse:4` отвергается).
+   На v4 в режиме `events_only` legacy-эндпоинт `/api/public/ingestion` отвергает события: около 12к
+   отвергнутых событий в час и сожжённый CPU шлюза при внешне здоровой картине. Отказ валит выкат так
+   же, как неуспешная проверка здоровья (режим обслуживания остаётся включён, печатается команда
+   отката), и флага, который этот отказ обходит, нет. Без единой настройки `MYRMIDON_TRACING_*`
+   проверка пишет «пропущено», и выкат продолжается.
 8. Выход из режима обслуживания. Вызов `exit` возвращает ответ, как только сервер помечает окно
    `leaving` (хвост выхода — возобновление очереди, хук выхода, закрытие окна — выполняется на тике
    режима), после чего скрипт ждёт закрытия окна: опрашивает `GET /api/myrmidon/maintenance`, пока

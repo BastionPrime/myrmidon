@@ -218,19 +218,22 @@ Order:
    the server service is recreated.
 7. The `/api/health` check (`verify-health.sh`): `status` is `ok`, the version and commit
    match.
-7b. The LLM tracing guard (`tracing-check.sh`, TRACING-HEALTH): the gateway must carry the
-   OTLP-only callback set. The script compares the intended list the bundle generates (one
-   source of truth, `tracing_intended_callbacks()` in `lib.sh`) with the effective callbacks
-   — the union of `MYRMIDON_TRACING_CALLBACKS_COMMAND` (the live gateway or its database)
-   and the `callbacks:` list of `MYRMIDON_TRACING_GATEWAY_CONFIG` — and refuses the legacy
-   `langfuse` callback while the Langfuse server is v4
-   (`GET <MYRMIDON_TRACING_LANGFUSE_URL>/api/public/health` reports 4.x) or while the version
-   cannot be proven (the release bundle pins it in `MYRMIDON_TRACING_LANGFUSE_VERSION`). v4
-   in `events_only` mode rejects the legacy `/api/public/ingestion` endpoint: about 12k
-   rejected events per hour and burned gateway CPU while everything looked healthy. A
-   refusal fails the deploy like a failed health check (maintenance stays on, the rollback
-   command is printed) and there is no flag that skips it. Without any `MYRMIDON_TRACING_*`
-   setting the check logs a skip and the deploy continues.
+7b. The LLM tracing guard (`tracing-check.sh`, TRACING-HEALTH), three checks, each skipped when its
+   settings are absent:
+   - the callback set is the OTLP-only one: a legacy `langfuse` callback is refused while the Langfuse
+     server is v4 (`GET <MYRMIDON_TRACING_LANGFUSE_URL>/api/public/health` reports 4.x) or while the
+     version cannot be proven (the bundle pins it in `MYRMIDON_TRACING_LANGFUSE_VERSION`);
+   - the install delivers: `MYRMIDON_TRACING_DELIVERY_COMMAND` prints the OTEL event count of
+     `events_core` and the LiteLLM SpendLogs request count over
+     `MYRMIDON_TRACING_DELIVERY_WINDOW_SEC` (15 min by default); zero events with traffic, a ratio
+     below 50 %, or unreadable counts are refused;
+   - `MYRMIDON_TRACING_LANGFUSE_IMAGE` and `MYRMIDON_TRACING_GATEWAY_IMAGE` carry a full `X.Y.Z` tag or
+     a digest (a major tag such as `langfuse/langfuse:4` is refused).
+   v4 in `events_only` mode rejects the legacy `/api/public/ingestion` endpoint: about 12k rejected
+   events per hour and burned gateway CPU while everything looked healthy. A refusal fails the deploy
+   like a failed health check (maintenance stays on, the rollback command is printed) and there is no
+   flag that skips it. Without any `MYRMIDON_TRACING_*` setting the step logs a skip and the deploy
+   continues.
 8. Leaving maintenance mode. The `exit` call returns as soon as the server marks the window
    `leaving` (the leave tail — resuming the queue, the exit hook, retiring the window — runs on
    the server's maintenance tick), and the script then waits for the window to retire: it polls
