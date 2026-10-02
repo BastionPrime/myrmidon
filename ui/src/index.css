@@ -1,6 +1,12 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* myrmidon(UI-0a): UI-2.0 token layer — --myr-* design-system tokens and the
+   self-hosted Saira/Exo 2/Inter/JetBrains Mono subsets for the ui2 tree.
+   Imported here (not a parallel pipeline) per DESIGN.md's single-token-source
+   rule. Values documented in ui/src/ui2/tokens.css. */
+@import "./ui2/tokens.css";
+
 @font-face {
   font-family: "InterVariable";
   src: url("/fonts/InterVariable.woff2") format("woff2");

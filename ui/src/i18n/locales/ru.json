@@ -61,5 +61,50 @@
   },
   "sidebar": {
     "version": "Myrmidon {{version}}"
+  },
+  "ui2": {
+    "nav": {
+      "railLabel": "Основная навигация",
+      "group": {
+        "observe": "Наблюдение",
+        "decide": "Решения и связь",
+        "manage": "Управление"
+      },
+      "center": "Командный центр",
+      "fleet": "Флот серверов",
+      "swarm": "Рой",
+      "costs": "Расходы",
+      "quality": "Качество",
+      "waiting": "Ждёт меня",
+      "commander": "Полководец",
+      "settings": "Настройки",
+      "more": "Ещё",
+      "badge": {
+        "attention": "Ждёт: {{count}}"
+      }
+    },
+    "nests": {
+      "all": "Все гнёзда"
+    },
+    "chip": {
+      "colony": "{{active}} из {{total}}",
+      "fleet": "Флот",
+      "fleetAttention": "Флот: требует внимания",
+      "forecast": "{{spend}} из {{budget}}"
+    },
+    "decisions": {
+      "badge": "Решений ждёт: {{count}}"
+    },
+    "owner": "Владелец",
+    "ownerChannel": "Web · сейчас",
+    "commander": {
+      "aria": "Сказать Полководцу (Ctrl K)",
+      "placeholder": "Сказать Полководцу…",
+      "stubNote": "Заглушка: сообщение пока не отправляется. Открывается существующий чат; беседа с Полководцем придёт с обновлением чата 1.6.",
+      "openChat": "Открыть чат"
+    },
+    "phone": {
+      "status": "Владелец · Web"
+    }
   }
 }

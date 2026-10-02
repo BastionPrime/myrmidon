@@ -86,6 +86,10 @@ export const instanceExperimentalSettingsSchema = z.object({
   autoRestartDevServerWhenIdle: z.boolean().default(false),
   enableWorkspaceBranchReconcileForward: z.boolean().default(true),
   enableWorkspaceDirtyQuarantineRepair: z.boolean().default(true),
+  // myrmidon(UI-0a): UI-2.0 shell flag — opt-in, default off. While off the
+  // vendor 1.x shell renders unchanged; the ui2 tree mounts only under this
+  // flag (owner decision 02.10: clean-room toward 2.0, parallel with 1.5).
+  enableMyrmidonUi2: z.boolean().default(false),
   enableOwnerInstanceAdmin: z.boolean().default(false),
   // Kill switch for the sandbox duplex command-stream bridge. Default off. When
   // off the host keeps the file bridge for every run with no manifest change and

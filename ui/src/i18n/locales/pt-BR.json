@@ -61,5 +61,50 @@
   },
   "sidebar": {
     "version": "Myrmidon {{version}}"
+  },
+  "ui2": {
+    "nav": {
+      "railLabel": "Main navigation",
+      "group": {
+        "observe": "Observe",
+        "decide": "Decide & talk",
+        "manage": "Manage"
+      },
+      "center": "Command center",
+      "fleet": "Server fleet",
+      "swarm": "Swarm",
+      "costs": "Costs",
+      "quality": "Quality",
+      "waiting": "Wait for me",
+      "commander": "Commander",
+      "settings": "Settings",
+      "more": "More",
+      "badge": {
+        "attention": "{{count}} waiting"
+      }
+    },
+    "nests": {
+      "all": "All nests"
+    },
+    "chip": {
+      "colony": "{{active}} of {{total}}",
+      "fleet": "Fleet",
+      "fleetAttention": "Fleet: 1 attention",
+      "forecast": "{{spend}} of {{budget}}"
+    },
+    "decisions": {
+      "badge": "{{count}} decisions waiting"
+    },
+    "owner": "Owner",
+    "ownerChannel": "Web · now",
+    "commander": {
+      "aria": "Tell the Commander (Ctrl K)",
+      "placeholder": "Tell the Commander…",
+      "stubNote": "Stub: the message is not sent yet. It opens the existing chat; the Commander conversation arrives with the 1.6 chat update.",
+      "openChat": "Open chat"
+    },
+    "phone": {
+      "status": "Owner · Web"
+    }
   }
 }

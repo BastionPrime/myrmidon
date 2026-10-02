@@ -114,6 +114,8 @@ import {
 import { filterHiddenInstanceSettingsPath, normalizeRememberedInstanceSettingsPath } from "./lib/instance-settings";
 import { useCloudInstance } from "./hooks/useCloudInstance";
 import { useStreamlinedUiEnabled } from "./hooks/useStreamlinedUiEnabled";
+import { useMyrmidonUi2Enabled } from "./ui2/useMyrmidonUi2Enabled"; // myrmidon(UI-0a)
+import { Ui2Shell } from "./ui2/shell/Ui2Shell"; // myrmidon(UI-0a)
 import { cloudStackCreateUrl } from "./lib/cloudLinks";
 import { navigateTopLevel } from "@/lib/browserNavigation";
 
@@ -753,6 +755,18 @@ function NoCompaniesStartPage() {
 
 export function App() {
   const { enabled: streamlinedUiEnabled, loaded: streamlinedUiLoaded } = useStreamlinedUiEnabled();
+  // myrmidon(UI-0a): UI-2.0 shell behind the instance flag enableMyrmidonUi2.
+  // While loading the flag keeps the vendor shell (no flash); when on, the
+  // ui2 frame replaces the vendor Layout for the whole company route tree —
+  // the routes and pages themselves stay shared with 1.5 (OPE-3550).
+  const { enabled: myrmidonUi2Enabled } = useMyrmidonUi2Enabled();
+  const boardShell = myrmidonUi2Enabled ? (
+    <Ui2Shell /> /* myrmidon(UI-0a) */
+  ) : streamlinedUiEnabled ? (
+    <Layout />
+  ) : (
+    <ProductionLayout />
+  );
 
   return (
     <>
@@ -842,7 +856,7 @@ export function App() {
           <Route path="execution-workspaces/:workspaceId/runtime-logs" element={<UnprefixedExecutionWorkspaceRedirect />} />
           <Route path="execution-workspaces/:workspaceId/issues" element={<UnprefixedExecutionWorkspaceRedirect />} />
           <Route path="execution-workspaces/:workspaceId/routines" element={<UnprefixedExecutionWorkspaceRedirect />} />
-          <Route path=":companyPrefix" element={streamlinedUiEnabled ? <Layout /> : <ProductionLayout />}>
+          <Route path=":companyPrefix" element={boardShell}>
             {boardRoutes(streamlinedUiEnabled)}
           </Route>
           <Route path="*" element={<NotFoundPage scope="global" />} />

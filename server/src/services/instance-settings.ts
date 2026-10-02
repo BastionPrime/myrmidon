@@ -264,6 +264,7 @@ export function normalizeExperimentalSettings(raw: unknown): InstanceExperimenta
       enableSummaries: parsed.data.enableSummaries ?? false,
       enableStatusCards: parsed.data.enableStatusCards ?? false,
       enableDecisions: parsed.data.enableDecisions ?? false,
+      enableMyrmidonUi2: parsed.data.enableMyrmidonUi2 ?? false, // myrmidon(UI-0a)
       enableGoalsSidebarLink: parsed.data.enableGoalsSidebarLink ?? false,
       enableServerInfoDebugView: parsed.data.enableServerInfoDebugView ?? false,
       enablePaperclipDeveloperMode: parsed.data.enablePaperclipDeveloperMode ?? false,
@@ -305,6 +306,7 @@ export function normalizeExperimentalSettings(raw: unknown): InstanceExperimenta
     enableSummaries: false,
     enableStatusCards: false,
     enableDecisions: false,
+    enableMyrmidonUi2: false, // myrmidon(UI-0a)
     enableGoalsSidebarLink: false,
     enableServerInfoDebugView: false,
     enablePaperclipDeveloperMode: false,

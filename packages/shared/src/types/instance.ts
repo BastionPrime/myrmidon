@@ -103,6 +103,13 @@ export interface InstanceExperimentalSettings {
   enableSummaries: boolean;
   enableStatusCards: boolean;
   enableDecisions: boolean;
+  /**
+   * myrmidon(UI-0a): the Myrmidon 2.0 shell (rail, top bar, phone bottom bar,
+   * Commander entry). Strictly opt-in, default off; the 1.x shell renders
+   * unchanged while this is false. Kept in sync with the validator default
+   * (packages/shared/src/validators/instance.ts).
+   */
+  enableMyrmidonUi2: boolean;
   enableGoalsSidebarLink: boolean;
   enableServerInfoDebugView: boolean;
   /** Shows internal Paperclip maintainer tools and observability links. */
