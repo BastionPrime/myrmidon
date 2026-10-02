@@ -80,7 +80,7 @@ export const ENGINEER_TASKS_V1: VersionedReferenceTask[] = [
     changeNote: REMIRROR_NOTE,
     slug: "triage-incoming-issue",
     title: "Triage an incoming issue",
-    prompt: "A ticket arrives: \\\"Users report the export button on the reports page returns a 500 error since this morning.\\\" Write the triage note: what you check first, in order, and what evidence you collect before proposing a fix.",
+    prompt: "A ticket arrives: \"Users report the export button on the reports page returns a 500 error since this morning.\" Write the triage note: what you check first, in order, and what evidence you collect before proposing a fix.",
     kind: "general",
     weight: 1,
     rubric: R(
@@ -93,7 +93,7 @@ export const ENGINEER_TASKS_V1: VersionedReferenceTask[] = [
     changeNote: REMIRROR_NOTE,
     slug: "write-repro-script",
     title: "Write a minimal reproduction script",
-    prompt: "Write a minimal shell or Python script that reproduces: \\\"HTTP requests to example.com/api/v1/items intermittently return 429 even with no rate limit configured.\\\" The script must be safe to run and print a clear verdict line.",
+    prompt: "Write a minimal shell or Python script that reproduces: \"HTTP requests to example.com/api/v1/items intermittently return 429 even with no rate limit configured.\" The script must be safe to run and print a clear verdict line.",
     kind: "code",
     weight: 1,
     rubric: R(
@@ -145,7 +145,7 @@ export const ENGINEER_TASKS_V1: VersionedReferenceTask[] = [
     changeNote: REMIRROR_NOTE,
     slug: "write-git-recovery",
     title: "Recover a lost commit",
-    prompt: "A colleague says: \\\"I did a hard reset and lost my last commit.\\\" Give the exact commands to recover it, and one sentence on why they work.",
+    prompt: "A colleague says: \"I did a hard reset and lost my last commit.\" Give the exact commands to recover it, and one sentence on why they work.",
     kind: "code",
     weight: 1,
     rubric: R(
@@ -236,7 +236,7 @@ export const ENGINEER_TASKS_V1: VersionedReferenceTask[] = [
     changeNote: REMIRROR_NOTE,
     slug: "negotiate-scope-319",
     title: "Answer a scope request",
-    prompt: "A stakeholder asks to \\\"just also export to PDF\\\" in a ticket about fixing an export bug. Draft the reply that keeps the ticket scoped and offers a path for the new request.",
+    prompt: "A stakeholder asks to \"just also export to PDF\" in a ticket about fixing an export bug. Draft the reply that keeps the ticket scoped and offers a path for the new request.",
     kind: "general",
     weight: 1,
     rubric: R(
@@ -262,7 +262,7 @@ export const ENGINEER_TASKS_V1: VersionedReferenceTask[] = [
     changeNote: REMIRROR_NOTE,
     slug: "write-runbook",
     title: "Write a runbook step",
-    prompt: "Write the runbook step \\\"restore the nightly backup to a verification environment\\\" so an on-call engineer who has never done it can follow it at 03:00. Include the verification and the abort condition.",
+    prompt: "Write the runbook step \"restore the nightly backup to a verification environment\" so an on-call engineer who has never done it can follow it at 03:00. Include the verification and the abort condition.",
     kind: "general",
     weight: 2,
     rubric: R(
@@ -340,7 +340,7 @@ export const ENGINEER_TASKS_V1: VersionedReferenceTask[] = [
     changeNote: REMIRROR_NOTE,
     slug: "estimate-task",
     title: "Estimate a task honestly",
-    prompt: "A task is \\\"add an audit log to the settings page\\\". Write the estimate breakdown: what is included, what is excluded, and the two unknowns that could double it.",
+    prompt: "A task is \"add an audit log to the settings page\". Write the estimate breakdown: what is included, what is excluded, and the two unknowns that could double it.",
     kind: "general",
     weight: 1,
     rubric: R(
