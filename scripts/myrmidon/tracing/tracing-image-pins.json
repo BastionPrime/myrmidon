@@ -1,0 +1,17 @@
+{
+  "$comment": "myrmidon(TRACING-PINS): release pins of the LLM tracing pair. The release bundle ships the Langfuse v4 server, its worker and the LiteLLM gateway as ONE tested pair; a mismatched pair is the 02.10 incident class (Langfuse v4 in events_only mode rejects the legacy ingestion events a gateway on the legacy 'langfuse' callback keeps sending). The versions below are the exact images the tracing contract test runs in docker/tracing/docker-compose.contract.yml, so a bump of either side must re-run that contract test before the release (docs/myrmidon/deploy.md, deploy.ru.md, step 7b). This file is the ONE source of truth: scripts/myrmidon/dockergate/check-release-support.sh resolves the 'langfuse', 'langfuse-worker' and 'litellm' components from here, and scripts/myrmidon/tracing/tracing-release-pins.myrmidon.test.mjs keeps them equal to the contract compose.",
+  "components": {
+    "langfuse": {
+      "repository": "docker.langfuse.com/langfuse/langfuse",
+      "tag": "4.49.0"
+    },
+    "langfuse-worker": {
+      "repository": "docker.langfuse.com/langfuse/langfuse-worker",
+      "tag": "4.49.0"
+    },
+    "litellm": {
+      "repository": "ghcr.io/berriai/litellm",
+      "tag": "v1.103.2"
+    }
+  }
+}

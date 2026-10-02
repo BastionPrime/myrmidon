@@ -24,6 +24,18 @@
 # only when the tag resolves in the registry (imagetools inspect), so a stale
 # local tag file cannot name an image that is not there.
 #
+# myrmidon(TRACING-PINS): the LLM tracing pair --
+# `langfuse`, `langfuse-worker` and `litellm` -- is not built per release. Its
+# exact images are pinned in scripts/myrmidon/tracing/tracing-image-pins.json
+# (the ONE source of truth, kept equal to the tested contract compose by
+# scripts/myrmidon/tracing/tracing-release-pins.myrmidon.test.mjs). The three
+# components resolve from that file, never from a release tag or sha:
+#
+#   --tracing-pins   print the pinned tracing images and exit, for example:
+#                      langfuse=docker.langfuse.com/langfuse/langfuse:4.49.0
+#
+# Naming a tracing component in --components resolves it from the file too.
+#
 # This script is read-only; deploy.sh does the pulling and switching.
 set -euo pipefail
 
@@ -32,13 +44,15 @@ die() { printf '[myrmidon-release-support] ERROR: %s\n' "$*" >&2; exit 1; }
 
 source_file="" tag="" short_sha=""
 components="dockergate,fleetd"
+tracing_pins_only=0
 while (($#)); do
   case "$1" in
     --from-file) source_file="$2"; shift 2 ;;
     --from-tag) tag="$2"; shift 2 ;;
     --from-sha) short_sha="$2"; shift 2 ;;
     --components) components="$2"; shift 2 ;;
-    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+    --tracing-pins) tracing_pins_only=1; shift ;;
+    -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -46,10 +60,49 @@ done
 declare -A MYR_COMPONENT_REPOSITORIES=(
   [dockergate]="ghcr.io/itkadr-git/myrmidon-dockergate"
   [fleetd]="ghcr.io/itkadr-git/myrmidon-fleetd"
+  # myrmidon(TRACING-PINS): third-party images of the tracing pair (see the header).
+  [langfuse]="docker.langfuse.com/langfuse/langfuse"
+  [langfuse-worker]="docker.langfuse.com/langfuse/langfuse-worker"
+  [litellm]="ghcr.io/berriai/litellm"
 )
 
-command -v docker >/dev/null 2>&1 || die "docker is not installed"
+# myrmidon(TRACING-PINS): the components that resolve from the pins file, not from
+# the registry. They are not built by the release workflows, so a release tag or
+# sha never names them; the file is the one source of truth.
+MYR_TRACING_COMPONENTS="langfuse,langfuse-worker,litellm"
+TRACING_PINS_FILE="${MYR_TRACING_PINS_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../tracing/tracing-image-pins.json}"
+
 command -v jq >/dev/null 2>&1 || die "jq is not installed"
+
+# Print <name>=<repo>:<tag> (or <repo>@<digest>) from the pins file.
+resolve_pinned() {
+  local name="$1" repo tag digest
+  [[ -f "$TRACING_PINS_FILE" ]] || die "tracing pins file not found: $TRACING_PINS_FILE"
+  repo="$(jq -r --arg n "$name" '.components[$n].repository // empty' "$TRACING_PINS_FILE")"
+  [[ -n "$repo" ]] || die "tracing pins file does not name component '$name'"
+  digest="$(jq -r --arg n "$name" '.components[$n].digest // empty' "$TRACING_PINS_FILE")"
+  tag="$(jq -r --arg n "$name" '.components[$n].tag // empty' "$TRACING_PINS_FILE")"
+  if [[ -n "$digest" ]]; then
+    printf '%s=%s@%s\n' "$name" "$repo" "$digest"
+  elif [[ -n "$tag" ]]; then
+    printf '%s=%s:%s\n' "$name" "$repo" "$tag"
+  else
+    die "tracing pins file names no tag or digest for component '$name'"
+  fi
+}
+
+is_tracing_component() {
+  case ",$MYR_TRACING_COMPONENTS," in *",$1,"*) return 0 ;; *) return 1 ;; esac
+}
+
+# --tracing-pins is a pure file read: no registry and no docker daemon.
+if ((tracing_pins_only)); then
+  IFS=',' read -r -a want <<<"$MYR_TRACING_COMPONENTS"
+  for name in "${want[@]}"; do resolve_pinned "$name"; done
+  exit 0
+fi
+
+command -v docker >/dev/null 2>&1 || die "docker is not installed"
 
 [[ -n "$source_file" || -n "$tag" || -n "$short_sha" ]] \
   || die "give one of --from-file, --from-tag or --from-sha"
@@ -82,6 +135,10 @@ resolve_from_file() {
   IFS=',' read -r -a want <<<"$components"
   local missing=0
   for name in "${want[@]}"; do
+    if is_tracing_component "$name"; then
+      resolve_pinned "$name"
+      continue
+    fi
     repo="${MYR_COMPONENT_REPOSITORIES[$name]}"
     [[ -n "$repo" ]] || die "unknown component: $name"
     digest="$(jq -r --arg n "$name" '(.components[$n].digest // .[$n] // empty)' "$f" 2>/dev/null || true)"
@@ -101,6 +158,10 @@ resolve_from_ref() {
   local -a want
   IFS=',' read -r -a want <<<"$components"
   for name in "${want[@]}"; do
+    if is_tracing_component "$name"; then
+      resolve_pinned "$name"
+      continue
+    fi
     repo="${MYR_COMPONENT_REPOSITORIES[$name]}"
     [[ -n "$repo" ]] || die "unknown component: $name"
     digest="$(resolve "$repo" "$ref")" || digest=""
