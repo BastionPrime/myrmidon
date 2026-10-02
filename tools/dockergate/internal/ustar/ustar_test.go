@@ -270,6 +270,10 @@ func TestRedTeam_RT1_4_TarStructure(t *testing.T) {
 		{"applied.json is an array", hermes, withApplied(`[]`), deny.TarContent},
 		{"applied.json has an extra key", hermes, withApplied(`{"restartHash":"r","filesHash":"f","files":[],"x":1}`), deny.TarContent},
 		{"applied.json misses a key", hermes, withApplied(`{"restartHash":"r","files":[]}`), deny.TarContent},
+		{"applied.json maxConcurrentRuns is a string", hermes, withApplied(`{"restartHash":"r","filesHash":"f","files":[],"maxConcurrentRuns":"3"}`), deny.TarContent},
+		{"applied.json maxConcurrentRuns is zero", hermes, withApplied(`{"restartHash":"r","filesHash":"f","files":[],"maxConcurrentRuns":0}`), deny.TarContent},
+		{"applied.json maxConcurrentRuns over 50", hermes, withApplied(`{"restartHash":"r","filesHash":"f","files":[],"maxConcurrentRuns":51}`), deny.TarContent},
+		{"applied.json maxConcurrentRuns plus an extra key", hermes, withApplied(`{"restartHash":"r","filesHash":"f","files":[],"maxConcurrentRuns":3,"x":1}`), deny.TarContent},
 		{"applied.json restartHash is a number", hermes, withApplied(`{"restartHash":1,"filesHash":"f","files":[]}`), deny.TarContent},
 		{"applied.json files is not an array", hermes, withApplied(`{"restartHash":"r","filesHash":"f","files":"x"}`), deny.TarContent},
 		{"applied.json files holds a number", hermes, withApplied(`{"restartHash":"r","filesHash":"f","files":[1]}`), deny.TarContent},
@@ -544,5 +548,15 @@ func TestPaddingJunkIsNotCanonical(t *testing.T) {
 func TestOwnerConstant(t *testing.T) {
 	if ustar.Owner != 10001 {
 		t.Fatalf("owner %d", ustar.Owner)
+	}
+}
+
+// The board records the applied run limit in the marker since CONCURRENCY-SYNC.
+func TestAppliedMarkerWithMaxConcurrentRuns(t *testing.T) {
+	for _, body := range []string{
+		`{"restartHash":"r","filesHash":"f","files":["a"],"maxConcurrentRuns":1}`,
+		`{"restartHash":"r","filesHash":"f","files":[],"maxConcurrentRuns":50}`,
+	} {
+		wantOK(t, build(t, withApplied(body)), hermes, nonce)
 	}
 }

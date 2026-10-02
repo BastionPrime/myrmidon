@@ -1072,6 +1072,15 @@ function terminalResultCode(status: string): { exitCode: number; signal: string 
   return { exitCode: 1, signal: null, errorCode: "hermes_gateway_protocol_error" };
 }
 
+// myrmidon(RECOVERY-HERMES-GATEWAY): the upstream-restart signature. When the
+// model gateway behind Hermes is restarted (a rolling deploy, a crash), the
+// in-flight turn ends with a "Connection error." message even though the task
+// itself is fine. That is a transient upstream condition, not a provider
+// verdict, so the run is marked for the platform's bounded transient retry
+// instead of a reconciliation hold. Only this family: every other
+// hermes_gateway_run_failed keeps the vendor's hold-and-ask behavior.
+const HERMES_GATEWAY_CONNECTION_ERROR_SIGNATURE = "Connection error.";
+
 export function mapFinalResultForTest(input: {
   terminal: TerminalState;
   outputChunks: string[];
@@ -1092,6 +1101,16 @@ export function mapFinalResultForTest(input: {
   const errorMessage = mapped.errorCode
     ? redactText(extractErrorMessage(payload) ?? `Hermes run ${input.terminal.status}`)
     : null;
+  // myrmidon(RECOVERY-HERMES-GATEWAY): see the signature constant above — a
+  // failed turn whose message carries the upstream-connection signature is
+  // transient, so it is marked for a bounded retry. Any other failed turn
+  // stays a plain provider failure.
+  const errorFamily =
+    mapped.errorCode === "hermes_gateway_run_failed" &&
+    errorMessage !== null &&
+    errorMessage.includes(HERMES_GATEWAY_CONNECTION_ERROR_SIGNATURE)
+      ? "transient_upstream"
+      : null;
   return {
     exitCode: mapped.exitCode,
     signal: mapped.signal,
@@ -1100,6 +1119,7 @@ export function mapFinalResultForTest(input: {
     model: extractModel(payload),
     ...(mapped.errorCode ? { errorCode: mapped.errorCode } : {}),
     ...(errorMessage ? { errorMessage } : {}),
+    ...(errorFamily ? { errorFamily } : {}),
     ...(usage ? { usage } : {}),
     ...(costUsd !== null ? { costUsd } : {}),
     ...(output ? { summary: output.slice(0, 2_000) } : {}),
@@ -1180,6 +1200,76 @@ async function fetchFinalStatus(input: {
 function redactErrorMessage(err: unknown, redactText: TextRedactor = sanitizeSensitiveText): string {
   if (err instanceof Error) return redactText(err.message);
   return redactText(String(err));
+}
+
+/** myrmidon(RECOVERY-HERMES-GATEWAY): the gateway run id the previous attempt
+ * left in this task session (sessionCodec, gateway/server/index.ts, persists
+ * sessionParams.hermesRunId). sessionParams is keyed by the task session, so
+ * this is the run that was working this issue before this attempt. */
+function readPredecessorRunId(ctx: AdapterExecutionContext): string | null {
+  const params = ctx.runtime?.sessionParams;
+  if (!params || typeof params !== "object") return null;
+  const value = (params as Record<string, unknown>).hermesRunId;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+/**
+ * myrmidon(RECOVERY-HERMES-GATEWAY): make sure a predecessor gateway run is no
+ * longer live before this attempt creates its own run — never start a second
+ * turn over a live one.
+ *
+ * Returns true when this attempt may proceed:
+ * - the predecessor already reports a terminal status;
+ * - its status cannot be read at all (unreachable gateway, 404 for a run the
+ *   gateway no longer knows): nothing proves a live turn, and the create
+ *   below still carries its own Idempotency-Key, so a duplicate cannot happen
+ *   for this attempt;
+ * - a stop was requested and a terminal status followed within STOP_GRACE_MS.
+ *
+ * Returns false only when the predecessor answered and stayed non-terminal
+ * after the stop: the caller then fails with a retryable error instead of
+ * creating a run beside it.
+ */
+async function settlePredecessorRun(input: {
+  ctx: AdapterExecutionContext;
+  baseUrl: URL;
+  headers: Record<string, string>;
+  runId: string;
+  redactText: TextRedactor;
+}): Promise<boolean> {
+  let observedStatus: string | null = null;
+  try {
+    // Same per-request bound as fetchFinalStatus's poll: a hung gateway must
+    // not block this attempt past the platform's own stop-verification
+    // deadline (STOP_REQUEST_TIMEOUT_MS).
+    const observed = await fetchJson(apiUrl(input.baseUrl, `/v1/runs/${encodeURIComponent(input.runId)}`), {
+      method: "GET",
+      headers: input.headers,
+      signal: AbortSignal.timeout(STOP_REQUEST_TIMEOUT_MS),
+    });
+    observedStatus = extractStatus(observed);
+  } catch {
+    return true;
+  }
+  if (observedStatus && TERMINAL_STATUSES.has(observedStatus)) return true;
+  await input.ctx.onLog(
+    "stdout",
+    `[hermes-gateway] predecessor run ${input.runId} is still live (${observedStatus ?? "unknown status"}); stopping it before a new turn\n`,
+  );
+  await stopRun({
+    ctx: input.ctx,
+    baseUrl: input.baseUrl,
+    headers: input.headers,
+    runId: input.runId,
+    redactText: input.redactText,
+  });
+  const finalStatus = await fetchFinalStatus({
+    baseUrl: input.baseUrl,
+    headers: input.headers,
+    runId: input.runId,
+    deadlineMs: STOP_GRACE_MS,
+  });
+  return finalStatus !== null;
 }
 
 function errorResult(err: unknown, redactText: TextRedactor = sanitizeSensitiveText): AdapterExecutionResult {
@@ -1438,6 +1528,44 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   let runId: string | null = null;
   let replayed = false;
+  // myrmidon(RECOVERY-HERMES-GATEWAY): never start a second turn over a live
+  // predecessor. The task session carries the previous attempt's gateway run
+  // id, so a resumed/re-woken task whose earlier turn is still running on the
+  // gateway would otherwise get a second turn over the same provider session.
+  // A predecessor that is already terminal, unknown or unreachable is no
+  // reason to hold this attempt back (see settlePredecessorRun). The create
+  // below keeps this attempt's own Idempotency-Key either way — never the
+  // predecessor's (see the idempotencyKey comment above).
+  const predecessorRunId = readPredecessorRunId(ctx);
+  if (predecessorRunId) {
+    const predecessorSettled = await settlePredecessorRun({
+      ctx,
+      baseUrl,
+      headers: eventHeaders,
+      runId: predecessorRunId,
+      redactText,
+    });
+    if (!predecessorSettled) {
+      await ctx.onLog(
+        "stderr",
+        `[hermes-gateway] predecessor run ${predecessorRunId} did not stop; not creating a second turn\n`,
+      );
+      return {
+        exitCode: 1,
+        signal: null,
+        timedOut: false,
+        errorCode: "hermes_gateway_predecessor_running",
+        errorFamily: "transient_upstream",
+        errorMessage: `Hermes gateway run ${predecessorRunId} from the previous attempt is still running; waiting for it to stop instead of running two turns at once.`,
+        provider: "hermes_gateway",
+        // Keep the predecessor's id in the task session: the transient retry
+        // must check the same live run again rather than start a fresh one
+        // beside it.
+        sessionParams: { ...(ctx.runtime?.sessionParams ?? {}), strategy },
+        sessionDisplayId: sessionKey ? redactText(sessionKey) : null,
+      };
+    }
+  }
   // myrmidon(G4): bound the create request itself, the same way
   // STOP_REQUEST_TIMEOUT_MS bounds the stop path — see CREATE_REQUEST_TIMEOUT_MS
   // and CREATE_CANCEL_GRACE_MS. onCancellationReady has already been awaited

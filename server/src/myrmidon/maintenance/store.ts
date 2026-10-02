@@ -5,6 +5,9 @@
 
 import { eq, sql } from "drizzle-orm";
 import { instanceSettings, type Db } from "@paperclipai/db";
+// myrmidon(BROWSER-CONSOLE): preserve the browser console key in `general`
+// (same rule as our maintenance key below).
+import { BROWSER_SESSIONS_GENERAL_KEY } from "../browser-console/store.js";
 import { parseMaintenanceDocument, type MaintenanceDocument } from "./domain.js";
 
 export const MAINTENANCE_GENERAL_KEY = "myrmidonMaintenance";
@@ -58,4 +61,11 @@ export function preserveMaintenanceGeneralKey(storedGeneral: unknown): Record<st
   if (typeof storedGeneral !== "object" || storedGeneral === null) return {};
   const value = (storedGeneral as Record<string, unknown>)[MAINTENANCE_GENERAL_KEY];
   return value === undefined ? {} : { [MAINTENANCE_GENERAL_KEY]: value };
+}
+
+/** myrmidon(BROWSER-CONSOLE): carry the browser console key over the same writes. */
+export function preserveBrowserConsoleGeneralKey(storedGeneral: unknown): Record<string, unknown> {
+  if (typeof storedGeneral !== "object" || storedGeneral === null) return {};
+  const value = (storedGeneral as Record<string, unknown>)[BROWSER_SESSIONS_GENERAL_KEY];
+  return value === undefined ? {} : { [BROWSER_SESSIONS_GENERAL_KEY]: value };
 }

@@ -859,6 +859,39 @@ describe("mapFinalResultForTest", () => {
     expect(result.exitCode).toBe(1);
     expect(result.errorCode).toBe("hermes_gateway_run_failed");
     expect(result.errorMessage).toBe("boom");
+    expect(result.errorFamily).toBeUndefined();
+  });
+
+  // myrmidon(RECOVERY-HERMES-GATEWAY): the upstream-restart signature is the
+  // only failed-run family that is transient; every other failure keeps the
+  // vendor's hold-and-ask behavior.
+  it("marks a failed run carrying the upstream connection signature as transient", () => {
+    const result = mapFinalResultForTest({
+      terminal: {
+        runId: "run-1",
+        status: "failed",
+        payload: { status: "failed", error: "Connection error." },
+      },
+      outputChunks: [],
+      sessionKey: "session-key",
+      strategy: "issue",
+    });
+    expect(result.errorCode).toBe("hermes_gateway_run_failed");
+    expect(result.errorFamily).toBe("transient_upstream");
+  });
+
+  it("does not mark a failed run whose message merely mentions a connection", () => {
+    const result = mapFinalResultForTest({
+      terminal: {
+        runId: "run-1",
+        status: "failed",
+        payload: { status: "failed", error: "the connection to the tool was refused" },
+      },
+      outputChunks: [],
+      sessionKey: "session-key",
+      strategy: "issue",
+    });
+    expect(result.errorFamily).toBeUndefined();
   });
 });
 
@@ -2242,5 +2275,212 @@ describe("resolveCreateRequestTimeoutMs", () => {
     expect(resolveCreateRequestTimeoutMs(4, env)).toBe(90_000);
     expect(resolveCreateRequestTimeoutMs(301, {})).toBe(60_000);
     expect(resolveCreateRequestTimeoutMs("abc", { MYRMIDON_HERMES_CREATE_TIMEOUT_SEC: "1" })).toBe(60_000);
+  });
+});
+
+// myrmidon(RECOVERY-HERMES-GATEWAY): the predecessor overlap guard. The task
+// session carries the previous attempt's gateway run id
+// (sessionParams.hermesRunId); before creating anything the adapter must make
+// sure that run is no longer live, so a re-woken task can never run two turns
+// over the same provider session at once.
+describe("execute — predecessor overlap guard (RECOVERY-HERMES-GATEWAY)", () => {
+  function predecessorCtx(sessionParams: Record<string, unknown>): AdapterExecutionContext {
+    const ctx = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    ctx.runtime.sessionParams = sessionParams;
+    return ctx;
+  }
+
+  it("does not create a second run and reports a retryable transient error while a live predecessor will not stop", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/stop")) {
+        calls.push("stop");
+        return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      }
+      if (url.endsWith("/v1/runs")) {
+        calls.push("create");
+        return new Response(JSON.stringify({ run_id: "run-new", status: "started" }), { status: 200 });
+      }
+      if (init?.method === "GET") {
+        calls.push("status");
+        // The predecessor stays live for the whole grace window.
+        return new Response(JSON.stringify({ status: "running", run_id: "run-prev-1" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = predecessorCtx({ hermesRunId: "run-prev-1", strategy: "issue" });
+    let settled = false;
+    const resultPromise = execute(ctx).finally(() => {
+      settled = true;
+    });
+    for (let advanced = 0; !settled && advanced <= 2 * STOP_GRACE_MS; advanced += 500) {
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    const result = await resultPromise;
+    vi.useRealTimers();
+
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("hermes_gateway_predecessor_running");
+    expect(result.errorFamily).toBe("transient_upstream");
+    expect(calls).not.toContain("create");
+    expect(calls).toContain("stop");
+    // The retry must look at the same live predecessor again, not start a
+    // fresh turn beside it.
+    expect(result.sessionParams).toMatchObject({ hermesRunId: "run-prev-1" });
+  });
+
+  it("stops a live predecessor and proceeds with its own create once it reaches a terminal status", async () => {
+    const calls: string[] = [];
+    let stopped = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/stop")) {
+        stopped = true;
+        calls.push("stop");
+        return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      }
+      if (url.endsWith("/v1/runs")) {
+        calls.push("create");
+        return new Response(JSON.stringify({ run_id: "run-new", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(
+          sseStream(["event: run.completed", "data: {\"status\":\"completed\",\"output\":\"done\"}", ""].join("\n")),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      if (init?.method === "GET" && url.endsWith("run-prev-2")) {
+        if (stopped) {
+          calls.push("status-terminal");
+          return new Response(JSON.stringify({ status: "cancelled" }), { status: 200 });
+        }
+        calls.push("status-live");
+        return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+      }
+      // The new run's own status polls stay non-terminal; its terminal state
+      // arrives through the SSE stream above.
+      return new Response(JSON.stringify({ status: "running" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await execute(predecessorCtx({ hermesRunId: "run-prev-2", strategy: "issue" }));
+
+    expect(result.exitCode).toBe(0);
+    expect(calls.indexOf("stop")).toBeLessThan(calls.indexOf("create"));
+    expect(calls).toContain("create");
+  });
+
+  it("proceeds straight to the create when the predecessor already reports a terminal status", async () => {
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/stop")) {
+        calls.push("stop");
+        return new Response(JSON.stringify({ status: "stopping" }), { status: 200 });
+      }
+      if (url.endsWith("/v1/runs")) {
+        calls.push("create");
+        return new Response(JSON.stringify({ run_id: "run-new", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(
+          sseStream(["event: run.completed", "data: {\"status\":\"completed\",\"output\":\"done\"}", ""].join("\n")),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      if (init?.method === "GET") {
+        calls.push("status-terminal");
+        return new Response(JSON.stringify({ status: "completed" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "completed" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await execute(predecessorCtx({ hermesRunId: "run-prev-3", strategy: "issue" }));
+
+    expect(result.exitCode).toBe(0);
+    expect(calls).toContain("create");
+    expect(calls).not.toContain("stop");
+  });
+
+  it("proceeds with the create when the predecessor status cannot be read at all", async () => {
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        calls.push("create");
+        return new Response(JSON.stringify({ run_id: "run-new", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(
+          sseStream(["event: run.completed", "data: {\"status\":\"completed\",\"output\":\"done\"}", ""].join("\n")),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      if (init?.method === "GET") {
+        calls.push("status-unknown");
+        // The gateway no longer knows that run: 404, i.e. nothing live.
+        return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+      }
+      return new Response(JSON.stringify({ status: "completed" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await execute(predecessorCtx({ hermesRunId: "run-prev-4", strategy: "issue" }));
+
+    expect(result.exitCode).toBe(0);
+    expect(calls).toContain("create");
+    const calls2 = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const init = calls2.find(([input]) => String(input).endsWith("/v1/runs"))?.[1] as RequestInit;
+    // The create keeps this attempt's own Idempotency-Key, never the predecessor's.
+    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe("pc-run-1");
+  });
+
+  it("does not let a forceFreshSession wake context change the session-key strategy", async () => {
+    // The strategy is the card's (adapterConfig.sessionKeyStrategy) alone; a
+    // fresh-session wake flag must not silently re-key the Hermes session.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-new", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(
+          sseStream(["event: run.completed", "data: {\"status\":\"completed\",\"output\":\"done\"}", ""].join("\n")),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response(JSON.stringify({ status: "completed" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const withCardStrategy = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      timeoutSec: 5,
+      sessionKeyStrategy: "agent",
+    });
+    withCardStrategy.context = { ...withCardStrategy.context, forceFreshSession: true };
+    const agentStrategyResult = await execute(withCardStrategy);
+
+    const defaultStrategy = makeCtx({ apiBaseUrl: "http://127.0.0.1:8642", apiKey: "secret-key", timeoutSec: 5 });
+    defaultStrategy.context = { ...defaultStrategy.context, forceFreshSession: true };
+    await execute(defaultStrategy);
+
+    const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const createInits = calls
+      .filter(([input]) => String(input).endsWith("/v1/runs"))
+      .map(([, init]) => init as RequestInit);
+    expect(createInits).toHaveLength(2);
+    const cardKey = (createInits[0]!.headers as Record<string, string>)["X-Hermes-Session-Key"];
+    expect(cardKey).toContain(":agent:agent-1");
+    expect(cardKey).not.toContain(":issue:issue-1");
+    const defaultKey = (createInits[1]!.headers as Record<string, string>)["X-Hermes-Session-Key"];
+    expect(defaultKey).toBe("paperclip:company:company-1:agent:agent-1:issue:issue-1");
+    expect(agentStrategyResult.sessionParams).toMatchObject({ strategy: "agent" });
   });
 });

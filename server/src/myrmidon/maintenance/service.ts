@@ -226,6 +226,8 @@ export function maintenanceService(
     }
   }
 
+  // myrmidon(EXIT-ASYNC): the leave tail runs on the maintenance tick
+  // (tickWindow for a `leaving` window), not inside the exit HTTP call.
   async function finishLeaving(window: MaintenanceWindow) {
     // Admission is already open for this window (state `leaving`); start what queued up.
     try {
@@ -378,7 +380,20 @@ export function maintenanceService(
       });
       if (!window) return { scope, state: "off" as const, changed: false };
       if (changed) await audit(window, "exit_requested", actor, reason ? { exitReason: reason } : {});
-      await finishLeaving(window);
+      // myrmidon(EXIT-ASYNC): the exit call returns as soon as the window is
+      // marked `leaving`; it does NOT await finishLeaving. The original inline
+      // await ran resumeQueuedRuns (the whole queued backlog), the onExited
+      // hook, the retire write and the exit audit inside the HTTP request, so
+      // the deploy script's 30s http_post_json timeout (and any client's 120s)
+      // cut the call off and the window stayed `leaving` for minutes. Admission
+      // already reopened in `leaving` (domain.ts `blockingWindows` excludes it),
+      // and the maintenance tick (tickWindow: `leaving` -> finishLeaving, every
+      // MYRMIDON_MAINTENANCE_TICK_SEC, 5s by default) owns the tail: retire is a
+      // row-locked idempotent write and a failed resumeQueuedRuns is retried by
+      // the vendor periodic pass, so a crash between the mark and the finish
+      // leaves at most a `leaving` window that the next tick completes. Callers
+      // that need the `off` state (deploy.sh step 8, the board deploy jobs)
+      // poll GET /maintenance until the window is gone.
       const still = (await readMaintenanceDocument(db)).windows.find((w) => w.id === window.id);
       if (still) return { ...(await view(still)), changed };
       return { scope, state: "off" as const, changed };

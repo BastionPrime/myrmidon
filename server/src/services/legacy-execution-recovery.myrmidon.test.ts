@@ -8,6 +8,7 @@
 // error code.
 import { expect, it, describe } from "vitest";
 import { legacyExecutionNeedsReconciliation } from "./legacy-execution-recovery.js";
+import { isConversationAdapter } from "./conversation-continuation.js";
 
 function runnerProfileFor(adapterType: string): Record<string, unknown> {
   return { adapterDispatch: { adapterType } };
@@ -19,6 +20,11 @@ const baseRun = {
   resultJson: {},
   runnerProfileJson: runnerProfileFor("hermes_local"),
 };
+
+// myrmidon(RECOVERY-HERMES-GATEWAY): the gateway adapter is a conversation
+// adapter too, so its failed/interrupted runs get the continuation mark and
+// the infrastructure-interrupt relief the local adapters get.
+const gatewayRun = { ...baseRun, runnerProfileJson: runnerProfileFor("hermes_gateway") };
 
 describe("legacyExecutionNeedsReconciliation: infrastructure interruptions (L1)", () => {
   it.each(["agent_paused", "process_lost", "server_shutdown_interrupted", "issue_reassigned"])(
@@ -164,5 +170,54 @@ describe("legacyExecutionNeedsReconciliation: infrastructure interruptions (L1)"
         runnerProfileJson: null,
       }),
     ).toBe(true);
+  });
+
+  // myrmidon(RECOVERY-HERMES-GATEWAY): the gateway adapter is in
+  // CONVERSATION_ADAPTER_TYPES, so heartbeat.ts's mergeRunStopMetadataForAgent
+  // writes `resultJson.conversationContinuation` for its failed, timed-out and
+  // interrupted runs (the same mark the local adapters get), and
+  // hasConversationContinuationPolicy below therefore clears the hold.
+  it("does not hold a failed gateway run that carries the continuation mark", () => {
+    expect(isConversationAdapter("hermes_gateway")).toBe(true);
+    for (const [status, errorCode] of [
+      ["failed", "hermes_gateway_run_failed"],
+      ["timed_out", "timeout"],
+      ["interrupted", "server_shutdown_interrupted"],
+    ] as const) {
+      expect(
+        legacyExecutionNeedsReconciliation({
+          ...gatewayRun,
+          status,
+          errorCode,
+          scheduledRetryAttempt: 0,
+          resultJson: { conversationContinuation: "continue_conversation_v1" },
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("does not hold a gateway run interrupted by an infrastructure code", () => {
+    for (const errorCode of ["agent_paused", "process_lost", "server_shutdown_interrupted", "issue_reassigned"]) {
+      expect(
+        legacyExecutionNeedsReconciliation({
+          ...gatewayRun,
+          errorCode,
+          scheduledRetryAttempt: 0,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("still holds an unclaimed or non-conversation run for the same infrastructure code", () => {
+    for (const runnerProfileJson of [null, runnerProfileFor("openclaw_gateway"), runnerProfileFor("process")]) {
+      expect(
+        legacyExecutionNeedsReconciliation({
+          ...baseRun,
+          errorCode: "server_shutdown_interrupted",
+          scheduledRetryAttempt: 0,
+          runnerProfileJson,
+        }),
+      ).toBe(true);
+    }
   });
 });

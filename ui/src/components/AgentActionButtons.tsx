@@ -270,7 +270,9 @@ export function AgentActionButtons({
   const agentAction = useMutation({
     mutationFn: async (action: "invoke" | "pause" | "resume" | "clear_error" | "approve" | "terminate") => {
       switch (action) {
-        case "invoke": return agentsApi.invoke(agent.id, resolvedCompanyId ?? undefined);
+        // myrmidon(WAKE-BIND): the wake button uses the wakeup API so the run is
+        // always bound to a task — the agent's top ready task, or a clear refusal.
+        case "invoke": return agentsApi.wakeup(agent.id, { source: "on_demand", triggerDetail: "manual" }, resolvedCompanyId ?? undefined);
         case "pause": return agentsApi.pause(agent.id, resolvedCompanyId ?? undefined);
         case "resume": return agentsApi.resume(agent.id, resolvedCompanyId ?? undefined);
         case "clear_error": return agentsApi.clearError(agent.id, resolvedCompanyId ?? undefined);
@@ -297,15 +299,20 @@ export function AgentActionButtons({
 
   const providerTraceAction = useMutation({
     mutationFn: () =>
-      agentsApi.invoke(agent.id, resolvedCompanyId ?? undefined, {
+      // myrmidon(WAKE-BIND): traced runs wake through the wakeup API too, so
+      // they carry the same task binding (or the same clear refusal).
+      agentsApi.wakeup(agent.id, {
+        source: "on_demand",
+        triggerDetail: "manual",
         debug: { providerTrace: "raw" },
-      }),
+      }, resolvedCompanyId ?? undefined),
     onSuccess: (run) => {
       onActionError?.(null);
       invalidateAgent();
-      if (navigateToRunOnInvoke) {
+      // myrmidon(WAKE-BIND): a refused/skipped wake has no run to navigate to.
+      if (navigateToRunOnInvoke && run && typeof run === "object" && "id" in run) { // myrmidon(WAKE-BIND)
         if (!confirmLateNavigationChanges(agentActionStartedDirtyRef)) return;
-        navigate(`/agents/${canonicalAgentRef}/runs/${run.id}`);
+        navigate(`/agents/${canonicalAgentRef}/runs/${(run as HeartbeatRun).id}`); // myrmidon(WAKE-BIND)
       }
     },
     onError: (err) => {

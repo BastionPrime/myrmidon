@@ -9,6 +9,8 @@ import { executionFailureRetryCount } from "./execution-recovery-attempt.js";
 import { isSupersededConversationRun } from "./agent-conversations.js";
 // myrmidon(R3): runs interrupted by maintenance mode are retried, not held
 import { MAINTENANCE_INTERRUPT_ERROR_CODE } from "../myrmidon/maintenance/domain.js";
+// myrmidon(RUN-STALL): runs interrupted by the stall sweep are resumable, not held
+import { RUN_STALL_ERROR_CODE } from "../myrmidon/run-stall/constants.js";
 // myrmidon(L1): infrastructure interruptions (pause, process loss, shutdown,
 // reassignment) are retried or released, not held -- only for a conversation
 // adapter or one with its own idempotency key, see infra-interrupts.ts
@@ -27,6 +29,7 @@ export function legacyExecutionNeedsReconciliation(
   )
     return false;
   if (run.errorCode === MAINTENANCE_INTERRUPT_ERROR_CODE) return false; // myrmidon(R3): maintenance interruption, retried after exit
+  if (run.errorCode === RUN_STALL_ERROR_CODE) return false; // myrmidon(RUN-STALL): stall interruption, the sweep re-opens the task itself
   if (shouldSkipReconciliationForInfraInterrupt(run)) return false; // myrmidon(L1): infrastructure interruption, retried or released, not held
   // A fresh conversation turn lets the agent decide what remains. The retry
   // scheduler, not an action-outcome hold, owns the automatic attempt limit.

@@ -1,4 +1,10 @@
 import type { FeedbackDataSharingPreference } from "./feedback.js";
+// myrmidon(WORKSPACE-HYGIENE): the workspace quotas stored in instance settings
+import type { WorkspaceHygieneLimits } from "../myrmidon-workspace-hygiene.js";
+// myrmidon(C0): the run admission limits stored in instance settings
+import type { RunLimits } from "../myrmidon-runtime-limits.js";
+// myrmidon(EXTCASE-B): the browser-bridge allowlist stored in instance settings
+import type { BrowserBridgeSettings } from "../myrmidon-browser-bridge.js";
 
 export const DAILY_RETENTION_PRESETS = [3, 7, 14] as const;
 export const WEEKLY_RETENTION_PRESETS = [1, 2, 4] as const;
@@ -38,6 +44,28 @@ export interface InstanceGeneralSettings {
    * Kubernetes sandbox provider and denies local/ssh execution.
    */
   executionMode?: InstanceExecutionMode;
+  /**
+   * myrmidon(WORKSPACE-HYGIENE): disk quotas for execution workspaces, changed
+   * from `GET`/`PATCH /api/myrmidon/workspace-hygiene`. Absent means "use the
+   * environment variable, then the default (both quotas off)"; kept in sync with
+   * the validator of the same field (packages/shared/src/validators/instance.ts).
+   */
+  workspaceHygiene?: WorkspaceHygieneLimits;
+  /**
+   * myrmidon(C0): run admission limits changed from the instance settings page
+   * and `GET`/`PATCH /api/myrmidon/runtime-limits`. Absent means "use the
+   * environment variable, then the default"; kept in sync with the validator of
+   * the same field (packages/shared/src/validators/instance.ts).
+   */
+  runLimits?: RunLimits;
+  /**
+   * myrmidon(EXTCASE-B): browser-bridge allowlist (the tender-platform domains
+   * the gateway and the extension both accept), changed from the bridge panel.
+   * Absent means "no domain is allowed" — the bridge denies by default.
+   * Kept in sync with the validator of the same field
+   * (packages/shared/src/validators/instance.ts).
+   */
+  browserBridge?: BrowserBridgeSettings;
 }
 
 export interface InstanceExperimentalSettings {

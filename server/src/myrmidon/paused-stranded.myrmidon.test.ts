@@ -65,8 +65,25 @@ describe("operatorPauseExemptsStrandedIssue (L3b)", () => {
     expect(operatorPauseExemptsStrandedIssue({ ...base, agent: { ...base.agent, status: "idle" } })).toBe(false);
   });
 
-  it("keeps the vendor behavior for an in_review issue", () => {
-    expect(operatorPauseExemptsStrandedIssue({ ...base, issueStatus: "in_review" })).toBe(false);
+  it("exempts an in_review issue too, for an operator pause: its reviewer is re-queued by the sweep once invokable again", () => {
+    // myrmidon(RECOVERY-HERMES-GATEWAY) extends L3b: blocking the review while
+    // the operator pause holds would make resume unable to wake it.
+    expect(operatorPauseExemptsStrandedIssue({ ...base, issueStatus: "in_review" })).toBe(true);
+  });
+
+  it("keeps the vendor behavior for an in_review issue under a system pause or with draining off", () => {
+    for (const pauseReason of ["budget", "system", "company_archived", "import", null]) {
+      expect(
+        operatorPauseExemptsStrandedIssue({
+          ...base,
+          issueStatus: "in_review",
+          agent: { ...base.agent, pauseReason },
+        }),
+      ).toBe(false);
+    }
+    expect(
+      operatorPauseExemptsStrandedIssue({ ...base, issueStatus: "in_review", drainsEnabled: false }),
+    ).toBe(false);
   });
 
   it("keeps the vendor behavior for a missing agent or an agent of another company", () => {

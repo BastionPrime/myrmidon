@@ -18,6 +18,9 @@ export const ATTENTION_SOURCE_KINDS = [
   "failed_run",
   "budget_alert",
   "agent_error_alert",
+  // myrmidon(SUB): an upstream release of a tracked stack component is newer
+  // than the running version, or appeared since the previous release check.
+  "stack_update",
 ] as const;
 
 export type AttentionSourceKind = (typeof ATTENTION_SOURCE_KINDS)[number];
@@ -31,7 +34,9 @@ export type AttentionSubjectKind =
   | "recovery_action"
   | "run"
   | "budget_incident"
-  | "agent";
+  | "agent"
+  // myrmidon(SUB): a component of the tracked stack registry.
+  | "stack_component";
 
 export type AttentionSeverity = "critical" | "high" | "medium" | "low";
 

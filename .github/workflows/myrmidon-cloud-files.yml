@@ -1,0 +1,157 @@
+name: Myrmidon cloud-files
+
+# The Microsoft 365 connector for container bots (tools/cloud-files, docs/myrmidon/cloud-files.md):
+#   ghcr.io/itkadr-git/myrmidon-cloud-files
+# On a pull request this runs the unit tests and checks that the image builds (no registry credentials);
+# push happens on main and on myr-v* tags, by the pattern in myrmidon-media-tools.yml. A manual run
+# from any other branch only runs the unit tests.
+
+on:
+  push:
+    branches: [main]
+    tags: ["myr-v*"]
+    paths:
+      - "tools/cloud-files/**"
+      - ".github/workflows/myrmidon-cloud-files.yml"
+  pull_request:
+    paths:
+      - "tools/cloud-files/**"
+      - ".github/workflows/myrmidon-cloud-files.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: myrmidon-cloud-files-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build cloud-files
+    if: ${{ github.repository == 'itkadr-git/myrmidon' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/itkadr-git/myrmidon-cloud-files
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/myr-v* ]]; then
+            tag="${GITHUB_REF#refs/tags/myr-}"
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::release tag must look like myr-vX.Y.Z, got ${GITHUB_REF#refs/tags/}"
+              exit 1
+            fi
+            echo "image_tag=${tag#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      # Unit tests of the spec validators and of the per-bot isolation, inside the build.
+      - name: Unit tests
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: tools/cloud-files
+          file: tools/cloud-files/Dockerfile
+          target: test
+          push: false
+
+      - name: Login to GitHub Container Registry
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/myr-v')) }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ghcr.io/itkadr-git/myrmidon-cloud-files
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.version.outputs.image_tag }},enable=${{ startsWith(github.ref, 'refs/tags/myr-v') }}
+          labels: |
+            org.opencontainers.image.title=Myrmidon cloud-files (Microsoft 365 connector)
+            org.opencontainers.image.description=OneDrive and mail MCP service for container bots with a per-bot ACL
+            org.opencontainers.image.source=https://github.com/itkadr-git/myrmidon
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build (pull request, no push)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: tools/cloud-files
+          file: tools/cloud-files/Dockerfile
+          target: service
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: cloud-files:pr-check
+          push: false
+          load: true
+          cache-from: type=registry,ref=ghcr.io/itkadr-git/myrmidon-cloud-files:buildcache
+
+      # Check the finished image, not the sources.
+      - name: Check the built image
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python cloud-files:pr-check -c "import cloud_files.server; print('import ok')"
+
+      - name: Build and push by digest
+        id: build
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/myr-v')) }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: tools/cloud-files
+          file: tools/cloud-files/Dockerfile
+          target: service
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=ghcr.io/itkadr-git/myrmidon-cloud-files,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=registry,ref=ghcr.io/itkadr-git/myrmidon-cloud-files:buildcache
+          cache-to: type=registry,ref=ghcr.io/itkadr-git/myrmidon-cloud-files:buildcache,mode=max
+
+      - name: Tag the built digest
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/myr-v')) }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ghcr.io/itkadr-git/myrmidon-cloud-files
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=(-t "$tag")
+          done < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools create "${args[@]}" "$IMAGE@$DIGEST"
+          docker buildx imagetools inspect "$IMAGE@$DIGEST"
+
+      - name: Summary
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/myr-v')) }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ghcr.io/itkadr-git/myrmidon-cloud-files
+        run: |
+          {
+            echo "### Myrmidon cloud-files (Microsoft 365 connector)"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Digest | \`$IMAGE@$DIGEST\` |"
+            echo "| Tags | $(jq -r '.tags | map("`" + . + "`") | join(", ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") |"
+          } >> "$GITHUB_STEP_SUMMARY"

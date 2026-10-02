@@ -27,23 +27,26 @@ export interface BuildChatStatusReplyInput {
 
 export async function buildChatStatusReply(input: BuildChatStatusReplyInput): Promise<string> {
   const { db, companyId, agentId, boardUserId, publicBaseUrl, context } = input;
-  const lines: string[] = [`${context.agent.name} · Telegram chat`];
+  // myrmidon(X8-texts): every line below is read by the chat owner in Telegram,
+  // so the labels are Russian; values (model names, levels, URLs, numbers)
+  // keep whatever the server stores.
+  const lines: string[] = [`${context.agent.name} · чат в Telegram`];
 
   const boardUrl = safeChatTaskUrl(publicBaseUrl, context.issue.id);
-  if (boardUrl) lines.push(`Board: ${boardUrl}`);
+  if (boardUrl) lines.push(`Доска: ${boardUrl}`);
 
   const overrideAdapterConfig = readOverrideAdapterConfig(context.issue.assigneeAdapterOverrides);
   const model = describeEffectiveChatValue(overrideAdapterConfig, context.agent.adapterConfig, "model");
-  lines.push(`Model: ${model.value} (${model.source})`);
+  lines.push(`Модель: ${model.value} (${model.source})`);
   if (THINK_OVERRIDE_ALLOWED_ADAPTER_TYPES.includes(context.agent.adapterType)) {
     const reasoning = describeEffectiveChatValue(overrideAdapterConfig, context.agent.adapterConfig, "effort");
-    lines.push(`Reasoning: ${reasoning.value} (${reasoning.source})`);
+    lines.push(`Рассуждения: ${reasoning.value} (${reasoning.source})`);
   }
 
   const hasModelSession = await hasAgentTaskSession(db, companyId, agentId, context.issue.id);
   lines.push(
-    `Session: #${context.issue.conversationSessionGeneration + 1}, model session ${
-      hasModelSession ? "active" : "starts fresh on next reply"
+    `Сессия: #${context.issue.conversationSessionGeneration + 1}, сессия модели ${
+      hasModelSession ? "активна" : "начнётся заново со следующим ответом"
     }`,
   );
 
@@ -55,9 +58,9 @@ export async function buildChatStatusReply(input: BuildChatStatusReplyInput): Pr
   const crossChannel = readCrossChannelSettings();
   if (crossChannel.messages > 0) {
     const webConversation = await issueService(db).getConversation(companyId, agentId, boardUserId);
-    lines.push(`Web chat: ${webConversation ? `shared (last ${crossChannel.messages} messages)` : "none"}`);
+    lines.push(`Веб-чат: ${webConversation ? `общий (последние ${crossChannel.messages} сообщений)` : "нет"}`);
   } else {
-    lines.push("Web chat: not shared");
+    lines.push("Веб-чат: не общий");
   }
 
   return lines.join("\n");
@@ -106,9 +109,9 @@ async function describeCurrentTurn(
     )
     .orderBy(desc(heartbeatRuns.createdAt))
     .limit(1);
-  if (!run) return "Now: idle";
-  if (run.status === "queued") return "Now: queued";
-  return `Now: replying since ${formatUtcTime(run.startedAt ?? run.createdAt)}`;
+  if (!run) return "Сейчас: простаивает";
+  if (run.status === "queued") return "Сейчас: в очереди";
+  return `Сейчас: отвечает с ${formatUtcTime(run.startedAt ?? run.createdAt)}`;
 }
 
 function formatUtcTime(value: Date | string | null): string {
@@ -155,5 +158,5 @@ function formatUsageLine(usageJson: Record<string, unknown> | null): string | nu
   if (inputTokens === null && outputTokens === null) return null;
   const cost = firstFiniteNumber(usageJson.costUsd, usageJson.cacheAdjustedCostUsd);
   const costText = cost !== null && cost > 0 ? `, $${cost.toFixed(2)}` : "";
-  return `Last reply: ${inputTokens ?? 0} in / ${outputTokens ?? 0} out tokens${costText}`;
+  return `Последний ответ: ${inputTokens ?? 0} вх. / ${outputTokens ?? 0} исх. токенов${costText}`;
 }
