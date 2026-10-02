@@ -76,6 +76,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/agent-memory-card.md](guides/agent-memory-card.md) | Вкладка «Memory» карточки агента: просмотр, выгрузка и удаление записей банка памяти, журнал |
 | [guides/browsers.md](guides/browsers.md) | Раздел «Браузеры» в настройках: экран живого браузера, пауза ботов на время сессии, журнал, очистка данных сайта |
 | [guides/stack-registry.md](guides/stack-registry.md) | Реестр компонентов стека: API, проба Docker, кэш, настройка сокета |
+| [guides/bridge-extension.md](guides/bridge-extension.md) | Браузерный мост, расширение (часть C): read-only действия в браузере клиентского ПК, сопряжение кодом, сборка и load-unpacked |
 
 ## Сборка и запуск
 
