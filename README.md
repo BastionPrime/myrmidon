@@ -117,7 +117,9 @@ what exists as of 1.5:
   that survive a mass wake ([run-limits](docs/myrmidon/guides/run-limits.md)).
 - **UI 2.0 shell.** The first piece of the 2.0 interface — the rail, the
   nest switcher, the design tokens — behind an instance flag, off by
-  default.
+  default. Its screens are bilingual, English and Russian, with the
+  language saved per user on the server
+  ([ui2-language](docs/myrmidon/guides/ui2-language.md)).
 
 Myrmidon sends no telemetry to the vendor. All settings are
 `MYRMIDON_*` environment variables documented in

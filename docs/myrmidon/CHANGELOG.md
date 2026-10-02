@@ -78,6 +78,20 @@ version file to edit. Base Paperclip version is in the image label
   STATUS-STRIP endpoint exists. i18n keys `ui2.*` ship in en/ru (translated)
   and the other locales (English values until the translation pass).
 
+### Interface language of the 2.0 UI (UI2-I18N)
+
+- The 2.0 UI tree is bilingual: English base, full Russian translation. The
+  language is a per-user setting stored on the server (table
+  `user_ui_language`, migration 0289) — the choice follows the person across
+  browsers; `GET/PUT /api/myrmidon/ui2/language/me` (board users only, one
+  activity-log entry per company membership on a change). In the browser the
+  last choice is mirrored to `localStorage`, so a reload keeps the language
+  before the request resolves and a failed write leaves it applied locally
+  with a flag. The `lang` attribute on the ui2 root switches the display font
+  (Saira / Exo 2). Guard tests hold the catalogs: key parity en↔ru, no
+  untranslated Russian values, no hard-coded user-visible strings in the
+  ui2 tree. User guide: [guides/ui2-language.md](guides/ui2-language.md).
+
 ### Task PR sync
 
 - A task delivered by a pull request settles itself once its PRs merge

@@ -86,6 +86,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) | История ревизий инструкций агента: снимки, откат, журнал |
 | [guides/auto-resume.md](guides/auto-resume.md) | Автовозобновление агента из `error`: бэкофф 1/5/15, карточка оператору после потолка попыток, настройки |
 | [guides/task-pr-sync.md](guides/task-pr-sync.md) | Закрытие задачи по слитым PR: проход по рабочим продуктам `pull_request`, возврат исполнителю без слияния, гейты после выката, сторож побудок |
+| [guides/ui2-language.md](guides/ui2-language.md) | Язык интерфейса 2.0: экран выбора, хранение настройки на сервере per-user, каталоги `ui2.*` и сторож-тесты, эндпоинт для операторов |
 
 ## Сборка и запуск
 
