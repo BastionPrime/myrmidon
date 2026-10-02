@@ -329,6 +329,8 @@ export const ru: Ui2Catalog = {
         aria: "Сказать Командиру (Ctrl K)",
         placeholder: "Сказать Командиру…",
         stubNote: "Заглушка: сообщение пока не отправляется. Оно открывает существующий чат; диалог Командира появится с обновлением чата 1.6.",
+        // myrmidon(1.6-CTO-CHAT-A): palette carries the draft to the real screen.
+        carryNote: "Черновик откроется в чате Полководца: доска соберёт из вашего текста эпик на одобрение.",
         openChat: "Открыть чат",
       },
       nav: {
@@ -342,5 +344,18 @@ export const ru: Ui2Catalog = {
         placeholderBody: "Макет 2.0 для этой зоны ещё не подключён; рабочий экран ниже сохраняет поток.",
         placeholderLegacyLink: "Вернуться к текущему макету",
       },
+  },
+  // myrmidon(1.6-CTO-CHAT-A): the Commander chat screen — free-text planning
+  // entry (screen-map §4.3).
+  commanderChat: {
+    title: "Чат с Полководцем",
+    subtitle: "Опишите задачу обычным текстом — доска предложит эпик с задачами на ваше одобрение.",
+    loading: "Загружаем беседу…",
+    noAgent: "В этой компании ещё нет агента-Полководца.",
+    placeholder: "Скажите Полководцу, что нужно построить…",
+    send: "Собрать план",
+    planAria: "Предложенный план",
+    epicLabel: "Эпик",
+    resolving: "Применяем ваше решение…",
   },
 };

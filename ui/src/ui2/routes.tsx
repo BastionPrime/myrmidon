@@ -17,6 +17,9 @@ import { Ui2AgentOverviewPage } from "./screens/agent-overview/Ui2AgentOverviewP
 import { Ui2RunsSettings } from "./screens/settings/runs-queue/Ui2RunsSettings";
 import { Ui2SystemSettings } from "./screens/settings/system/Ui2SystemSettings";
 import { Ui2LanguageSettings } from "./screens/settings/language/Ui2LanguageSettings";
+// myrmidon(1.6-CTO-CHAT-A): the Commander chat screen — a real ui2 screen, not
+// a placeholder (see screens/CommanderChatScreen.tsx).
+import { CommanderChatScreen } from "./screens/CommanderChatScreen";
 
 export type Ui2ScreenKey =
   | "decisions"
@@ -24,7 +27,8 @@ export type Ui2ScreenKey =
   | "agent-overview"
   | "settings-runs-queue"
   | "settings-system"
-  | "settings-language";
+  | "settings-language"
+  | "commander-chat";
 
 export interface Ui2RouteEntry {
   key: Ui2ScreenKey;
@@ -90,6 +94,16 @@ export const UI2_ROUTE_TABLE: Ui2RouteEntry[] = [
     titleKey: "ui2.screens.language",
     element: ui2Screen(<Ui2LanguageSettings />),
     legacyPath: "/company/settings",
+  },
+  // myrmidon(1.6-CTO-CHAT-A): the Commander chat — own route under the ui2
+  // flag. The legacy entry stays /board-chat (conference room); this screen is
+  // the single-owner planning conversation, so it does not shadow it.
+  {
+    key: "commander-chat",
+    path: "commander-chat",
+    titleKey: "ui2.screens.commanderChat",
+    element: <CommanderChatScreen />,
+    legacyPath: "/board-chat",
   },
 ];
 
