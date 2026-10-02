@@ -284,6 +284,22 @@ domain typed in (bare domain); cookies+storage are cleaned on the node via CDP.
 |---|---|---|---|---|
 | `MYRMIDON_STACK_DOCKER_SOCKET` | SUA | `/var/run/docker.sock` | Path to the Docker unix socket the stack registry image probes use to read digests and component labels with the `docker-image` probe (Docker API `GET /images/{ref}/json`, 10s timeout) | Socket unavailable on `POST /api/myrmidon/stack/refresh` — 503, the previous cache is kept; an individual missing image is an honest «unknown» with a reason, not an error. Read on every refresh, no server restart needed |
 
+## EXTCASE-B — мост браузера расширению клиента
+
+Настройки серверного модуля `server/src/myrmidon/browser-bridge/` (первый сторонний кейс: браузерные
+действия выполняются в браузере клиента, доска туда не дотягивается). Настройки моста задаются не
+переменной окружения, а записью `instance_settings.general.browserBridge`
+(`GET`/`PATCH /api/myrmidon/browser-bridge/settings`, чтение — board, запись — instance-admin):
+`domains` — домены ТП (allowlist), `signing` — политика подписи клиента
+(`enabled` — аварийное выключение, `mode` — `auto`/`manual`/`types`, `types` — типы действий,
+которые требуют человека при `mode: types`). Аварийное выключение одной кнопкой —
+`POST /api/myrmidon/browser-bridge/signing/disable`; после него шлюз отклоняет любое sign-действие
+(fail-closed), а факт выключения пишется в журнал компании.
+
+| Переменная | Функция | По умолчанию | Что делает | Как выключить / особое |
+|---|---|---|---|---|
+| `MYRMIDON_BROWSER_BRIDGE_PEPPER` | EXTCASE-B | не задана | Перец HMAC для pairing-кодов и bridge-токенов моста: в базе лежат только дайджесты, по ним проверяются предъявленный код (обмен на токен устройства) и токен при подключении расширения к `/bridge/v1` | Не задана — процесс берёт случайный перец на свой старт и пишет предупреждение: всё выданное до перезапуска перестаёт проверяться, устройства парируются заново (панель выдаёт новый код). Задаётся в окружении доски, значение — секрет, в репозитории и логах не хранится. Перец общий на инстанс, поэтому он не лежит в настройках, которые панель читает и правит |
+
 ## 1.4 — EXT-CASE-OCR (the OCR path: PDF -> text in the bot workspace)
 
 | Variable | Function | Default | What it does | How to disable / special |
