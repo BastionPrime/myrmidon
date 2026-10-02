@@ -103,7 +103,7 @@ API доски под `/api/myrmidon/companies/:companyId/evals`:
 `myrmidon-evals`: `evals.seeded` (роль, inserted/updated), `evals.run_completed`
 (роль, субъект, вердикт, scorePercent, needsConfirm) и `evals.run_confirmed`
 (роль, субъект, вердикт, scorePercent). Тексты ответов и сырые ответы судьи
-остаются в `eval_runs.scores` — журнал их не видит.
+не сохраняются вовсе — в `eval_runs.scores` лежат только начисленные баллы и агрегат; журнал их не видит.
 
 ## Экспорт в Langfuse (необязательный, по умолчанию выключен)
 

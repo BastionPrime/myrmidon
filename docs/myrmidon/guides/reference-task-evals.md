@@ -105,8 +105,9 @@ today the seam is exercised through this API.
 Every mutation writes one activity row by the system actor `myrmidon-evals`:
 `evals.seeded` (role, inserted/updated), `evals.run_completed`
 (role, subject, verdict, scorePercent, needsConfirm) and `evals.run_confirmed`
-(role, subject, verdict, scorePercent). Answer texts and judge raw responses
-stay in `eval_runs.scores` — the journal never sees them.
+(role, subject, verdict, scorePercent). Answer texts and judge raw responses are not
+persisted at all — only awarded points and the aggregate live in
+`eval_runs.scores`; the journal never sees them.
 
 ## Langfuse export (optional, off by default)
 
