@@ -1439,13 +1439,23 @@ class AuthorityConnection {
     );
   }
 
-  /** True once this side closed the connection and withdrew its authority. */
+  /** True once the control plane withdrew this connection's authority. */
   get revoked(): boolean {
     return this.#revoked;
   }
 
-  close(code?: number): void {
+  /** Withdraw authority and close: frames already queued on this connection
+   * are dropped (the runner replays them on its next authenticated
+   * connection). Use for protocol faults, admission rejection, a failed
+   * event commit, replacement and forced re-authentication. */
+  revoke(code?: number): void {
     this.#revoked = true;
+    this.close(code);
+  }
+
+  /** Close the socket only. Frames already queued keep their processing, so
+   * stop() followed by drainPendingConnectionProcessing() settles them. */
+  close(code?: number): void {
     if (this.#closed) return;
     this.#closed = true;
     this.wire.close(code);
@@ -1569,6 +1579,8 @@ export class DurablePrpControlPlane {
 
   async stop(): Promise<void> {
     for (const connection of this.#connections) {
+      // Ingress shutdown, not revocation: queued frames still settle through
+      // drainPendingConnectionProcessing().
       connection.close();
     }
     this.#connections.clear();
@@ -1603,7 +1615,9 @@ export class DurablePrpControlPlane {
   disconnectActiveRunner(): void {
     const connections = [...this.#connections];
     this.#connections.clear();
-    for (const connection of connections) connection.close();
+    // Rotation or an unpersistable tool result withdraws this owner's
+    // authority; its queued frames must not run against the new state.
+    for (const connection of connections) connection.revoke();
   }
 
   activeRunnerConnectionCount(): number {
@@ -2003,17 +2017,18 @@ export class DurablePrpControlPlane {
     connection = new AuthorityConnection({
       wire,
       onJson: (value) => {
-        // Frames queued behind an in-flight handler must not outlive a local
-        // close: a revoked owner (lost ACK, replaced connection, protocol
+        // Frames queued behind an in-flight handler must not outlive a
+        // revocation: a revoked owner (lost ACK, replaced connection, protocol
         // fault) cannot complete commands ahead of its replayed events. The
-        // runner replays both on its next authenticated connection.
+        // runner replays both on its next authenticated connection. A plain
+        // close (stop) keeps processing so the drain can settle it.
         processing = processing
           .then(() =>
             connection.revoked
               ? undefined
               : this.#handleJson(connection, value),
           )
-          .catch(() => connection.close());
+          .catch(() => connection.revoke());
         const tail = processing;
         this.#connectionProcessing.set(connection, tail);
         const release = () => {
@@ -2044,7 +2059,7 @@ export class DurablePrpControlPlane {
     } catch {
       this.#store.state.malformedFrames += 1;
       this.#store.save();
-      connection.close();
+      connection.revoke();
       return;
     }
     const envelopeVersion = envelope.version;
@@ -2060,7 +2075,7 @@ export class DurablePrpControlPlane {
           (envelopeVersion as number) > protocolVersion
         : envelopeVersion !== expectedVersion)
     ) {
-      connection.close();
+      connection.revoke();
       return;
     }
     const kind = envelope.kind;
@@ -2083,7 +2098,7 @@ export class DurablePrpControlPlane {
       connection.lease.revokedAt !== null ||
       connection.lease.expiresAtUnixMs <= Date.now()
     ) {
-      connection.close();
+      connection.revoke();
       return;
     }
     if (kind === "lease_renew") {
@@ -2094,7 +2109,7 @@ export class DurablePrpControlPlane {
       if (this.#store.state.warmTransition?.phase === "awaiting_result")
         connection.replayOnly = true;
       if (connection.replayOnly) {
-        connection.close();
+        connection.revoke();
         return;
       }
       await this.#event(connection, envelope);
@@ -2130,7 +2145,7 @@ export class DurablePrpControlPlane {
         canonicalJson(connection.identity) !==
           canonicalJson(receipt.newIdentity)
       ) {
-        connection.close();
+        connection.revoke();
         return;
       }
       if (transition) {
@@ -2161,7 +2176,7 @@ export class DurablePrpControlPlane {
       return;
     }
     if (kind !== "pong") {
-      connection.close();
+      connection.revoke();
     }
   }
 
@@ -2183,7 +2198,7 @@ export class DurablePrpControlPlane {
       (expectedExpiry as number) <= 0 ||
       (expectedExpiry as number) > lease.expiresAtUnixMs
     ) {
-      connection.close();
+      connection.revoke();
       return;
     }
     // A handoff receipt binds the exact expiry. Finish that boundary before
@@ -2426,17 +2441,17 @@ export class DurablePrpControlPlane {
     envelope: Record<string, unknown>,
   ): void {
     if (connection.pendingChallenge !== null) {
-      connection.close();
+      connection.revoke();
       return;
     }
     const payload = envelope.payload as Record<string, unknown> | undefined;
     if (payload === undefined || typeof payload.clientNonce !== "string") {
-      connection.close();
+      connection.revoke();
       return;
     }
     const authorization = this.#authorizeHello(payload);
     if (authorization === null) {
-      connection.close();
+      connection.revoke();
       return;
     }
     const serverNonce = randomUUID();
@@ -2517,12 +2532,12 @@ export class DurablePrpControlPlane {
       payload.clientNonce !== pending.clientNonce ||
       payload.serverNonce !== pending.serverNonce
     ) {
-      connection.close();
+      connection.revoke();
       return;
     }
     let authorization = this.#reauthorizePendingChallenge(pending, Date.now());
     if (authorization === null) {
-      connection.close();
+      connection.revoke();
       return;
     }
     const expectedClientProof = domainHmac(
@@ -2534,7 +2549,7 @@ export class DurablePrpControlPlane {
       ],
     );
     if (!proofMatches(expectedClientProof, payload.clientProof)) {
-      connection.close();
+      connection.revoke();
       return;
     }
     if (this.#beforeAuthenticatedConnection) {
@@ -2548,7 +2563,7 @@ export class DurablePrpControlPlane {
       // challenge, credential snapshot, expiry, and live connection afterward;
       // credential consumption through welcome remains one synchronous boundary.
       if (this.#protocolIntegrityError !== null) {
-        connection.close();
+        connection.revoke();
         return;
       }
       if (
@@ -2558,7 +2573,7 @@ export class DurablePrpControlPlane {
         return;
       authorization = this.#reauthorizePendingChallenge(pending, Date.now());
       if (authorization === null) {
-        connection.close();
+        connection.revoke();
         return;
       }
     }
@@ -2582,7 +2597,7 @@ export class DurablePrpControlPlane {
           : { warmTransitionId: pending.warmTransitionId }),
       }) === null
     ) {
-      connection.close();
+      connection.revoke();
       return;
     }
     let leaseToken: string | null = null;
@@ -2600,7 +2615,7 @@ export class DurablePrpControlPlane {
           original.expiresAtUnixMs <= Date.now() ||
           original.revocationEpoch !== recovering.receipt.leaseRevocationEpoch)
       ) {
-        connection.close();
+        connection.revoke();
         return;
       }
       leaseToken = `lease_${randomUUID()}`;
@@ -2644,7 +2659,7 @@ export class DurablePrpControlPlane {
         pending.warmTransitionVersion !== 1 ||
         lease.credentialId !== transition.credentialId
       ) {
-        connection.close();
+        connection.revoke();
         return;
       }
       if (transition.phase === "prepared") {
@@ -2686,7 +2701,7 @@ export class DurablePrpControlPlane {
     );
     for (const active of this.#connections) {
       if (active !== connection && active.secureChannel !== null)
-        active.close();
+        active.revoke(); // replaced by the newly authenticated owner
     }
     this.#welcome(connection, leaseToken);
   }
@@ -2694,7 +2709,7 @@ export class DurablePrpControlPlane {
   #welcome(connection: AuthorityConnection, leaseToken: string | null): void {
     const lease = connection.lease;
     if (lease === null || connection.connectionId === null) {
-      connection.close();
+      connection.revoke();
       return;
     }
 
@@ -2841,7 +2856,7 @@ export class DurablePrpControlPlane {
     const result = envelope.payload as Record<string, unknown> | undefined;
     const commandId = result?.commandId;
     if (result === undefined || typeof commandId !== "string") {
-      connection.close();
+      connection.revoke();
       return;
     }
     const transition = this.#store.state.warmTransition;
@@ -2854,7 +2869,7 @@ export class DurablePrpControlPlane {
         canonicalJson(result) !==
           canonicalJson(transition.expectedResult ?? transition.command.result)
       ) {
-        connection.close();
+        connection.revoke();
         return;
       }
       if (transition.phase === "awaiting_result") {
@@ -2879,7 +2894,7 @@ export class DurablePrpControlPlane {
       (candidate) => candidate.commandId === commandId,
     );
     if (command === undefined) {
-      connection.close();
+      connection.revoke();
       return;
     }
     if (this.#isTerminalLifecycleCommand(command)) {
@@ -2897,12 +2912,12 @@ export class DurablePrpControlPlane {
       status !== "rejected" &&
       status !== "indeterminate"
     ) {
-      connection.close();
+      connection.revoke();
       return;
     }
     if (command.status !== "pending") {
       if (canonicalJson(command.result) !== canonicalJson(result)) {
-        connection.close();
+        connection.revoke();
         return;
       }
       this.#store.state.duplicateCommandResults += 1;
@@ -2919,7 +2934,7 @@ export class DurablePrpControlPlane {
       status === "completed"
     ) {
       if (connection.warmTransitionVersion !== 1 || connection.lease === null) {
-        connection.close();
+        connection.revoke();
         return;
       }
       const receipt = warmTransitionReceipt(
@@ -3016,7 +3031,7 @@ export class DurablePrpControlPlane {
         this.#onProtocolIntegrityError?.(error);
       }
     } finally {
-      connection.close();
+      connection.revoke();
     }
   }
 
@@ -3025,7 +3040,7 @@ export class DurablePrpControlPlane {
     envelope: Record<string, unknown>,
   ): Promise<void> {
     if (this.#protocolIntegrityError !== null) {
-      connection.close();
+      connection.revoke();
       return;
     }
     // Authentication binds the channel, but an authenticated sender can still
@@ -3039,12 +3054,12 @@ export class DurablePrpControlPlane {
       envelope.turnId !== this.#identity.turnId ||
       envelope.itemId !== this.#identity.itemId
     ) {
-      connection.close();
+      connection.revoke();
       return;
     }
     const validated = validatePrpEvent(envelope.payload);
     if (!validated.ok) {
-      connection.close();
+      connection.revoke();
       return;
     }
     const event = validated.event;
@@ -3063,7 +3078,7 @@ export class DurablePrpControlPlane {
       event.turnId !== this.#identity.turnId ||
       event.itemId !== this.#identity.itemId
     ) {
-      connection.close();
+      connection.revoke();
       return;
     }
     const semantic = (event.payload as Record<string, unknown> | undefined)
@@ -3087,7 +3102,7 @@ export class DurablePrpControlPlane {
         semanticCorrelation.turnId !== this.#identity.turnId ||
         semanticCorrelation.itemId !== this.#identity.itemId)
     ) {
-      connection.close();
+      connection.revoke();
       return;
     }
     const existing = this.#store.state.committedEvents.find(
@@ -3098,7 +3113,7 @@ export class DurablePrpControlPlane {
         ? sourceSeq !== this.#store.state.ackedSourceSeq + 1
         : sourceSeq !== existing.sourceSeq
     ) {
-      connection.close();
+      connection.revoke();
       return;
     }
     if (
@@ -3143,7 +3158,7 @@ export class DurablePrpControlPlane {
           )
         : null;
     if (eventToEvict === -1) {
-      connection.close();
+      connection.revoke();
       return;
     }
     // The caller's durable commit is the acknowledgement authority. A crash
@@ -3157,7 +3172,7 @@ export class DurablePrpControlPlane {
       if (error instanceof NativeSessionProtocolIntegrityError) {
         this.#failProtocolIntegrity(connection, error);
       } else {
-        connection.close();
+        connection.revoke();
       }
       return;
     }
@@ -3165,7 +3180,7 @@ export class DurablePrpControlPlane {
     // is in flight. Once that exact owner has faulted, even a prior successful
     // commit cannot reopen delivery or invoke a new business operation.
     if (this.#protocolIntegrityError !== null) {
-      connection.close();
+      connection.revoke();
       return;
     }
 
@@ -3181,7 +3196,7 @@ export class DurablePrpControlPlane {
           (candidate) => !unsettledSemanticInput(candidate, this.#store.state),
         );
         if (currentEviction < 0) {
-          connection.close();
+          connection.revoke();
           return;
         }
         this.#store.state.committedEvents.splice(currentEviction, 1);
