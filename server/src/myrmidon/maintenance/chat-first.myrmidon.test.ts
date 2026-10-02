@@ -114,9 +114,8 @@ describeEmbeddedPostgres("chat-first: the queued-run start path", () => {
 
   afterEach(async () => {
     await heartbeatService(db).drainActiveRunExecutions();
-    // Issues reference runs (executionRunId); runs reference wakeups; run
-    // events reference runs. The FK-safe order: wakeups, issues, events, runs.
-    await db.delete(agentWakeupRequests);
+    // FK-safe order: issues first (their executionRunId is set-null), then run
+    // events, then runs, then wakeups (runs reference them).
     await db.delete(issues);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await db.delete(heartbeatRunEvents);
@@ -128,6 +127,7 @@ describeEmbeddedPostgres("chat-first: the queued-run start path", () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
     }
+    await db.delete(agentWakeupRequests);
     await db.delete(agents);
     await db.delete(companies);
     await db.delete(instanceSettings);
