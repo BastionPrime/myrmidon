@@ -20,6 +20,7 @@ import {
   type MaintenanceWindow,
 } from "./domain.js";
 import { setMaintenanceDocumentCache, windowAgentIds } from "./gate.js";
+import { withHookTimeout } from "./hook-timeout.js";
 import { readMaintenanceSettings } from "./settings.js";
 import { mutateMaintenanceDocument, readMaintenanceDocument } from "./store.js";
 
@@ -83,10 +84,20 @@ const SYSTEM_ACTOR: MaintenanceActor = { actorType: "system", actorId: "myrmidon
 
 export function maintenanceService(
   db: Db,
-  deps: { heartbeat: MaintenanceHeartbeatPort; hooks?: MaintenanceHooks; now?: () => Date },
+  deps: {
+    heartbeat: MaintenanceHeartbeatPort;
+    hooks?: MaintenanceHooks;
+    now?: () => Date;
+    /** Upper bound for one integration hook call (onEntered/onExited). A hook
+     *  that exceeds it is abandoned (the promise keeps running detached) and the
+     *  window lifecycle continues — OPE-3638: a hung onExited pinned `leaving`
+     *  windows for hours. Defaults to MYRMIDON_MAINTENANCE_HOOK_TIMEOUT_MS (15s). */
+    hookTimeoutMs?: number;
+  },
 ) {
   const now = deps.now ?? (() => new Date());
   const hooks = deps.hooks ?? {};
+  const hookTimeoutMs = deps.hookTimeoutMs ?? readMaintenanceSettings().hookTimeoutMs;
 
   async function agentFilter(window: MaintenanceWindow, column: AnyPgColumn): Promise<SQL | null | false> {
     const ids = await windowAgentIds(db, window);
@@ -203,7 +214,19 @@ export function maintenanceService(
     const hook = hooks[name];
     if (!hook) return;
     try {
-      const zabbix = await hook(window);
+      // myrmidon(HOOK-TIMEOUT, OPE-3638): the hook is bounded. A hung hook is
+      // abandoned (it keeps running detached — we cannot cancel a promise) and
+      // the caller proceeds; the timeout is logged and audited below.
+      const zabbix = await withHookTimeout(
+        () => hook(window),
+        hookTimeoutMs,
+        () => {
+          logger.error(
+            { windowId: window.id, hook: name, hookTimeoutMs },
+            "maintenance integration hook timed out",
+          );
+        },
+      );
       if (zabbix && name === "onEntered") {
         await write((doc) => ({
           next: doc.windows.some((w) => w.id === window.id)
@@ -228,6 +251,13 @@ export function maintenanceService(
 
   // myrmidon(EXIT-ASYNC): the leave tail runs on the maintenance tick
   // (tickWindow for a `leaving` window), not inside the exit HTTP call.
+  // myrmidon(LEAVE-ALWAYS, OPE-3638): retire ALWAYS runs. Before this the
+  // retire write sat after the hook and the resume; a hook that threw past
+  // runHook's catch (or a throw between them) left the window in `leaving`
+  // forever, and `enter` answered 409 "still leaving" on the next try — 38
+  // open windows in production. The hook side effect (the Zabbix period
+  // deletion) can be lost on the hung side, recorded in the log/audit, and
+  // the window still closes.
   async function finishLeaving(window: MaintenanceWindow) {
     // Admission is already open for this window (state `leaving`); start what queued up.
     try {
@@ -236,13 +266,20 @@ export function maintenanceService(
       // The vendor periodic resumeQueuedRuns picks the queue up anyway.
       logger.error({ err, windowId: window.id }, "failed to resume queued runs after maintenance");
     }
-    await runHook(window, "onExited");
-    const at = now();
-    await write((doc) => ({
-      next: doc.windows.some((w) => w.id === window.id) ? retireWindow(doc, window.id, at) : null,
-      result: null,
-    }));
-    await audit(window, "exited", SYSTEM_ACTOR);
+    try {
+      await runHook(window, "onExited");
+    } catch (err) {
+      // Belt and braces: runHook catches its own, but the retire below must
+      // run even if something between here and it throws.
+      logger.error({ err, windowId: window.id }, "onExited hook failed while leaving maintenance");
+    } finally {
+      const at = now();
+      await write((doc) => ({
+        next: doc.windows.some((w) => w.id === window.id) ? retireWindow(doc, window.id, at) : null,
+        result: null,
+      }));
+      await audit(window, "exited", SYSTEM_ACTOR);
+    }
   }
 
   async function tickWindow(window: MaintenanceWindow) {
@@ -306,13 +343,20 @@ export function maintenanceService(
     tickInFlight = (async () => {
       const doc = await readMaintenanceDocument(db);
       setMaintenanceDocumentCache(doc);
-      for (const window of doc.windows) {
-        try {
-          await tickWindow(window);
-        } catch (err) {
-          logger.error({ err, windowId: window.id }, "maintenance tick failed for window");
-        }
-      }
+      // myrmidon(TICK-ISOLATION, OPE-3638): each window is processed
+      // independently. Before this the loop was sequential and awaited every
+      // tickWindow: one stuck `leaving` window (a hung onExited hook, a slow
+      // interrupt) starved every window behind it — the 15:37 deploy drain
+      // could not interrupt its 16 runs because earlier windows held the tick.
+      // The per-window try/catch is kept: a window's failure is logged, never
+      // the tick's.
+      await Promise.allSettled(
+        doc.windows.map((window) =>
+          tickWindow(window).catch((err) => {
+            logger.error({ err, windowId: window.id }, "maintenance tick failed for window");
+          }),
+        ),
+      );
     })().finally(() => {
       tickInFlight = null;
     });
