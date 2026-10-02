@@ -233,6 +233,11 @@ import { resolveCoreTrustPreset } from "../services/trust-preset-resolver.js";
 import { readObject } from "../lib/objects.js";
 import { listInvalidOrgChainDescendantIds } from "../services/agent-invokability.js";
 import { logger } from "../middleware/logger.js";
+// myrmidon(H2): revision history for agent instructions bundles
+import {
+  recordAgentInstructionsRevision,
+  type AgentInstructionsRevisionSource,
+} from "../myrmidon/agent-instructions-revisions/service.js";
 // myrmidon(S4): agent self-update guards and model validation
 import {
   assertInheritProcessEnvChangeAllowed,
@@ -2807,6 +2812,42 @@ export function agentRoutes(
     throw forbidden(decision.explanation, authorizationDeniedDetails(decision));
   }
 
+  // myrmidon(H2): snapshot the agent's whole instructions bundle into the
+  // revision table after a change. Exported bundle files are read from the
+  // agent's CURRENT state (the caller just wrote it); a failure to record is
+  // logged, never fatal to the edit itself.
+  async function recordInstructionsRevisionAfterChange(
+    targetAgentId: string,
+    input: {
+      source: AgentInstructionsRevisionSource;
+      changedFiles?: string[];
+      actor?: { agentId: string | null; actorType: string; actorId: string };
+    },
+  ): Promise<void> {
+    try {
+      const agent = await svc.getById(targetAgentId);
+      if (!agent) return;
+      const exported = await instructions.exportFiles(agent);
+      await recordAgentInstructionsRevision(db, agent, {
+        source: input.source,
+        files: exported.files,
+        entryFile: exported.entryFile,
+        changedFiles: input.changedFiles,
+        actor: input.actor
+          ? {
+            createdByAgentId: input.actor.actorType === "agent" ? input.actor.agentId : null,
+            createdByUserId: input.actor.actorType === "user" ? input.actor.actorId : null,
+          }
+          : undefined,
+      });
+    } catch (error) {
+      logger.warn(
+        { error, agentId: targetAgentId, source: input.source },
+        "failed to record an instructions revision",
+      );
+    }
+  }
+
   async function assertCanManageInstructionsPath(req: Request, targetAgent: { id: string; companyId: string }) {
     await assertCanApplyProtectedAgentChange(
       req,
@@ -5023,6 +5064,12 @@ export function agentRoutes(
 
     const actor = getActorInfo(req);
     const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
+    // myrmidon(H2): a bundle-level change (mode, root, entry file) reshapes the
+    // bundle; snapshot the resulting state as a revision.
+    await recordInstructionsRevisionAfterChange(existing.id, {
+      source: "instructions_bundle_patch",
+      actor,
+    });
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       adapterConfig,
@@ -5088,6 +5135,13 @@ export function agentRoutes(
     const result = await instructions.writeFile(existing, req.body.path, req.body.content, {
       clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate,
     });
+    // myrmidon(H2): record the changed bundle as a revision so any earlier
+    // instructions state can be restored (single source with history).
+    await recordInstructionsRevisionAfterChange(existing.id, {
+      source: "instructions_bundle_file_put",
+      changedFiles: [result.file.path],
+      actor,
+    });
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       result.adapterConfig,
@@ -5140,6 +5194,12 @@ export function agentRoutes(
 
     const actor = getActorInfo(req);
     const result = await instructions.deleteFile(existing, relativePath);
+    // myrmidon(H2): the deletion changed the bundle; keep the revision trail.
+    await recordInstructionsRevisionAfterChange(existing.id, {
+      source: "instructions_bundle_file_delete",
+      changedFiles: [relativePath],
+      actor,
+    });
     await logActivity(db, {
       companyId: existing.companyId,
       actorType: actor.actorType,
