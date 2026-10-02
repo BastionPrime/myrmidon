@@ -78,6 +78,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/browsers.md](guides/browsers.md) | Раздел «Браузеры» в настройках: экран живого браузера, пауза ботов на время сессии, журнал, очистка данных сайта |
 | [guides/stack-registry.md](guides/stack-registry.md) | Реестр компонентов стека: API, проба Docker, кэш, настройка сокета |
 | [guides/bridge-extension.md](guides/bridge-extension.md) | Браузерный мост, расширение (часть C): read-only действия в браузере клиентского ПК, сопряжение кодом, сборка и load-unpacked |
+| [guides/owner-telegram-cards.md](guides/owner-telegram-cards.md) | Доставка карточек вопросов и согласований владельцу задачи в Telegram-личку с агентом-автором (U2) |
 
 ## Сборка и запуск
 
