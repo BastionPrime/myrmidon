@@ -343,6 +343,11 @@ The board API is `GET/POST /api/myrmidon/companies/:companyId/evals/{tasks,seed,
 The judge never executes code: for `code`-kind reference tasks the CI pass rate arrives as a request
 parameter and is folded into the aggregate as a separate score line.
 
+The operator guide for the whole path — seeding the corpus, running a subject,
+the promote/confirm/regress verdict with its threshold+repeat rule, the
+journal rows and the Langfuse export — is
+[guides/reference-task-evals.md](guides/reference-task-evals.md).
+
 ## EXTCASE-B — browser bridge to the client's extension
 
 Settings of the server module `server/src/myrmidon/browser-bridge/` (the first third-party case: browser
