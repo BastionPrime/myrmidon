@@ -10,6 +10,23 @@ version file to edit. Base Paperclip version is in the image label
 
 ## 1.5.0
 
+### Tracing health (TRACING-HEALTH)
+
+- The "LLM tracing" status card in Company settings and the operator attention
+  signal: the board reads the health report of the LiteLLM → Langfuse v4
+  tracing pipeline (`GET /api/myrmidon/tracing/health`, part C) and surfaces
+  it two ways. The card (below the Server console section) shows the dot and
+  state (`ok` / `ok (idle)` / `red` / `unknown` / `not enabled`), the reason
+  line, one null-aware line per evidence probe and the window span, refreshing
+  once a minute. A periodic sweep (`MYRMIDON_TRACING_SIGNAL_INTERVAL_SEC`,
+  default 300 s, off with the check itself) evaluates the same report for
+  every company and raises ONE attention card on the operator desk —
+  `degraded` is high, `unknown` is medium, `ok`/`idle` raise nothing; the
+  signal goes to the operator role, never the task owner. Dedup is by state:
+  recovery clears the card without dismissal bookkeeping, and the journal gets
+  one activity row per state transition only. Guide:
+  [guides/tracing-health.md](guides/tracing-health.md).
+
 ### Client connectors (the browser bridge)
 
 - The client connector gateway (EXTCASE-B): the board accepts an outbound
