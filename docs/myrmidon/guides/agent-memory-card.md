@@ -1,6 +1,6 @@
 # Agent memory: the agent card's Memory tab
 
-> Русская версия: [agent-memory-card.ru.md](agent-memory-card.ru.md)
+> Russian version: [agent-memory-card.ru.md](agent-memory-card.ru.md)
 
 The **Memory** tab of the agent card shows the entries of the agent's memory
 bank — the same bank the memory plugin writes to during runs. From the tab an
