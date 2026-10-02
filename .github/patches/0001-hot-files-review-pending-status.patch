@@ -1,0 +1,86 @@
+From e4b5d5703e4d804635952f4df26ff2d29a1e20bc Mon Sep 17 00:00:00 2001
+From: itkadr-git <333709514+itkadr-git@users.noreply.github.com>
+Date: Fri, 2 Oct 2026 03:54:44 +0200
+Subject: [PATCH] ci(hot-files): report a pending commit status instead of
+ failing while review waits
+
+The hot-files gate exited 1 on every PR that touches hot files until the
+review-approved label was added. All repo activity runs under the owner's
+account, so every such PR emailed the owner a failed-run notification.
+A missing review is a pending state, not a failure.
+
+Now the job always ends green and reports a commit status with context
+hot-files-review: success when no hot files are touched or the
+review-approved label is present, pending while review is outstanding.
+A new push still removes the label, so the status goes back to pending.
+Branch protection should require the hot-files-review status context.
+---
+ .../workflows/myrmidon-hot-files-review.yml   | 24 +++++++++++++------
+ 1 file changed, 17 insertions(+), 7 deletions(-)
+
+diff --git a/.github/workflows/myrmidon-hot-files-review.yml b/.github/workflows/myrmidon-hot-files-review.yml
+index b34422492..a29faafdf 100644
+--- a/.github/workflows/myrmidon-hot-files-review.yml
++++ b/.github/workflows/myrmidon-hot-files-review.yml
+@@ -3,8 +3,15 @@ name: Myrmidon hot files review
+ # myrmidon(R1): решение владельца 28.09.2026 — PR, которые трогают ключевые файлы ядра, сливаются
+ # только после ревью. Все действия в репозитории идут от одной учётки, поэтому одобрение GitHub
+ # здесь не работает; вместо него — метка `review-approved`, которую ставит роль ревьюера
+-# (adm-dev-review) или сопровождающий после ревью. Проверка обязательная (ruleset).
+-# Новый push снимает метку: ревью относится к конкретному коду.
++# (adm-dev-review) или сопровождающий после ревью. Новый push снимает метку: ревью относится
++# к конкретному коду.
++#
++# A waiting review is not a failure. The job never fails while review is pending: a red run
++# emails the repo owner on every hot-files PR. Instead, it reports a commit status with
++# context `hot-files-review` (required by the ruleset):
++#   - pending  - hot files touched, review-approved label not present yet;
++#   - success  - the label is present, or no hot files touched.
++# The job itself always ends green.
+ 
+ on:
+   pull_request:
+@@ -13,6 +20,7 @@ on:
+ permissions:
+   contents: read
+   pull-requests: write
++  statuses: write
+ 
+ jobs:
+   hot-files-review:
+@@ -25,6 +33,7 @@ jobs:
+           REPO: ${{ github.repository }}
+           PR: ${{ github.event.pull_request.number }}
+           ACTION: ${{ github.event.action }}
++          SHA: ${{ github.event.pull_request.head.sha }}
+         run: |
+           set -euo pipefail
+           files="$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')"
+@@ -32,18 +41,19 @@ jobs:
+           touched="$(grep -E "$hot" <<<"$files" || true)"
+           if [[ -z "$touched" ]]; then
+             echo "Ключевые файлы не затронуты — ревью не обязательно."
++            gh api -X POST "repos/$REPO/statuses/$SHA" -f state='success' -f context='hot-files-review' -f description='no hot files touched' >/dev/null
+             exit 0
+           fi
+           echo "Затронуты ключевые файлы:"; echo "$touched"
+           if [[ "$ACTION" == "synchronize" ]]; then
+             gh api -X DELETE "repos/$REPO/issues/$PR/labels/review-approved" >/dev/null 2>&1 || true
+-            echo "::error::Новый push после ревью — метка review-approved снята, нужно повторное ревью."
+-            exit 1
++            echo "Новый push после ревью — метка review-approved снята, нужно повторное ревью."
+           fi
+           labels="$(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name')"
+           if grep -qx 'review-approved' <<<"$labels"; then
+             echo "Метка review-approved есть — ревью пройдено."
+-            exit 0
++            gh api -X POST "repos/$REPO/statuses/$SHA" -f state='success' -f context='hot-files-review' -f description='review-approved' >/dev/null
++          else
++            echo "PR трогает ключевые файлы ядра: нужна метка review-approved после ревью."
++            gh api -X POST "repos/$REPO/statuses/$SHA" -f state='pending' -f context='hot-files-review' -f description='waiting for review-approved' >/dev/null
+           fi
+-          echo "::error::PR трогает ключевые файлы ядра: нужна метка review-approved после ревью (adm-dev-review или сопровождающий)."
+-          exit 1
+-- 
+2.47.3
+
