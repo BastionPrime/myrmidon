@@ -21,14 +21,34 @@ export const BRIDGE_ACTION_TIMEOUT_MS = 30_000;
 /** Time budget of a human-confirmed action (180 s). */
 export const BRIDGE_CONFIRMATION_TIMEOUT_MS = 180_000;
 
+/**
+ * Ceiling of one `browser.download` (part D), mirrored from the gateway
+ * contract. The extension refuses a larger file before it crosses the bridge.
+ */
+export const BROWSER_DOWNLOAD_MAX_BYTES = 25 * 1024 * 1024;
+
 /** JSON-RPC 2.0 version string. */
 export const JSON_RPC_VERSION = "2.0";
 
 export const BRIDGE_HELLO_METHOD = "bridge.hello";
 export const BRIDGE_READY_METHOD = "bridge.ready";
 
+/**
+ * The gateway's cancellation notification: it gave up on one action (most often
+ * the person did not confirm a signing step within the 180 s budget). The
+ * extension drops the pending action and closes any confirmation prompt.
+ */
+export const BRIDGE_CANCEL_METHOD = "browser.cancel";
+
 /** Capabilities this build of the extension implements. */
-export const EXTENSION_CAPABILITIES = ["open", "read", "click", "screenshot"] as const;
+export const EXTENSION_CAPABILITIES = [
+  "open",
+  "read",
+  "click",
+  "fill",
+  "download",
+  "screenshot",
+] as const;
 
 export type ExtensionCapability = (typeof EXTENSION_CAPABILITIES)[number];
 
@@ -53,6 +73,8 @@ export const BROWSER_BRIDGE_ERROR_CODES = {
   pairingCodeExpired: -32017,
   protocolVersionUnsupported: -32018,
   confirmationNotGranted: -32019,
+  signingDisabled: -32020,
+  downloadTooLarge: -32021,
 } as const;
 
 /** Bot-driven browser methods the extension can execute. */

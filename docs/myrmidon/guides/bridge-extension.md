@@ -1,12 +1,13 @@
-# Browser bridge extension (part C)
+# Browser bridge extension (parts C and D)
 
 > Russian version: [bridge-extension.ru.md](bridge-extension.ru.md)
 
-The browser bridge gives a company bot read-only eyes and hands in a browser on
-a client PC: open, read, click, screenshot. The bridge has two sides. The
-gateway side (part B) lives on the board; the extension side (part C) is the
-Chrome/Edge extension in [`extension/`](../../../extension/). Part D adds
-fill/download and human-confirmed signing steps and is not merged yet.
+The browser bridge gives a company bot eyes and hands in a browser on a client
+PC: open, read, click, fill, download, screenshot, plus a confirmation step a
+person on that PC must answer. The bridge has two sides. The gateway side (part
+B) lives on the board; the extension side (parts C and D) is the Chrome/Edge
+extension in [`extension/`](../../../extension/). The tender-site-specific
+recorded scenarios are built on top of these primitives and do not live here.
 
 ## What the extension is
 
@@ -19,24 +20,53 @@ code.
 
 The wire contract is JSON-RPC 2.0, mirrored from the gateway into
 `extension/src/protocol.ts` (the original,
-`packages/shared/src/myrmidon-browser-bridge.ts`, arrives with part B — not
-merged yet; when the gateway contract changes, both files change in sync). The
-handshake is `bridge.hello` →
-`bridge.ready`; the gateway announces the protocol revision and the company's
-allowlist of tender-site domains in `bridge.ready`.
+`packages/shared/src/myrmidon-browser-bridge.ts`, arrives with part B; when the
+gateway contract changes, both files change in sync). The handshake is
+`bridge.hello` → `bridge.ready`; the gateway announces the protocol revision and
+the company's allowlist of domains in `bridge.ready`.
 
 ## Actions
 
-This build implements four read-only methods: `browser.open`, `browser.read`,
-`browser.click`, `browser.screenshot` (`extension/src/actions.ts`,
-`EXTENSION_CAPABILITIES`). `browser.fill` and `browser.download` exist in the
-protocol but are refused by this build — the capability check runs in the
-gateway and again locally in the extension, deny by default.
+Six methods: `browser.open`, `browser.read`, `browser.click`, `browser.fill`,
+`browser.download`, `browser.screenshot` (`extension/src/actions.ts`,
+`EXTENSION_CAPABILITIES`). The capability check runs in the gateway and again
+locally in the extension, deny by default.
+
+- `browser.open` / `browser.read` / `browser.click` — navigation, the page's
+  visible text, and a click on a selector.
+- `browser.fill` — type a value into one field (input, textarea, select or a
+  contenteditable node) and dispatch `input`/`change`, so a page that listens
+  for them sees the change. Any other element is refused.
+- `browser.download` — fetch a file in the page's own session (the content
+  script runs in the page's origin, so the request carries the cookies the
+  person's browser already has) and return its name, type, size and bytes
+  (base64) to the bot. The bridge carries at most
+  `BROWSER_DOWNLOAD_MAX_BYTES` (25 MiB); a larger file is refused with
+  `downloadTooLarge`.
+- `browser.screenshot` — the visible tab as a PNG data url.
 
 Every action passes a local allowlist gate (`extension/src/allowlist.ts`)
 before any browser API is touched: the extension keeps its own copy of the
 company's domain allowlist and matches the target host as the domain itself or
 its subdomain. The gateway checks again — defense in depth.
+
+There is no sign method. Signing is never performed by the extension: a local
+helper owns the key and the PIN, and the extension declares no `sign`
+capability at all.
+
+## Confirmation
+
+An action the gateway marks `confirmation: "human"` runs only after a person on
+the client PC confirms it. The extension opens a small extension page
+(`confirm/confirm.html`) showing one line — the action and its target — with
+Confirm and Refuse. A refusal is a `confirmationNotGranted` error and the action
+does not run.
+
+The gateway owns the budget: it holds the request for 180 s and, when nobody
+answers, sends the `browser.cancel` notification with the request id. The
+extension drops that pending step and closes the prompt, so a step a person
+never confirmed cannot fire later. The same path serves any confirmable
+action, not only signing steps.
 
 ## Pairing
 
@@ -63,11 +93,12 @@ npm install
 node build.mjs        # or: npm run build
 ```
 
-The build (`extension/build.mjs`) runs `tsc` and copies the manifest into
-`dist-extension/` — the load-unpacked directory. In Chrome or Edge open
-`chrome://extensions`, enable Developer mode, and choose "Load unpacked"
-pointing at `dist-extension/`. Type-checking without output:
-`npm run typecheck` (`tsc --noEmit`). Requires Node >= 24.11.
+The build (`extension/build.mjs`) runs `tsc` and copies the manifest plus the
+static pages (`popup/`, `options/`, `confirm/`) into `dist-extension/` — the
+load-unpacked directory. In Chrome or Edge open `chrome://extensions`, enable
+Developer mode, and choose "Load unpacked" pointing at `dist-extension/`.
+Type-checking without output: `npm run typecheck` (`tsc --noEmit`). Requires
+Node >= 24.11.
 
 The extension is not part of the board image and is not deployed with it: it is
 installed manually on each client PC.

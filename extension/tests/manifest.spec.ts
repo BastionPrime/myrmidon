@@ -66,7 +66,12 @@ describe("protocol copy (part B contract mirror)", () => {
     expect(protocol).toContain("BRIDGE_PROTOCOL_VERSION = 1");
   });
 
-  it("declares only the part C capabilities (open/read/click/screenshot)", () => {
-    expect(protocol).toContain('["open", "read", "click", "screenshot"]');
+  it("declares the read-only set plus the part D primitives, and never sign", () => {
+    for (const capability of ['"open"', '"read"', '"click"', '"fill"', '"download"', '"screenshot"']) {
+      expect(protocol).toContain(capability);
+    }
+    // Signing is never automated by the extension: the helper owns the key and
+    // the PIN, so the extension declares no sign capability at all.
+    expect(protocol).not.toContain('"sign"');
   });
 });
