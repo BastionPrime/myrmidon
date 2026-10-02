@@ -190,7 +190,9 @@ async function buildMigrationNoticeText(
     .from(agents)
     .where(and(eq(agents.companyId, input.companyId), eq(agents.id, input.agentId)));
   const link = safeChatTaskUrl(input.publicBaseUrl, input.migratedFromIssueId);
-  return `This chat is now a standing conversation with ${agent?.name ?? "this agent"}. Earlier tasks stay on the board${link ? `: ${link}` : "."}`;
+  // myrmidon(X8-texts): this notice is read in the bridged Telegram DM, so it
+  // is Russian like the rest of the command surface.
+  return `Теперь это постоянный чат с ${agent?.name ?? "этим агентом"}. Прежние задачи остаются на доске${link ? `: ${link}` : "."}`;
 }
 
 const MAX_LOGGED_ERROR_TEXT = 2_000;
@@ -509,7 +511,7 @@ export async function refuseUnlinkedTelegramDm(
         authorizationMode: "safe_notice",
         effect: "thread_message",
         threadId: input.thread.id,
-        text: "This bot is available only to members of this workspace. Ask an administrator to link your Telegram account.",
+        text: "Этот бот доступен только участникам рабочего пространства. Попросите администратора привязать ваш аккаунт Telegram.",
         settleDelivery: false,
         resourceId: input.resourceId,
       },

@@ -37,7 +37,7 @@ describeEmbeddedPostgres("reconcileStrandedAssignedIssues: operator-paused agent
 
   async function seedPausedAgentIssue(input: {
     pauseReason: string | null;
-    issueStatus?: "todo" | "in_progress";
+    issueStatus?: "todo" | "in_progress" | "in_review";
     run: SeedRun;
   }) {
     const companyId = randomUUID();
@@ -74,6 +74,23 @@ describeEmbeddedPostgres("reconcileStrandedAssignedIssues: operator-paused agent
       assigneeAgentId: agentId,
       responsibleUserId: "user-a",
       createdAt: new Date(now.getTime() - 60 * 60 * 1000),
+      // myrmidon(RECOVERY-HERMES-GATEWAY): an in_review issue carries a
+      // pending execution state whose current participant is the paused agent
+      // (the reviewer), which is what the sweep keys the review recovery on.
+      executionState: input.issueStatus === "in_review"
+        ? {
+            status: "pending",
+            currentStageId: randomUUID(),
+            currentStageIndex: 0,
+            currentStageType: "review",
+            currentParticipant: { type: "agent", agentId, userId: null },
+            returnAssignee: { type: "agent", agentId, userId: null },
+            reviewRequest: null,
+            completedStageIds: [],
+            lastDecisionId: null,
+            lastDecisionOutcome: null,
+          }
+        : null,
     });
     let runId: string | null = null;
     if (input.run !== "none") {
@@ -121,6 +138,40 @@ describeEmbeddedPostgres("reconcileStrandedAssignedIssues: operator-paused agent
 
     expect(await recoveryActionsFor(issueId)).toHaveLength(0);
     expect(await issueStatus(issueId)).toBe("todo");
+  }, 30_000);
+
+  it("does not escalate a review of an operator-paused reviewer: the issue stays in_review", async () => {
+    // myrmidon(RECOVERY-HERMES-GATEWAY): the vendor sweep blocks a review whose
+    // participant is not invokable; with an operator pause the participant is
+    // re-queued by the sweep itself once the pause is lifted, so blocking it
+    // (which would take it out of the sweep's candidates) is wrong.
+    const { issueId } = await seedPausedAgentIssue({
+      pauseReason: "manual",
+      issueStatus: "in_review",
+      run: "cancelled_by_pause",
+    });
+
+    await heartbeatService(db).reconcileStrandedAssignedIssues();
+
+    expect(await recoveryActionsFor(issueId)).toHaveLength(0);
+    expect(await issueStatus(issueId)).toBe("in_review");
+  }, 30_000);
+
+  it("keeps the vendor escalation for a review whose reviewer is on a system pause", async () => {
+    const { issueId } = await seedPausedAgentIssue({
+      pauseReason: "budget",
+      issueStatus: "in_review",
+      run: "cancelled_by_pause",
+    });
+
+    await heartbeatService(db).reconcileStrandedAssignedIssues();
+
+    // The vendor records a board-owned recovery action here; the review stage
+    // still owns the issue status, so it is the action (not a `blocked`
+    // transition) that distinguishes this from the operator-pause case above.
+    const actions = await recoveryActionsFor(issueId);
+    expect(actions.length).toBeGreaterThan(0);
+    expect(actions[0]!.ownerType).toBe("board");
   }, 30_000);
 
   it("leaves the issue wakeable: no action or hold after the sweep, and resume wakes it", async () => {

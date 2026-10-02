@@ -50,6 +50,14 @@
       ]
     },
     {
+      "package": "@myrmidon/hindsight-paperclip",
+      "kind": "vitest-in-package",
+      "args": [
+        "--config",
+        "vitest.config.ts"
+      ]
+    },
+    {
       "package": "@paperclipai/teams-catalog",
       "kind": "vitest-at-root",
       "args": [

@@ -10,6 +10,12 @@
  * `/new`/`/reset` stand-in body for `runBridgedDirectMessageCommand`; this
  * PR (X8c) keeps those signatures and replaces the body with the full
  * command set. X8b calls it.
+ *
+ * myrmidon(X8-texts): every reply in this module is read by a person in the
+ * bridged Telegram DM, so the prose is Russian (the pilot chat language) and
+ * the command descriptions are the ones Telegram shows in its command menu.
+ * Command names, model ids, reasoning levels and the `/model default` keyword
+ * stay as they are — they are input, not prose.
  */
 
 import type { Db } from "@paperclipai/db";
@@ -64,12 +70,12 @@ export interface BridgedCommandSpec {
 }
 
 export const TELEGRAM_DM_COMMANDS: readonly BridgedCommandSpec[] = [
-  { command: "help", description: "Show commands" },
-  { command: "new", description: "Start a new session (optional: /new <model>)" },
-  { command: "model", description: "Show or switch the model for this chat" },
-  { command: "think", description: "Show or set reasoning effort" },
-  { command: "stop", description: "Stop the current reply" },
-  { command: "status", description: "Show model, session and current reply" },
+  { command: "help", description: "Показать команды" },
+  { command: "new", description: "Начать новую сессию (необязательно: /new <модель>)" },
+  { command: "model", description: "Показать или сменить модель для этого чата" },
+  { command: "think", description: "Показать или задать глубину рассуждений" },
+  { command: "stop", description: "Остановить текущий ответ" },
+  { command: "status", description: "Показать модель, сессию и текущий ответ" },
 ];
 
 /**
@@ -144,9 +150,9 @@ export async function runBridgedDirectMessageCommand(
     case "status":
       return handleStatusCommand(input, context);
     case "close":
-      return { kind: "reply", command: "close", text: "This chat does not close. Use /new to start over." };
+      return { kind: "reply", command: "close", text: "Этот чат не закрывается. Чтобы начать заново, отправьте /new." };
     case "task":
-      return { kind: "reply", command: "task", text: "In a direct chat just write your request." };
+      return { kind: "reply", command: "task", text: "В личном чате просто напишите свой запрос." };
     default:
       // myrmidon(X8c): same reasoning as the not-available branch above —
       // `name` is unvalidated chat input here, so `command` gets a fixed
@@ -155,7 +161,7 @@ export async function runBridgedDirectMessageCommand(
       return {
         kind: "reply",
         command: "unknown",
-        text: `Unknown command /${truncateForDisplay(parsed.name, MAX_DISPLAYED_COMMAND_NAME_LENGTH)}. Send /help for the list.`,
+        text: `Неизвестная команда /${truncateForDisplay(parsed.name, MAX_DISPLAYED_COMMAND_NAME_LENGTH)}. Список команд — /help.`,
       };
   }
 }
@@ -167,7 +173,7 @@ async function handleNewCommand(
 ): Promise<BridgedCommandResult> {
   const modelArg = args.trim();
   if (!modelArg) {
-    return { kind: "message", body: "/new", notice: "Started a new session. History stays on the board." };
+    return { kind: "message", body: "/new", notice: "Новая сессия начата. История остаётся на доске." };
   }
 
   const resolution = await resolveChooserSelection({
@@ -199,12 +205,12 @@ async function handleNewCommand(
   });
   const modelLabel =
     resolution.kind === "default"
-      ? `agent default (${describeCardValue(context.agent.adapterConfig, MODEL_CHOOSER.adapterConfigKey)})`
+      ? `по умолчанию у агента (${describeCardValue(context.agent.adapterConfig, MODEL_CHOOSER.adapterConfigKey)})`
       : resolution.candidate.id;
   return {
     kind: "message",
     body: "/new",
-    notice: `Started a new session with model ${modelLabel}. History stays on the board.`,
+    notice: `Новая сессия начата с моделью ${modelLabel}. История остаётся на доске.`,
   };
 }
 
@@ -223,7 +229,7 @@ async function handleChooserCommand(
       return {
         kind: "reply",
         command: chooser.commandName,
-        text: `Switching the ${chooser.noun} is not available for this agent.`,
+        text: chooser.unavailableText,
       };
     }
     const effective = describeEffectiveChatValue(
@@ -236,8 +242,8 @@ async function handleChooserCommand(
       command: chooser.commandName,
       text:
         `${chooser.statusLabel}: ${effective.value} (${effective.source}).\n` +
-        `Available:\n${formatChatChoiceList(availability.candidates)}\n` +
-        `Use /${chooser.commandName} <name or number>, /${chooser.commandName} default.`,
+        `Доступно:\n${formatChatChoiceList(availability.candidates)}\n` +
+        `Укажите /${chooser.commandName} <имя или номер> либо /${chooser.commandName} default.`,
     };
   }
 
@@ -272,7 +278,7 @@ async function handleChooserCommand(
     return {
       kind: "reply",
       command: chooser.commandName,
-      text: `${chooser.statusLabel} for this chat: agent default (${describeCardValue(context.agent.adapterConfig, chooser.adapterConfigKey)}).`,
+      text: `${chooser.statusLabel} для этого чата: по умолчанию у агента (${describeCardValue(context.agent.adapterConfig, chooser.adapterConfigKey)}).`,
     };
   }
 
@@ -293,8 +299,8 @@ async function handleChooserCommand(
     kind: "reply",
     command: chooser.commandName,
     text:
-      `${chooser.statusLabel} for this chat: ${resolution.candidate.id}. ` +
-      "The next reply starts a fresh model session with this chat's recent history.",
+      `${chooser.statusLabel} для этого чата: ${resolution.candidate.id}. ` +
+      "Следующий ответ начнёт новую сессию модели с недавней историей этого чата.",
   };
 }
 
@@ -308,10 +314,10 @@ async function handleStopCommand(input: BridgedCommandInput): Promise<BridgedCom
     cancelRun: input.cancelRun,
   });
   const text = result.failed
-    ? "Stopping is not available right now."
+    ? "Сейчас остановка недоступна."
     : result.stopped > 0
-      ? "Stopping the current reply."
-      : "Nothing is running.";
+      ? "Останавливаю текущий ответ."
+      : "Сейчас ничего не выполняется.";
   return { kind: "reply", command: "stop", text };
 }
 

@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyRunAdmissionLimits,
   createRunAdmission,
+  currentRunAdmissionLimits,
   readCgroupFreeMemoryBytes,
   readRunAdmissionLimits,
+  resetSharedRunAdmissionForTests,
   scheduleQueuedResweep,
 } from "./run-admission.js";
 
@@ -109,6 +112,70 @@ describe("memory headroom", () => {
         throw new Error("ENOENT");
       }),
     ).toBeNull();
+  });
+});
+
+describe("live limit changes", () => {
+  const NO_MEMORY_LIMITS = { minFreeMemoryMb: null, runMemoryEstimateMb: 300 };
+
+  it("lets the runs held behind the old ceiling start as soon as it is raised", () => {
+    const admission = createRunAdmission({ limits: { maxConcurrentRuns: 1, maxStartsPerMinute: null, ...NO_MEMORY_LIMITS } });
+    // One slot: one run starts, the next two wait for the queue sweep.
+    expect(admission.reserve(3)).toBe(1);
+    expect(admission.limited()).toBe(true);
+    admission.updateLimits({ maxConcurrentRuns: 3, maxStartsPerMinute: null, ...NO_MEMORY_LIMITS });
+    // The same admission object admits them now — no restart, no lost count.
+    expect(admission.reserve(3)).toBe(2);
+  });
+
+  it("keeps the run count and the start-rate window across a change", () => {
+    let clock = 0;
+    const admission = createRunAdmission({
+      limits: { maxConcurrentRuns: 2, maxStartsPerMinute: 2, ...NO_MEMORY_LIMITS },
+      now: () => clock,
+    });
+    expect(admission.reserve(2)).toBe(2);
+    admission.updateLimits({ maxConcurrentRuns: 5, maxStartsPerMinute: 2, ...NO_MEMORY_LIMITS });
+    // The two starts of this minute still count, and the two runs still run.
+    expect(admission.reserve(5)).toBe(0);
+    clock = 60_000;
+    // The window rolled over, but its own cap of two starts still holds.
+    expect(admission.reserve(5)).toBe(2);
+  });
+
+  it("lowers the ceiling without dropping runs already in flight", () => {
+    const admission = createRunAdmission({ limits: { maxConcurrentRuns: 4, maxStartsPerMinute: null, ...NO_MEMORY_LIMITS } });
+    expect(admission.reserve(4)).toBe(4);
+    admission.updateLimits({ maxConcurrentRuns: 2, maxStartsPerMinute: null, ...NO_MEMORY_LIMITS });
+    expect(admission.reserve(1)).toBe(0);
+    admission.finish();
+    expect(admission.reserve(1)).toBe(0);
+    admission.finish();
+    admission.finish();
+    // One run is still in flight, so exactly one of the two new slots is free.
+    expect(admission.reserve(2)).toBe(1);
+  });
+
+  it("applies limits to the process-wide admission and reports them back", () => {
+    resetSharedRunAdmissionForTests();
+    try {
+      applyRunAdmissionLimits({ maxConcurrentRuns: 7, maxStartsPerMinute: 3, minFreeMemoryMb: 900, runMemoryEstimateMb: 200 });
+      expect(currentRunAdmissionLimits()).toEqual({
+        maxConcurrentRuns: 7,
+        maxStartsPerMinute: 3,
+        minFreeMemoryMb: 900,
+        runMemoryEstimateMb: 200,
+      });
+      applyRunAdmissionLimits({ maxConcurrentRuns: null, maxStartsPerMinute: null, minFreeMemoryMb: null, runMemoryEstimateMb: 300 });
+      expect(currentRunAdmissionLimits()).toEqual({
+        maxConcurrentRuns: null,
+        maxStartsPerMinute: null,
+        minFreeMemoryMb: null,
+        runMemoryEstimateMb: 300,
+      });
+    } finally {
+      resetSharedRunAdmissionForTests();
+    }
   });
 });
 

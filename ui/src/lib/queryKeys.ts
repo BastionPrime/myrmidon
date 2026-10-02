@@ -592,6 +592,8 @@ export const queryKeys = {
       ["access", "user-company-access", userId] as const,
     invite: (token: string) => ["access", "invite", token] as const,
     currentBoardAccess: ["access", "current-board-access"] as const,
+    boardApiKeys: (includeInactive: boolean) =>
+      ["access", "board-api-keys", includeInactive ? "all" : "active"] as const,
   },
   auth: {
     session: ["auth", "session"] as const,

@@ -13,6 +13,19 @@
 
 import type { CompiledProfile } from "./types.js";
 
+/** One extra read-only mount a bot gets from the instance-level allowlist
+ *  (`MYRMIDON_BOT_MOUNT_SOURCES`, template.ts). Read-only only: a shared
+ *  directory is never mounted writable, and the driver refuses a mount whose
+ *  source the operator did not list. */
+export interface BotExtraMount {
+  /** Absolute host directory, listed in MYRMIDON_BOT_MOUNT_SOURCES. */
+  source: string;
+  /** Absolute mount point inside the container, outside the three fixed ones. */
+  containerPath: string;
+  /** Always true: a writable extra mount is not supported. */
+  readOnly: true;
+}
+
 /** Desired shape of a bot's container. Immutable for the life of the container:
  *  a change is a template drift (`templateDrift`), applied by `recreate`. */
 export interface BotContainerSpec {
@@ -27,6 +40,10 @@ export interface BotContainerSpec {
   /** Docker network the container joins. The local driver requires this to equal
    *  its own MYRMIDON_BOT_NETWORK; a caller cannot put a bot on an arbitrary network. */
   network: string;
+  /** Extra read-only mounts (the card's `container.extraMounts`). Their sources
+   *  are checked against MYRMIDON_BOT_MOUNT_SOURCES when the create body is
+   *  built; a mount outside that list is refused, not silently dropped. */
+  extraMounts?: readonly BotExtraMount[];
   /** Extra, non-authoritative labels (e.g. a project grouping). The driver's own
    *  identification labels (see template.ts BOT_LABEL_KEYS) always win on
    *  conflict and cannot be overridden through this field. */
@@ -57,6 +74,35 @@ export interface BotContainerStatus {
    *  never "none". */
   restartHash?: string;
   filesHash?: string;
+  /** myrmidon(CONCURRENCY-SYNC): gateway.api_server.max_concurrent_runs the applied
+   *  profile carries, read from the same marker (docker-driver.ts AppliedMarker).
+   *  Absent when nothing is verifiably applied, or when the marker predates the
+   *  field — "not reported", which the card shows as unknown, never as a match. */
+  maxConcurrentRuns?: number;
+}
+
+/** One template field whose live value (the container's inspect) no longer
+ *  matches what a freshly built create body asks for. */
+export interface TemplateDriftField {
+  /** Dotted path of the field inside a container inspect, e.g.
+   *  `HostConfig.Binds` — also the name the activity log carries, so a drift
+   *  is diagnosable from the log alone. */
+  field: string;
+  /** Value the freshly built create body asks for. */
+  expected: unknown;
+  /** Value the live container shows. `undefined` when the inspect the driver
+   *  reads does not report the field at all, which is a drift of that field. */
+  actual: unknown;
+}
+
+/**
+ * Result of the side-effect-free template check. `fields` names every field
+ * that differs, with both values (the activity log writes them out); empty
+ * `fields` means the live container still matches the spec.
+ */
+export interface TemplateDriftReport {
+  drifted: boolean;
+  fields: TemplateDriftField[];
 }
 
 export interface BotContainerDriver {
@@ -67,12 +113,14 @@ export interface BotContainerDriver {
   list(): Promise<BotContainerStatus[]>;
   /**
    * Side-effect-free check: does the existing container's live template (image,
-   * resource limits, network) no longer match `spec`? False when no container
-   * exists. The reconciler applies a `true` with `recreate`, gated behind the
+   * resource limits, network, bind list) no longer match `spec`? `drifted` is
+   * false when no container exists; `fields` names every field that differs,
+   * with the wanted and the live value, so the caller can log what drifted.
+   * The reconciler applies a `drifted: true` with `recreate`, gated behind the
    * same maintenance-pause-and-drain flow as a profile "restart" class change
    * whenever the container is live.
    */
-  templateDrift(spec: BotContainerSpec): Promise<boolean>;
+  templateDrift(spec: BotContainerSpec): Promise<TemplateDriftReport>;
   /** Creates the bot's container from `spec` without starting it, after
    *  preparing its volumes (created if absent, owned by the container's uid,
    *  mode 0700). Throws, before creating anything, if the image is not present

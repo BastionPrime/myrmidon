@@ -4,7 +4,7 @@ import path from "node:path";
 import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readBrandedStaticIndexHtml } from "../static-index-html.js";
+import { readBrandedStaticIndexHtml, readVersionedWebManifest } from "../static-index-html.js";
 
 describe("static SPA fallback HTML", () => {
   const tempDirs: string[] = [];
@@ -58,5 +58,17 @@ describe("static SPA fallback HTML", () => {
     const res = await request(app).get("/PAP/issues/PAP-9939");
     expect(res.text).toContain("/assets/index-new.js");
     expect(res.text).not.toContain("/assets/index-old.js");
+  });
+
+  it("versions manifest icon URLs", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-manifest-"));
+    tempDirs.push(dir);
+    fs.writeFileSync(
+      path.join(dir, "site.webmanifest"),
+      JSON.stringify({ icons: [{ src: "/android-chrome-192x192.png" }] }),
+    );
+    const versioned = JSON.parse(readVersionedWebManifest(dir, "1.2.2"));
+    expect(versioned.icons[0].src).toBe("/android-chrome-192x192.png?v=1.2.2");
+    expect(JSON.parse(readVersionedWebManifest(dir, null)).icons[0].src).toBe("/android-chrome-192x192.png");
   });
 });
