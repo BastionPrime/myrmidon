@@ -7,8 +7,14 @@ import type { Db } from "@paperclipai/db";
 import { agents, heartbeatRuns, issues } from "@paperclipai/db";
 import { conversationChannel, conversationOwnerUserId } from "../identity.js";
 
-/** Reply text for a command that cannot be attributed to the caller's own bridged conversation. */
-export const CHAT_NOT_AVAILABLE_TEXT = "This chat is not available.";
+/**
+ * Reply text for a command that cannot be attributed to the caller's own
+ * bridged conversation.
+ *
+ * myrmidon(X8-texts): the bridged Telegram DM answers in Russian — this is the
+ * language of the pilot chat (see the merge note at the top of commands/index.ts).
+ */
+export const CHAT_NOT_AVAILABLE_TEXT = "Этот чат недоступен.";
 
 export interface BridgedCommandIssueContext {
   id: string;

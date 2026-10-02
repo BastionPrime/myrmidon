@@ -1,0 +1,24 @@
+[Unit]
+Description=Myrmidon board (docker compose, the files deploy.sh manages)
+# The board must wait for the docker daemon: without this, a boot race lets
+# the unit fail (or, historically, start from whatever compose file it found).
+Requires=docker.service
+After=docker.service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# MYRMIDON_COMPOSE_DIR / MYRMIDON_COMPOSE_FILES are filled in by
+# scripts/myrmidon/deploy/lib.sh (verify_boot_unit) at install time from the
+# same settings the deploy scripts use. The unit therefore reads exactly the
+# compose files deploy.sh maintains (COMPOSE_FILES plus the image override),
+# and a new pinned digest takes effect on the next boot with no unit edit.
+WorkingDirectory=__COMPOSE_DIR__
+ExecStart=/usr/bin/docker compose --project-directory __COMPOSE_DIR__ __COMPOSE_FILE_ARGS__ up -d --no-deps __COMPOSE_SERVICE__
+ExecStop=-/usr/bin/docker compose --project-directory __COMPOSE_DIR__ __COMPOSE_FILE_ARGS__ stop __COMPOSE_SERVICE__
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

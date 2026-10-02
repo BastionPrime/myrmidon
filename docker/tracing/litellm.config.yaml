@@ -1,0 +1,31 @@
+# LiteLLM configuration for the TRACING-HEALTH contract check.
+#
+# The contract: ONE completion in, exactly ONE OTEL event out, zero ingestion
+# rejections on the Langfuse side. That only holds while the gateway exports
+# over OTLP (`langfuse_otel`) and does NOT install the legacy `langfuse`
+# callback, which posts trace/observation events to
+# `/api/public/ingestion` - an endpoint Langfuse v4 in `events_only` mode
+# rejects with "Bad request" per event.
+#
+# The callback list below is the same single-element list the release bundle
+# installs (`tracing_intended_callbacks()` in scripts/myrmidon/deploy/lib.sh).
+# Adding `langfuse` here is exactly the regression the contract test exists to
+# catch.
+#
+# The model is a stub: it points at a tiny OpenAI-compatible server on the
+# invoking host's loopback (`TRACING_CONTRACT_MOCK_BASE_URL`), so the check
+# never talks to a provider and never needs a provider key.
+model_list:
+  - model_name: tracing-contract
+    litellm_params:
+      model: openai/tracing-contract-stub
+      api_base: os.environ/TRACING_CONTRACT_MOCK_BASE_URL
+      api_key: os.environ/TRACING_CONTRACT_MOCK_API_KEY
+
+litellm_settings:
+  callbacks: ["langfuse_otel"]
+  # The response bodies are irrelevant to the contract; keep the traces small.
+  turn_off_message_logging: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

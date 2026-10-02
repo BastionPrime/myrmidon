@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "@/lib/queryKeys";
+import { ApiError } from "@/api/client";
 import { CompanySettingsSidebar } from "./CompanySettingsSidebar";
 import { primarySidebarStyles } from "./primary-sidebar-styles";
 
@@ -15,6 +16,11 @@ const mockPluginsApi = vi.hoisted(() => ({
   list: vi.fn(),
 }));
 const mockUsePluginSlots = vi.hoisted(() => vi.fn());
+const mockApi = vi.hoisted(() => ({
+  get: vi.fn(),
+  post: vi.fn(),
+  put: vi.fn(),
+}));
 
 vi.mock("@/lib/router", () => ({
   useNavigate: () => vi.fn(),
@@ -79,6 +85,21 @@ vi.mock("@/api/plugins", () => ({
   pluginsApi: mockPluginsApi,
 }));
 
+vi.mock("@/api/client", () => {
+  class MockApiError extends Error {
+    status: number;
+    body: unknown;
+
+    constructor(message: string, status: number, body: unknown) {
+      super(message);
+      this.name = "ApiError";
+      this.status = status;
+      this.body = body;
+    }
+  }
+  return { api: mockApi, ApiError: MockApiError };
+});
+
 vi.mock("@/plugins/slots", () => ({
   usePluginSlots: mockUsePluginSlots,
 }));
@@ -112,6 +133,7 @@ describe("CompanySettingsSidebar", () => {
       joinRequests: 2,
     });
     mockPluginsApi.list.mockResolvedValue([]);
+    mockApi.get.mockResolvedValue([]);
     mockUsePluginSlots.mockReturnValue({
       slots: [],
       isLoading: false,
@@ -384,6 +406,7 @@ describe("CompanySettingsSidebar operator-hidden entries", () => {
       joinRequests: 0,
     });
     mockPluginsApi.list.mockResolvedValue([]);
+    mockApi.get.mockResolvedValue([]);
     mockUsePluginSlots.mockReturnValue({ slots: [], isLoading: false, errorMessage: null });
   });
 
@@ -453,5 +476,78 @@ describe("CompanySettingsSidebar operator-hidden entries", () => {
     expect(container.textContent).not.toContain("Secrets");
     expect(container.textContent).not.toContain("Export");
     expect(container.textContent).not.toContain("Import");
+  });
+});
+
+describe("CompanySettingsSidebar Access hub availability", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    mockSidebarBadgesApi.get.mockResolvedValue({
+      inbox: 0,
+      approvals: 0,
+      failedRuns: 0,
+      joinRequests: 0,
+    });
+    mockPluginsApi.list.mockResolvedValue([]);
+    mockUsePluginSlots.mockReturnValue({ slots: [], isLoading: false, errorMessage: null });
+  });
+
+  afterEach(() => {
+    container.remove();
+    document.body.innerHTML = "";
+    vi.clearAllMocks();
+  });
+
+  async function renderSidebar() {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanySettingsSidebar />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    return root;
+  }
+
+  it("marks the Access hub entry as soon while the access-hub API is missing", async () => {
+    mockApi.get.mockImplementation(() => Promise.reject(new ApiError("Request failed: 404", 404, null)));
+
+    const root = await renderSidebar();
+
+    expect(sidebarNavItemMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "/company/settings/access-hub",
+        label: "Access hub",
+        textBadge: "soon",
+      }),
+    );
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("keeps the Access hub entry plain when the access-hub API answers", async () => {
+    mockApi.get.mockResolvedValue([]);
+
+    const root = await renderSidebar();
+
+    expect(sidebarNavItemMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "/company/settings/access-hub",
+        label: "Access hub",
+        textBadge: undefined,
+      }),
+    );
+
+    await act(async () => {
+      root.unmount();
+    });
   });
 });

@@ -1,12 +1,22 @@
 import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { environmentLeases, heartbeatRunEvents, heartbeatRuns, issueRecoveryActions, type Db } from "@paperclipai/db";
 import { readProcessStartedAt } from "./hot-restart.js";
+// myrmidon(D2): uuid-typed json comparisons for the board DB hot path. See
+// docs/myrmidon/DIVERGENCE.md.
+import { jsonTextUuid } from "../myrmidon/db-hot-path/json-uuid.js";
 
 // These adapters accept a conversation turn. Retrying a process or webhook can
 // replay the action itself, so those adapters retain their recovery contract.
 export const CONVERSATION_ADAPTER_TYPES = [
   "claude_local", "codex_local", "cursor", "gemini_local", "opencode_local",
   "pi_local", "grok_local", "kimi_local", "hermes_local",
+  // myrmidon(RECOVERY-HERMES-GATEWAY): the gateway adapter holds a provider
+  // session and hands it a fresh turn the same way the local adapters do, so
+  // an interrupted or failed run is continued rather than held for
+  // reconciliation. It earns that here because the adapter itself refuses to
+  // start a second turn while the previous attempt's gateway run is still
+  // live (see gateway/server/execute.ts).
+  "hermes_gateway",
 ] as const;
 
 export function isConversationAdapter(adapterType: string): boolean {
@@ -67,8 +77,8 @@ export function conversationRecoveryActionPredicate() {
     sql`exists (
       select 1 from ${heartbeatRuns}
       where ${heartbeatRuns.companyId} = ${issueRecoveryActions.companyId}
-        and ${heartbeatRuns.id}::text = ${issueRecoveryActions.evidence}->>'runId'
-        and coalesce(${heartbeatRuns.nativeIssueId}::text, ${heartbeatRuns.contextSnapshot}->>'issueId') = ${issueRecoveryActions.sourceIssueId}::text
+        and ${heartbeatRuns.id} = ${jsonTextUuid(sql`${issueRecoveryActions.evidence}->>'runId'`)}
+        and coalesce(${heartbeatRuns.nativeIssueId}, ${jsonTextUuid(sql`${heartbeatRuns.contextSnapshot}->>'issueId'`)}) = ${issueRecoveryActions.sourceIssueId}
         and ${heartbeatRuns.runtimeMode} = 'legacy'
         and ${inArray(heartbeatRuns.status, ['failed', 'timed_out', 'interrupted', 'cancelled'])}
         and ${conversationRunPredicate()}

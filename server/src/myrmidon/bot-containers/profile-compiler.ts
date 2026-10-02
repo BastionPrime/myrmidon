@@ -820,6 +820,10 @@ export function compileHermesProfileDetailed(input: HermesProfileInput): Compile
     files: [...restartFiles, ...filesTrackedFiles],
     restartHash,
     filesHash,
+    // myrmidon(CONCURRENCY-SYNC): the number the applied-state marker records, so the
+    // card can show what the gateway was given (see concurrency-sync.ts). It is already
+    // a line of config.yaml and therefore part of restartHash above.
+    maxConcurrentRuns: input.maxConcurrentRuns,
   };
   return { profile, warnings };
 }

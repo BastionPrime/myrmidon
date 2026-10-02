@@ -1,0 +1,21 @@
+diff --git a/gateway/run.py b/gateway/run.py
+index 20071c3..6415218 100644
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -5796,6 +5796,16 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool =
+     """Start the gateway and run until interrupted; False if it failed to start (non-zero exit so
+     systemd can auto-restart). ``replace`` kills any existing instance first (avoids restart-loop
+     deadlocks); ``force`` starts without consulting the host owner at all."""
++    # myrmidon(G1): size the loop's default executor above the fleet's max concurrent runs.
++    # Each live run keeps one worker for its whole life, so with the stock pool the gateway's
++    # blocking hops starve and the board's POST /v1/runs create calls time out behind them.
++    # HERMES_GATEWAY_EXECUTOR_WORKERS overrides the truthful default; see the default 64 in
++    # the fleet's bot runtime image. Cluster/thread-name unchanged otherwise.
++    import concurrent.futures as _myr_cf
++
++    asyncio.get_running_loop().set_default_executor(_myr_cf.ThreadPoolExecutor(
++        max_workers=int(os.environ.get("HERMES_GATEWAY_EXECUTOR_WORKERS", "64")),
++        thread_name_prefix="asyncio"))
+     # Set here (not at import) so incidental gateway.run imports from CLI code don't poison it.
+     os.environ["HERMES_EXEC_ASK"] = "1"
+ 

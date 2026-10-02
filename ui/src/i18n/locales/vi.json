@@ -1,9 +1,191 @@
 {
+  "accessHub": {
+    "notAvailable": {
+      "title": "Access hub is not available on this server yet",
+      "description": "This server does not serve the access-hub API yet, so there is nothing to manage here. The screen turns on by itself once the server part is deployed."
+    }
+  },
   "app": {
     "noCompanies": {
       "title": "Tạo công ty đầu tiên của bạn",
       "description": "Bắt đầu bằng cách tạo một công ty.",
       "newCompany": "Công ty mới"
+    }
+  },
+  "emergencyStopBanner": {
+    "banner": "{{agent}} is paused, but {{count}} run(s) are still finishing. They keep running until they finish on their own.",
+    "action": "Emergency stop",
+    "confirmTitle": "Stop {{count}} run(s) of {{agent}} now?",
+    "confirmDescription": "The run(s) are cancelled immediately with the same code a pause-cancellation uses, so no recovery hold appears. Work resumes when the agent is resumed. This cannot be undone.",
+    "cancel": "Cancel",
+    "confirmAction": "Stop runs now",
+    "toastTitle": "Emergency stop applied",
+    "toastBody": "{{count}} run(s) of {{agent}} were cancelled.",
+    "toastErrorTitle": "Emergency stop failed"
+  },
+  "maintenanceBanner": {
+    "title": "Maintenance mode",
+    "window": "Maintenance for {{scope}} ({{state}}) since {{since}}: {{reason}}. New agent runs are paused; wakes are queued ({{queued}}) and will be delivered when maintenance ends.",
+    "scope": {
+      "instance": "the whole instance",
+      "company": "this company",
+      "department": "a department",
+      "agent": "an agent"
+    },
+    "state": {
+      "on": "on",
+      "ending": "ending",
+      "draining": "draining, runs still running: {{count}}",
+      "drainingTimedOut": "draining, runs past the timeout: {{count}}"
+    },
+    "group": "Agent maintenance ({{state}}) since {{since}}: {{reason}} — agents: {{count}}, queued wakeups: {{queued}}. New agent runs are paused; wakes are delivered when maintenance ends.",
+    "ending": "Agent maintenance ending — agents: {{count}}",
+    "idsSummary": "Agent ids"
+  },
+  "about": {
+    "title": "About Myrmidon",
+    "version": "Version",
+    "commit": "Commit",
+    "imageDigest": "Image digest",
+    "base": "Upstream base: Paperclip {{version}} (MIT)",
+    "license": "License: {{license}}",
+    "attribution": "Based on Paperclip (MIT)",
+    "links": {
+      "repo": "Source code",
+      "changelog": "Changelog",
+      "docs": "Docs"
+    },
+    "unavailable": "Version information is unavailable right now.",
+    "loading": "Loading version information...",
+    "unknown": "unknown"
+  },
+  "sidebar": {
+    "version": "Myrmidon {{version}}"
+  },
+  "connectorPanel": {
+    "title": "Connectors",
+    "intro": "Client devices that connect through the browser bridge: pairing, the domain allowlist, the signing policy and the journal of what the bridge did.",
+    "devices": {
+      "title": "Devices",
+      "pairingLabel": "Pairing label",
+      "issue": "Issue pairing code",
+      "issuing": "Issuing...",
+      "expiresAt": "expires at {{time}}",
+      "device": "Device",
+      "status": "Status",
+      "lastSeen": "Last seen",
+      "version": "Version",
+      "capabilities": "Capabilities",
+      "online": "Online",
+      "offline": "Offline",
+      "none": "No devices are paired yet. Issue a pairing code and enter it in the browser extension on the client PC.",
+      "loading": "Loading devices...",
+      "revoke": "Revoke",
+      "confirmRevoke": "Confirm revoke",
+      "cancelRevoke": "Cancel",
+      "revoking": "Revoking..."
+    },
+    "allowlist": {
+      "title": "Domain allowlist",
+      "hint": "One hostname per line. Only these domains (and their subdomains) may be opened by the bot; everything else is refused by the gateway and by the extension."
+    },
+    "signing": {
+      "title": "Signing policy",
+      "mode": "Signing mode",
+      "modeAuto": "Automatic",
+      "modeManual": "Manual confirmation",
+      "modeTypes": "Per action type",
+      "dailyLimit": "Daily limit",
+      "noLimit": "No limit",
+      "signedToday": "{{count}} signatures today",
+      "types": "Action types needing confirmation",
+      "typesHint": "Comma-separated action types (for example tender.submit). In per-type mode only these ask a person to confirm.",
+      "save": "Save connector settings",
+      "saving": "Saving...",
+      "killSwitch": "Emergency stop signing",
+      "stopping": "Stopping...",
+      "off": "Signing is off: every sign action is refused, whatever the mode."
+    },
+    "journal": {
+      "title": "Journal",
+      "device": "Device",
+      "allDevices": "All devices",
+      "method": "Method",
+      "allMethods": "All methods",
+      "outcome": "Outcome",
+      "allOutcomes": "All outcomes",
+      "signaturesOnly": "Signatures only",
+      "when": "When",
+      "what": "What",
+      "confirmation": "Confirmation",
+      "documentHash": "Document hash",
+      "loading": "Loading the journal...",
+      "empty": "No journal rows match the filters."
+    }
+  },
+  "stack": {
+    "title": "Stack",
+    "intro": "Every component the board tracks: our running version and the latest upstream release, with the update plan.",
+    "loading": "Loading the stack registry...",
+    "empty": "The stack registry has no components yet.",
+    "filter": "Filter by name",
+    "filterPlaceholder": "Component name",
+    "refresh": "Refresh data",
+    "refreshing": "Refreshing...",
+    "check": "Check releases",
+    "checking": "Checking releases...",
+    "error": "The stack request failed: {{message}}",
+    "updatedAt": "Local state refreshed at {{time}}",
+    "checkedAt": "Releases checked at {{time}}",
+    "never": "never",
+    "unknown": "unknown",
+    "column": {
+      "name": "Component",
+      "source": "Release source",
+      "ours": "Ours",
+      "runningOn": "Runs on",
+      "latest": "Latest",
+      "behind": "Behind",
+      "patches": "Patches",
+      "actions": "Actions"
+    },
+    "behind": "{{count}} release(s)",
+    "patches": {
+      "closed": "closed",
+      "open": "open",
+      "unknown": "unknown",
+      "none": "none"
+    },
+    "notes": {
+      "show": "Notable lines",
+      "truncated": "Only the top lines are shown."
+    },
+    "source": {
+      "github-releases": "GitHub releases",
+      "github-tags": "GitHub tags",
+      "registry": "Registry",
+      "package": "Package",
+      "manual": "Manual"
+    },
+    "probe": {
+      "health-commit": "Board build commit",
+      "docker-image": "Docker image",
+      "container-labels": "Container labels",
+      "env": "Environment override",
+      "manual": "Operator set",
+      "none": "Not visible from the board"
+    },
+    "schedule": "Schedule update",
+    "dialog": {
+      "title": "Schedule update for {{name}}",
+      "intro": "This creates a backlog task with the plan below. Nothing is deployed here.",
+      "taskTitle": "Task title",
+      "plan": "Plan",
+      "create": "Create draft task",
+      "creating": "Creating...",
+      "cancel": "Cancel",
+      "created": "Draft task created: {{identifier}}",
+      "failed": "The task could not be created: {{message}}"
     }
   }
 }

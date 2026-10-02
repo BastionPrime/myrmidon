@@ -20,6 +20,8 @@ import type {
 import { readConfigFile } from "../config-file.js";
 // myrmidon(B1): product name in the user-facing text below; see product.ts.
 import { PRODUCT_NAME } from "../myrmidon/product.js";
+// myrmidon(U2): owner-delivery bindings for tasks without their own chat thread.
+import { telegramOwnerDeliveryBindings } from "../myrmidon/owner-delivery/telegram-owner-bindings.js";
 import { projectSafeChatPublication } from "./chat-publication-projection.js";
 import { safeChatTaskUrl } from "./chat-task-url.js";
 import {
@@ -269,7 +271,7 @@ export async function enqueueIssueInteractionChatPublications(
       .then((rows) => rows[0] ?? null);
     if (!sourceRun) return [];
   }
-  const bindings = await db
+  const vendorBindings = await db
     .select({
       conversation: chatConversations,
       endpoint: chatEndpoints,
@@ -291,6 +293,18 @@ export async function enqueueIssueInteractionChatPublications(
         inArray(chatEndpoints.status, ["active", "verifying"]),
       ),
     );
+  let bindings = vendorBindings;
+  // myrmidon(U2): when the task has no chat-thread binding of its own, deliver
+  // the card to the owner's standing Telegram DM conversation with the
+  // authoring agent (the X8b bridge) instead of leaving it board-only. The
+  // vendor's own bindings, when present, always win; this is additive.
+  if (bindings.length === 0) {
+    bindings = await telegramOwnerDeliveryBindings(db, {
+      companyId: interaction.companyId,
+      issueId: interaction.issueId,
+      createdByAgentId: interaction.createdByAgentId,
+    });
+  }
   if (bindings.length === 0) return [];
 
   const taskUrl = publicChatInteractionTaskUrl(interaction.issueId);

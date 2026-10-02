@@ -792,7 +792,10 @@ describe("Capability live runnerd and Codex session", () => {
     await session.sendMessage("warm response");
     expect(session.snapshot().status).toBe("warm_idle");
     expect(state.transports[0]?.processInfo().exited).toBe(false);
-    await vi.waitFor(() => expect(session.snapshot().status).toBe("suspended"), { timeout: 500 });
+    // The idle timer is 25 ms; this wait bounds only how long the suspend that
+    // follows it may take on a loaded runner. The test asserts that idle expiry
+    // suspends the runner, not how quickly, so the poll budget is generous.
+    await vi.waitFor(() => expect(session.snapshot().status).toBe("suspended"), { timeout: 4_000 });
     expect(state.transports[0]?.processInfo().exited).toBe(true);
 
     const active = session.sendMessage("start a long turn");
@@ -1440,6 +1443,11 @@ describe("Capability live runnerd and Codex session", () => {
       store: firstStore,
       transportFactory: fakeTransportFactory(state),
     });
+    // The short budget only bounds how long the abandoned first-attempt turn
+    // waits before it is declared timed out; the assertion below awaits that
+    // rejection whenever it lands. It may fire before or after the effect is
+    // persisted: the turn id is bound before the first macrotask after
+    // turn/start, so the held tool call still lands on the active turn.
     const first = await firstService.create({
       ...binding,
       attemptId: "attempt-killed",
@@ -1447,11 +1455,13 @@ describe("Capability live runnerd and Codex session", () => {
     });
     state.holdAfterTool = true;
     const killedTurn = captureTurnRejection(first.sendMessage("Apply idempotent progress once."));
+    // Polls the fsynced checkpoint; the budget covers slow disks on loaded
+    // runners and is not a latency assertion.
     await vi.waitFor(async () => {
       expect((await firstStore.load(binding.sessionId))?.mockState).toContain(
         "Progress persisted through the live Codex tool loop.",
       );
-    });
+    }, { timeout: 4_000 });
     await expect(first.recordUsage({
       receiptId: "provider-response-1",
       providerResponseId: "response-1",
@@ -1471,11 +1481,18 @@ describe("Capability live runnerd and Codex session", () => {
       store: new DurableCapabilityLiveSessionStore({ directory, binding }),
       transportFactory: fakeTransportFactory(state),
     });
+    // The resumed attempt must not inherit the killed attempt's 500 ms budget
+    // from the checkpoint: reconcileActiveTurn() and the duplicate turn below
+    // each wait on several fsynced checkpoint saves, which can take longer
+    // than that on a loaded CI runner. Nothing here asserts latency, only the
+    // durable outcome, so give the resumed turns a budget they cannot hit.
     const resumed = await resumedService.resume({
       sessionId: binding.sessionId,
       attemptId: "attempt-resumed",
       resumeOf: "attempt-killed",
+      turnTimeoutMs: 60_000,
     });
+    expect(resumed.snapshot().config.turnTimeoutMs).toBe(60_000);
     expect(resumed.snapshot().providerThreadId).toBe(state.threadId);
     expect(resumed.snapshot().attempts).toMatchObject([
       { attemptId: "attempt-killed", status: "terminated", failureCode: "worker_terminated" },

@@ -230,7 +230,8 @@ describeEmbeddedPostgres("myrmidon(S4) agent does not change its own configurati
 
     const known = await request(app)
       .patch(`/api/agents/${agent.id}`)
-      .send({ adapterConfig: { model: "model-a", models: { vision: "model-b", fallbacks: ["model-a"] } } });
+      .send({ adapterConfig: { model: "model-a", models: { vision: "model-b", fallbacks: ["model-b"] } } });
+    // myrmidon(M2-B): the chain may not name the primary model — that is a loop and is refused.
     expect(known.status).toBe(200);
 
     const special = await request(app)

@@ -1,0 +1,23 @@
+{
+  "roots": {
+    "sources": {
+      "kind": "shared",
+      "drive_id": "<owner drive id>",
+      "item_id": "<item id of the shared folder>",
+      "description": "Video and photo sources shared by the owner (read only)"
+    },
+    "bot-example": {
+      "kind": "own",
+      "folder": "Bots/example",
+      "description": "Personal folder of the bot in the connector account's OneDrive"
+    }
+  },
+  "bots": {
+    "<paperclip agent id>": {
+      "label": "example",
+      "peer_host": "myrmidon-bot-<paperclip agent id>",
+      "drive": {"sources": "ro", "bot-example": "rw"},
+      "mail": "none"
+    }
+  }
+}

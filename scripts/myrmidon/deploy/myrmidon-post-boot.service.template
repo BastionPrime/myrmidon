@@ -1,0 +1,22 @@
+[Unit]
+Description=Myrmidon post-boot check: prove the machine came up in the state the release intends
+# After the board unit and nginx: the check reads the board health and the
+# container fleet, so it must run once they are up. It is a oneshot that
+# fails (and stays failed in systemctl --failed) when the boot was wrong.
+Requires=docker.service paperclip.service
+After=docker.service paperclip.service
+After=nginx.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# MYRMIDON_DEPLOY_ENV points at the deploy.env of this installation (the same
+# file deploy.sh reads), filled in by scripts/myrmidon/deploy/lib.sh when the
+# unit is installed.
+ExecStart=/usr/bin/env bash __SCRIPT_DIR__/post-boot-check.sh --config __DEPLOY_ENV__ --timeout __TIMEOUT__
+# A failed boot check must not block the machine; it files the report for the
+# on-duty role (see post-boot-check.sh) and marks the unit failed.
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
