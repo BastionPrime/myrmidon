@@ -16,6 +16,7 @@ import { and, eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
+  agentRuntimeState,
   agentWakeupRequests,
   agents,
   companies,
@@ -131,6 +132,7 @@ describeEmbeddedPostgres("chat-first: the queued-run start path", () => {
       }
     }
     await db.delete(agentWakeupRequests);
+    await db.delete(agentRuntimeState);
     await db.delete(agents);
     await db.delete(companies);
     await db.delete(instanceSettings);
