@@ -258,6 +258,26 @@ domain typed in (bare domain); cookies+storage are cleaned on the node via CDP.
 |---|---|---|---|---|
 | `MYRMIDON_STACK_DOCKER_SOCKET` | SUA | `/var/run/docker.sock` | Path to the Docker unix socket the stack registry image probes use to read digests and component labels with the `docker-image` probe (Docker API `GET /images/{ref}/json`, 10s timeout) | Socket unavailable on `POST /api/myrmidon/stack/refresh` — 503, the previous cache is kept; an individual missing image is an honest «unknown» with a reason, not an error. Read on every refresh, no server restart needed |
 
+## 1.4 — EXT-CASE-OCR (the OCR path: PDF -> text in the bot workspace)
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_OCR_BASE_URL` | EXT-CASE-OCR | unset (path closed) | Address of the company's OCR contour as the board sees it: the MCP address of RAGFlow or an OpenAI-compatible gateway address (LiteLLM). Together with `MYRMIDON_OCR_KEY_SECRET` it opens the path; without either of the two settings the bot gets a stable `ocr_disabled` refusal and not a single request goes out | Empty/unset — the path is closed. The address may end with `/v1` (then it is not duplicated) |
+| `MYRMIDON_OCR_KEY_SECRET` | EXT-CASE-OCR | unset | **Name** of the company secret holding the OCR contour key (not the value). The value is read on every call for the task's owning company; it never appears in the setting, logs or journal | Empty/unset — the path is closed. The secret is created by the company's operator in the "Secrets" section |
+| `MYRMIDON_OCR_BACKEND` | EXT-CASE-OCR | `ragflow` | Which adapter is called: `ragflow` (MCP JSON-RPC `tools/call`, DeepDOC parsing) or `litellm` (chat request with the PDF as a file part). An unknown value — `ragflow` (a typo must not close the path) | With `litellm` and no `MYRMIDON_OCR_MODEL` the profile is not assembled: the call answers `ocr_disabled` |
+| `MYRMIDON_OCR_MODEL` | EXT-CASE-OCR | unset | For `litellm` — the name of the model that reads the PDF; for `ragflow` — the name of the parsing MCP tool (RAGFlow versions name it differently), `parse_document` by default | Empty — `litellm` refuses `ocr_disabled`, `ragflow` takes `parse_document` |
+| `MYRMIDON_OCR_MAX_BYTES` | EXT-CASE-OCR | `33554432` (32 MiB) | PDF size ceiling: above it — a `document_too_large` refusal before the backend is contacted (and before base64 is decoded in the tool) | Non-numeric, `0`, negative — the default is taken |
+| `MYRMIDON_OCR_MAX_PAGES` | EXT-CASE-OCR | `500` | Page-count ceiling (the page count is read from the PDF bytes); above it — a `too_many_pages` refusal before the backend | As above |
+| `MYRMIDON_OCR_MAX_CHARS` | EXT-CASE-OCR | `2000000` | Ceiling on the recognized text: the remainder is cut, the metadata gets `truncated: true` | As above |
+| `MYRMIDON_OCR_TIMEOUT_SEC` | EXT-CASE-OCR | `120` | Timeout of the request to the OCR backend (from 5 to 600; below 5 is raised to 5) | As above |
+| `MYRMIDON_OCR_WORKSPACE_DIR` | EXT-CASE-OCR | unset | Directory where a copy of the recognized text is placed (`<name>-<hash>.txt`, mode 0600). Without the setting the text lives only in the tool's response (a container bot writes it into its workspace itself) | Empty — no copy on disk |
+
+The bot's tool is `ocr.pdf` (input: `name`, `base64`, optional `origin`, `sourceId`; output: `text`,
+`pages`, `structure`, `metadata`). Served to the company at `POST /api/myrmidon/companies/:companyId/ocr/mcp`
+(JSON-RPC: `initialize`, `tools/list`, `tools/call`); only metadata goes to the activity journal
+(`name`, `sizeBytes`, `pages`, `origin`, `sourceId`, `backend`, `chars`, `truncated`) — the text and bytes
+never enter the journal.
+
 ## Settings in the agent record (not environment variables)
 
 | Field | Function | Default | What it does | How to disable / special |
