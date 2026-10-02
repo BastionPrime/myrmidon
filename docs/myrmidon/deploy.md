@@ -257,6 +257,14 @@ Order:
    like a failed health check (maintenance stays on, the rollback command is printed) and there is no
    flag that skips it. Without any `MYRMIDON_TRACING_*` setting the step logs a skip and the deploy
    continues.
+   The release pins the tracing pair together. `scripts/myrmidon/tracing/tracing-image-pins.json` names
+   the Langfuse v4 server, its worker and the LiteLLM gateway images of the bundle, and the tracing
+   contract test (`docker/tracing/tracing-contract-check.sh`, `docker/tracing/docker-compose.contract.yml`)
+   runs exactly that pair. A bump of ONE image alone ships a Langfuse/LiteLLM combination that the
+   contract test never ran — the 02.10 mismatch class. Re-run `docker/tracing/tracing-contract-check.sh`
+   before the release, and keep `tracing-image-pins.json` equal to the contract compose. The
+   release-support surface resolves these components from that file (`check-release-support.sh
+   --tracing-pins`).
 8. Leaving maintenance mode. The `exit` call returns as soon as the server marks the window
    `leaving` (the leave tail — resuming the queue, the exit hook, retiring the window — runs on
    the server's maintenance tick), and the script then waits for the window to retire: it polls
