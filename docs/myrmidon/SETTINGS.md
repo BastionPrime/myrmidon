@@ -462,15 +462,16 @@ dedup key; fields without a source stay null and never block the computation.
 
 ## TASK-PR-SYNC — a task settles once its pull requests merge
 
-A task whose `work_product` of type `pull_request` merged used to stay busy until
-someone noticed. The scheduler tick now runs a pass that refreshes each PR's
-state through the existing GitHub resolver and closes the task (`done`, one
-comment with the PR refs / merge sha / time, an activity row) when every PR has
-reached a terminal state and at least one merged and no post-deploy gate is still
-open. When none of them merged, the task goes back to its assignee (`in_progress`
-plus a comment) unless a newer comment already answered the closure. The sweep
-reads the same work-products surface the board uses; it adds no token or
-credential.
+A task whose `work_product` of type `pull_request` merged used to stay busy
+until someone noticed. The scheduler tick now runs a pass that refreshes each
+PR's state through the existing GitHub resolver and closes the task (`done`,
+one comment with the PR refs / merge sha / time, an activity row) when every
+PR has reached a terminal state and at least one merged and no post-deploy
+gate is still open. When none of them merged, the task goes back to its
+assignee (`in_progress` plus a comment) unless a newer comment already
+answered the closure. The sweep reads the same work-products surface the
+board uses; it adds no token or credential. Operator guide:
+[guides/task-pr-sync.md](guides/task-pr-sync.md).
 
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
