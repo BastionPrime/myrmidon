@@ -83,6 +83,40 @@
       }
     },
     {
+      "id": "07-run-scratch-resurrection-guard",
+      "kind": "patch",
+      "patch": "docker/bot-runtime/patches/07-run-scratch-resurrection-guard.patch",
+      "files": [
+        "agent/file_safety.py"
+      ],
+      "reason": "The run harness removes each run's scratch dir at the run boundary. A path remembered mid-session then succeeds again the moment a write tool's folded mkdir -p re-creates the missing paperclip-run-* parent: mode 755, no run-scratch marker file, never reclaimed — unmarked residue in the shared /tmp holding payloads and comment bodies readable to every co-tenant agent in the container. The guard refuses a write whose ancestor is a removed run-scratch root; a live root and dirs outside the class are untouched, and the guard fails open on its own errors.",
+      "dropCondition": "Upstream ships an equivalent guard in agent/file_safety.py / tools/file_operations.py: a write into a removed run-scratch root is refused instead of re-creating it.",
+      "offer": null,
+      "offerNote": "Not offered yet: see the note on delta 02 (publisher-scan wrapper pending).",
+      "probe": {
+        "source": "hermes",
+        "path": "agent/file_safety.py",
+        "upstreamMarker": "run_scratch|paperclip-run"
+      }
+    },
+    {
+      "id": "08-run-scratch-guard-write-paths",
+      "kind": "patch",
+      "patch": "docker/bot-runtime/patches/08-run-scratch-guard-write-paths.patch",
+      "files": [
+        "tools/file_operations.py"
+      ],
+      "reason": "Same change as delta 07: the guard has to run on both write paths the model can reach (write_file, patch_replace) and at the _atomic_write chokepoint where the folded mkdir -p lives, which also covers the V4A patch path. The two patches are one change, split only to keep the diffs file-sized.",
+      "dropCondition": "Same as delta 07: upstream refuses a write into a removed run-scratch root on its own write paths.",
+      "offer": null,
+      "offerNote": "Not offered yet: see the note on delta 02 (publisher-scan wrapper pending).",
+      "probe": {
+        "source": "hermes",
+        "path": "tools/file_operations.py",
+        "upstreamMarker": "run_scratch|resurrection"
+      }
+    },
+    {
       "id": "hindsight-reflect-timeout-and-fact-types",
       "kind": "upstream-plugin-gap",
       "files": [
