@@ -131,6 +131,7 @@ import { startLitellmCostSweep, stopLitellmCostSweep } from "./myrmidon/litellm-
 import { startBotCanary, stopBotCanary } from "./myrmidon/bot-containers/canary-index.js"; // myrmidon(R5-B)
 import { interactionContinuationOutboxService } from "./myrmidon/interaction-continuation-outbox.js"; // myrmidon(O1)
 import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
+import { createRunStallSweepFromHeartbeat } from "./myrmidon/run-stall/index.js"; // myrmidon(RUN-STALL)
 import {
   createPendingInteractionWakeSweep,
   readPendingInteractionWakeContextSnapshot,
@@ -1169,6 +1170,18 @@ async function startServerWithDatabaseTeardown(
     }
   };
   const executionControlSweepsInFlight = new Set<string>();
+  // myrmidon(RUN-STALL): progress-based run liveness. A run whose own recorded
+  // progress (output, run events, useful actions) has not moved for the stall
+  // threshold is interrupted as resumable, its task goes back to todo and the
+  // assignee is woken. Like its neighbours it needs the heartbeat service, so a
+  // process that does not schedule runs does not run this pass.
+  const runStallSweep = heartbeat
+    ? createRunStallSweepFromHeartbeat({
+        db: db as any,
+        heartbeat,
+        issues: issueService(db as any),
+      })
+    : null;
   const executionControlSweeps = [
     ["finalization", () => reconcileAbandonedExecutionControl(db)],
     ["replacement", () => heartbeat ? reconcileSafeNativeReplacements(db, new Date(), { verifyStoppedSession: run => verifyStoppedNativeSessionForReplacement(db, run) }) : undefined],
@@ -1176,6 +1189,7 @@ async function startServerWithDatabaseTeardown(
     ["status_delivery", () => deliverExecutionStatuses(db)],
     ["automatic_disposition", () => settleUnrecoverableExecutions(db)],
     ["local_ai_login_cleanup", () => localAiLoginService(db).reapExpired()],
+    ["run_stall", () => runStallSweep?.sweep()],
   ] as const;
   const sweepExecutionControl = () => {
     if (heartbeatSchedulerStopped) return;
