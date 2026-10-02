@@ -481,6 +481,11 @@ or above 0.02; `unknown` on probe failure. The evidence fields `deliveryRatio`
 and `legacyRejections` are additive parts of the JSON contract for the part D
 dedup key; fields without a source stay null and never block the computation.
 
+The check has two board surfaces, both reading the same report — see
+[guides/tracing-health.md](guides/tracing-health.md): the "LLM tracing" status
+card in Company settings and the operator attention signal that runs even when
+nobody has the card open.
+
 
 ## TASK-PR-SYNC — a task settles once its pull requests merge
 
