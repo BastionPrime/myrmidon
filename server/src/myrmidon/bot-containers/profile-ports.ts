@@ -40,6 +40,8 @@ import {
   secretService,
 } from "../../services/index.js";
 import { skillVersionSelectionMap } from "../../services/runtime-skill-selections.js";
+// myrmidon(1.6-SKILL-LIFE): the lifecycle decides what reaches this agent.
+import { skillLifecycleService } from "../skill-lifecycle/index.js";
 import { BOT_AGENT_API_KEY_NAME, ensureBotAgentKey } from "./agent-key.js";
 import { createBotBoardGatewayDeps, releaseStrayBotGateways } from "./board-gateway-ports.js";
 import {
@@ -208,6 +210,9 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
   const agents = agentService(db);
   const secrets = secretService(db);
   const skills = companySkillService(db);
+  // myrmidon(1.6-SKILL-LIFE): the profile compiler filters and pins company
+  // skills by their lifecycle state through this service.
+  const skillLifecycle = skillLifecycleService(db);
   const instructions = agentInstructionsService();
   const instanceSettings = instanceSettingsService(db);
   const resolveCardEnv = createCardEnvResolver(
@@ -396,10 +401,20 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
       const warnings: string[] = [];
       const preference = readPaperclipSkillSyncPreference(agent.adapterConfig);
       const experimental = await instanceSettings.getExperimental();
+      // myrmidon(1.6-SKILL-LIFE): the company lifecycle decides what reaches
+      // this agent — a deprecated skill reaches nobody, a candidate only the
+      // pilot agent set, and a verified skill is pinned to its verified
+      // revision, so a rollback takes effect on the next compile tick.
+      const lifecycle = await skillLifecycle.resolveDelivery(agent.companyId, agent.id);
+      const versionSelections = skillVersionSelectionMap(preference.desiredSkillEntries, {
+        versionPinsEnabled: experimental.enableBetaSkills === true,
+      });
+      for (const [key, versionId] of lifecycle.pinnedVersions) {
+        // The card's own pin wins when it set one; the lifecycle fills the rest.
+        if (!versionSelections.get(key)) versionSelections.set(key, versionId);
+      }
       const entries = await skills.listRuntimeSkillEntries(agent.companyId, {
-        versionSelections: skillVersionSelectionMap(preference.desiredSkillEntries, {
-          versionPinsEnabled: experimental.enableBetaSkills === true,
-        }),
+        versionSelections,
       });
       // The same resolution hermes_local uses, so a bot in a container carries the
       // skills it would have had running locally (including the board's own skill).
@@ -407,6 +422,12 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
       const byKey = new Map(entries.map((entry) => [entry.key, entry] as const));
       const result: Record<string, readonly HermesProfileSkillFile[]> = {};
       for (const key of desiredKeys) {
+        if (lifecycle.blockedKeys.has(key)) {
+          warnings.push(
+            lifecycle.reasons.get(key) ?? `skill ${key}: withheld by the skill lifecycle`,
+          );
+          continue;
+        }
         const entry = byKey.get(key);
         if (!entry) {
           warnings.push(`skill ${key}: not found in the company catalog, skipped`);

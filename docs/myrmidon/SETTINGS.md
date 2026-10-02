@@ -333,7 +333,7 @@ need a board actor. While the contour below is not configured, reads still work 
 | `MYRMIDON_EVALS_BASE_URL` | EVALS-A | unset (judge disabled) | Address of the company's LLM gateway contour (OpenAI-compatible, e.g. LiteLLM). Together with `MYRMIDON_EVALS_KEY_SECRET` it opens the judge path; without either the evals mutations answer `503` with the reason | Empty/unset — the judge is disabled (reads still work). The address may end with `/v1` (then it is not duplicated) |
 | `MYRMIDON_EVALS_KEY_SECRET` | EVALS-A | unset | **Name** of the company secret holding the gateway key (not the value). The value is read per company on every run; it never appears in the setting, logs or journal | Empty/unset — the judge is disabled |
 | `MYRMIDON_EVALS_MODEL` | EVALS-A | `qwen-plus-free` | The judge model behind the gateway. The 1.6 wave rule applies: a free DashScope model by default; paid models stay a deploy-repo concern | Any value the gateway serves |
-| `MYRMIDON_EVALS_TIMEOUT_SEC` | EVALS-A | `120` | Timeout of one judge chat-completions call (from 5 to 600; below 5 is raised to 5) | Non-numeric, `0`, negative — the default is taken |
+| `MYRMIDON_EVALS_TIMEOUT_SEC` | EVALS-A | `120` | Timeout of one judge chat-completions call (integer seconds, 5–600; out-of-range or non-numeric — the default 120 is taken) | `0`, negative, fractional, non-numeric — the default 120 |
 | `MYRMIDON_EVALS_LANGFUSE` | EVALS-A | unset | Master flag for the Langfuse score export: `true` enables exporting run scores to Langfuse when the contour below is configured. Scoring is written locally (eval_runs) regardless of this flag | Empty/unset/anything but `true` — no Langfuse export, local scoring only |
 | `MYRMIDON_EVALS_LANGFUSE_BASE_URL` | EVALS-A | unset | Langfuse ingestion base URL (the `/api/public/ingestion` suffix is appended). Used only when `MYRMIDON_EVALS_LANGFUSE=true` | Empty — the export is a no-op |
 | `MYRMIDON_EVALS_LANGFUSE_KEY` | EVALS-A | unset | Langfuse public ingestion key. Used only when `MYRMIDON_EVALS_LANGFUSE=true` | Empty — the export is a no-op |
@@ -342,6 +342,11 @@ need a board actor. While the contour below is not configured, reads still work 
 The board API is `GET/POST /api/myrmidon/companies/:companyId/evals/{tasks,seed,runs,runs/:runId,runs/:runId/confirm,verdict}`.
 The judge never executes code: for `code`-kind reference tasks the CI pass rate arrives as a request
 parameter and is folded into the aggregate as a separate score line.
+
+The operator guide for the whole path — seeding the corpus, running a subject,
+the promote/confirm/regress verdict with its threshold+repeat rule, the
+journal rows and the Langfuse export — is
+[guides/reference-task-evals.md](guides/reference-task-evals.md).
 
 ## EXTCASE-B — browser bridge to the client's extension
 
@@ -508,7 +513,6 @@ board uses; it adds no token or credential. Operator guide:
 | `MYRMIDON_TASK_PR_SYNC_BATCH_MAX` | TASK-PR-SYNC | `50` | How many candidate tasks one pass inspects at most (each task costs one GitHub resolve per PR) | From 1 to 500; values outside the range or non-numeric — the default |
 | `MYRMIDON_TASK_PR_SYNC_SETTLE_DISABLED` | TASK-PR-SYNC | unset (settling on) | Instance-wide lever to make the sweep read and log but never flip a task to `done` — for a deliberate post-deploy hold on every task at once. A task with its own post-deploy gate is already deferred per task (a pending card, a pending approval, or a monitor scheduled for the future) | `1`/`true`/`on`/`yes` — settling off; anything else — settling on. The per-task gate check cannot be disabled by this switch |
 
-
 ## TASK-PR-SYNC WAKE-GUARD — no run for a task whose pull requests all merged
 
 The admission-side half of TASK-PR-SYNC: before the board dispatches a run for
@@ -524,6 +528,21 @@ database hit per wake.
 |---|---|---|---|---|
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_ENABLED` | WAKE-GUARD | `1` (on) | Master switch of the wake guard: on — an event-free wake to a settle-pending task is skipped instead of dispatching a run | `0`/`false`/`off`/`no` — disable (wakes dispatch runs as before). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_TTL_SEC` | WAKE-GUARD | `60` | How long a suppress decision stays cached for one task (matches the sweep's default poll); the cache holds at most 1000 issues, least-recently-used eviction | From 1 to 3600; non-numeric, non-positive or above the cap — the default (60) |
+
+## 1.6 — SKILL-LIFECYCLE: company skill lifecycle
+
+Settings of `server/src/myrmidon/skill-lifecycle/`. A company skill is
+`candidate`, `verified` or `deprecated`; only a verified revision is delivered
+to agents by default, a candidate goes to the pilot agent set, a deprecated
+skill reaches nobody. A skill with no lifecycle row keeps the pre-feature
+behaviour and reaches everyone. Promotion needs an approved approval of type
+`skill_promotion`; a rollback restores the previous verified revision on the
+next compile of every agent that uses the skill. The lifecycle API lives under
+`GET/POST /api/myrmidon/companies/:companyId/skill-lifecycle`.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_SKILL_PILOT_AGENTS` | SKILL-LIFECYCLE | unset (empty set) | Comma-separated agent ids that receive `candidate` skills. Any other agent gets a candidate withheld, with a profile warning; `verified` skills reach everyone regardless | Unset or blank — the pilot set is empty, so a candidate reaches nobody (the safe reading of "no pilot configured"). Only agent ids are matched; whitespace around an entry is trimmed |
 
 ## 1.6 — AUTONOMY-MATRIX (Part A: matrix, enforcement, regulations API)
 
@@ -576,3 +595,8 @@ missing settings (names only, never values), and not a single request goes out.
 | `MYRMIDON_CTO_CHAT_MODEL` | 1.6-CTO-CHAT-B | `dashscope-qwen-flash` | The model name sent to the gateway for the planning completion | Empty/unset — the default; an unknown name fails at the gateway and the route answers 400 `backend_failed` |
 | `MYRMIDON_CTO_CHAT_TIMEOUT_SEC` | 1.6-CTO-CHAT-B | `90` | Timeout of the planning request (raised to at least 5, capped at 600) | Non-numeric, `0`, negative or above the cap — the default (90) |
 | `MYRMIDON_CTO_CHAT_MAX_TASKS` | 1.6-CTO-CHAT-B | `8` | Ceiling on child tasks in one proposal (a proposal can never be unbounded work); the hard absolute cap is 20 | Non-numeric, `0`, negative or above 20 — the default (8) |
+
+The flow end to end — how the owner asks from the portal or the Telegram DM,
+what the proposal and the approval card look like, and what acceptance
+creates — is the operator guide
+[guides/cto-chat-planner.md](guides/cto-chat-planner.md).
