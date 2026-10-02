@@ -62,6 +62,75 @@
   "sidebar": {
     "version": "Myrmidon {{version}}"
   },
+  "ui2": {
+    "nav": {
+      "railLabel": "Main navigation",
+      "group": {
+        "observe": "Observe",
+        "decide": "Decide & talk",
+        "manage": "Manage"
+      },
+      "center": "Command center",
+      "fleet": "Server fleet",
+      "swarm": "Swarm",
+      "costs": "Costs",
+      "quality": "Quality",
+      "waiting": "Wait for me",
+      "commander": "Commander",
+      "settings": "Settings",
+      "more": "More",
+      "badge": {
+        "attention": "{{count}} waiting"
+      }
+    },
+    "nests": {
+      "all": "All nests"
+    },
+    "chip": {
+      "colony": "{{active}} of {{total}}",
+      "fleet": "Fleet",
+      "fleetAttention": "Fleet: 1 attention",
+      "forecast": "{{spend}} of {{budget}}"
+    },
+    "decisions": {
+      "badge": "{{count}} decisions waiting"
+    },
+    "owner": "Owner",
+    "ownerChannel": "Web · now",
+    "commander": {
+      "aria": "Tell the Commander (Ctrl K)",
+      "placeholder": "Tell the Commander…",
+      "stubNote": "Stub: the message is not sent yet. It opens the existing chat; the Commander conversation arrives with the 1.6 chat update.",
+      "openChat": "Open chat"
+    },
+    "phone": {
+      "status": "Owner · Web"
+    },
+    "screens": {
+      "decisions": "Decisions",
+      "costs": "Costs",
+      "agentOverview": "Agent overview",
+      "runsQueue": "Runs and queue",
+      "system": "System",
+      "language": "Language",
+      "placeholderTitle": "Not in this wave yet",
+      "placeholderBody": "This screen is part of the UI 2.0 rollout plan and lands with its wave. The current data lives on the existing screen; this placeholder exists so the 2.0 frame and routing are real from day one.",
+      "placeholderLegacyLink": "Continue to the current screen"
+    },
+    "settings": {
+      "navLabel": "Settings navigation",
+      "general": "General",
+      "members": "Members",
+      "access": "Access",
+      "secrets": "Secrets",
+      "runs": "Runs and queue",
+      "budgets": "Budgets",
+      "autonomy": "Autonomy",
+      "guards": "Guardrails",
+      "castes": "Castes and models",
+      "system": "System"
+    }
+  },
   "connectorPanel": {
     "title": "Connectors",
     "intro": "Client devices that connect through the browser bridge: pairing, the domain allowlist, the signing policy and the journal of what the bridge did.",
@@ -121,6 +190,71 @@
       "documentHash": "Document hash",
       "loading": "Loading the journal...",
       "empty": "No journal rows match the filters."
+    }
+  },
+  "stack": {
+    "title": "Stack",
+    "intro": "Every component the board tracks: our running version and the latest upstream release, with the update plan.",
+    "loading": "Loading the stack registry...",
+    "empty": "The stack registry has no components yet.",
+    "filter": "Filter by name",
+    "filterPlaceholder": "Component name",
+    "refresh": "Refresh data",
+    "refreshing": "Refreshing...",
+    "check": "Check releases",
+    "checking": "Checking releases...",
+    "error": "The stack request failed: {{message}}",
+    "updatedAt": "Local state refreshed at {{time}}",
+    "checkedAt": "Releases checked at {{time}}",
+    "never": "never",
+    "unknown": "unknown",
+    "column": {
+      "name": "Component",
+      "source": "Release source",
+      "ours": "Ours",
+      "runningOn": "Runs on",
+      "latest": "Latest",
+      "behind": "Behind",
+      "patches": "Patches",
+      "actions": "Actions"
+    },
+    "behind": "{{count}} release(s)",
+    "patches": {
+      "closed": "closed",
+      "open": "open",
+      "unknown": "unknown",
+      "none": "none"
+    },
+    "notes": {
+      "show": "Notable lines",
+      "truncated": "Only the top lines are shown."
+    },
+    "source": {
+      "github-releases": "GitHub releases",
+      "github-tags": "GitHub tags",
+      "registry": "Registry",
+      "package": "Package",
+      "manual": "Manual"
+    },
+    "probe": {
+      "health-commit": "Board build commit",
+      "docker-image": "Docker image",
+      "container-labels": "Container labels",
+      "env": "Environment override",
+      "manual": "Operator set",
+      "none": "Not visible from the board"
+    },
+    "schedule": "Schedule update",
+    "dialog": {
+      "title": "Schedule update for {{name}}",
+      "intro": "This creates a backlog task with the plan below. Nothing is deployed here.",
+      "taskTitle": "Task title",
+      "plan": "Plan",
+      "create": "Create draft task",
+      "creating": "Creating...",
+      "cancel": "Cancel",
+      "created": "Draft task created: {{identifier}}",
+      "failed": "The task could not be created: {{message}}"
     }
   }
 }

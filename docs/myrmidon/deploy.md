@@ -412,8 +412,36 @@ scripts/myrmidon/deploy/rollback.sh --config /path/to/deploy.env --to sha256:<ol
 The script asks to type `RESTORE` (or takes `--yes-restore-database`), stops the server
 service, runs `RESTORE_COMMAND`, then brings the old image up.
 
-A release component rolls back separately, without touching the board:
+### Откат на локальный образ (ROLLBACK-LOCAL)
 
+Образы до 1.1.0 не лежат в реестре, а реестр может быть недоступен именно в момент инцидента.
+`--local` откатывает на образ, который уже есть на хосте выката, **без скачивания**:
+
+```sh
+# локальный тег
+scripts/myrmidon/deploy/rollback.sh --config /path/to/deploy.env --local myrmidon-local:hotfix
+# тот же дайджест, что и обычно, но без pull
+scripts/myrmidon/deploy/rollback.sh --config /path/to/deploy.env --local sha256:<64 hex>
+# откат на --to/--to-image без pull
+scripts/myrmidon/deploy/rollback.sh --config /path/to/deploy.env --to sha256:<old> --local
+```
+
+- Ссылка берётся из аргумента `--local` (тег или дайджест; голый дайджест дополняется до
+  `ghcr.io/itkadr-git/myrmidon@sha256:…`), из `MYRMIDON_ROLLBACK_LOCAL` в файле настроек
+  (действует, когда `--local` не передан), а голый `--local` без значения — из `--to`/`--to-image`.
+  Явный `--local <ссылка>` вместе с `--to`/`--to-image` — ошибка: ссылка одна.
+- Наличие образа проверяется через `docker image inspect` **до любых изменений**. Образа нет —
+  откат прекращается с ошибкой и списком локальных тегов/дайджестов этого репозитория
+  (`docker image ls <repo>`), чтобы опечатка в теге не превращалась в голое «No such image».
+- В этом режиме реестр не читается вовсе: ни `pull`, ни проверка «только из CI» — локальный
+  образ и так не мог пройти CI, а предупреждение о не-CI образе здесь бесполезно
+  (это его основной сценарий). Остальные шаги (maintenance, смена `image:`, health) — как в
+  обычном откате.
+- Помните: локальный образ на хосте ничем не защищён от подмены — право записи на хост
+  выката и есть граница доверия. `--dry-run` печатает план без изменений.
+
+## Что проверить после выката
+A release component rolls back separately, without touching the board:
 ```sh
 scripts/myrmidon/deploy/rollback-component.sh --config /path/to/deploy.env --component dockergate
 ```

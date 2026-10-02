@@ -64,6 +64,20 @@ version file to edit. Base Paperclip version is in the image label
   entry points, grants, health checks, rotation:
   [guides/external-mcp-connectors.md](guides/external-mcp-connectors.md).
 
+### UI 2.0 shell (flagged, UI-0a)
+
+- The Myrmidon 2.0 shell behind the instance flag `enableMyrmidonUi2`
+  (default off, Instance settings → Experimental → "Myrmidon UI 2.0 Shell"):
+  a clean-room tree `ui/src/ui2/` — the 232px left rail, the top bar with the
+  nest switcher, status chips and the "Tell the Commander" entry, and the
+  390px phone frame (56px header + five-tab bottom bar). The 2.0 design-system
+  tokens (`--myr-*`, light and dark) and the self-hosted Saira / Exo 2 / Inter /
+  JetBrains Mono subsets land with it. Pages and routes stay shared with the
+  1.x shell; turning the flag off restores it. The rail badge and status chips
+  read the existing dashboard and sidebar-badges aggregates until the
+  STATUS-STRIP endpoint exists. i18n keys `ui2.*` ship in en/ru (translated)
+  and the other locales (English values until the translation pass).
+
 ## 1.4.0
 
 Everything merged between the 1.3.2 and 1.4.0 tags. Deploy this release's board,
