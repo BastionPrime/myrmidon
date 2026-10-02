@@ -84,6 +84,34 @@ still recreates every bot on every pass (the 01.10 incident); a 1.3.2 dockergate
 1.3.1 board is safe but pointless. fleetd from the same tag too. The digests are in the
 GitHub release notes.
 
+### Upgrading from 1.3.2 to 1.4.0
+
+Deploy the board, dockergate and fleetd images from the same 1.4.0 tag together. No new
+migrations to run by hand: the upgrade is image-only on the host side.
+
+What changes for operators:
+
+- **Automatic rollback by health is on by default** (R5-C). A failed post-deploy health
+  check no longer leaves the board on the broken image: the host executor immediately
+  runs `rollback.sh` to the image the deploy remembered before the switch, and the job
+  closes `auto_rolled_back` with the maintenance window lifted. A failed rollback itself
+  ends `failed_rollback` with the window kept on for the operator. To restore the 1.3.x
+  manual contract, set `AUTO_ROLLBACK=0` in `deploy.env` AND `MYRMIDON_DEPLOY_AUTO_ROLLBACK=0`
+  on the board side — both sides must agree. See [SETTINGS.md](SETTINGS.md).
+- **The bot fleet got the same protection**: a failed canary or wave bot moves the rollout
+  to `rolling_back`, every touched bot is returned to its own card image one at a time, and
+  the rollout ends `rolled_back` with the original failure reason kept. Disable with
+  `MYRMIDON_BOT_CANARY_AUTO_ROLLBACK=0` to keep the canary on the new image for inspection.
+- **Unattended auto-update stays off**: `MYRMIDON_DEPLOY_AUTO_UPDATE` defaults to `0` —
+  every deploy still waits for an explicit human confirmation in the interface. Enable it
+  only after the release scenario has run on the staging stand.
+- **New optional section on the agent card**: the Memory tab (view, export, removal of the
+  agent's memory bank) is off until the instance sets `MYRMIDON_HINDSIGHT_API_URL` and
+  `MYRMIDON_HINDSIGHT_KEY_SECRET`. Without the pair nothing changes on the card.
+- **Cloud storage (part B)**: the owner can now connect a cloud provider from the panel
+  with OAuth; the token bundle lives in a company secret of the instance secret store and
+  never reaches the bots. No action needed at upgrade time — existing grants keep working.
+
 `--dry-run` runs the same check (it only reads the registry and updates `origin/main` in the
 clone), so a trial run shows the refusal in advance.
 
