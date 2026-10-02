@@ -12,6 +12,9 @@
 # org.opencontainers.image.revision label names a commit that is on origin/main
 # or carries a myr-v* tag (git fetch in the clone that holds these scripts).
 # There is no flag to skip this check, --force does not skip it either.
+# It also refuses when the systemd boot unit (paperclip.service) does not
+# start the server from exactly the compose files this deploy manages
+# (one boot path: see lib.sh, verify_boot_unit).
 #
 # Steps: pull the image by digest; remember the current digest as "previous";
 # dump the database (DUMP_COMMAND, refuses an empty dump); enter maintenance;
@@ -123,6 +126,16 @@ if [[ -n "$MYR_RELEASE_COMPONENTS" && "$MYR_RELEASE_COMPONENTS" != "none" ]]; th
   done <<<"$component_digests"
 fi
 
+# myrmidon(BOOT-PATH): one boot path. The boot unit must read exactly the
+# compose files this deploy manages, or a reboot restarts the board from
+# a different (e.g. vendor) compose file. Refused before anything changes;
+# the check is read-only and runs in a dry run too.
+if ! verify_boot_unit; then
+  log "Only a boot unit pointing at the compose files of this deploy (COMPOSE_DIR, COMPOSE_FILES, the override) is accepted; this cannot be skipped."
+  die "boot unit not verified, nothing was changed: $BOOT_UNIT_REASON"
+fi
+log "boot unit ok: $(boot_unit_path) starts $COMPOSE_SERVICE from COMPOSE_DIR ($COMPOSE_FILES + $COMPOSE_OVERRIDE_FILE)"
+
 previous="$(current_digest)"
 previous_image="$(current_image)"
 
@@ -134,6 +147,7 @@ fi
 if [[ "$DRY_RUN" == "1" ]]; then
   log "dry run: nothing will be changed. Plan:"
   plan "0. image check passed (read-only): $ref is in the registry, commit ${CI_IMAGE_REVISION:0:12} is on origin/main or a myr-v* tag"
+  plan "0.5 boot unit check passed (read-only): $(boot_unit_path) reads the compose files of this deploy"
   plan "1. docker pull $ref"
   plan "2. remember previous image: ${previous_image:-<none>} -> $PREVIOUS_IMAGE_FILE"
   plan "3. dump database with DUMP_COMMAND into $DUMP_DIR (refuse if smaller than $DUMP_MIN_BYTES bytes)"

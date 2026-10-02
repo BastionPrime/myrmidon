@@ -177,6 +177,98 @@ check_ci_image_for_repo() {
   commit_is_reviewed "$revision"
 }
 
+# The boot unit (one boot path). The board container is started at boot by a
+# systemd unit; the incident of 01.10 was exactly a unit that read a *different*
+# compose file than the one deploy.sh maintains, so an old vendor image replaced
+# the board for 7 minutes. verify_boot_unit() refuses a deploy unless the unit
+# points at the same compose files (COMPOSE_DIR + COMPOSE_FILES + the override)
+# this deploy manages, and can install the canonical unit from the template.
+# Settings (all optional, see deploy.env.example; read by load_config):
+#   SYSTEMD_UNIT_NAME     default paperclip.service
+#   SYSTEMD_UNIT_DIR      default /etc/systemd/system (sandboxable for stands)
+#   SYSTEMD_UNIT_INSTALL  1 = install the canonical unit from the template when
+#                         none exists yet (needs root); unset = verify only.
+#                         A unit that exists but does not match is ALWAYS a
+#                         refusal, even with SYSTEMD_UNIT_INSTALL=1: repairing a
+#                         foreign unit silently is how the incident happened.
+
+# Fills the paperclip.service template: __COMPOSE_DIR__, __COMPOSE_FILE_ARGS__
+# (the colon-separated COMPOSE_FILES expanded into -f arguments plus the
+# override file) and __COMPOSE_SERVICE__.
+render_boot_unit() {
+  local -a files=()
+  local f
+  IFS=':' read -r -a _boot_files <<<"$COMPOSE_FILES"
+  for f in "${_boot_files[@]}"; do files+=("$COMPOSE_DIR/$f"); done
+  files+=("$OVERRIDE_PATH")
+  local file_args=""
+  for f in "${files[@]}"; do file_args+="${file_args:+ }-f $f"; done
+  sed -e "s|__COMPOSE_DIR__|$COMPOSE_DIR|g" \
+    -e "s|__COMPOSE_FILE_ARGS__|$file_args|g" \
+    -e "s|__COMPOSE_SERVICE__|$COMPOSE_SERVICE|g" \
+    "$MYR_SCRIPT_DIR/paperclip.service.template"
+}
+
+# The install path of the unit (absolute).
+boot_unit_path() { printf '%s/%s\n' "${SYSTEMD_UNIT_DIR%/}" "$SYSTEMD_UNIT_NAME"; }
+
+# Checks the installed unit against the compose set this deploy manages.
+# Returns 0 and sets BOOT_UNIT_OK=1 when the unit is the canonical one (its
+# ExecStart names exactly COMPOSE_DIR, every COMPOSE_FILES entry and the
+# override, in any order, with no other compose file); returns 1 with
+# BOOT_UNIT_REASON set otherwise. Missing unit, uninstalled systemd or a
+# foreign unit are all "not verified": the deploy refuses.
+verify_boot_unit() {
+  BOOT_UNIT_OK=0 BOOT_UNIT_REASON=""
+  local unit expected
+  unit="$(boot_unit_path)"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    BOOT_UNIT_REASON="systemctl is not available: the boot unit $SYSTEMD_UNIT_NAME cannot be verified; install it from scripts/myrmidon/deploy/paperclip.service.template or set SYSTEMD_UNIT_INSTALL=1 on a host with systemd"
+    return 1
+  fi
+  if [[ ! -f "$unit" ]]; then
+    if [[ "$SYSTEMD_UNIT_INSTALL" == "1" && "$DRY_RUN" != "1" ]]; then
+      install_boot_unit || return 1
+    else
+      BOOT_UNIT_REASON="the boot unit $unit does not exist; install it (SYSTEMD_UNIT_INSTALL=1 or copy scripts/myrmidon/deploy/paperclip.service.template) so the board starts from the compose files this deploy manages"
+      return 1
+    fi
+  fi
+  expected="$(render_boot_unit)"
+  if [[ "$(cat "$unit")" != "$expected" ]]; then
+    BOOT_UNIT_REASON="the boot unit $unit does not match the canonical unit for COMPOSE_DIR=$COMPOSE_DIR (COMPOSE_FILES=$COMPOSE_FILES + $COMPOSE_OVERRIDE_FILE): it may start the board from other compose files, as on 01.10. Fix: SYSTEMD_UNIT_INSTALL=1 on the unit host, or make the unit match scripts/myrmidon/deploy/paperclip.service.template. The deploy is refused while the unit differs (nothing was changed)"
+    return 1
+  fi
+  BOOT_UNIT_OK=1
+  return 0
+}
+
+# Installs the canonical unit (needs write access to SYSTEMD_UNIT_DIR, i.e.
+# root on a real host) and reloads systemd. Existing foreign unit: refusal.
+install_boot_unit() {
+  local unit
+  unit="$(boot_unit_path)"
+  if [[ -f "$unit" ]]; then
+    BOOT_UNIT_REASON="refusing to overwrite the existing unit $unit with the canonical one automatically: a foreign unit is exactly the 01.10 incident; remove or fix it by hand, then deploy"
+    return 1
+  fi
+  if ! mkdir -p "$SYSTEMD_UNIT_DIR" 2>/dev/null; then
+    BOOT_UNIT_REASON="cannot create $SYSTEMD_UNIT_DIR (need root to install the boot unit $SYSTEMD_UNIT_NAME); install it by hand from scripts/myrmidon/deploy/paperclip.service.template"
+    return 1
+  fi
+  local tmp
+  tmp="$(mktemp "$SYSTEMD_UNIT_DIR/.paperclip.XXXXXX")" || { BOOT_UNIT_REASON="cannot write to $SYSTEMD_UNIT_DIR"; return 1; }
+  render_boot_unit >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$unit" || { rm -f "$tmp"; BOOT_UNIT_REASON="cannot install the unit at $unit"; return 1; }
+  if command -v systemctl >/dev/null 2>&1; then
+    run systemctl daemon-reload || log "WARNING: systemctl daemon-reload failed; run it by hand"
+    run systemctl enable "$SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || log "WARNING: could not enable $SYSTEMD_UNIT_NAME; run: systemctl enable $SYSTEMD_UNIT_NAME"
+  fi
+  log "boot unit installed: $unit (from paperclip.service.template; After=docker.service, reads the compose files of this deploy)"
+  return 0
+}
+
 # Loads the settings file (see deploy.env.example) and applies defaults.
 load_config() {
   local file="$1"
@@ -216,6 +308,9 @@ load_config() {
   : "${RUNS_WAIT_TIMEOUT_SEC:=1800}"
   : "${ALLOW_UNKNOWN_RUNS:=0}"
   : "${POLL_INTERVAL_SEC:=5}"
+  : "${SYSTEMD_UNIT_NAME:=paperclip.service}"
+  : "${SYSTEMD_UNIT_DIR:=/etc/systemd/system}"
+  : "${SYSTEMD_UNIT_INSTALL:=}"
   case "$MAINTENANCE_MODE" in
     api|hook|pause) ;;
     *) die "MAINTENANCE_MODE must be api, hook or pause (got $MAINTENANCE_MODE)" ;;
