@@ -680,7 +680,7 @@ describe("deploy.sh: drain-interrupt enter body", () => {
   });
 });
 
-describe("lib.sh: waiting for the async maintenance exit (myrmidon EXIT-ASYNC)", () => {
+describe("lib.sh: async maintenance exit and post-deploy fleet check", () => {
   // Runs the real lib.sh functions against a fake `curl` that answers the
   // maintenance status from a file the test controls. No registry, board or
   // server is touched.
@@ -699,6 +699,7 @@ case "$url" in
   *maintenance*)
     cat "$SANDBOX/maintenance.json" 2>/dev/null || echo '{"active":false,"instance":null,"windows":[]}'
     if [ -e "$SANDBOX/flip-on-read" ]; then rm -f "$SANDBOX/flip-on-read"; echo '{"active":false,"instance":null,"windows":[]}' > "$SANDBOX/maintenance.json"; fi ;;
+  *issues*) cat "$SANDBOX/issues.json" 2>/dev/null || echo '[]' ;;
   *) echo '{"status":"ok"}' ;;
 esac
 `;
@@ -780,6 +781,55 @@ esac
     assert.notEqual(code, 0);
     // The wait never runs after a failed POST: the only call is the POST.
     assert.equal(read(path.join(sb.dir, "calls.log")).trim().split("\n").length, 1);
+  });
+
+  it("post_deploy_fleet_check passes when no issue is blocked and the window retired", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 0, out);
+    assert.match(out, /no blocked issues in the deploy window, maintenance retired/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when an issue became blocked in the window", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([{ id: "i1", status: "blocked" }]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1);
+    assert.match(out, /degraded: 1 blocked issue/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when the board answers an unexpected shape", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    // A body that is neither an array nor {issues: []}: the check cannot count
+    // it, so it reports degraded instead of passing.
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify({ error: "boom" }));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1, out);
+    assert.match(out, /degraded: board issue list unreadable/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when the window did not retire", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1);
+    assert.match(out, /degraded: maintenance window did not retire after exit/);
+  });
+
+  it("post_deploy_fleet_check is skipped without BOARD_API_URL/BOARD_COMPANY_ID", () => {
+    const sb = libSandbox();
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 0, out);
+    assert.match(out, /skipping the fleet check/);
   });
 });
 

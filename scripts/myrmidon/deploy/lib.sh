@@ -377,6 +377,62 @@ wait_for_maintenance_off() {
   done
 }
 
+# myrmidon(POST-DEPLOY-CHECK): after the image switch, the health check and the
+# maintenance exit, prove the deploy did not leave the fleet stalled.
+# Read-only against the board API the deploy already talks to. Two facts:
+#   1. No issue is `blocked` with an update inside the deploy window
+#      (GET /companies/<id>/issues?status=blocked&updatedSince=<deploy start>).
+#      A planned restart must not turn in-flight work into blocked; any hit is
+#      the failure signature this step exists for.
+#   2. The maintenance window retired (`off`): the admission gate that closed
+#      during the drain is gone, so the vendor periodic resumeQueuedRuns
+#      re-admits what queued up.
+# BOARD_API_URL and BOARD_COMPANY_ID are optional: when unset, the check is
+# skipped with a log line, so a standalone install without board credentials
+# stays deployable. A configured but unreadable board is a degraded deploy, not
+# a pass. Returns 1 (and logs "degraded:") when the deploy must be reported
+# degraded; 0 on a clean check.
+post_deploy_fleet_check() {
+  local started_at="$1" rc=0
+  if [[ -z "${BOARD_API_URL:-}" || -z "${BOARD_COMPANY_ID:-}" ]]; then
+    log "post-deploy check: BOARD_API_URL/BOARD_COMPANY_ID not set; skipping the fleet check (set them in the deploy env to enable)"
+    return 0
+  fi
+  local -a auth=()
+  mapfile -t auth < <(auth_header_args "$MAINTENANCE_TOKEN_FILE")
+  local body blocked
+  body="$(curl -fsS --max-time 30 "${auth[@]}" \
+    "$BOARD_API_URL/companies/$BOARD_COMPANY_ID/issues?status=blocked&updatedSince=$started_at&limit=100" 2>/dev/null)" || body=""
+  if [[ -z "$body" ]]; then
+    log "post-deploy check: board issue list unreadable (BOARD_API_URL=$BOARD_API_URL)"
+    log "degraded: board issue list unreadable after deploy"
+    return 1
+  fi
+  blocked="$(jq -r 'if type == "array" then length elif type == "object" and (.issues | type == "array") then (.issues | length) else "?" end' <<<"$body" 2>/dev/null || echo "?")"
+  if [[ "$blocked" == "?" || -z "$blocked" ]]; then
+    log "post-deploy check: unexpected board answer shape for blocked issues"
+    log "degraded: board issue list unreadable after deploy"
+    return 1
+  fi
+  if ((blocked > 0)); then
+    log "post-deploy check: $blocked blocked issue(s) updated since the deploy started ($started_at) — inspect them before waking agents by hand"
+    log "degraded: $blocked blocked issue(s) in the deploy window"
+    rc=1
+  fi
+  local mstate mbody
+  mbody="$(http_get "$MAINTENANCE_API_URL" "$MAINTENANCE_TOKEN_FILE" 2>/dev/null)" || mbody=""
+  mstate="$(jq -r '.instance.state // "off"' <<<"$mbody" 2>/dev/null || echo off)"
+  if [[ "$mstate" != "off" ]]; then
+    log "post-deploy check: maintenance window still '$mstate' after exit"
+    log "degraded: maintenance window did not retire after exit"
+    rc=1
+  fi
+  if ((rc == 0)); then
+    log "post-deploy check: no blocked issues in the deploy window, maintenance retired"
+  fi
+  return "$rc"
+}
+
 # Prints the number of running agent runs, or nothing when unknown.
 running_runs() {
   if [[ -n "$RUNNING_RUNS_COMMAND" ]]; then

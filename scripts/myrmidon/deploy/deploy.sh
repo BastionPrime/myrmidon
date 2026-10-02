@@ -162,6 +162,11 @@ log "3/8 database dump"
 take_dump "${digest#sha256:}"
 LAST_DUMP_FILE="${LAST_DUMP_FILE:-}"
 
+# myrmidon(POST-DEPLOY-CHECK): the deploy window starts when the first
+# board-affecting step runs (the maintenance enter below). Issues blocked after
+# this moment are the failure signature the post-deploy check looks for.
+deploy_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 log "4/8 enter maintenance"
 maintenance_enter "deploy $MYRMIDON_IMAGE@${digest:0:19}"
 
@@ -205,7 +210,19 @@ if ! "$MYR_SCRIPT_DIR/verify-health.sh" --url "$HEALTH_URL" --timeout "$HEALTH_T
 fi
 
 log "8/8 leave maintenance"
+# myrmidon(EXIT-ASYNC): the exit POST returns once the window is marked
+# `leaving`; maintenance_exit then waits (bounded) for the window to retire, so
+# the deploy waits on the STATE, not on the HTTP call.
 maintenance_exit
+
+# myrmidon(POST-DEPLOY-CHECK): the board is live again — prove the deploy did
+# not leave the fleet stalled. A degraded verdict does NOT fail the deploy (the
+# image is switched and healthy); it is reported loudly so the operator reacts
+# at once instead of finding a stalled team by hand.
+log "post-deploy fleet check"
+if ! post_deploy_fleet_check "$deploy_started_at"; then
+  log "DEPLOY DEGRADED: $ref is running and healthy, but the post-deploy check reported problems above; inspect the board now"
+fi
 log "deployed $ref (previous: ${previous:-<none>}, dump: $LAST_DUMP_FILE)"
 
 # RELEASE-GATE: the components of the same release roll out in this same run.
