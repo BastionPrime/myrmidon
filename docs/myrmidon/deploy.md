@@ -76,18 +76,36 @@ There is no bypass: no flag, no setting. `--force` (redeploying the same image) 
 `--expect-*` do not skip the check. To deploy an image that does not pass, the image must go
 through CI: a PR into `main`, a merge, a build.
 
-### Deploy the board and dockergate together
+### Deploy the board and the release components together
 
-When the release notes say the A2 contract changed on both sides, deploy the board image AND
-the dockergate image from the same tag together. A 1.3.2 board against a 1.3.1 dockergate
-still recreates every bot on every pass (the 01.10 incident); a 1.3.2 dockergate against a
-1.3.1 board is safe but pointless. fleetd from the same tag too. The digests are in the
-GitHub release notes.
+Since 1.4.0 (RELEASE-GATE, after the 01.10 incident) `deploy.sh` deploys the release's
+component images (dockergate, fleetd) **in the same run** as the board image, and refuses
+a release whose components are missing from the registry **before anything changes**. The
+digests are resolved from the same release: the `myr-vX.Y.Z` tag from the board image
+version label, else the `sha-<short>` tag of its commit
+(`scripts/myrmidon/dockergate/check-release-support.sh`). There is nothing to look up by
+hand: the operator passes the board digest and the script finds the matching component
+digests itself.
+
+The components are listed in `MYRMIDON_RELEASE_COMPONENTS` (default `dockergate,fleetd`).
+Each component rolls with its own pull by digest, its own override file
+(`docker-compose.myrmidon-<component>.yml`), a service recreate and a **required** health
+probe (`MYR_<COMPONENT>_HEALTH_URL`; unset means the component rollout refuses after the
+switch — fail-closed). A failed component rollout or a failed post-deploy smoke ends the
+deploy as DEGRADED with the rollback commands printed; the board itself is already healthy
+at that point, so the rollback is the operator's decision. `MYRMIDON_RELEASE_COMPONENTS=none`
+restores the board-only behavior (not for a release: the 01.10 incident was exactly that
+split). The settings are in [SETTINGS.md](SETTINGS.md); an example is in
+[`deploy.env.example`](../../scripts/myrmidon/deploy/deploy.env.example).
 
 ### Upgrading from 1.3.2 to 1.4.0
 
-Deploy the board, dockergate and fleetd images from the same 1.4.0 tag together. No new
-migrations to run by hand: the upgrade is image-only on the host side.
+Deploy the board, dockergate and fleetd images from the same 1.4.0 tag together — with
+1.4.0 the script does this in one run (the section above): pass the board digest, and the
+dockergate and fleetd digests of the same tag are resolved and rolled automatically. No new
+migrations to run by hand: the upgrade is image-only on the host side. For the component
+health probes to pass, set `MYR_DOCKERGATE_HEALTH_URL` and `MYR_FLEETD_HEALTH_URL` in
+`deploy.env` before the deploy (see [SETTINGS.md](SETTINGS.md)).
 
 What changes for operators:
 
@@ -130,7 +148,9 @@ scripts/myrmidon/deploy/deploy.sh --config /path/to/deploy.env --digest sha256:<
 Order:
 
 0. The image check (the section above). If it fails, the deploy does not start and nothing is
-   touched.
+   touched. Right after it the component digests of the same release are resolved
+   (`check-release-support.sh`); a release whose components are missing from the registry is
+   refused here too, before the pull and the dump.
 1. `docker pull` of the image by digest. If it does not pull, the deploy does not start.
 2. The current image from the override file is remembered as the previous one: the full
    reference goes to `$STATE_DIR/previous-image` (so the first switch from a vendor image
@@ -164,9 +184,21 @@ Order:
 7. The `/api/health` check (`verify-health.sh`): `status` is `ok`, the version and commit
    match.
 8. Leaving maintenance mode.
+9. The release components roll out in the same run (see
+   [Deploy the board and the release components together](#deploy-the-board-and-the-release-components-together)):
+   one `rollout-component.sh` per component — pull by digest, the component override file,
+   a service recreate, the required health probe. A failed component marks the deploy
+   DEGRADED and prints the rollback commands.
+10. The post-deploy smoke (`bot-apply-smoke.sh`): within `MYRMIDON_DEPLOY_SMOKE_TIMEOUT_SEC`
+    (300 s by default) at least one bot container of `MYRMIDON_DEPLOY_SMOKE_COMPANY` must
+    re-apply (its status is `running`). On failure the deploy reports DEGRADED with the
+    rollback commands. With the company unset the smoke is skipped with a warning;
+    `MYRMIDON_DEPLOY_SMOKE=0` disables it entirely (not for a release).
 
 If step 7 fails, the script exits with an error, **maintenance stays on**, and the output
-carries the rollback command and the dump path.
+carries the rollback command and the dump path. A failure at steps 9–10 happens after the
+board is healthy and maintenance is already lifted: the script exits with an error and the
+DEGRADED line, and the rollback of the board and of each component is the operator's call.
 
 `--dry-run` changes nothing (does not pull the image, does not dump, does not touch files)
 and prints the plan. The image check (step 0) does run in it: it only reads.
@@ -202,6 +234,20 @@ scripts/myrmidon/deploy/rollback.sh --config /path/to/deploy.env --to sha256:<ol
 The script asks to type `RESTORE` (or takes `--yes-restore-database`), stops the server
 service, runs `RESTORE_COMMAND`, then brings the old image up.
 
+A release component rolls back separately, without touching the board:
+
+```sh
+scripts/myrmidon/deploy/rollback-component.sh --config /path/to/deploy.env --component dockergate
+```
+
+It restores the image the component's rollout remembered as previous (`$STATE_DIR/
+previous-<component>-image`, or an explicit `--to-image <ref>`), recreates the service and
+re-runs that component's health probe (skipped with a warning when the probe is unset). Like
+`rollback.sh` it is the emergency path: an unverified target warns but does not block.
+Rolling the board back does not roll the components back, and rolling a component back does
+not touch the board: after a DEGRADED deploy the output names exactly which side failed and
+which command to run.
+
 ## Deploy from the interface
 
 The board can start its own deploy: the instance settings ("Board update") verify a digest,
@@ -219,7 +265,10 @@ rules are the script's rules, not a second policy:
   `scripts/myrmidon/deploy/deploy-from-job.sh`, which polls the board API, waits for the
   window to be `on`, runs the same `deploy.sh` (dump, drain, health) and writes a small JSON
   report per job (`$STATE_DIR/job-<id>.json`). Mount that directory read-only into the board
-  container as `MYRMIDON_DEPLOY_REPORTS_DIR`; the board reads it, it never writes there;
+  container as `MYRMIDON_DEPLOY_REPORTS_DIR`; the board reads it, it never writes there.
+  Because the executor runs the same `deploy.sh`, the release gate applies here too: the
+  components of the release roll in the same job, and a failed component rollout or smoke
+  fails the job with the DEGRADED line in its log (`$STATE_DIR/job-<id>.log`);
 - the job is marked succeeded only when the board's own `/api/health` agrees with the
   reported version and commit — a lying report cannot close a failed deploy;
 - a job stuck in one step longer than `MYRMIDON_DEPLOY_STEP_TIMEOUT_SEC` aborts itself and
@@ -268,6 +317,9 @@ case the interface refuses — which is exactly the case the script would refuse
 
 - `/api/health`: `status: ok`, the version and commit as in the image summary; `maintenance`
   is off.
+- The component probes of the release gate: the deploy output ends with
+  `release gate passed: board and <components> rolled out together, bots re-apply`. Each
+  component answers its own probe (the exact target is your `MYR_<COMPONENT>_HEALTH_URL`).
 - The server log: migrations applied, no startup errors:
   `docker compose logs --since 10m <service>`.
 - Ad-hoc operator indexes: a migration may drop indexes created by hand outside the
