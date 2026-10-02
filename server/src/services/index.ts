@@ -20,7 +20,7 @@ export {
   type BuiltInAgentState,
   type BuiltInAgentStatus,
 } from "./built-in-agents.js";
-export { agentInstructionsService, syncInstructionsBundleConfigFromFilePath } from "./agent-instructions.js";
+export { agentInstructionsBundleMode, agentInstructionsService, syncInstructionsBundleConfigFromFilePath } from "./agent-instructions.js";
 export { assetService } from "./assets.js";
 export { documentService, extractLegacyPlanBody } from "./documents.js";
 export { artifactReviewDocumentService } from "./artifact-review-documents.js";

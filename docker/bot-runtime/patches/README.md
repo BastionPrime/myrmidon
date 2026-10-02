@@ -27,7 +27,7 @@ option-description string, plus the one deliberate difference noted for
 To repeat the comparison (`<reference>` is the reference checkout):
 
 ```sh
-git clone --branch v2026.9.24 https://github.com/NousResearch/hermes-agent.git /tmp/hermes-check
+git clone --branch v2026.9.24 https://github.com/BastionPrime/hermes-agent.git /tmp/hermes-check
 cd /tmp/hermes-check
 for p in /path/to/docker/bot-runtime/patches/*.patch; do git apply --whitespace=fix "$p"; done
 diff -rq --exclude=.git --exclude=__pycache__ . <reference>
@@ -56,7 +56,7 @@ listed above) are not patched anywhere.
 
 1. Write the change against a fresh clone of the pinned tag:
    ```sh
-   git clone --branch v2026.9.24 https://github.com/NousResearch/hermes-agent.git /tmp/hermes-check
+   git clone --branch v2026.9.24 https://github.com/BastionPrime/hermes-agent.git /tmp/hermes-check
    cd /tmp/hermes-check
    # edit, test against a real gateway run locally
    git diff > my-change.patch

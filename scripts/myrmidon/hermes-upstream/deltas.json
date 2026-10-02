@@ -1,5 +1,5 @@
 {
-  "$comment": "Machine-readable delta registry for hermes-agent. Every change we carry on top of the pinned upstream tag lives here with the reason and the condition under which it can be dropped; hermes-upstream-check.mjs compares it against upstream and flags the deltas upstream has caught up with. Docs: docs/myrmidon/hermes-deltas.md. Keep pinnedRef/pinnedVersion in sync with docker/bot-runtime/Dockerfile (the checker fails when they disagree).",
+  "$comment": "Machine-readable delta registry for hermes-agent. Every change we carry on top of the pinned upstream tag lives here with the reason and the condition under which it can be dropped; hermes-upstream-check.mjs compares it against upstream and flags the deltas upstream has caught up with. Docs: docs/myrmidon/hermes-deltas.md. Keep pinnedRef/pinnedVersion in sync with docker/bot-runtime/Dockerfile (the checker fails when they disagree). `source` stays the upstream repository (that is what the pin is compared against); the image itself clones `docker/bot-runtime/Dockerfile`'s HERMES_REPO, our mirror fork — see the 'Not deltas' section of the docs.",
   "component": "hermes-agent",
   "source": "https://github.com/NousResearch/hermes-agent.git",
   "pinnedRef": "v2026.9.24",
