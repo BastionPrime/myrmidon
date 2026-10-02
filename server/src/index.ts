@@ -133,6 +133,7 @@ import { startBotCanary, stopBotCanary } from "./myrmidon/bot-containers/canary-
 import { interactionContinuationOutboxService } from "./myrmidon/interaction-continuation-outbox.js"; // myrmidon(O1)
 import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
 import { createRunStallSweepFromHeartbeat } from "./myrmidon/run-stall/index.js"; // myrmidon(RUN-STALL)
+import { createTaskPrSyncScheduler } from "./myrmidon/task-pr-sync/index.js"; // myrmidon(TASK-PR-SYNC)
 import {
   createPendingInteractionWakeSweep,
   readPendingInteractionWakeContextSnapshot,
@@ -1313,6 +1314,12 @@ async function startServerWithDatabaseTeardown(
       logger.error({ err }, "pending interaction wake sweep failed");
     }));
   };
+  // myrmidon(TASK-PR-SYNC): links each task to the pull requests that deliver it
+  // through the work-products surface, refreshes their state from GitHub through
+  // the existing resolver, and settles the task (status done, one comment with the
+  // PR refs / merge sha / time) once every PR is merged — or returns it to the
+  // assignee when a PR was closed without merging.
+  const scheduleTaskPrSyncSweep = createTaskPrSyncScheduler({ db: db as any, track: trackHeartbeatSchedulerWork });
   // myrmidon(AUTO-RESUME): resumes an agent left in `error` once its 1/5/15 min
   // backoff step is due; the per-agent maintenance gate lives in the sweeper.
   // Runs on the same mutually-exclusive scheduler paths as the other
@@ -1776,6 +1783,7 @@ async function startServerWithDatabaseTeardown(
         scheduleSetupTokenReaperSweep();
         scheduleEnvironmentLeaseCleanupSweep();
         schedulePendingInteractionWakeSweep(); // myrmidon(P12)
+        scheduleTaskPrSyncSweep(); // myrmidon(TASK-PR-SYNC)
         scheduleAutoResumeSweep(); // myrmidon(AUTO-RESUME)
 
         if (heartbeatSchedulerStopped) return;
