@@ -415,6 +415,7 @@ All off by default.
 | `MYRMIDON_TRACING_CLICKHOUSE_DATABASE` | TRACING-HEALTH | `default` | Database of the Langfuse tables (`events_core`, `langfuse_ingestion_rejections`) | — |
 | `MYRMIDON_TRACING_WINDOW_SEC` | TRACING-HEALTH | `900` (15 min) | Length of the health check window: events in ClickHouse and gateway requests are counted over the last N seconds | From 60 to 3600; non-integer or out of bounds — the default. A window with no gateway traffic is the state `idle` (OK with a reason), not an alarm: the check must not cry wolf on quiet periods |
 | `MYRMIDON_TRACING_HEALTH_TTL_SEC` | TRACING-HEALTH | `60` | Cache TTL of the report: the probes run at most once per TTL; inside it the previous report is served (checkedAt shows when it was actually measured) | From 5 to 3600; non-integer or out of bounds — the default. Any probe failure is the state `unknown` with a reason in the JSON contract, never a 500 |
+| `MYRMIDON_TRACING_SIGNAL_INTERVAL_SEC` | TRACING-HEALTH | `300` | Period (sec) of the operator-signal sweep (part D): the board itself polls the tracing health report and records the attention signal + the state-transition journal row, so the operator desk is fresh even when nobody has the status card open. A steady state writes nothing — one row per transition only | From 60 to 86400; non-integer or out of bounds — the default. Off together with the check itself: no tracing settings — no timer, no query |
 
 Health semantics (the operator's 02.10 findings, baked into the domain):
 `idle` without gateway traffic; `degraded` when events are missing while traffic
@@ -425,3 +426,22 @@ or above 0.02; `unknown` on probe failure. The evidence fields `deliveryRatio`
 and `legacyRejections` are additive parts of the JSON contract for the part D
 dedup key; fields without a source stay null and never block the computation.
 
+
+## TASK-PR-SYNC — a task settles once its pull requests merge
+
+A task whose `work_product` of type `pull_request` merged used to stay busy until
+someone noticed. The scheduler tick now runs a pass that refreshes each PR's
+state through the existing GitHub resolver and closes the task (`done`, one
+comment with the PR refs / merge sha / time, an activity row) when every PR has
+reached a terminal state and at least one merged and no post-deploy gate is still
+open. When none of them merged, the task goes back to its assignee (`in_progress`
+plus a comment) unless a newer comment already answered the closure. The sweep
+reads the same work-products surface the board uses; it adds no token or
+credential.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_TASK_PR_SYNC_ENABLED` | TASK-PR-SYNC | `1` (on) | Master switch of the delivering-PR sweep: on — a task is linked to its PRs and settled when they all merge | `0`/`false`/`off`/`no` — disable (tasks stay busy until closed by hand). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
+| `MYRMIDON_TASK_PR_SYNC_POLL_SEC` | TASK-PR-SYNC | `60` | Minimum spacing between two passes; the scheduler queue itself ticks more often | Values below 15 or non-numeric or fractional — the default (60) |
+| `MYRMIDON_TASK_PR_SYNC_BATCH_MAX` | TASK-PR-SYNC | `50` | How many candidate tasks one pass inspects at most (each task costs one GitHub resolve per PR) | From 1 to 500; values outside the range or non-numeric — the default |
+| `MYRMIDON_TASK_PR_SYNC_SETTLE_DISABLED` | TASK-PR-SYNC | unset (settling on) | Instance-wide lever to make the sweep read and log but never flip a task to `done` — for a deliberate post-deploy hold on every task at once. A task with its own post-deploy gate is already deferred per task (a pending card, a pending approval, or a monitor scheduled for the future) | `1`/`true`/`on`/`yes` — settling off; anything else — settling on. The per-task gate check cannot be disabled by this switch |

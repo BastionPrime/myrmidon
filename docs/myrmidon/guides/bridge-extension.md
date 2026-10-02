@@ -55,6 +55,14 @@ Unpair removes the token. Revoking the device in the bridge panel makes the
 gateway refuse the token (fail-closed) and the connection drops. The bridge
 token never appears in the UI, in logs, or in the page.
 
+## Signing
+
+The extension signs documents through a local helper process on the client PC,
+talked to over Chrome Native Messaging. The message contract —
+`extension/src/native-host-contract.ts` (types and validators only; a concrete
+helper lives outside the public fork) — is documented in
+[signing-host-contract.md](signing-host-contract.md).
+
 ## Build and install
 
 ```sh

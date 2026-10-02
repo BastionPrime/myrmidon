@@ -34,6 +34,14 @@ version file to edit. Base Paperclip version is in the image label
   journal with filters (device, method, outcome, signatures only) and the
   document hash per signature. Guide:
   [guides/connector-panel.md](guides/connector-panel.md).
+- The signing host contract: a generic, client-free native-messaging contract
+  for local signing helpers (`extension/src/native-host-contract.ts`) — a
+  closed `actionType` enum (`sign` / `sign_and_submit` / `sign_attachment`), a
+  document payload of bytes or a SHA-256 digest, a closed error-code set, and
+  validators both sides compile against. A concrete helper (token middleware
+  binding, PIN storage) is deployment-specific and lives outside the public
+  fork. Guide:
+  [guides/signing-host-contract.md](guides/signing-host-contract.md).
 
 ### OCR path
 
@@ -125,6 +133,23 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   (`agent.auto_resume_issued` / `agent.auto_resume_exhausted`). Settings:
   `MYRMIDON_AUTO_RESUME_*` in [SETTINGS.md](SETTINGS.md); guide:
   [guides/auto-resume.md](guides/auto-resume.md) (#272).
+
+### Telegram
+
+- Telegram DM run status and inline split (U1). In a bridged Telegram DM
+  (`MYRMIDON_TELEGRAM_DM_CONVERSATIONS`) a run can now show its "working on
+  it" status as one editable message instead of milestone silence: the status
+  is posted once when the run is queued, the same provider message is edited
+  in place as the phase changes, and the run's final answer replaces it —
+  the failure, admin-attention and completion milestones still publish, and
+  the `/stop` terminal milestone stays suppressed. Separately, a long
+  structured Markdown answer that the vendor sends as one `.md` attachment
+  can split inline into ordered parts at paragraph/line/word boundaries.
+  Both behaviors are opt-in and off by default:
+  `MYRMIDON_TELEGRAM_DM_STATUS` and `MYRMIDON_TELEGRAM_SPLIT_MAX_PARTS` (a
+  document needing more parts than the cap stays an attachment); see
+  [SETTINGS.md](SETTINGS.md) and the guide
+  [guides/telegram-dm-status.md](guides/telegram-dm-status.md) (#267, #313).
 
 ## 1.3.2
 
