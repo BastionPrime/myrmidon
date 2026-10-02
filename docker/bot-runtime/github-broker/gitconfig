@@ -1,0 +1,19 @@
+# myrmidon(G1) CONTAINER-GITHUB-WRITE: the dev image's system git config.
+# Installed at /etc/gitconfig (root-owned, read-only root FS) so every git
+# invocation in a bot container consults the run-scoped credential helper
+# without needing GIT_CONFIG_* env vars, which the terminal env scrub may
+# drop. The leading empty helper value clears ambient helpers (gh, keychains,
+# credential-store) so they neither outrank ours nor receive store/erase
+# callbacks; ours is URL-scoped to github.com over https and re-validates the
+# request host itself, so a rewritten remote cannot reach it. SSH remote URLs
+# are rewritten to https so the helper covers them too.
+[credential]
+	helper =
+[credential "https://github.com"]
+	helper = !/opt/paperclip/bin/git-credential-paperclip
+[credential "https://www.github.com"]
+	helper = !/opt/paperclip/bin/git-credential-paperclip
+[url "https://github.com/"]
+	insteadOf = git@github.com:
+[url "https://github.com/"]
+	insteadOf = ssh://git@github.com/

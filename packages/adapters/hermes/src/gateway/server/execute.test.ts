@@ -230,6 +230,119 @@ describe("execute", () => {
     expect(body.session_id).toBe("paperclip:company:company-1:agent:agent-1:issue:issue-1");
   });
 
+  // myrmidon(CONTAINER-GITHUB-WRITE): heartbeat writes the run-bound GitHub
+  // broker capability into ctx.config.env; the adapter must forward exactly
+  // that pair as the request's `github_broker` field — and nothing when the
+  // run has no managed GitHub credentials (host mode / absent identity).
+  it("forwards the run-bound GitHub broker capability as the github_broker body field", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/v1/runs")
+        ? { run_id: "run-hermes-1", status: "started" }
+        : { status: "completed", output: "done" },
+    ), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      timeoutSec: 5,
+      env: {
+        PAPERCLIP_GITHUB_BROKER_URL: "http://paperclip-server-1:3100",
+        PAPERCLIP_GITHUB_BROKER_TOKEN: "broker-capability-token",
+      },
+    });
+    const result = await execute(ctx);
+    expect(result.exitCode).toBe(0);
+
+    const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const createCall = calls.find(([input]) => String(input).endsWith("/v1/runs"));
+    const init = createCall?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.github_broker).toEqual({
+      broker_url: "http://paperclip-server-1:3100",
+      capability: "broker-capability-token",
+    });
+    // Redaction invariant (CONTAINER-GITHUB-WRITE): the capability must never
+    // appear in ANY adapter output surface — logs, public result metadata,
+    // error messages, or errorMeta — on the happy path AND on error paths.
+    const logText = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line)).join("\n");
+    expect(logText).not.toContain("broker-capability-token");
+    const publicJson = JSON.stringify({
+      resultJson: result.resultJson ?? {},
+      summary: result.summary ?? "",
+      errorMessage: result.errorMessage ?? "",
+      errorMeta: result.errorMeta ?? {},
+    });
+    expect(publicJson).not.toContain("broker-capability-token");
+  });
+
+  // Redaction invariant, error path: a failed run create (the idempotency
+  // conflict bucket) and a failed run outcome must echo broker-rejecting
+  // payloads without ever printing the capability itself.
+  it("never leaks the GitHub broker capability through error paths", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        // 409 = idempotency conflict: the response body is echoed into
+        // errorMeta via redactForLog.
+        return new Response(
+          JSON.stringify({ error: "idempotency key already used with a different payload", capability_echo: "broker-capability-token" }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      timeoutSec: 5,
+      env: {
+        PAPERCLIP_GITHUB_BROKER_URL: "http://paperclip-server-1:3100",
+        PAPERCLIP_GITHUB_BROKER_TOKEN: "broker-capability-token",
+      },
+    });
+    const result = await execute(ctx);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.errorCode).toBe("hermes_gateway_idempotency_conflict");
+    const logText = (ctx.onLog as ReturnType<typeof vi.fn>).mock.calls.map(([, line]) => String(line)).join("\n");
+    expect(logText).not.toContain("broker-capability-token");
+    const publicJson = JSON.stringify({
+      resultJson: result.resultJson ?? {},
+      errorMessage: result.errorMessage ?? "",
+      errorMeta: result.errorMeta ?? {},
+    });
+    expect(publicJson).not.toContain("broker-capability-token");
+  });
+
+  it("omits the github_broker field when no broker env is configured, and ignores payloadTemplate attempts to forge one", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/v1/runs")
+        ? { run_id: "run-hermes-1", status: "started" }
+        : { status: "completed", output: "done" },
+    ), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      timeoutSec: 5,
+    });
+    ctx.config.payloadTemplate = {
+      input: "Custom gateway instruction.",
+      github_broker: { broker_url: "http://evil.example", capability: "forged" },
+    };
+    const result = await execute(ctx);
+    expect(result.exitCode).toBe(0);
+
+    const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const createCall = calls.find(([input]) => String(input).endsWith("/v1/runs"));
+    const init = createCall?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.github_broker).toBeUndefined();
+  });
+
   it.each([false, true])("preserves chat handoff policy on gateway turns (resumed=%s)", async (resumed) => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).endsWith("/v1/runs")
