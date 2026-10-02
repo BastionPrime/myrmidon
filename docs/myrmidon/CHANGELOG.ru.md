@@ -153,6 +153,37 @@
   прогона, который лишь гонялся бы с закрытием. Руководство оператора:
   [guides/task-pr-sync.ru.md](guides/task-pr-sync.ru.md).
 
+### Доступ к GitHub из контейнера (CONTAINER-GITHUB-WRITE)
+
+- Агент в контейнере бота может пушить в GitHub через управляемые доской
+  учётные данные (#363): когда GitHub-личность прогона управляется доской
+  (по умолчанию, см. `MYRMIDON_HOST_GITHUB_CREDENTIALS` в
+  [SETTINGS.ru.md](SETTINGS.ru.md)), heartbeat выпускает capability
+  `github_credentials`, привязанную к прогону, и адаптер `hermes_gateway`
+  теперь доставляет её в контейнер — пара едет телом запроса `/v1/runs`
+  (`github_broker`), привязывается только к этому прогону (contextvars,
+  никогда не через общий для одновременных прогонов шлюза process env) и
+  попадает в каждый дочерний процесс терминала и `execute_code` этого
+  прогона как `PAPERCLIP_GITHUB_BROKER_URL`/
+  `PAPERCLIP_GITHUB_BROKER_TOKEN`. Внутри контейнера credential-хелпер
+  `git` dev-образа (URL-скоуп на `github.com` по https, ремоуты
+  `ssh://git@github.com/…` переписываются на https) и врапер `gh` на каждом
+  вызове резолвят учётные данные через брокера доски
+  `POST /runtime-tools/github/credentials` и запускают настоящий
+  `git`/`gh`; враперы перебирают до 6 адресов брокера
+  (`PAPERCLIP_GITHUB_BROKER_URL` → `PAPERCLIP_API_URL` →
+  `PAPERCLIP_RUNTIME_API_URL` → элементы
+  `PAPERCLIP_RUNTIME_API_CANDIDATES_JSON`) и никогда не печатают токен.
+  Прогон без capability — или карточка, чья GitHub-личность не управляется
+  доской, — получает оба имени вырезанными, а враперы честно пропускают
+  вызов дальше, ровно как до этой правки. Статический
+  `GH_TOKEN`/`GITHUB_TOKEN`, унаследованный из профиля образа, больше не
+  затеняет учётные данные: пока capability привязана, эти имена
+  очищаются в дочерних процессах прогона. Это закрывает дыру, ради которой
+  вводился `MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST` (см.
+  SETTINGS.ru.md): allowlist остаётся запасным путём для ботов разработки
+  на машинах, где адрес брокера доски действительно недостижим.
+
 ## 1.4.0
 
 Всё слитое между тегами 1.3.2 и 1.4.0. Образы доски, dockergate и fleetd этого
