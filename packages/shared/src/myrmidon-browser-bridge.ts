@@ -336,7 +336,6 @@ export const BROWSER_BRIDGE_ERROR_CODES = {
   protocolVersionUnsupported: -32018,
   confirmationNotGranted: -32019,
   signingDisabled: -32020,
-  dailyLimitReached: -32022,
   downloadTooLarge: -32021,
   dailyLimitReached: -32022,
 } as const;
