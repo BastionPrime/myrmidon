@@ -366,7 +366,14 @@ case "$1" in
         if [ -e "$SANDBOX/registry-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
         cat "$SANDBOX/imagetools.json" ;;
     esac ;;
-  compose) exit 0 ;;
+  compose)
+    case "$*" in
+      *--services)
+        # HOST-TARGETING: the declared services of the sandbox's compose
+        # project (the fail-closed pre-check reads them).
+        printf 'server\\ndockergate\\nfleetd\\n' ;;
+      *) exit 0 ;;
+    esac ;;
 esac
 `;
 
