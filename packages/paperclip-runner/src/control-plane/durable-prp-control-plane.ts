@@ -1416,6 +1416,7 @@ class AuthorityConnection {
   activationReceipt: DurableWarmRunTransition | null = null;
   readonly wire: PrpWireConnection;
   #closed = false;
+  #revoked = false;
   #onClose: () => void;
 
   constructor(input: {
@@ -1438,7 +1439,13 @@ class AuthorityConnection {
     );
   }
 
+  /** True once this side closed the connection and withdrew its authority. */
+  get revoked(): boolean {
+    return this.#revoked;
+  }
+
   close(code?: number): void {
+    this.#revoked = true;
     if (this.#closed) return;
     this.#closed = true;
     this.wire.close(code);
@@ -1996,8 +2003,16 @@ export class DurablePrpControlPlane {
     connection = new AuthorityConnection({
       wire,
       onJson: (value) => {
+        // Frames queued behind an in-flight handler must not outlive a local
+        // close: a revoked owner (lost ACK, replaced connection, protocol
+        // fault) cannot complete commands ahead of its replayed events. The
+        // runner replays both on its next authenticated connection.
         processing = processing
-          .then(() => this.#handleJson(connection, value))
+          .then(() =>
+            connection.revoked
+              ? undefined
+              : this.#handleJson(connection, value),
+          )
           .catch(() => connection.close());
         const tail = processing;
         this.#connectionProcessing.set(connection, tail);
