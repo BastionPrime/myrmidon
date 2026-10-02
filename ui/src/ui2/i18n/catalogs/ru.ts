@@ -153,4 +153,43 @@ export const ru: Ui2Catalog = {
     monthsAgo: "{{count}} мес назад",
     updated: "Обновлено {{time}}",
   },
+  ui2: {
+    owner: "Владелец",
+    ownerChannel: "Веб",
+    nests: {
+      all: "Все гнёзда",
+    },
+    phone: {
+      status: "Владелец · Веб",
+    },
+    chip: {
+      colony: "{{active}} из {{total}}",
+      fleet: "Флот",
+      fleetAttention: "Флот: 1 требует внимания",
+      forecast: "{{spend}} из {{budget}}",
+    },
+    commander: {
+      aria: "Сказать Командиру (Ctrl K)",
+      placeholder: "Сказать Командиру…",
+      stubNote: "Заглушка: сообщение пока не отправляется. Оно открывает существующий чат; диалог Командира появится с обновлением чата 1.6.",
+      openChat: "Открыть чат",
+    },
+    nav: {
+      railLabel: "Основная навигация",
+      badge: {
+        attention: "{{count}} пунктов требуют внимания",
+      },
+    },
+    settings: {
+      navLabel: "Разделы настроек",
+    },
+    decisions: {
+      badge: "{{count}} решений ожидают",
+    },
+    screens: {
+      placeholderTitle: "Этот экран появится в 2.0",
+      placeholderBody: "Макет 2.0 для этой зоны ещё не подключён; рабочий экран ниже сохраняет поток.",
+      placeholderLegacyLink: "Вернуться к текущему макету",
+    },
+  },
 };

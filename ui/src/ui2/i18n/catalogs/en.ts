@@ -157,6 +157,45 @@ export const en = {
     monthsAgo: "{{count}}mo ago",
     updated: "Updated {{time}}",
   },
+  ui2: {
+    owner: "Owner",
+    ownerChannel: "Web",
+    nests: {
+      all: "All nests",
+    },
+    phone: {
+      status: "Owner · Web",
+    },
+    chip: {
+      colony: "{{active}} of {{total}}",
+      fleet: "Fleet",
+      fleetAttention: "Fleet: 1 attention",
+      forecast: "{{spend}} of {{budget}}",
+    },
+    commander: {
+      aria: "Tell the Commander (Ctrl K)",
+      placeholder: "Tell the Commander…",
+      stubNote: "Stub: the message is not sent yet. It opens the existing chat; the Commander conversation arrives with the 1.6 chat update.",
+      openChat: "Open chat",
+    },
+    nav: {
+      railLabel: "Main navigation",
+      badge: {
+        attention: "{{count}} items need attention",
+      },
+    },
+    settings: {
+      navLabel: "Settings sections",
+    },
+    decisions: {
+      badge: "{{count}} decisions waiting",
+    },
+    screens: {
+      placeholderTitle: "This screen arrives with 2.0",
+      placeholderBody: "The 2.0 layout for this area is not wired yet; the working screen below keeps the flow.",
+      placeholderLegacyLink: "Back to the current layout",
+    },
+  },
 };
 
 export type Ui2Catalog = {
@@ -305,5 +344,83 @@ export type Ui2Catalog = {
     weeksAgo: string;
     monthsAgo: string;
     updated: string;
+  };
+  ui2: {
+    owner: "Owner",
+    ownerChannel: "Web",
+    nests: {
+      all: "All nests",
+    },
+    phone: {
+      status: "Owner · Web",
+    },
+    chip: {
+      colony: "{{active}} of {{total}}",
+      fleet: "Fleet",
+      fleetAttention: "Fleet: 1 attention",
+      forecast: "{{spend}} of {{budget}}",
+    },
+    commander: {
+      aria: "Tell the Commander (Ctrl K)",
+      placeholder: "Tell the Commander…",
+      stubNote: "Stub: the message is not sent yet. It opens the existing chat; the Commander conversation arrives with the 1.6 chat update.",
+      openChat: "Open chat",
+    },
+    nav: {
+      railLabel: "Main navigation",
+      badge: {
+        attention: "{{count}} items need attention",
+      },
+    },
+    settings: {
+      navLabel: "Settings sections",
+    },
+    decisions: {
+      badge: "{{count}} decisions waiting",
+    },
+    screens: {
+      placeholderTitle: "This screen arrives with 2.0",
+      placeholderBody: "The 2.0 layout for this area is not wired yet; the working screen below keeps the flow.",
+      placeholderLegacyLink: "Back to the current layout",
+    },
+  },
+  ui2: {
+    owner: string;
+    ownerChannel: string;
+    nests: {
+      all: string;
+    };
+    phone: {
+      status: string;
+    };
+    chip: {
+      colony: string;
+      fleet: string;
+      fleetAttention: string;
+      forecast: string;
+    };
+    commander: {
+      aria: string;
+      placeholder: string;
+      stubNote: string;
+      openChat: string;
+    };
+    nav: {
+      railLabel: string;
+      badge: {
+        attention: string;
+      };
+    };
+    settings: {
+      navLabel: string;
+    };
+    decisions: {
+      badge: string;
+    };
+    screens: {
+      placeholderTitle: string;
+      placeholderBody: string;
+      placeholderLegacyLink: string;
+    };
   };
 };
