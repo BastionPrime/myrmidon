@@ -233,6 +233,11 @@ import { resolveCoreTrustPreset } from "../services/trust-preset-resolver.js";
 import { readObject } from "../lib/objects.js";
 import { listInvalidOrgChainDescendantIds } from "../services/agent-invokability.js";
 import { logger } from "../middleware/logger.js";
+// myrmidon(H2): revision history for agent instructions bundles
+import {
+  recordAgentInstructionsRevision,
+  type AgentInstructionsRevisionSource,
+} from "../myrmidon/agent-instructions-revisions/service.js";
 // myrmidon(S4): agent self-update guards and model validation
 import {
   assertInheritProcessEnvChangeAllowed,
@@ -244,6 +249,8 @@ import {
   readPauseDrainsEnabled,
   shouldCancelActiveRunsOnOperatorPause,
 } from "../myrmidon/pause-drain.js";
+// myrmidon(WAKE-BIND): a manual wake binds to the agent's top ready task
+import { findTopReadyIssueForAgent } from "../myrmidon/idle-pickup.js";
 import {
   AGENT_PROFILE_CHANGE_CONSENT_FIELDS,
   agentInstructionsChangeTargetKey,
@@ -2805,6 +2812,42 @@ export function agentRoutes(
     throw forbidden(decision.explanation, authorizationDeniedDetails(decision));
   }
 
+  // myrmidon(H2): snapshot the agent's whole instructions bundle into the
+  // revision table after a change. Exported bundle files are read from the
+  // agent's CURRENT state (the caller just wrote it); a failure to record is
+  // logged, never fatal to the edit itself.
+  async function recordInstructionsRevisionAfterChange(
+    targetAgentId: string,
+    input: {
+      source: AgentInstructionsRevisionSource;
+      changedFiles?: string[];
+      actor?: { agentId: string | null; actorType: string; actorId: string };
+    },
+  ): Promise<void> {
+    try {
+      const agent = await svc.getById(targetAgentId);
+      if (!agent) return;
+      const exported = await instructions.exportFiles(agent);
+      await recordAgentInstructionsRevision(db, agent, {
+        source: input.source,
+        files: exported.files,
+        entryFile: exported.entryFile,
+        changedFiles: input.changedFiles,
+        actor: input.actor
+          ? {
+            createdByAgentId: input.actor.actorType === "agent" ? input.actor.agentId : null,
+            createdByUserId: input.actor.actorType === "user" ? input.actor.actorId : null,
+          }
+          : undefined,
+      });
+    } catch (error) {
+      logger.warn(
+        { error, agentId: targetAgentId, source: input.source },
+        "failed to record an instructions revision",
+      );
+    }
+  }
+
   async function assertCanManageInstructionsPath(req: Request, targetAgent: { id: string; companyId: string }) {
     await assertCanApplyProtectedAgentChange(
       req,
@@ -5021,6 +5064,12 @@ export function agentRoutes(
 
     const actor = getActorInfo(req);
     const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
+    // myrmidon(H2): a bundle-level change (mode, root, entry file) reshapes the
+    // bundle; snapshot the resulting state as a revision.
+    await recordInstructionsRevisionAfterChange(existing.id, {
+      source: "instructions_bundle_patch",
+      actor,
+    });
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       adapterConfig,
@@ -5086,6 +5135,13 @@ export function agentRoutes(
     const result = await instructions.writeFile(existing, req.body.path, req.body.content, {
       clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate,
     });
+    // myrmidon(H2): record the changed bundle as a revision so any earlier
+    // instructions state can be restored (single source with history).
+    await recordInstructionsRevisionAfterChange(existing.id, {
+      source: "instructions_bundle_file_put",
+      changedFiles: [result.file.path],
+      actor,
+    });
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       result.adapterConfig,
@@ -5138,6 +5194,12 @@ export function agentRoutes(
 
     const actor = getActorInfo(req);
     const result = await instructions.deleteFile(existing, relativePath);
+    // myrmidon(H2): the deletion changed the bundle; keep the revision trail.
+    await recordInstructionsRevisionAfterChange(existing.id, {
+      source: "instructions_bundle_file_delete",
+      changedFiles: [relativePath],
+      actor,
+    });
     await logActivity(db, {
       companyId: existing.companyId,
       actorType: actor.actorType,
@@ -5855,15 +5917,38 @@ export function agentRoutes(
         ),
       );
     }
+    // myrmidon(WAKE-BIND): a wake must always carry its task. Accept the
+    // documented top-level issueId, and for a manual wake with no issue at all
+    // bind the agent's top ready task — the same candidate ranking the
+    // idle-pickup scheduler uses — or refuse it. This never starts an
+    // issue-less run that could do the work but not write to its task
+    // (403 cross_issue_influence).
+    const actorScopedWakePayload = req.actor.type === "agent" && wakePayload
+      ? { ...wakePayload, commentId: undefined, wakeCommentId: undefined, wakeCommentIds: undefined } // myrmidon(WAKE-BIND)
+      : wakePayload;
+    wakePayload = req.body.issueId // myrmidon(WAKE-BIND)
+      ? { ...(actorScopedWakePayload ?? {}), issueId: req.body.issueId } // myrmidon(WAKE-BIND)
+      : actorScopedWakePayload;
+    const wakeHasIssueBinding = typeof wakePayload?.issueId === "string" // myrmidon(WAKE-BIND)
+      || typeof wakePayload?.taskId === "string" // myrmidon(WAKE-BIND)
+      || typeof wakePayload?.wakeCommentId === "string"; // myrmidon(WAKE-BIND)
+    if (!req.body.failedRunId && !wakeHasIssueBinding && (opts.source ?? "on_demand") === "on_demand") { // myrmidon(WAKE-BIND)
+      const topReadyTask = await findTopReadyIssueForAgent(db, { id, companyId: agent.companyId }); // myrmidon(WAKE-BIND)
+      if (!topReadyTask) { // myrmidon(WAKE-BIND)
+        throw conflict( // myrmidon(WAKE-BIND)
+          "This agent has no ready task to wake for. Pass issueId (or payload.issueId) to wake it for a specific task.", // myrmidon(WAKE-BIND)
+          { code: "wakeup_requires_ready_task" }, // myrmidon(WAKE-BIND)
+        );
+      }
+      wakePayload = { ...(wakePayload ?? {}), issueId: topReadyTask.id }; // myrmidon(WAKE-BIND)
+    }
     const run = await heartbeat.wakeup(id, {
       failedRunId: req.body.failedRunId ?? null,
       ...(req.actor.type === "board" && !req.body.failedRunId ? { manualUserWake: true } : {}),
       source: opts.source,
       triggerDetail: req.body.triggerDetail ?? "manual",
       reason: req.body.reason ?? null,
-      payload: req.actor.type === "agent" && wakePayload
-        ? { ...wakePayload, commentId: undefined, wakeCommentId: undefined, wakeCommentIds: undefined }
-        : wakePayload,
+      payload: wakePayload, // myrmidon(WAKE-BIND)
       idempotencyKey: req.body.idempotencyKey ?? null,
       requestedByActorType: req.actor.type === "agent" ? "agent" : "user",
       requestedByActorId: req.actor.type === "agent" ? req.actor.agentId ?? null : req.actor.userId ?? null,

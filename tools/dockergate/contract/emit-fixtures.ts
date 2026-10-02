@@ -366,6 +366,16 @@ await driver.start(BOT_KEY);
 
 write("traffic.json", `${JSON.stringify(recorded, null, 1)}\n`);
 write("manifest.json", `${JSON.stringify(manifest, null, 1)}\n`);
+
+// RELEASE-GATE (the 01.10 incident): the applied markers the server writes,
+// generated from serializeAppliedMarker of THIS commit. The Go contract test
+// (internal/ustar/marker_contract_test.go) feeds them through the real
+// ustar.Validate; the diff against contract/testdata in CI catches a stale
+// checked-in copy, exactly like the fixtures above. The matrix lives in
+// emit-marker-contract.mjs; it is imported here so one emitter run produces
+// the whole contract set.
+await import("./emit-marker-contract.mjs").then((m) => m.emitMarkerContract(outDir));
+
 server.close();
 fs.rmSync(sockDir, { recursive: true, force: true });
 console.error(`emitted ${recorded.length} recorded requests, ${manifest.bodies.length} bodies, ${manifest.archives.length} archives into ${outDir}`);
