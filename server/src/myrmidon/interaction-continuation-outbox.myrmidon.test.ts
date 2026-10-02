@@ -542,7 +542,17 @@ describeEmbeddedPostgres("interaction continuation outbox", () => {
     expect(heartbeat.wakeup).not.toHaveBeenCalled();
 
     // Zero threshold restores the immediate sweep (old behavior).
+    // The fresh intent's `requestedAt` is `now` from the same clock tick, and
+    // the sweep's candidate filter is `requestedAt < now - sweepAgeMs`; with a
+    // zero threshold a same-millisecond write loses that strict comparison.
+    // Backdate the re-recorded intent by one millisecond so the zero-threshold
+    // sweep deterministically sees it (CI failure: scanned 0 vs 1).
     await recordIntent2(seeded);
+    const fresh = await readIntent(seeded);
+    await db
+      .update(agentWakeupRequests)
+      .set({ requestedAt: new Date(fresh!.requestedAt.getTime() - 1) })
+      .where(eq(agentWakeupRequests.id, fresh!.id));
     expect((await outbox.sweepPending({ sweepAgeMs: 0 })).scanned).toBe(1);
     expect(heartbeat.wakeup).toHaveBeenCalledTimes(1);
   });
