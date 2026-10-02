@@ -818,3 +818,126 @@ tracing_check() {
   log "tracing: callbacks ok (OTLP only)"
   return 0
 }
+
+# --- TRACING-HEALTH: delivery and image pins ---------------------------------
+# The installer sends a test request through the gateway and waits for an OTEL
+# event in `events_core`. Without that event the install is NOT complete, and a
+# silent success is exactly what the incident was about. The same window
+# carries the delivery ratio: OTEL events against LiteLLM SpendLogs requests,
+# refused below 50 %. Parts 1 and 2 of the deploy-side tracing guard.
+#
+#   MYRMIDON_TRACING_DELIVERY_COMMAND     prints two integers for the window:
+#                                         "<otel events> <spend requests>"
+#   MYRMIDON_TRACING_DELIVERY_WINDOW_SEC  the window the command reads; 900
+#                                         (15 min) by default, exported to it
+#   MYRMIDON_TRACING_LANGFUSE_IMAGE       Langfuse image reference of the bundle
+#   MYRMIDON_TRACING_GATEWAY_IMAGE        gateway (LiteLLM) image reference
+# The two image settings must carry a full X.Y.Z tag or a digest: a major or
+# minor tag moves under the deployment and is not a pin.
+
+# Prints a non-negative integer from a piece of text, or nothing.
+tracing_integer_of() {
+  local value="$1"
+  value="${value//[[:space:]]/}"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' ""
+  fi
+  return 0
+}
+
+# Reads the two counts of the delivery command ("<events> <requests>") with the
+# window exported to it. Prints "<events> <requests>", or nothing when the
+# command is unreadable or does not print two integers.
+tracing_delivery_counts() {
+  local command="$1" window="$2" out events requests
+  [[ -n "$command" ]] || return 0
+  out="$(MYRMIDON_TRACING_DELIVERY_WINDOW_SEC="$window" bash -c "$command" 2>/dev/null)" || out=""
+  events=""
+  requests=""
+  read -r events requests <<<"$out" || true
+  events="$(tracing_integer_of "${events:-}")"
+  requests="$(tracing_integer_of "${requests:-}")"
+  if [[ -z "$events" || -z "$requests" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+  printf '%s %s\n' "$events" "$requests"
+}
+
+# The delivery check. Returns 1 (after a log line) when the install must be
+# treated as failed: unreadable counts, no OTEL event while the gateway served
+# requests, or a ratio below 50 %. Returns 0 when the install is proven, and
+# also 0 with a log line when the window holds no gateway request at all
+# (nothing to measure yet).
+tracing_delivery_check() {
+  local command="${1:-}" window="${2:-900}" counts events requests percent
+  if [[ -z "$command" ]]; then
+    log "tracing: no MYRMIDON_TRACING_DELIVERY_COMMAND configured; the delivery check is skipped"
+    return 0
+  fi
+  counts="$(tracing_delivery_counts "$command" "$window")"
+  if [[ -z "$counts" ]]; then
+    log "tracing: REFUSED: the delivery command did not print the two integers of the ${window}s window (OTEL events, SpendLogs requests); the tracing install cannot be proven complete"
+    return 1
+  fi
+  read -r events requests <<<"$counts"
+  if ((requests == 0)); then
+    log "tracing: no gateway request in the last ${window}s; the delivery ratio is not measurable yet"
+    return 0
+  fi
+  if ((events == 0)); then
+    log "tracing: REFUSED: no OTEL event arrived in the last ${window}s while the gateway served $requests request(s); the tracing install is not complete (events_core is empty for the window)"
+    return 1
+  fi
+  percent=$((events * 100 / requests))
+  if ((events * 2 < requests)); then
+    log "tracing: REFUSED: the delivery ratio is ${percent}% (${events} OTEL events against ${requests} gateway requests in ${window}s), below the 50% floor"
+    return 1
+  fi
+  log "tracing: delivery ok: ${percent}% (${events} OTEL events against ${requests} gateway requests in ${window}s)"
+  return 0
+}
+
+# Explains why an image reference is not pinned, or prints nothing when it is
+# (a full X.Y.Z tag, or a digest). A major or minor tag, `latest`, or no tag at
+# all moves under the deployment and is not a pin.
+tracing_image_pin_problem() {
+  local ref="$1" tag
+  [[ -n "$ref" ]] || return 0
+  if [[ "$ref" == *@sha256:* ]]; then
+    valid_digest "sha256:${ref#*@sha256:}" && return 0
+    printf '%s\n' "$ref carries @sha256: without 64 lowercase hex characters"
+    return 0
+  fi
+  if [[ "$ref" != *:* ]]; then
+    printf '%s\n' "$ref has no tag: an untagged reference resolves to latest, which is not a pin"
+    return 0
+  fi
+  tag="${ref##*:}"
+  if [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9._-]+)?$ ]]; then
+    return 0
+  fi
+  printf '%s\n' "$ref is pinned by '$tag', which is not a full X.Y.Z version: a major or minor tag moves; pin it by X.Y.Z or by digest"
+}
+
+# The image-pin check: both images must be pinned when they are configured.
+# Returns 1 with a log line on the first unpinned reference, 0 otherwise.
+tracing_check_image_pins() {
+  local langfuse_image="${1:-}" gateway_image="${2:-}" problem
+  problem="$(tracing_image_pin_problem "$langfuse_image")"
+  if [[ -n "$problem" ]]; then
+    log "tracing: REFUSED: the Langfuse image is not pinned: $problem"
+    return 1
+  fi
+  problem="$(tracing_image_pin_problem "$gateway_image")"
+  if [[ -n "$problem" ]]; then
+    log "tracing: REFUSED: the gateway image is not pinned: $problem"
+    return 1
+  fi
+  if [[ -n "$langfuse_image$gateway_image" ]]; then
+    log "tracing: image pins ok (langfuse='${langfuse_image:-<unset>}', gateway='${gateway_image:-<unset>}')"
+  fi
+  return 0
+}
