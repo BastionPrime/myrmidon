@@ -81,7 +81,7 @@ same answer as if such a card had been passed to **Apply now**.
 The bot image canary drives its rollout image through this same pass: the
 rollout's image replaces the card's image for that pass (`specImage`), while
 limits and mounts still come from the freshly read card — the override
-survives the fresh read. See [design/bot-canary.md](design/bot-canary.md)
+survives the fresh read. See [design/bot-canary.md](../design/bot-canary.md)
 (Russian).
 
 ## Status and errors
