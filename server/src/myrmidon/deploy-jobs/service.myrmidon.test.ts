@@ -366,6 +366,65 @@ describe("deploy jobs service: automatic rollback by health (R5-C)", () => {
     expect(current.job?.status).toBe("failed_health");
     expect(h.maintenance.exit).not.toHaveBeenCalled();
   });
+
+  // R5-C review fix: the executor with AUTO_ROLLBACK=1 (its default) never
+  // reports health-failed — the board tick must follow the rollback phases
+  // straight from `running`, including when it misses the intermediate ones.
+  describe("deploy jobs service: executor default phases in running (R5-C review fix)", () => {
+    it("rolling-back in running moves the job to rolling_back", async () => {
+      const h = harness(); // autoRollback on, the executor default
+      const jobId = await driveToRunning(h, "claimed");
+      h.reports.set(jobId, { jobId, phase: "rolling-back", detail: "deploy failed (exit 1); rolling back automatically" });
+      await h.service.tick();
+      const current = await h.service.current();
+      expect(current.job?.status).toBe("rolling_back");
+      expect(current.job?.failureReason).toContain("rolling back automatically");
+      expect(h.maintenance.exit).not.toHaveBeenCalled();
+    });
+
+    it("a tick that missed health-failed and rolling-back still finishes auto_rolled_back (the review race)", async () => {
+      const h = harness();
+      const jobId = await driveToRunning(h, "claimed");
+      // Exactly the sequence the real executor writes in the default
+      // configuration: rolling-back is gone before the board ever ticks on
+      // it, health-failed never existed.
+      h.reports.set(jobId, { jobId, phase: "rolled-back", detail: "rolled back to the previous image; health check passed" });
+      await h.service.tick();
+
+      const current = await h.service.current();
+      expect(current.job?.status).toBe("auto_rolled_back");
+      expect(current.job?.active).toBe(false);
+      expect(current.job?.failureReason).toContain("rolled back to the previous image");
+      // The rollback already closed the window; the board still records the
+      // exit for the same reason finishRollback does.
+      expect(h.maintenance.exit).toHaveBeenCalledWith("deploy rolled back automatically");
+      // Terminal: further ticks change nothing.
+      await h.service.tick();
+      expect((await h.service.current()).job?.status).toBe("auto_rolled_back");
+    });
+
+    it("rollback-failed in running ends failed_rollback with the window on", async () => {
+      const h = harness();
+      const jobId = await driveToRunning(h, "claimed");
+      h.reports.set(jobId, { jobId, phase: "rollback-failed", detail: "rollback failed with exit 2" });
+      await h.service.tick();
+      const current = await h.service.current();
+      expect(current.job?.status).toBe("failed_rollback");
+      expect(current.job?.failureReason).toContain("rollback failed with exit 2");
+      expect(h.maintenance.exit).not.toHaveBeenCalled();
+    });
+
+    it("rolled-back with the board switch off ends failed_health (desync recorded as a failure)", async () => {
+      const h = harness({ autoRollback: false });
+      const jobId = await driveToRunning(h, "claimed");
+      h.reports.set(jobId, { jobId, phase: "rolled-back", detail: "rolled back to the previous image" });
+      await h.service.tick();
+      const current = await h.service.current();
+      expect(current.job?.status).toBe("failed_health");
+      expect(current.job?.failureReason).toContain("rolled back with the board switch off");
+      expect(h.maintenance.exit).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("deploy jobs service: preview", () => {
