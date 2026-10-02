@@ -22,6 +22,7 @@ import {
   heartbeatRunEvents,
   heartbeatRuns,
   instanceSettings,
+  issues,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -124,6 +125,7 @@ describeEmbeddedPostgres("chat-first: the queued-run start path", () => {
       }
     }
     await db.delete(agentWakeupRequests);
+    await db.delete(issues);
     await db.delete(agents);
     await db.delete(companies);
     await db.delete(instanceSettings);
@@ -194,6 +196,16 @@ describeEmbeddedPostgres("chat-first: the queued-run start path", () => {
     agentId: string,
     provenance: { source: string | null; actorType: "user" | "system" | null },
   ) {
+    const issueId = randomUUID();
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "owner chat",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentId,
+      responsibleUserId: "user-a",
+    });
     const [wakeup] = await db
       .insert(agentWakeupRequests)
       .values({
@@ -217,7 +229,7 @@ describeEmbeddedPostgres("chat-first: the queued-run start path", () => {
         status: "queued",
         wakeupRequestId: wakeup!.id,
         contextSnapshot: {
-          issueId: randomUUID(),
+          issueId,
           source: provenance.source,
           wakeReason: "External chat message received",
         },
