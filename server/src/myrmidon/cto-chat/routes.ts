@@ -71,8 +71,8 @@ export function myrmidonCtoChatRoutes(
   let runtime: CtoChatRuntime | null = deps.runtime ?? null;
   const resolveRuntime = async (): Promise<CtoChatRuntime> => {
     if (runtime) return runtime;
-    const { createCtoChatRuntime } = await import("./runtime.js");
-    runtime = createCtoChatRuntime(db, settings);
+    const { createCtoChatRuntimeForDb } = await import("./runtime.js");
+    runtime = createCtoChatRuntimeForDb(db, settings);
     return runtime;
   };
 
