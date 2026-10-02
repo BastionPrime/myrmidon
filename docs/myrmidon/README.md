@@ -73,6 +73,8 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/access-hub.md](guides/access-hub.md) | Хаб доступов в настройках: секреты парка, выдача агентам, ротация, SSH-ключи, журнал |
 | [guides/emergency-stop.md](guides/emergency-stop.md) | Аварийная остановка прогонов, которые осушаемая пауза оставила дорабатывать |
 | [guides/bot-container-card.md](guides/bot-container-card.md) | Раздел «Container» карточки агента: настройки контейнера, лимит одновременных прогонов, статус |
+| [guides/browsers.md](guides/browsers.md) | Раздел «Браузеры» в настройках: экран живого браузера, пауза ботов на время сессии, журнал, очистка данных сайта |
+| [guides/stack-registry.md](guides/stack-registry.md) | Реестр компонентов стека: API, проба Docker, кэш, настройка сокета |
 
 ## Сборка и запуск
 

@@ -617,7 +617,13 @@ export function decideQueuedRunStaleness(
   const statusOutcome = decideIssueStatus({
     status: facts.issueStatus,
     requiresInProgress,
-    terminalBypass: facts.resumeIntent || facts.wakeCommentIdPresent,
+    // myrmidon(N2): a run woken by a card addressed to it answers that card,
+    // which outlives the status flip that closed the task it was opened on.
+    // Cancelling the run as terminal drops the addressee's only chance to
+    // answer: the same false cancellation the ownership bypass (P2) already
+    // prevents for a non-assignee addressee.
+    terminalBypass:
+      facts.resumeIntent || facts.wakeCommentIdPresent || facts.isPendingInteractionAddresseeWake === true,
   });
   if (statusOutcome === "terminal") {
     return {

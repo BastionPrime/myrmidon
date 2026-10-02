@@ -36,7 +36,10 @@ Extra read-only bot mounts (shared directories) are described in
    duplicate key, `null`, a fractional number or an escaped letter are rejected), then
    canonically rebuilt and compared byte for byte with the received one. The rebuild takes
    values from `bots[]`, not from the request. Tar uploads (`ustar`) are checked byte for
-   byte and rebuilt the same way: types, uid/gid, modes, paths, order, content.
+   byte and rebuilt the same way: types, uid/gid, modes, paths, order, content. The
+   `applied.json` marker inside the profile tar is data written by the board, so its
+   content is not rebuilt; its form is checked (see
+   [The applied-profile marker](#the-applied-profile-marker)).
 4. **Bot consistency.** The `botKey` comes from the container name; the label, volumes,
    network and helper script must match it. Extra volumes beyond the three bot volumes are
    allowed only as read-only binds whose source is named in full in `mountSources` and
@@ -44,7 +47,13 @@ Extra read-only bot mounts (shared directories) are described in
    process-count limits may not exceed what `bots[]` records.
 5. **State.** Before a call, dockergate inspects the container itself and checks the
    preconditions (the bot label, status, the presence of `.next`).
-6. **Responses are cut down** to the fields the driver reads, with a size cap.
+6. **Responses are cut down** to the fields the driver reads, with a size cap. The A2 answer
+   carries the state the driver reads plus every field its template-drift check compares —
+   `Config.Image` and `HostConfig` `Memory`, `NanoCpus`, `PidsLimit`, `NetworkMode`, `Binds`.
+   Trimming away a compared field is not a smaller answer: the board reads nothing there, calls
+   the container different and recreates it on every pass (the 01.10 incident, `HostConfig.Binds`).
+   A gate contract test checks the A2 answer against the field list the driver emits
+   (`tools/dockergate/contract/emit-fixtures.ts`), so dropping one turns CI red.
 
 ## The allowed-call table
 
@@ -66,6 +75,17 @@ Extra read-only bot mounts (shared directories) are described in
 `K` is a lowercase UUID. Any other path (including `exec`, `attach`, `commit`, `build`,
 `images/create`, `volumes`, `networks`, `info`, `events`, `system`, `swarm`) gets 403
 `route_not_allowed`.
+
+## The applied-profile marker
+
+Each profile upload ends with the applied-profile marker `applied.json`. It is an object
+with exactly the string keys `restartHash` and `filesHash` and the string array `files`,
+plus the optional integer `maxConcurrentRuns` (1..50) that the board records since
+CONCURRENCY-SYNC. Any other key, a `maxConcurrentRuns` of another type or outside that
+range, or a file over the size cap is refused with `tar_content` (`applied_json` /
+`applied_keys` / `applied_size` in the log detail). A board older than CONCURRENCY-SYNC
+writes the three-key marker; dockergate accepts both forms, and a marker written by an
+older board does not block a profile apply.
 
 ## Configuration
 

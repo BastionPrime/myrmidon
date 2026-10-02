@@ -13,9 +13,16 @@
 # into the board container as MYRMIDON_DEPLOY_REPORTS_DIR).
 #
 # Report phases: claimed → switching → switched → health-ok | health-failed |
-# error. The board marks the job succeeded only when its own /api/health
-# agrees with the reported version and commit, so a lying report cannot close
-# a failed deploy.
+# error. With AUTO_ROLLBACK=1 (the default; the board's
+# MYRMIDON_DEPLOY_AUTO_ROLLBACK is the same switch on the board side) a failed
+# deploy does not stop at health-failed: the executor immediately runs the
+# same rollback.sh against the image deploy.sh remembered before the switch
+# (the locally known previous image — rollback is the emergency path, the
+# CI-image check there only warns), reports rolling-back → rolled-back |
+# rollback-failed, and the board closes the job as auto_rolled_back (window
+# left) or failed_rollback (window kept on for the operator). AUTO_ROLLBACK=0
+# restores the manual contract: health-failed, window on, the operator rolls
+# back by hand.
 #
 # The script exits when no dispatchable job is left and --once was given, or
 # keeps polling (one executor per host; a second instance refuses to start by
@@ -47,6 +54,9 @@ BOARD_TOKEN_FILE="${BOARD_TOKEN_FILE:-$HEALTH_TOKEN_FILE}"
 if [[ -n "$BOARD_TOKEN_FILE" ]]; then
   [[ -r "$BOARD_TOKEN_FILE" ]] || die "token file not readable: $BOARD_TOKEN_FILE"
 fi
+# myrmidon(R5-C): automatic rollback by health; 1 by default, 0 restores the
+# manual "window stays on for the operator" contract. Unset means 1.
+AUTO_ROLLBACK="${AUTO_ROLLBACK:-1}"
 
 REPORT_DIR="${REPORT_DIR:-$STATE_DIR}"
 JOBS_URL="$BOARD_API_URL/myrmidon/deploy-jobs"
@@ -92,7 +102,7 @@ dispatchable() { # prints "jobId digest" of the job to run, or nothing
   jq -r '
     (.job // null) as $j
     | if $j == null then empty
-      elif ($j.status == "maintenance_on" or $j.status == "running") then "\($j.id) \($j.digest)"
+      elif ($j.status == "maintenance_on" or $j.status == "running" or $j.status == "rolling_back") then "\($j.id) \($j.digest)"
       else empty end
   ' <<<"$body"
 }
@@ -131,9 +141,27 @@ run_deploy() { # run_deploy <jobId> <digest>
   commit="$(image_label "$MYR_CI_IMAGE@$digest" org.opencontainers.image.revision || true)"
   if ((rc == 0)); then
     report "$job" health-ok "deploy.sh finished" "$version" "$commit"
-  else
-    report "$job" health-failed "deploy.sh failed with exit $rc; see $STATE_DIR/job-$job.log" "$version" "$commit"
+    return 0
   fi
+  # myrmidon(R5-C): a failed health check is not the end when the automatic
+  # rollback is on. rollback.sh switches the image back to the one deploy.sh
+  # remembered before the switch (PREVIOUS_IMAGE_FILE) — the locally known
+  # previous image; it is the emergency path, so its own CI-image check only
+  # warns. A successful rollback still has to pass its health check, so
+  # "rolled-back" means the board answers on the previous image again.
+  if [[ "$AUTO_ROLLBACK" != "0" ]]; then
+    report "$job" rolling-back "deploy failed (exit $rc); rolling back automatically; see $STATE_DIR/job-$job.log" "$version" "$commit"
+    local rc_rb=0
+    "$MYR_SCRIPT_DIR/rollback.sh" --config "$config" 2>>"$STATE_DIR/job-$job.log"
+    rc_rb=$?
+    if ((rc_rb == 0)); then
+      report "$job" rolled-back "rolled back to the previous image; health check passed" "" ""
+      return 0
+    fi
+    report "$job" rollback-failed "rollback failed with exit $rc_rb; maintenance stays on; see $STATE_DIR/job-$job.log" "" ""
+    return 1
+  fi
+  report "$job" health-failed "deploy.sh failed with exit $rc; see $STATE_DIR/job-$job.log" "$version" "$commit"
   return "$rc"
 }
 

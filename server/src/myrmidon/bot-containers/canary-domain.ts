@@ -14,9 +14,17 @@
 // The canary flow (release 1.3 item 9, "R5-B"): the new image goes to ONE bot's
 // container first — health check and a smoke run — and only after the canary
 // proves the image do the rest of the fleet follow, in waves. A failed canary
-// leaves the other containers untouched: the rollout stops right there, the
-// canary bot stays on the new image for inspection, and the rollback is the
-// operator's (R5-C) job, not this module's.
+// leaves the other containers untouched: the rollout stops right there.
+//
+// R5-C (auto-rollback by health, release 1.3 item 10): with
+// MYRMIDON_BOT_CANARY_AUTO_ROLLBACK on (the default) a failed rollout does
+// not leave the canary (or the already rolled wave bots) on the broken image:
+// every bot that received the new digest gets its card's own image applied
+// back — the "local" image, the one the card pinned before the rollout — and
+// the rollout ends `rolled_back` with the original failure reason kept. With
+// the rollback off the rollout ends `canary_failed` / `canary_smoke_failed` /
+// `failed_health` exactly as before, the canary staying on the new image for
+// inspection.
 //
 // Design: docs/myrmidon/design/bot-canary.md.
 
@@ -40,8 +48,10 @@ export type BotCanaryStatus =
   | "wave_draining"
   | "wave_applying"
   | "wave_restoring"
+  | "rolling_back"
   | "succeeded"
   | "failed_health"
+  | "rolled_back"
   | "aborted";
 
 /** Statuses under which the rollout still expects progress from the server itself. */
@@ -56,6 +66,7 @@ export const BOT_CANARY_ACTIVE_STATUSES: readonly BotCanaryStatus[] = [
   "wave_draining",
   "wave_applying",
   "wave_restoring",
+  "rolling_back",
 ];
 
 export function isBotCanaryActive(status: BotCanaryStatus): boolean {
@@ -91,6 +102,12 @@ export interface BotCanaryJob {
   waveBotKeys: string[];
   /** Bot keys already rolled out to the new image, canary first. */
   doneBotKeys: string[];
+  /**
+   * Bot keys already restored to their card images by the automatic rollback
+   * (R5-C). A subset of doneBotKeys: only the bots the rollback actually
+   * re-applied; empty while no rollback runs.
+   */
+  rolledBackBotKeys: string[];
   failureReason: string | null;
   steps: BotCanaryStep[];
 }
@@ -126,8 +143,10 @@ const STATUSES: readonly BotCanaryStatus[] = [
   "wave_draining",
   "wave_applying",
   "wave_restoring",
+  "rolling_back",
   "succeeded",
   "failed_health",
+  "rolled_back",
   "aborted",
 ];
 
@@ -193,6 +212,7 @@ function parseJob(raw: unknown): BotCanaryJob | null {
     smokeRunId: typeof raw.smokeRunId === "string" ? raw.smokeRunId : null,
     waveBotKeys: parseStringList(raw.waveBotKeys),
     doneBotKeys: parseStringList(raw.doneBotKeys),
+    rolledBackBotKeys: parseStringList(raw.rolledBackBotKeys),
     failureReason: typeof raw.failureReason === "string" ? raw.failureReason : null,
     steps,
   };
@@ -341,6 +361,7 @@ export function newBotCanaryJob(input: {
     smokeRunId: null,
     waveBotKeys: [],
     doneBotKeys: [],
+    rolledBackBotKeys: [],
     failureReason: null,
     steps: [{ at: createdAt, status: "pending", detail: "rollout created" }],
   };
@@ -373,6 +394,37 @@ export function assertNoActiveBotCanary(doc: BotCanaryDocument): void {
 export function isBotCanaryAbortable(job: BotCanaryJob): boolean {
   return ["pending", "verifying", "verified", "canary_waiting"].includes(job.status);
 }
+
+/**
+ * The bot keys the automatic rollback (R5-C) must restore: everyone who
+ * received the rollout's image — the canary once its switch started (the
+ * statuses from canary_running on), then the wave bots that were applied
+ * before the failure (doneBotKeys). Bots never touched are not in it.
+ */
+export function botCanaryRollbackTargets(job: BotCanaryJob): string[] {
+  const targets = [...job.doneBotKeys];
+  const canarySwitched = CANARY_SWITCHED_STATUSES.includes(job.status);
+  if (canarySwitched && job.canaryBotKey && !targets.includes(job.canaryBotKey)) {
+    targets.unshift(job.canaryBotKey);
+  }
+  return targets;
+}
+
+/**
+ * Statuses under which the canary's container has already been (re)created
+ * with the rollout image: from canary_running on the switch happened, whether
+ * the rollout later failed at health, smoke or a wave. canary_waiting is
+ * absent on purpose: a deferred apply changed nothing.
+ */
+const CANARY_SWITCHED_STATUSES: readonly BotCanaryStatus[] = [
+  "canary_running",
+  "canary_health_wait",
+  "canary_smoke",
+  "wave_draining",
+  "wave_applying",
+  "wave_restoring",
+  "rolling_back",
+];
 
 /**
  * Split `remaining` bot keys into the next wave and the rest. The wave size is

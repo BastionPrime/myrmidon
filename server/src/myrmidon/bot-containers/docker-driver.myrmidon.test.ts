@@ -16,10 +16,13 @@ import {
   buildProfileArchives,
   computeProfileRemovals,
   containerTemplateDrifted,
+  containerTemplateInspectExpectation,
+  CONTAINER_TEMPLATE_INSPECT_FIELDS,
   demuxDockerLogs,
   dockerBotContainerDriver,
   parseAppliedMarker,
   serializeAppliedMarker,
+  templateDriftFields,
   type DockerDriverConfig,
 } from "./docker-driver.js";
 import type { BotContainerDriver, BotContainerSpec } from "./driver.js";
@@ -168,6 +171,7 @@ describe("containerTemplateDrifted", () => {
 
   it("is false when every template field still matches", () => {
     expect(containerTemplateDrifted(matchingInspect(), body)).toBe(false);
+    expect(templateDriftFields(matchingInspect(), body)).toEqual([]);
   });
 
   type Inspect = ReturnType<typeof matchingInspect>;
@@ -193,6 +197,48 @@ describe("containerTemplateDrifted", () => {
     expect(containerTemplateDrifted({ Config: existing.Config, HostConfig: { ...existing.HostConfig, Binds: undefined } }, body)).toBe(
       true,
     );
+  });
+
+  // The 01.10 incident: the inspect the board reads (through dockergate) had no
+  // HostConfig.Binds at all. The report must name that field and show it was
+  // absent — this is the line the activity log carries, and the check that
+  // turned every pass into a recreate.
+  it("names the field and both values of a drift", () => {
+    const existing = matchingInspect();
+    existing.HostConfig.Memory += 1;
+    expect(templateDriftFields(existing, body)).toEqual([
+      { field: "HostConfig.Memory", expected: body.HostConfig.Memory, actual: existing.HostConfig.Memory },
+    ]);
+  });
+
+  it("names an inspect field the reader dropped, and reports it as absent", () => {
+    const existing = matchingInspect();
+    const withoutBinds = { Config: existing.Config, HostConfig: { ...existing.HostConfig, Binds: undefined } };
+    expect(templateDriftFields(withoutBinds, body)).toEqual([
+      { field: "HostConfig.Binds", expected: [...body.HostConfig.Binds], actual: undefined },
+    ]);
+  });
+
+  // The contract with dockergate: these are the paths the gate's A2 answer must
+  // carry (tools/dockergate/contract/emit-fixtures.ts writes them into
+  // inspect-contract.json, the gate's contract test checks them).
+  it("compares exactly the fields it announces, and expects them back", () => {
+    expect(CONTAINER_TEMPLATE_INSPECT_FIELDS).toEqual([
+      "Config.Image",
+      "HostConfig.Memory",
+      "HostConfig.NanoCpus",
+      "HostConfig.PidsLimit",
+      "HostConfig.NetworkMode",
+      "HostConfig.Binds",
+    ]);
+    expect(containerTemplateInspectExpectation(body)).toEqual([
+      { path: "Config.Image", value: body.Image },
+      { path: "HostConfig.Memory", value: body.HostConfig.Memory },
+      { path: "HostConfig.NanoCpus", value: body.HostConfig.NanoCpus },
+      { path: "HostConfig.PidsLimit", value: body.HostConfig.PidsLimit },
+      { path: "HostConfig.NetworkMode", value: body.HostConfig.NetworkMode },
+      { path: "HostConfig.Binds", value: body.HostConfig.Binds },
+    ]);
   });
 
   it("is false for a bot whose card asked for the extra mount its container already has", () => {
@@ -1078,6 +1124,17 @@ describe("dockerBotContainerDriver against a fake Docker daemon", () => {
       expect(bot()?.body.Image).toBe("myrmidon-hermes:1.1.0");
     });
 
+    it("reports which template field drifted, with both values", async () => {
+      await driver.create(spec());
+      await driver.writeProfile("agent-a", testProfile());
+      await driver.start("agent-a");
+      expect(await driver.templateDrift(spec({ memoryMb: 2048 }))).toEqual({
+        drifted: true,
+        fields: [{ field: "HostConfig.Memory", expected: 2048 * 1024 * 1024, actual: 1536 * 1024 * 1024 }],
+      });
+      expect(await driver.templateDrift(spec())).toEqual({ drifted: false, fields: [] });
+    });
+
     it("recreate checks the new image first and leaves the running container untouched when it is missing", async () => {
       await driver.create(spec());
       await driver.writeProfile("agent-a", testProfile());
@@ -1094,7 +1151,7 @@ describe("dockerBotContainerDriver against a fake Docker daemon", () => {
       await driver.writeProfile("agent-a", testProfile());
       await driver.start("agent-a");
       const oldId = bot()!.id;
-      expect(await driver.templateDrift(spec({ image: "myrmidon-hermes:1.2.0" }))).toBe(true);
+      expect((await driver.templateDrift(spec({ image: "myrmidon-hermes:1.2.0" }))).drifted).toBe(true);
       const before = daemon.requests.length;
       await driver.recreate(spec({ image: "myrmidon-hermes:1.2.0", memoryMb: 2048 }));
 
@@ -1115,7 +1172,7 @@ describe("dockerBotContainerDriver against a fake Docker daemon", () => {
       expect(bot()?.id).not.toBe(oldId);
       expect(bot()?.state).toBe("created");
       expect(bot()?.body.Image).toBe("myrmidon-hermes:1.2.0");
-      expect(await driver.templateDrift(spec({ image: "myrmidon-hermes:1.2.0", memoryMb: 2048 }))).toBe(false);
+      expect((await driver.templateDrift(spec({ image: "myrmidon-hermes:1.2.0", memoryMb: 2048 }))).drifted).toBe(false);
       // the volumes (and with them the applied profile) survive the recreate
       expect((await driver.status("agent-a")).restartHash).toBe("restart-1");
     });

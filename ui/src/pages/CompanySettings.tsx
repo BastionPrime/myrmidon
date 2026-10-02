@@ -25,6 +25,7 @@ import {
 } from "../components/agent-config-primitives";
 import { InstanceGeneralSettings } from "./InstanceGeneralSettings";
 import { ConnectorPanel } from "@/components/myrmidon/ConnectorPanel"; // myrmidon(EXTCASE-PANEL)
+import { FleetConsolePanel } from "../components/myrmidon/FleetConsolePanel"; // myrmidon(SC1)
 
 export function CompanySettings() {
   const {
@@ -332,6 +333,8 @@ export function CompanySettings() {
             : null
         }
       />
+
+      <FleetConsolePanel /> {/* myrmidon(SC1) */}
 
       <InstanceGeneralSettings embedded />
 

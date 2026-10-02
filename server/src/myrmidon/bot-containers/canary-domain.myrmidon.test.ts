@@ -6,6 +6,7 @@ import {
   assertNoActiveBotCanary,
   BotCanaryConflict,
   botCanaryReferenceProblem,
+  botCanaryRollbackTargets,
   emptyBotCanaryDocument,
   isBotCanaryAbortable,
   isBotCanaryActive,
@@ -15,6 +16,8 @@ import {
   planNextBotCanaryWave,
   retireBotCanaryJob,
   verifyBotCanaryImage,
+  type BotCanaryJob,
+  type BotCanaryStatus,
 } from "./canary-domain.js";
 
 // Placeholder data only: fake ids, digests and commit shas.
@@ -190,8 +193,51 @@ describe("bot canary: abortability and activity", () => {
 
   it("active statuses are the non-terminal ones", () => {
     expect(isBotCanaryActive("wave_restoring" as never)).toBe(true);
+    expect(isBotCanaryActive("rolling_back" as never)).toBe(true);
     expect(isBotCanaryActive("succeeded" as never)).toBe(false);
     expect(isBotCanaryActive("canary_smoke_failed" as never)).toBe(false);
+    expect(isBotCanaryActive("rolled_back" as never)).toBe(false);
+  });
+});
+
+describe("bot canary: automatic rollback targets (R5-C)", () => {
+  const base = (status: BotCanaryStatus, extra: Partial<BotCanaryJob> = {}): BotCanaryJob => ({
+    ...newBotCanaryJob({
+      id: "rollout-a",
+      companyId: "company-a",
+      digest: GOOD,
+      canaryBotKey: "agent-canary",
+      reason: "rollout",
+      startedBy: { actorType: "user", actorId: "user-a" },
+      now: NOW,
+    }),
+    status,
+    ...extra,
+  });
+
+  it("before the canary switch there is nothing to restore", () => {
+    expect(botCanaryRollbackTargets(base("canary_waiting"))).toEqual([]);
+    expect(botCanaryRollbackTargets(base("verifying", { doneBotKeys: [] }))).toEqual([]);
+  });
+
+  it("the canary that switched is a target even before doneBotKeys names it", () => {
+    // A canary health failure happens BEFORE the smoke succeeds — doneBotKeys
+    // is still empty, but the canary container already runs the new image.
+    expect(botCanaryRollbackTargets(base("canary_health_wait"))).toEqual(["agent-canary"]);
+    expect(botCanaryRollbackTargets(base("canary_smoke"))).toEqual(["agent-canary"]);
+  });
+
+  it("wave bots that were applied are targets, canary first", () => {
+    expect(botCanaryRollbackTargets(base("wave_applying", { doneBotKeys: ["agent-canary", "agent-b"] }))).toEqual([
+      "agent-canary",
+      "agent-b",
+    ]);
+  });
+
+  it("during the rollback itself the targets stay stable", () => {
+    expect(
+      botCanaryRollbackTargets(base("rolling_back", { doneBotKeys: ["agent-canary", "agent-b"], rolledBackBotKeys: ["agent-canary"] })),
+    ).toEqual(["agent-canary", "agent-b"]);
   });
 });
 
