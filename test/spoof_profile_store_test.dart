@@ -167,6 +167,14 @@ void main() {
       expect(await store.load(max1), isNull);
     });
 
+    test('regenerateFor stores the deterministic pick and is stable', () async {
+      final fresh = await store.regenerateFor(max1);
+      expect((await store.load(max1))!.deviceName, fresh.deviceName);
+      final again = await store.regenerateFor(max1);
+      expect(again.deviceName, fresh.deviceName);
+      expect(again.osVersion, fresh.osVersion);
+    });
+
     test('regenerate replaces the profile (user action, S3)', () async {
       await store.save(max1, store.generate());
       final old = await store.load(max1);

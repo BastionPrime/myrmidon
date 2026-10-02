@@ -4,6 +4,7 @@ library;
 export 'legacy_db_migrator.dart';
 export 'per_account_databases.dart';
 export 'per_account_media_cache.dart';
+export 'preset_key_hash.dart';
 export 'spoof_device_presets.dart';
 export 'spoof_profile.dart';
 export 'spoof_profile_store.dart';

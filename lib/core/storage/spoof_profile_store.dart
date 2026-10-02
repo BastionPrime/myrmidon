@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'package:wellmagram/core/accounts/account_key.dart';
 import 'package:wellmagram/core/accounts/network.dart';
 
+import 'preset_key_hash.dart';
 import 'spoof_device_presets.dart';
 import 'spoof_profile.dart';
 
@@ -53,6 +54,42 @@ class SpoofProfileStore {
 
   static String storageKey(AccountKey account) =>
       '$_keyPrefix${account.network.storageName}_${account.id}';
+
+  /// Deterministic-stable preset pick for an account key: the same key
+  /// always resolves to the same preset row (FNV-1a of the storage key),
+  /// and distinct keys spread across the table. Anti-ban §4.8: profile
+  /// must be plausible and stable per account.
+  SpoofDevicePreset presetFor(AccountKey account) {
+    final index =
+        presetIndexForAccountKey(storageKey(account), spoofDevicePresets.length);
+    return spoofDevicePresets[index];
+  }
+
+  /// Generates a profile from the deterministic preset pick for [account]
+  /// (stable per key, see [presetFor]); same contract as [generate].
+  SpoofProfile generateFor(AccountKey account,
+      {Set<String> usedDeviceNames = const {}}) {
+    final preset = presetFor(account);
+    final shortLocale = preset.locale.split(RegExp(r'[-_]')).first;
+    return SpoofProfile(
+      enabled: true,
+      deviceName: preset.deviceName,
+      osVersion: preset.osVersion,
+      screen: preset.screen,
+      timezone: preset.timezone,
+      locale: shortLocale,
+      deviceLocale: shortLocale,
+      deviceId: _hex(8),
+      deviceType: 'ANDROID',
+      arch: 'arm64-v8a',
+      appVersion: spoofAppVersion,
+      buildNumber: spoofBuildNumber,
+      pushDeviceType: 'GCM',
+      instanceId: _uuidLike(),
+      clientSessionId: random.nextInt(0x7ffffffe) + 1,
+      userAgent: preset.userAgent,
+    );
+  }
 
   /// Generates a fresh plausible profile: preset pair model/os_version +
   /// timezone/locale + random ids. Excludes models already used by other
@@ -112,6 +149,14 @@ class SpoofProfileStore {
     Set<String> usedDeviceNames = const {},
   }) async {
     final profile = generate(usedDeviceNames: usedDeviceNames);
+    await save(account, profile);
+    return profile;
+  }
+
+  /// Regenerates from the deterministic preset pick for [account] and
+  /// stores it; returns the profile.
+  Future<SpoofProfile> regenerateFor(AccountKey account) async {
+    final profile = generateFor(account);
     await save(account, profile);
     return profile;
   }
