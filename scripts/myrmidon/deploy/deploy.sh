@@ -42,6 +42,14 @@
 # On a failed health check the script stops with maintenance still on and
 # prints the rollback command. --dry-run changes nothing and prints the plan
 # (the image checks are read-only, so they run in a dry run too).
+#
+# TRACING-HEALTH: right after the health check the deploy verifies the LLM
+# tracing callbacks of the gateway (tracing-check.sh): the legacy `langfuse`
+# callback against a v4 Langfuse server is refused, and the deploy stops like a
+# failed health check — maintenance stays on and the rollback command is
+# printed. There is no flag that skips the refusal. Without a MYRMIDON_TRACING_*
+# setting the check logs that it is skipped, so an installation without a
+# tracing gateway still deploys.
 set -euo pipefail
 # shellcheck source=lib.sh source-path=SCRIPTDIR
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -133,6 +141,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   plan "5. wait for zero running runs (timeout ${RUNS_WAIT_TIMEOUT_SEC}s); onTimeout=$MAINTENANCE_ON_TIMEOUT drains for the grace and then interrupts what is still running (retried after the window closes); on a drain timeout maintenance is lifted and the deploy aborts before the image changes"
   plan "6. set image in $OVERRIDE_PATH to $ref; docker compose up -d --no-deps $COMPOSE_SERVICE"
   plan "7. verify $HEALTH_URL: status ok, version ${expect_version:-<from image label>}, commit ${expect_commit:-<from image label>}"
+  plan "7b. verify the LLM tracing callbacks (OTLP only; refuses the legacy 'langfuse' callback against a v4 Langfuse server; logs a skip when no MYRMIDON_TRACING_* input is configured)"
   plan "8. leave maintenance (the exit POST returns when the window is marked leaving; the deploy waits for the state off, MAINTENANCE_EXIT_WAIT_SEC=${MAINTENANCE_EXIT_WAIT_SEC}s); then the post-deploy fleet check (no issue blocked in the deploy window, the window retired; needs BOARD_API_URL/BOARD_COMPANY_ID, otherwise skipped)"
   if [[ -n "$component_digests" ]]; then
     plan "9. roll out release components together with the board: $MYR_RELEASE_COMPONENTS (${component_resolution}; one rollout-component.sh per component, each with its own pull, switch and health check)"
@@ -206,6 +215,26 @@ if ! "$MYR_SCRIPT_DIR/verify-health.sh" --url "$HEALTH_URL" --timeout "$HEALTH_T
   log "DEPLOY FAILED: $ref is running but health does not match. Maintenance stays on."
   log "Roll back with: $MYR_SCRIPT_DIR/rollback.sh --config $config"
   log "Pre-deploy dump: $LAST_DUMP_FILE"
+  exit 1
+fi
+
+# TRACING-HEALTH: the gateway must carry the OTLP-only callback set. A legacy
+# `langfuse` callback against a v4 Langfuse server makes the gateway reject
+# about 12k events per hour while everything looks healthy, so a refusal stops
+# the deploy exactly like a failed health check (maintenance stays on, the
+# rollback command is printed). The check is read-only: without a
+# MYRMIDON_TRACING_* setting it logs a skip and the deploy continues.
+log "7b/8 verify LLM tracing callbacks"
+if ! "$MYR_SCRIPT_DIR/tracing-check.sh" \
+  --langfuse-url "${MYRMIDON_TRACING_LANGFUSE_URL:-}" \
+  --langfuse-version "${MYRMIDON_TRACING_LANGFUSE_VERSION:-}" \
+  --gateway-config "${MYRMIDON_TRACING_GATEWAY_CONFIG:-}" \
+  --callbacks-command "${MYRMIDON_TRACING_CALLBACKS_COMMAND:-}" \
+  --intended-file "${MYRMIDON_TRACING_CALLBACKS_FILE:-$(tracing_callbacks_file_default)}" \
+  ${MYRMIDON_TRACING_TOKEN_FILE:+--token-file "$MYRMIDON_TRACING_TOKEN_FILE"}; then
+  log "DEPLOY FAILED: $ref is running and healthy, but the LLM tracing callbacks are refused. Maintenance stays on."
+  log "Fix the gateway callbacks (OTLP only, 'langfuse_otel') and run the deploy again."
+  log "Roll back with: $MYR_SCRIPT_DIR/rollback.sh --config $config"
   exit 1
 fi
 
