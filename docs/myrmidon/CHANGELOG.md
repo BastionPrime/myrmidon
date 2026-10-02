@@ -66,6 +66,17 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   the markers `serializeAppliedMarker()` writes are emitted from the server code
   of every commit and fed through the dockergate validator, so a marker the
   validator would deny turns CI red before any image exists (#276).
+- AUTO-RESUME: the board itself resumes an agent left in `error` by a failed
+  run — a sweep on the scheduler tick with a backoff of 1, 5 and 15 minutes,
+  reusing the pause/resume wake chain so the resumed agent also wakes the work
+  it was stranded on. After `MYRMIDON_AUTO_RESUME_MAX_ATTEMPTS` (default 3)
+  failed resumes the board stops and escalates the agent's `agent_error_alert`
+  card on the attention desk to severity `critical`; the operator's resume
+  re-arms the counter. State lives in `agents.metadata.myrmidon_auto_resume`
+  (no migration), every action writes an activity log row
+  (`agent.auto_resume_issued` / `agent.auto_resume_exhausted`). Settings:
+  `MYRMIDON_AUTO_RESUME_*` in [SETTINGS.md](SETTINGS.md); guide:
+  [guides/auto-resume.md](guides/auto-resume.md) (#272).
 
 ## 1.3.2
 
