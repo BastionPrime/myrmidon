@@ -304,6 +304,22 @@ The bot's tool is `ocr.pdf` (input: `name`, `base64`, optional `origin`, `source
 (`name`, `sizeBytes`, `pages`, `origin`, `sourceId`, `backend`, `chars`, `truncated`) — the text and bytes
 never enter the journal.
 
+## EXTCASE-B — browser bridge to the client's extension
+
+Settings of the server module `server/src/myrmidon/browser-bridge/` (the first third-party case: browser
+actions run in the client's browser, the board cannot reach it). The bridge is configured not by an
+environment variable but by the `instance_settings.general.browserBridge` record
+(`GET`/`PATCH /api/myrmidon/browser-bridge/settings`, read — board, write — instance-admin):
+`domains` — the allowlist of support domains, `signing` — the client signing policy
+(`enabled` — emergency off, `mode` — `auto`/`manual`/`types`, `types` — action types that require
+a human under `mode: types`). The one-button emergency off is
+`POST /api/myrmidon/browser-bridge/signing/disable`; after it the gateway rejects any sign action
+(fail-closed) and the fact is written to the company journal.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_BROWSER_BRIDGE_PEPPER` | EXTCASE-B | unset | HMAC pepper for pairing codes and bridge tokens of the bridge: only digests live in the database; the presented code (exchanged for a device token) and the token at the extension's `/bridge/v1` connection are verified against them | Unset — the process takes a random pepper at its startup and logs a warning: everything issued before the restart stops validating, devices re-pair (the panel issues a new code). Set in the board's environment; the value is a secret, never stored in the repo or logs. The pepper is per-instance, which is why it is not kept in the settings the panel reads and edits |
+
 ## Settings in the agent record (not environment variables)
 
 | Field | Function | Default | What it does | How to disable / special |
