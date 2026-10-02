@@ -78,6 +78,21 @@ version file to edit. Base Paperclip version is in the image label
   STATUS-STRIP endpoint exists. i18n keys `ui2.*` ship in en/ru (translated)
   and the other locales (English values until the translation pass).
 
+### Task PR sync
+
+- A task delivered by a pull request settles itself once its PRs merge
+  (#315): a periodic sweep (`server/src/myrmidon/task-pr-sync/`, ships
+  enabled) reads the task's own `pull_request` work products, refreshes each
+  PR's state through the existing GitHub resolver, and closes the task with
+  one neutral comment (PR refs, merge sha, time) when every PR is terminal
+  with at least one merged and no post-deploy gate (a pending card, a pending
+  approval or a future-scheduled monitor) is still open. Closed-without-merge
+  PRs send the task back to its assignee; superseded PR rows are ignored. And
+  the wake guard half (#339, post-1.5.0): an event-free wake to such a
+  settle-pending task is skipped (reason `wake_skipped_pr_settle_pending`)
+  instead of dispatching a run that would only race the settle. Operator
+  guide: [guides/task-pr-sync.md](guides/task-pr-sync.md).
+
 ## 1.4.0
 
 Everything merged between the 1.3.2 and 1.4.0 tags. Deploy this release's board,
