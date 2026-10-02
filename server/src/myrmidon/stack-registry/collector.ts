@@ -7,9 +7,13 @@
 import http from "node:http";
 import { getServerInfoSnapshot, type ServerInfoSnapshot } from "../../server-info.js";
 import {
+  STACK_DOCUMENT_VERSION,
   STACK_SEED,
   emptyStackDocument,
+  patchEntryFromDelta,
+  seedDeltasFor,
   type StackDocument,
+  type StackPatchEntry,
   type StackSeedComponent,
   type StackSnapshot,
 } from "./domain.js";
@@ -139,6 +143,26 @@ export interface CollectStackLocalOptions {
   images?: DockerImagesPort;
   /** Board snapshot override; defaults to the live /api/health source. */
   serverInfo?: ServerInfoSnapshot;
+  /**
+   * The previously stored document. Part B state (upstream release data and
+   * patch-closed verdicts) is carried over by component name, so a local
+   * refresh never wipes the scheduled release check.
+   */
+  previous?: StackDocument;
+}
+
+function carryPrevious(prev: StackSnapshot | undefined, snapshot: StackSnapshot): StackSnapshot {
+  if (!prev) return snapshot;
+  const patches = snapshot.local.patches.map((patch) => {
+    const old = prev.local.patches.find((entry) => entry.title === patch.title);
+    return old ? { ...patch, state: old.state, reason: old.reason } : patch;
+  });
+  return {
+    ...snapshot,
+    local: { ...snapshot.local, patches },
+    ...(prev.upstreamState ? { upstreamState: prev.upstreamState } : {}),
+    ...(prev.patchClosed ? { patchClosed: prev.patchClosed } : {}),
+  };
 }
 
 /**
@@ -149,6 +173,7 @@ export interface CollectStackLocalOptions {
  */
 export async function collectStackLocal(options: CollectStackLocalOptions = {}): Promise<StackDocument> {
   const checkedAt = (options.now ?? (() => new Date()))().toISOString();
+  const previous = options.previous;
   const images = options.images ?? dockerImagesPort(process.env[STACK_DOCKER_SOCKET_ENV]?.trim() || DEFAULT_STACK_DOCKER_SOCKET);
 
   const serverInfo = options.serverInfo ?? getServerInfoSnapshot();
@@ -156,6 +181,7 @@ export async function collectStackLocal(options: CollectStackLocalOptions = {}):
 
   const components: StackSnapshot[] = [];
   for (const seed of STACK_SEED) {
+    const seededPatches: StackPatchEntry[] = seedDeltasFor(seed.name).map(patchEntryFromDelta);
     const snapshot: StackSnapshot = {
       version: 1,
       name: seed.name,
@@ -170,7 +196,7 @@ export async function collectStackLocal(options: CollectStackLocalOptions = {}):
         runningOn: null,
         unknownReason: null,
         checkedAt,
-        patches: [],
+        patches: seededPatches,
       },
     };
     switch (seed.localProbe) {
@@ -185,7 +211,7 @@ export async function collectStackLocal(options: CollectStackLocalOptions = {}):
         break;
       }
       case "docker-image": {
-        snapshot.local = { ...(await probeDockerImages(seed, images)), checkedAt, patches: [] };
+        snapshot.local = { ...(await probeDockerImages(seed, images)), checkedAt, patches: seededPatches };
         break;
       }
       case "env": {
@@ -205,9 +231,14 @@ export async function collectStackLocal(options: CollectStackLocalOptions = {}):
         break;
       }
     }
-    components.push(snapshot);
+    components.push(carryPrevious(previous?.components.find((c) => c.name === seed.name), snapshot));
   }
-  return { version: 1, refreshedAt: checkedAt, components };
+  return {
+    version: STACK_DOCUMENT_VERSION,
+    refreshedAt: checkedAt,
+    checkedAt: options.previous?.checkedAt ?? null,
+    components,
+  };
 }
 
 export { emptyStackDocument };

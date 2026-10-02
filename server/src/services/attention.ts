@@ -63,6 +63,9 @@ import { canonicalizeStoredResolverPolicy } from "./issue-thread-interaction-res
 import { decisionQueueService } from "./decision-queues.js";
 // myrmidon(AUTO-RESUME): escalates the agent error card after the board gave up resuming
 import { readAutoResumeAttentionState } from "../myrmidon/auto-resume.js";
+// myrmidon(SUB): upstream stack releases surface in the attention feed
+import { buildStackAttentionCards } from "../myrmidon/stack-registry/attention.js";
+import { readStackDocument } from "../myrmidon/stack-registry/store.js";
 // myrmidon(TRACING-HEALTH): the "LLM tracing" red state raises one operator card (part D)
 import { readTracingHealthAttentionSignal } from "../myrmidon/tracing-health/attention.js";
 
@@ -95,6 +98,7 @@ const ATTENTION_SOURCE_KINDS: AttentionSourceKind[] = [
   "failed_run",
   "budget_alert",
   "agent_error_alert",
+  "stack_update",
 ];
 
 const SEVERITY_RANK: Record<AttentionSeverity, number> = {
@@ -116,6 +120,7 @@ const SOURCE_RANK: Record<AttentionSourceKind, number> = {
   review: 8,
   productivity_review: 9,
   join_request: 10,
+  stack_update: 11,
 };
 
 const PENDING_INTERACTION_STATUSES = ["pending"] as const;
@@ -1891,6 +1896,47 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
             kind: "agent_error",
             agentName: agent.name,
             failureReasonExcerpt: excerpt(agent.errorReason),
+            images: [],
+          },
+        }));
+      }
+
+      // myrmidon(SUB): the scheduled stack release check writes its result into
+      // the stack cache; a component that lags behind upstream (or got a new
+      // release) surfaces here. The feed recomputes on every list, so the data
+      // stays in the registry cache and never in an attention table.
+      const stackDocument = await readStackDocument(db);
+      for (const card of buildStackAttentionCards(stackDocument)) {
+        add(createItem({
+          companyId,
+          sourceKind: "stack_update",
+          subject: {
+            kind: "stack_component",
+            id: card.component,
+            companyId,
+            title: card.title,
+            identifier: null,
+            status: null,
+            href: null,
+            metadata: card.metadata,
+          },
+          whyNow: card.whyNow,
+          decisionVerbs: decisionVerbs(
+            { id: "review", label: "Review update", description: "Open the stack update and plan the upgrade." },
+            { id: "dismiss", label: "Dismiss", description: "Dismiss this stack update until the next release." },
+          ),
+          inlineResolvable: true,
+          entryRule: "an upstream release is newer than the cached local version, or a new release appeared since the last check.",
+          exitRule: "the component is updated to the latest release, the local version catches up, or the row is dismissed.",
+          dedupKey: card.dedupKey,
+          severity: card.severity,
+          activityAt: card.activityAt,
+          createdAt: card.activityAt,
+          updatedAt: card.activityAt,
+          relatedIssue: null,
+          detail: {
+            kind: "generic",
+            summaryExcerpt: card.summaryExcerpt,
             images: [],
           },
         }));
