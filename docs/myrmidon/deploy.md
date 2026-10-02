@@ -223,8 +223,8 @@ Order:
    source of truth, `tracing_intended_callbacks()` in `lib.sh`) with the effective callbacks
    — the union of `MYRMIDON_TRACING_CALLBACKS_COMMAND` (the live gateway or its database)
    and the `callbacks:` list of `MYRMIDON_TRACING_GATEWAY_CONFIG` — and refuses the legacy
-   `langfuse` callback while the Langfuse server is v4 (`GET
-   <MYRMIDON_TRACING_LANGFUSE_URL>/api/public/health` reports 4.x) or while the version
+   `langfuse` callback while the Langfuse server is v4
+   (`GET <MYRMIDON_TRACING_LANGFUSE_URL>/api/public/health` reports 4.x) or while the version
    cannot be proven (the release bundle pins it in `MYRMIDON_TRACING_LANGFUSE_VERSION`). v4
    in `events_only` mode rejects the legacy `/api/public/ingestion` endpoint: about 12k
    rejected events per hour and burned gateway CPU while everything looked healthy. A
