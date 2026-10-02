@@ -3,6 +3,8 @@ import {
   decideQueuedCommentActorOwnsEntry,
   decideQueuedCommentReorder,
 } from "../domain/policy.js";
+// myrmidon(S5): queued comment edits are stored with secret values masked
+import { maskSecretsInText } from "../../../myrmidon/secret-masking.js";
 import type {
   QueuedCommentActivityPublication,
   QueuedCommentActor,
@@ -94,10 +96,15 @@ export function createEditQueuedComment(deps: { issueLock: QueuedCommentIssueLoc
           throw new QueuedCommentMutationForbiddenError("Only the queued message author can edit it");
         }
 
+        // myrmidon(S5): the edited comment body is stored with secret values masked,
+        // like agent comments in issues.ts addComment. Board users editing their own
+        // queued message can paste provider output; the mask is applied to the stored
+        // text so the secret value never reaches the database.
+        const maskedBody = maskSecretsInText(input.body);
         const updated = await tx.updateCommentBody({
           issueId: input.issue.id,
           commentId: input.commentId,
-          body: input.body,
+          body: maskedBody,
           updatedAt: input.now,
         });
         if (!updated) {
