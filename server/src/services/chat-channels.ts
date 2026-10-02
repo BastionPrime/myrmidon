@@ -244,6 +244,9 @@ import {
   refuseUnlinkedTelegramDm,
   type TelegramDmBridgeDeps,
 } from "../myrmidon/agent-chat-bridge/bridge.js";
+// myrmidon(U2): company-wide interaction lookup for callbacks on cards
+// delivered to the owner's Telegram conversation from other tasks.
+import { listInteractionForCallback } from "../myrmidon/owner-delivery/callback-interaction-lookup.js";
 import {
   authorizeNativeChatReviewPresentation,
   NativeChatReviewPresentationContentionError,
@@ -19743,9 +19746,14 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         );
       return false;
     }
-    const interaction = (
-      await issueThreadInteractionService(db).listForIssue(conversation.issueId)
-    ).find((candidate) => candidate.id === token.interactionId);
+    // myrmidon(U2): the confirmation card may belong to another task than the
+    // conversation's own issue (owner delivery); resolve company-wide, same
+    // kind/shape checks below.
+    const interaction = await listInteractionForCallback(db, {
+      companyId: action.companyId,
+      conversationIssueId: conversation.issueId,
+      interactionId: token.interactionId,
+    });
     if (
       !interaction ||
       interaction.kind !== "request_confirmation" ||
@@ -20770,13 +20778,18 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       return deny(safelyKnown);
     }
 
-    const interaction = (
-      await issueThreadInteractionService(db).listForIssue(conversation.issueId)
-    ).find((candidate) => candidate.id === payload.interactionId);
+    // myrmidon(U2): a card delivered to the owner's standing Telegram
+    // conversation (X8b) can belong to a different task than the
+    // conversation's own issue; resolve by interaction id company-wide while
+    // keeping every company/actor check below unchanged.
+    const interaction = await listInteractionForCallback(db, {
+      companyId: record.endpoint.companyId,
+      conversationIssueId: conversation.issueId,
+      interactionId: payload.interactionId,
+    });
     if (
       !interaction ||
-      interaction.companyId !== record.endpoint.companyId ||
-      interaction.issueId !== conversation.issueId
+      interaction.companyId !== record.endpoint.companyId
     ) {
       return deny(safelyKnown);
     }
@@ -20887,7 +20900,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         .where(
           and(
             eq(issues.companyId, record.endpoint.companyId),
-            eq(issues.id, conversation.issueId),
+            // myrmidon(U2): the confirmation card may belong to another task
+            // than the conversation's own issue (owner delivery); resolve the
+            // action's issue from the interaction, not the conversation.
+            eq(issues.id, interaction.issueId),
           ),
         )
         .then((rows) => rows[0] ?? null);
@@ -21270,7 +21286,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       .where(
         and(
           eq(issues.companyId, record.endpoint.companyId),
-          eq(issues.id, conversation.issueId),
+          // myrmidon(U2): the question card may belong to another task than
+          // the conversation's own issue (owner delivery); resolve the
+          // action's issue from the interaction, not the conversation.
+          eq(issues.id, interaction.issueId),
         ),
       )
       .then((rows) => rows[0] ?? null);
