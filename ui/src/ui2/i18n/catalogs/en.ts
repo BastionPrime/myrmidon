@@ -157,6 +157,20 @@ export const en = {
     monthsAgo: "{{count}}mo ago",
     updated: "Updated {{time}}",
   },
+  // myrmidon(1.6-CTO-CHAT-A): the Commander chat screen — free-text planning
+  // entry (screen-map §4.3).
+  commanderChat: {
+    title: "Commander chat",
+    subtitle:
+      "Describe what you want in plain text — the board proposes an epic with tasks for your approval.",
+    loading: "Loading conversation…",
+    noAgent: "No Commander agent found in this company yet.",
+    placeholder: "Tell the Commander what to build…",
+    send: "Build a plan",
+    planAria: "Proposed plan",
+    epicLabel: "Epic",
+    resolving: "Applying your decision…",
+  },
 };
 
 export type Ui2Catalog = {
@@ -305,5 +319,18 @@ export type Ui2Catalog = {
     weeksAgo: string;
     monthsAgo: string;
     updated: string;
+  };
+  // myrmidon(1.6-CTO-CHAT-A): the Commander chat screen — free-text planning
+  // entry (screen-map §4.3). Keys render only via useUi2T.
+  commanderChat: {
+    title: string;
+    subtitle: string;
+    loading: string;
+    noAgent: string;
+    placeholder: string;
+    send: string;
+    planAria: string;
+    epicLabel: string;
+    resolving: string;
   };
 };

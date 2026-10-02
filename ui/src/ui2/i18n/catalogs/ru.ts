@@ -153,4 +153,17 @@ export const ru: Ui2Catalog = {
     monthsAgo: "{{count}} мес назад",
     updated: "Обновлено {{time}}",
   },
+  // myrmidon(1.6-CTO-CHAT-A): the Commander chat screen — free-text planning
+  // entry (screen-map §4.3).
+  commanderChat: {
+    title: "Чат с Полководцем",
+    subtitle: "Опишите задачу обычным текстом — доска предложит эпик с задачами на ваше одобрение.",
+    loading: "Загружаем беседу…",
+    noAgent: "В этой компании ещё нет агента-Полководца.",
+    placeholder: "Скажите Полководцу, что нужно построить…",
+    send: "Собрать план",
+    planAria: "Предложенный план",
+    epicLabel: "Эпик",
+    resolving: "Применяем ваше решение…",
+  },
 };

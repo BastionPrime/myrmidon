@@ -1,10 +1,10 @@
-// myrmidon(UI-0a): "Tell the Commander" palette — the stub promised by
-// OPE-3550: an input that acknowledges the request and routes the operator
-// to the existing chat surface. Full CTO-CHAT (epic parsing, per-Commander
-// history, active channel routing) is 1.6 (screen-map §4.3); this entry only
-// guarantees the affordance exists under the flag and never looks wired to
-// something that does not exist yet: the send action is explicit about being
-// a stub in the UI copy (ui2.commander.stubNote).
+// myrmidon(UI-0a, 1.6-CTO-CHAT-A): "Tell the Commander" palette — the entry
+// point promised by OPE-3550 and now wired to the real Commander chat screen
+// (1.6): submitting navigates to the Commander chat route with the typed text
+// carried over, so the planning conversation continues in one place. The
+// conversation itself (epic parsing via /api/myrmidon/cto-chat/plan, approval
+// card, per-Commander history, active channel routing) lives in
+// screens/CommanderChatScreen.tsx (screen-map §4.3).
 import { useEffect, useRef } from "react";
 import { ArrowRight } from "lucide-react";
 import { useTranslation } from "@/i18n";
@@ -46,7 +46,12 @@ export function Ui2CommanderPalette({ onClose }: { onClose: () => void }) {
         onMouseDown={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault();
-          navigate("/board-chat");
+          // myrmidon(1.6-CTO-CHAT-A): continue in the Commander chat, keeping
+          // the typed draft so the operator does not retype it.
+          const draft = inputRef.current?.value ?? "";
+          navigate(
+            draft ? `/commander-chat?draft=${encodeURIComponent(draft)}` : "/commander-chat",
+          );
           onClose();
         }}
         style={{
@@ -78,9 +83,11 @@ export function Ui2CommanderPalette({ onClose }: { onClose: () => void }) {
           }}
         />
         <p style={{ fontSize: "var(--myr-text-nano)", color: "var(--myr-ink-muted)", margin: 0 }}>
-          {t("ui2.commander.stubNote", {
+          {/* myrmidon(1.6-CTO-CHAT-A): no longer a stub — the draft carries
+              over to the Commander chat screen, where the plan is built. */}
+          {t("ui2.commander.carryNote", {
             defaultValue:
-              "Stub: the message is not sent yet. It opens the existing chat; the Commander conversation arrives with the 1.6 chat update.",
+              "The draft opens in the Commander chat, where the board proposes an epic from your text.",
           })}
         </p>
         <button
