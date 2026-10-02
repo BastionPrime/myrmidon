@@ -370,3 +370,21 @@ always on and needs no configuration. Recorded here per the registry rule.
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | — | H2 | — (always on) | Instructions bundle revisions are recorded on every file put/delete and bundle patch, and `POST /api/agents/:id/instructions-revisions/:revisionId/rollback` restores a revision (the restore itself becomes a new revision). No settings | Not configurable: this is a corrective feature with no deployment-specific values. Rollback of an external bundle is refused (422) until the agent switches to a managed bundle |
+
+## 1.4 — automatic resume from `error` (AUTO-RESUME)
+
+An agent left in `error` by a failed run is resumed by the board itself with a
+backoff of 1, 5 and 15 minutes, reusing the L3 pause/resume wake chain (the
+resumed agent also wakes the work it was stranded on). After the attempt cap the
+board stops and escalates the agent's `agent_error_alert` card on the attention
+desk to "the board gave up; an operator must intervene". The failure counter and
+the give-up mark live in `agents.metadata.myrmidon_auto_resume`; an agent record
+change after the give-up (an operator action) re-arms the counter.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_AUTO_RESUME_ENABLED` | AUTO-RESUME | `1` (on) | Master switch: the board resumes an agent left in `error` on its own | `0`/`false`/`off`/`no` — disable (vendor behaviour: `error` until an operator resumes by hand). Unset or unrecognized — enabled |
+| `MYRMIDON_AUTO_RESUME_BACKOFF_MS` | AUTO-RESUME | `60000,300000,900000` (1/5/15 min) | Comma-separated backoff steps in milliseconds per resume attempt; the last step repeats. The first attempt is due one step after the agent entered `error` | Only positive integers are read; invalid entries are dropped; an empty or all-invalid list falls back to the default |
+| `MYRMIDON_AUTO_RESUME_MAX_ATTEMPTS` | AUTO-RESUME | `3` | Failed resumes in one streak before the board gives up and raises the operator card; the agent is then left in `error` until an operator acts | Non-numeric, `0`, negative — the default |
+| `MYRMIDON_AUTO_RESUME_INTERVAL_SEC` | AUTO-RESUME | `60` | How often (sec) the sweep looks for due agents; the sweep runs on the scheduler tick and this gate keeps it per-minute | Values below 10 — 10. Non-numeric, `0`, negative — the default |
+| `MYRMIDON_AUTO_RESUME_WINDOW_MS` | AUTO-RESUME | `3600000` (1 h) | A streak whose last failure is older than this is treated as a new episode (the attempt counter restarts) | Non-numeric, `0`, negative — the default |

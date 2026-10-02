@@ -1312,6 +1312,26 @@ async function startServerWithDatabaseTeardown(
       logger.error({ err }, "pending interaction wake sweep failed");
     }));
   };
+  // myrmidon(AUTO-RESUME): resumes an agent left in `error` once its 1/5/15 min
+  // backoff step is due; the per-agent maintenance gate lives in the sweeper.
+  // Runs on the same mutually-exclusive scheduler paths as the other
+  // independent sweeps: the enabled tick owns it, and the disabled path starts
+  // its own runtime for it, so there is never a second instance of the sweep.
+  const scheduleAutoResumeSweep = () => {
+    if (heartbeatSchedulerStopped) return;
+    // Some vendor test doubles for the heartbeat service are partial and omit
+    // this method; skip the pass instead of crashing the startup path.
+    if (typeof environmentLeaseCleanupHeartbeat.sweepAutoResume !== "function") return;
+    trackHeartbeatSchedulerWork(environmentLeaseCleanupHeartbeat.sweepAutoResume(new Date())
+      .then((result) => {
+        if (result.resumed > 0 || result.exhausted > 0) {
+          logger.warn(result, "auto-resume swept errored agents");
+        }
+      })
+      .catch((err) => {
+        logger.error({ err }, "auto-resume sweep failed");
+      }));
+  };
   const githubConnectionEvents = githubConnectionEventService(db as any, {
     wakeup: environmentLeaseCleanupHeartbeat.wakeup,
   });
@@ -1754,6 +1774,7 @@ async function startServerWithDatabaseTeardown(
         scheduleSetupTokenReaperSweep();
         scheduleEnvironmentLeaseCleanupSweep();
         schedulePendingInteractionWakeSweep(); // myrmidon(P12)
+        scheduleAutoResumeSweep(); // myrmidon(AUTO-RESUME)
 
         if (heartbeatSchedulerStopped) return;
         trackHeartbeatSchedulerWork(routines
@@ -1930,6 +1951,7 @@ async function startServerWithDatabaseTeardown(
       scheduleExternalObjectRefreshSweep(new Date());
       scheduleEnvironmentLeaseCleanupSweep();
       schedulePendingInteractionWakeSweep(); // myrmidon(P12)
+      scheduleAutoResumeSweep(); // myrmidon(AUTO-RESUME)
       scheduleGitHubConnectionEventPoll();
       scheduleGitHubConnectionContinuitySweep();
     });

@@ -637,6 +637,8 @@ import {
   createIdlePickupSweeper,
   idlePickupForAgent,
 } from "../myrmidon/idle-pickup.js";
+// myrmidon(AUTO-RESUME): the board resumes an agent left in `error` with backoff
+import { createAutoResumeSweeper } from "../myrmidon/auto-resume.js";
 import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
 // myrmidon(S2-hostcred): a run never inherits the host's GitHub credentials
 import {
@@ -18023,6 +18025,36 @@ export function heartbeatService(
     isAgentUnderMaintenance: (agentId) => isAgentUnderMaintenance(db, agentId),
   });
 
+  // myrmidon(AUTO-RESUME): the periodic pass that brings an agent left in
+  // `error` back, with a 1/5/15 min backoff and a give-up card to the operator
+  // after the attempt cap. It reuses the L3 resume wake chain, so a resumed
+  // agent also wakes the work it was stranded on. Settings and the pure policy
+  // live in myrmidon/auto-resume.ts; state is kept in agents.metadata.
+  const autoResumeSweeper = createAutoResumeSweeper({
+    db,
+    resumeWake: (agentId) => pauseResumeWakeAgent({ db, startNextQueuedRunForAgent, enqueueWakeup }, agentId),
+    logActivity: async (input) => {
+      await logActivity(db, {
+        companyId: input.companyId,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        agentId: input.agentId,
+        runId: input.runId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        details: input.details,
+      });
+    },
+    isAgentInvokable: async (agent) => {
+      const full = await getAgent(agent.id);
+      if (!full || full.companyId !== agent.companyId) return false;
+      const invokability = await getAgentInvokability(full);
+      return invokability.invokable;
+    },
+    isAgentUnderMaintenance: (agentId) => isAgentUnderMaintenance(db, agentId),
+  });
+
   async function sweepPendingCleanupLeases(opts?: {
     backoffMs?: number;
     /** One cleanup attempt per explicit user Retry, for this failed run only.
@@ -29178,6 +29210,11 @@ export function heartbeatService(
     // myrmidon(IDLE-PICKUP): periodic idle-pickup pass, exposed for the
     // scheduler tick in index.ts and for tests and operators
     sweepIdlePickup: (now?: Date) => idlePickupSweeper.sweep(now),
+
+    // myrmidon(AUTO-RESUME): resumes an agent left in `error` once its backoff
+    // step is due; logic in myrmidon/auto-resume.ts. Called by the scheduler
+    // tick in server/src/index.ts on its own single-flight queue.
+    sweepAutoResume: (now?: Date) => autoResumeSweeper.sweep(now),
     // Override-aware scheduling-suppression check (honors the worktree
     // run-execution experimental setting). Callers outside the service that
     // gate on suppression should prefer this over the env-only resolver.
