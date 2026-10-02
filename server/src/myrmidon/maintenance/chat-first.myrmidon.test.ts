@@ -20,6 +20,7 @@ import {
   agentWakeupRequests,
   agents,
   companies,
+  companySkills,
   createDb,
   heartbeatRunEvents,
   heartbeatRuns,
@@ -133,6 +134,7 @@ describeEmbeddedPostgres("chat-first: the queued-run start path", () => {
     }
     await db.delete(agentWakeupRequests);
     await db.delete(agentRuntimeState);
+    await db.delete(companySkills);
     await db.delete(agents);
     await db.delete(companies);
     await db.delete(instanceSettings);
