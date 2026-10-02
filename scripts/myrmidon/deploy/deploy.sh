@@ -20,9 +20,21 @@
 # override file and recreate only the server service; verify /api/health
 # (status, version, commit); leave maintenance.
 #
+# RELEASE-GATE (the 01.10 incident): the release's component images roll out
+# together with the board, in this same run. After the board image check
+# resolves and verifies the matching dockergate and fleetd digests (same
+# release: the tag the board image was built from, or the short sha of its
+# commit; see ../dockergate/check-release-support.sh). A release whose
+# component digests are missing is refused BEFORE anything changes. After the
+# board is healthy each component is pulled, switched and health-checked
+# (rollout-component.sh); a failing component health is DEGRADED, not silent.
+# Last, a post-deploy smoke (bot-apply-smoke.sh) waits for at least one bot
+# container to re-apply; failing that within its window the deploy reports
+# DEGRADED and prints the rollback commands.
+#
 # On a failed health check the script stops with maintenance still on and
 # prints the rollback command. --dry-run changes nothing and prints the plan
-# (the image check is read-only, so it runs in a dry run too).
+# (the image checks are read-only, so they run in a dry run too).
 set -euo pipefail
 # shellcheck source=lib.sh source-path=SCRIPTDIR
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -45,6 +57,14 @@ parse_digest_arg "$digest"
 load_config "$config"
 require_cmd docker curl jq
 
+# RELEASE-GATE: which components roll with the board, and the smoke settings.
+MYR_RELEASE_COMPONENTS="${MYRMIDON_RELEASE_COMPONENTS:-dockergate,fleetd}"
+MYR_SMOKE_ENABLED="${MYRMIDON_DEPLOY_SMOKE:-1}"
+MYR_SMOKE_TIMEOUT_SEC="${MYRMIDON_DEPLOY_SMOKE_TIMEOUT_SEC:-300}"
+MYR_SMOKE_INTERVAL_SEC="${MYRMIDON_DEPLOY_SMOKE_INTERVAL_SEC:-10}"
+MYR_SMOKE_COMPANY="${MYRMIDON_DEPLOY_SMOKE_COMPANY:-}"
+MYR_SMOKE_AGENT="${MYRMIDON_DEPLOY_SMOKE_AGENT:-}"
+
 # Only CI images reach production: this runs before any other action.
 [[ "$MYRMIDON_IMAGE" == "$MYR_CI_IMAGE" ]] \
   || die "MYRMIDON_IMAGE is '$MYRMIDON_IMAGE': only $MYR_CI_IMAGE is deployed (images built by CI); nothing was changed"
@@ -55,6 +75,38 @@ if ! check_ci_image "$ref"; then
   die "image refused, nothing was changed: $CI_CHECK_REASON"
 fi
 log "image ok: built by CI from commit ${CI_IMAGE_REVISION:0:12}, version ${CI_IMAGE_VERSION:-<none>}"
+
+# RELEASE-GATE: resolve the component digests of the SAME release before
+# anything changes. Order: the myr-vX.Y.Z tag when the board commit carries
+# one (version label of a tag build), else the sha-<short> tag of the commit.
+# A release whose component digests are missing is refused here: rolling the
+# board alone is exactly what the 01.10 incident did to the fleet.
+component_digests=""
+component_resolution=""
+if [[ -n "$MYR_RELEASE_COMPONENTS" && "$MYR_RELEASE_COMPONENTS" != "none" ]]; then
+  version_tag=""
+  if [[ "${CI_IMAGE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    version_tag="$CI_IMAGE_VERSION"
+  fi
+  if [[ -n "$version_tag" ]]; then
+    component_resolution="tag $version_tag"
+    component_digests="$("$MYR_SCRIPT_DIR/../dockergate/check-release-support.sh" --from-tag "$version_tag" --components "$MYR_RELEASE_COMPONENTS" 2>/dev/null)" || component_digests=""
+  fi
+  if [[ -z "$component_digests" ]]; then
+    component_resolution="sha ${CI_IMAGE_REVISION:0:7}"
+    component_digests="$("$MYR_SCRIPT_DIR/../dockergate/check-release-support.sh" --from-sha "${CI_IMAGE_REVISION:0:7}" --components "$MYR_RELEASE_COMPONENTS" 2>/dev/null)" || component_digests=""
+  fi
+  if [[ -z "$component_digests" ]]; then
+    log "Release gate: the component images ($MYR_RELEASE_COMPONENTS) of this release ($component_resolution) are not in the registry."
+    log "A release must ship its components together with the board; this deploy is refused and nothing was changed."
+    log "This cannot be skipped: build and publish the component images from the same commit (the component workflows run on every push to main and every myr-v* tag)."
+    die "release incomplete: component digests missing ($MYR_RELEASE_COMPONENTS, resolved by $component_resolution)"
+  fi
+  log "release components ($component_resolution):"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && log "  $line"
+  done <<<"$component_digests"
+fi
 
 previous="$(current_digest)"
 previous_image="$(current_image)"
@@ -75,6 +127,10 @@ if [[ "$DRY_RUN" == "1" ]]; then
   plan "6. set image in $OVERRIDE_PATH to $ref; docker compose up -d --no-deps $COMPOSE_SERVICE"
   plan "7. verify $HEALTH_URL: status ok, version ${expect_version:-<from image label>}, commit ${expect_commit:-<from image label>}"
   plan "8. leave maintenance"
+  if [[ -n "$component_digests" ]]; then
+    plan "9. roll out release components together with the board: $MYR_RELEASE_COMPONENTS (${component_resolution}; one rollout-component.sh per component, each with its own pull, switch and health check)"
+    plan "10. post-deploy smoke: wait for a bot container to re-apply (bot-apply-smoke.sh, timeout ${MYR_SMOKE_TIMEOUT_SEC}s); on failure the deploy reports DEGRADED and prints the rollback commands"
+  fi
   exit 0
 fi
 
@@ -144,3 +200,49 @@ fi
 log "8/8 leave maintenance"
 maintenance_exit
 log "deployed $ref (previous: ${previous:-<none>}, dump: $LAST_DUMP_FILE)"
+
+# RELEASE-GATE: the components of the same release roll out in this same run.
+# A component failure marks the deploy DEGRADED (the board itself is healthy;
+# the rollback commands are printed, not auto-run: the operator decides).
+component_failures=""
+if [[ -n "$component_digests" ]]; then
+  log "9/10 roll out release components"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    name="${line%%=*}"
+    cdigest="${line#*=}"
+    log "rolling out $name at $cdigest"
+    if ! "$MYR_SCRIPT_DIR/rollout-component.sh" --config "$config" --component "$name" --digest "$cdigest"; then
+      component_failures="$component_failures $name"
+    fi
+  done <<<"$component_digests"
+  if [[ -n "$component_failures" ]]; then
+    log "DEGRADED: component rollout failed for:$component_failures"
+    log "Roll back the board with: $MYR_SCRIPT_DIR/rollback.sh --config $config"
+    log "Roll back a component with: $MYR_SCRIPT_DIR/rollback-component.sh --config $config --component <dockergate|fleetd>"
+    exit 1
+  fi
+fi
+
+# RELEASE-GATE: post-deploy smoke. Within MYR_SMOKE_TIMEOUT_SEC at least one
+# bot container must re-apply; otherwise the deploy is DEGRADED with the
+# rollback commands. Skipped only when explicitly disabled or unconfigured
+# (no company): an unconfigured smoke on a bot fleet is itself reported.
+if [[ "$MYR_SMOKE_ENABLED" == "1" ]]; then
+  if [[ -z "$MYR_SMOKE_COMPANY" ]]; then
+    log "WARNING: post-deploy bot smoke skipped: MYRMIDON_DEPLOY_SMOKE_COMPANY is not set; the deploy cannot prove a bot re-applied"
+  else
+    log "10/10 post-deploy smoke: waiting for a bot container to re-apply"
+    smoke_args=(--board-url "${BOARD_API_URL:-$MAINTENANCE_API_URL}" --company "$MYR_SMOKE_COMPANY" --timeout "$MYR_SMOKE_TIMEOUT_SEC" --interval "$MYR_SMOKE_INTERVAL_SEC")
+    [[ -n "$MYR_SMOKE_AGENT" ]] && smoke_args+=(--agent "$MYR_SMOKE_AGENT")
+    [[ -n "$HEALTH_TOKEN_FILE" ]] && smoke_args+=(--token-file "$HEALTH_TOKEN_FILE")
+    if ! "$MYR_SCRIPT_DIR/bot-apply-smoke.sh" "${smoke_args[@]}"; then
+      log "DEGRADED: no bot container re-applied within ${MYR_SMOKE_TIMEOUT_SEC}s"
+      log "Roll back the board with: $MYR_SCRIPT_DIR/rollback.sh --config $config"
+      log "Roll back a component with: $MYR_SCRIPT_DIR/rollback-component.sh --config $config --component <dockergate|fleetd>"
+      exit 1
+    fi
+  fi
+fi
+
+log "release gate passed: board and $MYR_RELEASE_COMPONENTS rolled out together, bots re-apply"

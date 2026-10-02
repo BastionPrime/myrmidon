@@ -1,0 +1,29 @@
+{
+ "index": [
+  {
+   "id": "no-limit",
+   "file": "markers/no-limit.json",
+   "hasLimit": false
+  },
+  {
+   "id": "limit-min",
+   "file": "markers/limit-min.json",
+   "hasLimit": true
+  },
+  {
+   "id": "limit-typical",
+   "file": "markers/limit-typical.json",
+   "hasLimit": true
+  },
+  {
+   "id": "limit-max",
+   "file": "markers/limit-max.json",
+   "hasLimit": true
+  },
+  {
+   "id": "limit-with-many-files",
+   "file": "markers/limit-with-many-files.json",
+   "hasLimit": true
+  }
+ ]
+}
