@@ -14,6 +14,7 @@ import { workspaceHygieneLimitsSchema } from "../myrmidon-workspace-hygiene.js";
 import { runLimitsSchema } from "../myrmidon-runtime-limits.js";
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in the same general settings row
 import { browserBridgeSettingsSchema } from "../myrmidon-browser-bridge.js";
+import { swarmClaimSettingsSchema } from "../myrmidon-swarm-claim.js";
 
 function presetSchema<T extends readonly number[]>(presets: T, label: string) {
   return z.number().refine(
@@ -49,6 +50,11 @@ export const instanceGeneralSettingsSchema = z.object({
   // myrmidon(EXTCASE-B): browser-bridge allowlist changed from the bridge panel;
   // absent means "no domain is allowed" (deny by default).
   browserBridge: browserBridgeSettingsSchema.optional(),
+  // myrmidon(1.6-SWARM): per-role queues with leased claims — the pilot flag,
+  // the lease TTL, the per-agent ceiling and the sweep interval, changed from
+  // /api/myrmidon/swarm-claim; absent means "use the environment variable, then
+  // the default (the pilot is off)".
+  swarmClaim: swarmClaimSettingsSchema.optional(),
 }).strict();
 
 export const patchInstanceGeneralSettingsSchema = z

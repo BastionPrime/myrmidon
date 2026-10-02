@@ -231,3 +231,5 @@ export {
 } from "./myrmidon_wiki_regulations.js";
 // myrmidon(1.6-EVALS): reference tasks and judge runs for the evals module.
 export { evalReferenceTasks, evalRuns } from "./myrmidon_evals.js";
+// myrmidon(1.6-SWARM): leases of the per-role task queues.
+export { issueClaims } from "./issue_claims.js";

@@ -5,6 +5,7 @@ import type { WorkspaceHygieneLimits } from "../myrmidon-workspace-hygiene.js";
 import type { RunLimits } from "../myrmidon-runtime-limits.js";
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in instance settings
 import type { BrowserBridgeSettings } from "../myrmidon-browser-bridge.js";
+import type { SwarmClaimSettings } from "../myrmidon-swarm-claim.js";
 
 export const DAILY_RETENTION_PRESETS = [3, 7, 14] as const;
 export const WEEKLY_RETENTION_PRESETS = [1, 2, 4] as const;
@@ -66,6 +67,13 @@ export interface InstanceGeneralSettings {
    * (packages/shared/src/validators/instance.ts).
    */
   browserBridge?: BrowserBridgeSettings;
+  /**
+   * myrmidon(1.6-SWARM): per-role queues with leased claims, changed from
+   * `GET`/`PATCH /api/myrmidon/swarm-claim`. Absent means "use the environment
+   * variable, then the default (the pilot is off)". Kept in sync with the
+   * validator of the same field (packages/shared/src/validators/instance.ts).
+   */
+  swarmClaim?: SwarmClaimSettings;
 }
 
 export interface InstanceExperimentalSettings {
