@@ -258,6 +258,15 @@ vi.mock("../realtime/live-events-ws.js", () => ({
   setupLiveEventsWebSocketServer: vi.fn(),
 }));
 
+// myrmidon(EXTCASE-B): server startup only has to schedule the bridge; the
+// module's own suite covers its behaviour, and the real module would reach for
+// the secret service this suite deliberately does not mock.
+vi.mock("../myrmidon/browser-bridge/index.js", () => ({
+  startBrowserBridge: vi.fn(),
+  myrmidonBrowserBridgeRoutes: vi.fn(() => ({ use: vi.fn() })),
+  myrmidonBrowserBridgePublicRoutes: vi.fn(() => ({ use: vi.fn() })),
+}));
+
 vi.mock("../services/index.js", () => ({
   backfillLegacyToolOAuthTokens: vi.fn(async () => ({
     scannedConnections: 0,
@@ -390,6 +399,22 @@ vi.mock("../services/feedback-share-client.js", () => ({
 
 vi.mock("../services/plugin-worker-manager.js", () => ({
   createPluginWorkerManager: vi.fn(() => ({ id: "plugin-worker-manager" })),
+}));
+
+// The bot container sweep is off unless enabled and is not under test here; its port wiring
+// pulls the real services graph, which this test replaces with a partial @paperclipai/db mock.
+vi.mock("../myrmidon/bot-containers/startup.js", () => ({
+  startBotContainers: vi.fn(),
+  stopBotContainers: vi.fn(),
+}));
+
+// myrmidon(R5-B): same for the bot image canary wiring — the canary index
+// imports the bot container runtime, which pulls the real services graph and
+// the partial @paperclipai/db mock has no table columns. The canary itself is
+// a no-op unless MYRMIDON_BOT_CANARY is set and has its own suites.
+vi.mock("../myrmidon/bot-containers/canary-index.js", () => ({
+  startBotCanary: vi.fn(),
+  stopBotCanary: vi.fn(),
 }));
 
 vi.mock("../startup-banner.js", () => ({

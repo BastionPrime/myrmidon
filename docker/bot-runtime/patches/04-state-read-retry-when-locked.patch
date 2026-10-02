@@ -1,57 +1,49 @@
 diff --git a/hermes_state.py b/hermes_state.py
-index 2d00a1f..2a2309e 100644
+index 8ecc3b5..cac1c9e 100644
 --- a/hermes_state.py
 +++ b/hermes_state.py
-@@ -170,6 +170,18 @@ _READ_OPEN_RETRY_SECONDS = 60.0
+@@ -178,6 +178,19 @@ _READ_OPEN_RETRY_SECONDS = 60.0
  # Deliberately NOT for writable opens: a writer owns the transition, so an IOERR there is a real
  # storage/fd problem. A persistent IOERR still exhausts the budget and propagates.
  _READ_ONLY_IOERR_RETRY_ATTEMPTS, _READ_ONLY_IOERR_RETRY_BACKOFF_S = 3, 0.05
-+# myrmidon(G1): retry a READ that finds the database locked. The write path already waits
-+# out a busy database (BEGIN IMMEDIATE, idempotent INSERT OR IGNORE, jittered retry), but the
-+# read path used to replay only "disk I/O error". With one persistent gateway, two concurrent
-+# runs of the same agent (one writing a turn, the other resuming the session history) made the
-+# reader fail with "database is locked". In WAL mode there is exactly one writer at a time, so
-+# the fix is to wait for it, not to change the locking: a bounded exponential back-off with
-+# jitter on the SAME connection (see _read_retrying_ioerr). A persistent lock exhausts the
-+# budget and raises the original error; any other OperationalError is raised at once.
++# myrmidon(G1): also retry a READ that finds the database locked. The write path already waits out
++# a busy database (BEGIN IMMEDIATE, idempotent INSERT OR IGNORE, jittered retry), but the read path
++# used to replay only "disk I/O error". With one persistent gateway, two concurrent runs of the
++# same agent (one writing a turn, the other resuming the session history) made the reader fail with
++# "database is locked". In WAL mode there is exactly one writer at a time, so the fix is to wait for
++# it, not to change the locking: a bounded exponential back-off with jitter on the SAME connection
++# (see _read_retrying_ioerr). A persistent lock exhausts the budget and raises the original error;
++# any other OperationalError is raised at once. Fixed constants on purpose — a tunable here would be
++# one more setting to document, and nothing in this image needs to change them.
 +_READ_LOCKED_MARKERS = ("database is locked", "database is busy")
 +_READ_LOCKED_RETRY_ATTEMPTS = 15
 +_READ_LOCKED_RETRY_BASE_S = 0.05
 +_READ_LOCKED_RETRY_CAP_S = 1.0
- 
- 
- def _default_db_path() -> Path:
-@@ -947,14 +959,29 @@ class SessionDB(
+ # SQLite busy handler budget for reads. Under DELETE (rollback-journal) mode a reader needs a SHARED
+ # lock, which every commit from another process blocks across its journal+db fsyncs; the writer
+ # connection's 1 s timeout exists for writes (they retry at application level) and starved readers
+@@ -1114,12 +1127,22 @@ class SessionDB(
          the statement is replayed on the SAME connection within the read-only IOERR budget -- never
          closed and reopened (close() cancels this process's POSIX locks for every sibling connection),
          never quarantined (busy is not broken). A persistent IOERR exhausts the budget and propagates."""
 -        for attempt in range(_READ_ONLY_IOERR_RETRY_ATTEMPTS + 1):
-+        budget = max(_READ_ONLY_IOERR_RETRY_ATTEMPTS, _READ_LOCKED_RETRY_ATTEMPTS)
-+        for attempt in range(budget + 1):
++        for attempt in range(max(_READ_ONLY_IOERR_RETRY_ATTEMPTS, _READ_LOCKED_RETRY_ATTEMPTS) + 1):
              try:
                  with self._read_ctx() as conn:
                      return fn(conn)
              except sqlite3.OperationalError as exc:
 -                if attempt >= _READ_ONLY_IOERR_RETRY_ATTEMPTS or _DISK_IO_ERROR_MARKER not in str(exc).lower():
--                    raise
--                time.sleep(_READ_ONLY_IOERR_RETRY_BACKOFF_S)
 +                err = str(exc).lower()
-+                if _DISK_IO_ERROR_MARKER in err:
-+                    if attempt >= _READ_ONLY_IOERR_RETRY_ATTEMPTS:
-+                        raise
-+                    time.sleep(_READ_ONLY_IOERR_RETRY_BACKOFF_S)
-+                    continue
++                # myrmidon(G1): a neighbouring writer holds the single WAL write lock — wait for it
++                # on the SAME connection (close() would cancel this process's POSIX locks for every
++                # sibling connection) with a doubling, jittered back-off; past the budget, raise.
 +                if any(marker in err for marker in _READ_LOCKED_MARKERS):
-+                    # myrmidon(G1): a neighbouring writer holds the lock. Wait with doubling
-+                    # and jitter on the same connection (never close it: close() cancels this
-+                    # process's POSIX locks for every sibling connection); past the budget,
-+                    # raise as before.
 +                    if attempt >= _READ_LOCKED_RETRY_ATTEMPTS:
 +                        raise
-+                    delay = min(_READ_LOCKED_RETRY_CAP_S, _READ_LOCKED_RETRY_BASE_S * (2 ** attempt))
-+                    time.sleep(delay * (0.5 + random.random()))
++                    time.sleep(min(_READ_LOCKED_RETRY_CAP_S, _READ_LOCKED_RETRY_BASE_S * (2 ** attempt))
++                               * (0.5 + random.random()))
 +                    continue
-+                raise
- 
-     def _ensure_db_file_generation(self) -> None:
-         """Mint a once-per-file generation stamp (state_meta + application_id). First opener wins (INSERT
++                if attempt >= _READ_ONLY_IOERR_RETRY_ATTEMPTS or _DISK_IO_ERROR_MARKER not in err:
+                     note_storage_error(self.db_path, exc)
+                     raise
+                 time.sleep(_READ_ONLY_IOERR_RETRY_BACKOFF_S)

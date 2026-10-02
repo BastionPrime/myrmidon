@@ -15,6 +15,7 @@
 // message is safe to show in the reconcile activity log.
 
 import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS } from "@paperclipai/shared";
+import { BOT_BOARD_GATEWAY_SERVER_NAME } from "./board-gateway.js";
 import type {
   HermesProfileAdapterConfig,
   HermesProfileEnvEntry,
@@ -32,6 +33,11 @@ import type {
 
 export const BOT_HINDSIGHT_API_URL_ENV = "MYRMIDON_BOT_HINDSIGHT_API_URL";
 export const BOT_HINDSIGHT_BANK_ENV = "MYRMIDON_BOT_HINDSIGHT_BANK";
+// myrmidon(MEMORY-ISOLATION): the bank allowlist. A bank outside it fails the
+// compile instead of silently materializing a new bank: a typo'd
+// adapterConfig.hindsight.bankId must never become a fresh bank that nobody
+// reads. Unset/blank = no check (the current behavior).
+export const BOT_HINDSIGHT_ALLOWED_BANKS_ENV = "MYRMIDON_BOT_HINDSIGHT_ALLOWED_BANKS";
 export const BOT_LLM_BASE_URL_ENV = "MYRMIDON_BOT_LLM_BASE_URL";
 export const BOT_LLM_API_KEY_ENV_ENV = "MYRMIDON_BOT_LLM_API_KEY_ENV";
 export const BOT_LLM_API_KEY_SECRET_ENV = "MYRMIDON_BOT_LLM_API_KEY_SECRET";
@@ -63,6 +69,15 @@ export interface BotProfileSettings {
   hindsightApiUrl: string | null;
   /** Default hindsight bank, used when the card names none. */
   hindsightBank: string | null;
+  /**
+   * Banks a card's `adapterConfig.hindsight.bankId` (and the fallback
+   * `MYRMIDON_BOT_HINDSIGHT_BANK`) may name, from
+   * `MYRMIDON_BOT_HINDSIGHT_ALLOWED_BANKS` (comma-separated). Null when unset
+   * or blank: no allowlist check, the pre-MEMORY-ISOLATION behavior. Empty
+   * after trimming the commas is also null — an allowlist of nothing is a
+   * misconfigured value, not "no bank is allowed".
+   */
+  hindsightAllowedBanks: string[] | null;
   /**
    * OpenAI-compatible LLM gateway base URL; null = each provider's own default endpoint.
    * Only a card that goes through the gateway ({@link cardUsesLlmGateway}) gets it; a card
@@ -127,6 +142,9 @@ function parseHttpUrl(value: string): boolean {
  * "" sends the raw token), `noAuth: true` in place of `tokenSecret` for a server
  * that takes no token. An entry with neither `tokenSecret` nor `noAuth` is an
  * error, so a forgotten secret never becomes an unauthenticated server.
+ * The name of the bot's own board tool gateway server is reserved: that server is
+ * issued per bot by the board, so a declaration under its name (which would carry
+ * one instance-wide token into every bot) is an error, not a silent override.
  * Errors name the entry and the field, never a value.
  */
 export function parseBotMcpServers(raw: string | null): { servers: BotStaticMcpServer[]; error: string | null } {
@@ -148,6 +166,9 @@ export function parseBotMcpServers(raw: string | null): { servers: BotStaticMcpS
     const rawName = typeof record.name === "string" ? record.name : "";
     const name = sanitizeMcpServerName(rawName);
     if (!name) return fail(`${label} has no usable "name"`);
+    if (name === sanitizeMcpServerName(BOT_BOARD_GATEWAY_SERVER_NAME)) {
+      return fail(`${label} ("${name}") uses a reserved server name: the board tool gateway of each bot is issued by the board and cannot be declared here`);
+    }
     if (seen.has(name)) return fail(`${label} ("${name}") repeats a server name`);
     seen.add(name);
     const url = typeof record.url === "string" ? record.url.trim() : "";
@@ -167,12 +188,31 @@ export function parseBotMcpServers(raw: string | null): { servers: BotStaticMcpS
   return { servers, error: null };
 }
 
+/**
+ * MYRMIDON_BOT_HINDSIGHT_ALLOWED_BANKS: comma-separated bank ids. Blank,
+ * unset or commas-only → null (no check). Duplicates and empty items are
+ * folded away; order is kept as written (it never reaches a compiled file).
+ */
+export function parseBotHindsightAllowedBanks(raw: string | null): string[] | null {
+  if (raw === null) return null;
+  const seen = new Set<string>();
+  const banks: string[] = [];
+  for (const item of raw.split(",")) {
+    const bank = item.trim();
+    if (!bank || seen.has(bank)) continue;
+    seen.add(bank);
+    banks.push(bank);
+  }
+  return banks.length > 0 ? banks : null;
+}
+
 export function readBotProfileSettings(env: NodeJS.ProcessEnv = process.env): BotProfileSettings {
   const llmApiKeyEnv = readSetting(env, BOT_LLM_API_KEY_ENV_ENV);
   const mcp = parseBotMcpServers(readSetting(env, BOT_MCP_SERVERS_ENV));
   return {
     hindsightApiUrl: readSetting(env, BOT_HINDSIGHT_API_URL_ENV),
     hindsightBank: readSetting(env, BOT_HINDSIGHT_BANK_ENV),
+    hindsightAllowedBanks: parseBotHindsightAllowedBanks(readSetting(env, BOT_HINDSIGHT_ALLOWED_BANKS_ENV)),
     llmBaseUrl: readSetting(env, BOT_LLM_BASE_URL_ENV),
     llmApiKeyEnv,
     llmApiKeySecret: readSetting(env, BOT_LLM_API_KEY_SECRET_ENV) ?? llmApiKeyEnv,
@@ -245,6 +285,27 @@ export function cardUsesLlmGateway(card: Record<string, unknown>): boolean {
 }
 
 /**
+ * myrmidon(MEMORY-ISOLATION): the card's hindsight bank must be on
+ * MYRMIDON_BOT_HINDSIGHT_ALLOWED_BANKS when that setting is set. Checked before
+ * any secret is created for the bot (the same fail-fast slot as
+ * {@link assertBotLlmSettingsForCard}), so a typo'd bank id in a card fails the
+ * compile leaving nothing behind, instead of silently materializing a new bank
+ * nobody reads. Unset/blank allowlist = no check (the previous behavior). A
+ * missing bank anywhere is NOT this function's error (readHindsight owns it) —
+ * here a card without a bank simply passes.
+ */
+export function assertBotHindsightBankForCard(settings: BotProfileSettings, card: Record<string, unknown>): void {
+  if (!settings.hindsightAllowedBanks) return;
+  const bankId = asTrimmedString(asRecord(card.hindsight).bankId) ?? settings.hindsightBank;
+  if (!bankId) return;
+  if (!settings.hindsightAllowedBanks.includes(bankId)) {
+    throw new BotProfileInputError(
+      `hindsight bank "${bankId}" is not in ${BOT_HINDSIGHT_ALLOWED_BANKS_ENV} (${settings.hindsightAllowedBanks.join(", ")})`,
+    );
+  }
+}
+
+/**
  * The gateway settings a card needs, checked against the card: a card whose
  * provider goes through the gateway ({@link cardUsesLlmGateway}) fails here,
  * naming the missing setting, instead of compiling to a profile that talks to
@@ -282,8 +343,9 @@ export interface BotMcpSource {
   scheme?: string;
   /** A server that takes no token: no header and no .env variable are produced. */
   noAuth?: boolean;
-  /** Whether the runtime MCP URL base rewrite applies (default true: it is meant for the board gateway's
-   *  own URLs). Servers declared in MYRMIDON_BOT_MCP_SERVERS are reached at the address given, so they opt out. */
+  /** Whether the runtime MCP URL base rewrite applies (default true). Servers declared in MYRMIDON_BOT_MCP_SERVERS
+   *  and the bot's own board gateway (its URL comes from MYRMIDON_BOT_BOARD_URL, already reachable from the
+   *  container) are used at the address given, so the compiler sets this to false for them. */
   rewriteUrl?: boolean;
 }
 
@@ -367,6 +429,30 @@ const RECALL_BUDGETS = ["low", "mid", "high"] as const;
 const MEMORY_MODES = ["hybrid", "context", "tools"] as const;
 
 /**
+ * One observation scope: a hindsight tag conjunction, e.g. `["channel:board"]`
+ * or `["channel:board", "team:core"]`. Serialized into
+ * `hermes/hindsight/config.json` as `observation_scopes` (an array of arrays),
+ * the same shape the live hermes_local profiles carry.
+ */
+export function parseObservationScopes(value: unknown): string[][] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const scopes: string[][] = [];
+  const seen = new Set<string>();
+  for (const scope of value) {
+    // A single tag ("channel:board") is the same as a one-element list.
+    const tags = (typeof scope === "string" ? [scope] : Array.isArray(scope) ? scope : [])
+      .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+      .filter((tag) => tag.length > 0);
+    if (tags.length === 0) continue;
+    const key = JSON.stringify(tags);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    scopes.push(tags);
+  }
+  return scopes.length > 0 ? scopes : undefined;
+}
+
+/**
  * hindsight settings. The fleet only runs `local_external` (one shared service),
  * so `mode` is fixed here and a card cannot switch a bot to a cloud endpoint.
  * The card's optional `adapterConfig.hindsight` block may name the bank and tune
@@ -380,6 +466,15 @@ function readHindsight(card: Record<string, unknown>, settings: BotProfileSettin
       `no hindsight bank: the card sets no adapterConfig.hindsight.bankId and ${BOT_HINDSIGHT_BANK_ENV} is not set`,
     );
   }
+  // myrmidon(MEMORY-ISOLATION): the bank must be on the allowlist when one is
+  // set — a typo'd bank id must fail the compile, not silently create a bank.
+  // The bank id itself is safe to name in the error: it is an id, not a value
+  // the way a secret or an address is.
+  if (settings.hindsightAllowedBanks && !settings.hindsightAllowedBanks.includes(bankId)) {
+    throw new BotProfileInputError(
+      `hindsight bank "${bankId}" is not in ${BOT_HINDSIGHT_ALLOWED_BANKS_ENV} (${settings.hindsightAllowedBanks.join(", ")})`,
+    );
+  }
   const recallBudget = RECALL_BUDGETS.find((candidate) => candidate === block.recallBudget);
   const memoryMode = MEMORY_MODES.find((candidate) => candidate === block.memoryMode);
   return {
@@ -391,6 +486,7 @@ function readHindsight(card: Record<string, unknown>, settings: BotProfileSettin
     recallBudget,
     memoryMode,
     autoRetain: typeof block.autoRetain === "boolean" ? block.autoRetain : undefined,
+    observationScopes: parseObservationScopes(block.observationScopes),
   };
 }
 

@@ -17,6 +17,7 @@ vi.mock("../sentry.js", async () => {
 });
 
 import { reconcileAbandonedExecutionControl } from "./execution-control-reconciliation.js";
+import { waitForPendingRunFailureReports } from "./run-failure-report.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -74,11 +75,23 @@ describeEmbeddedPostgres("reconcileAbandonedExecutionControl reports a genuine f
     return { companyId, agentId, issueId, runId };
   }
 
+  /**
+   * Run one sweep and wait for every Sentry report it started. The sweep calls
+   * `void reportRunFailure(...)`, which reads the database before it calls
+   * `captureRunFailure`, so without this drain a report can land after the
+   * caller has already counted the captures.
+   */
+  async function sweep() {
+    const result = await reconcileAbandonedExecutionControl(db);
+    await waitForPendingRunFailureReports(30_000);
+    return result;
+  }
+
   it("reports exactly one Sentry event for a genuine finalization-deadline failure", async () => {
     const { runId } = await seedAbandonedRunFixture();
     const captureCallsBefore = mockCaptureRunFailure.mock.calls.length;
 
-    const result = await reconcileAbandonedExecutionControl(db);
+    const result = await sweep();
 
     expect(result.surfaced).toBe(1);
     const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
@@ -96,7 +109,7 @@ describeEmbeddedPostgres("reconcileAbandonedExecutionControl reports a genuine f
 
   it("reports zero events for a repeated sweep over the same already-failed run", async () => {
     const { runId } = await seedAbandonedRunFixture();
-    await reconcileAbandonedExecutionControl(db);
+    await sweep();
     // The first sweep already cleared executionControlDeadlineAt and moved the
     // run to "failed". Restore the deadline to simulate a second sweep still
     // observing the same run as a candidate.
@@ -106,7 +119,7 @@ describeEmbeddedPostgres("reconcileAbandonedExecutionControl reports a genuine f
       .where(eq(heartbeatRuns.id, runId));
 
     const captureCallsBefore = mockCaptureRunFailure.mock.calls.length;
-    const result = await reconcileAbandonedExecutionControl(db);
+    const result = await sweep();
 
     // The run is already terminal ("failed"), so the early terminal-status
     // guard applies and no second "failed" write happens.

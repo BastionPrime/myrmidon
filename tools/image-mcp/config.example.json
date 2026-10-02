@@ -1,0 +1,17 @@
+{
+  "bots": {
+    "example-image": {
+      "token_sha256": "<hex sha256 of that bot's token: printf %s \"$TOKEN\" | sha256sum>",
+      "peer_host": "myrmidon-bot-example",
+      "tools": ["generate_image", "file_get", "file_list", "file_delete"],
+      "quota_bytes": 2147483648,
+      "rate_per_min": 30,
+      "generations_per_day": 200
+    },
+    "example-peer-only": {
+      "peer_host": "myrmidon-bot-example-2",
+      "tools": ["generate_image", "file_get", "file_list"],
+      "generations_per_day": 50
+    }
+  }
+}

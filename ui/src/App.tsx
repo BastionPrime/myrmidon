@@ -83,10 +83,14 @@ import { GatewayDetail } from "./pages/apps/gateways/GatewayDetail";
 import { CompanySkills } from "./pages/CompanySkills";
 import { SkillStudio } from "./pages/SkillStudio";
 import { Secrets } from "./pages/Secrets";
+import { AccessHubPage } from "./components/myrmidon/access-hub/AccessHubPage";
+import { BrowsersSettingsPage } from "./components/myrmidon/browsers/BrowsersSettingsPage"; // myrmidon(BROWSER-CONSOLE)
+import { CloudsSettingsPage } from "./components/myrmidon/clouds/CloudsSettingsPage"; // myrmidon(CLOUD-CONNECTOR)
 import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
+import { BoardApiKeysPage } from "./pages/BoardApiKeys";
 import { ProfileSettings } from "./pages/ProfileSettings";
 import { PluginManager } from "./pages/PluginManager";
 import { PluginSettings } from "./pages/PluginSettings";
@@ -188,6 +192,13 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
       <Route element={<HiddenSettingsPageGate pageKey="company.secrets" />}>
         <Route path="company/settings/secrets" element={<Secrets />} />
       </Route>
+      {/* The access hub is the fleet view of the same secrets surface, so it
+          rides the operator visibility key of Secrets. */}
+      <Route element={<HiddenSettingsPageGate pageKey="company.secrets" />}>
+        <Route path="company/settings/access-hub" element={<AccessHubPage />} />
+      </Route>
+      <Route path="company/settings/browsers" element={<BrowsersSettingsPage />} /> {/* myrmidon(BROWSER-CONSOLE) */}
+      <Route path="company/settings/clouds" element={<CloudsSettingsPage />} /> {/* myrmidon(CLOUD-CONNECTOR) */}
       <Route path="company/settings/tools" element={<LegacyToolsSettingsRedirect />} />
       <Route path="company/settings/tools/:tab" element={<LegacyToolsSettingsRedirect />} />
       <Route path="tools" element={<LegacyToolsRedirect />} />
@@ -243,6 +254,8 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
       </Route>
       <Route element={<HiddenSettingsPageGate pageKey="instance.access" />}>
         <Route path="company/settings/instance/access" element={<InstanceAccess />} />
+        {/* myrmidon(ROLE-SCOPED-TOKENS): scoped board API key management */}
+        <Route path="company/settings/instance/board-api-keys" element={<BoardApiKeysPage />} />
       </Route>
       <Route element={<HiddenSettingsPageGate pageKey="instance.experimental" />}>
         <Route path="company/settings/instance/experimental" element={<InstanceExperimentalSettings />} />

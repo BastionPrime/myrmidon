@@ -1,0 +1,15 @@
+{
+  "bots": {
+    "example-video": {
+      "token_sha256": "<hex sha256 of that bot's token: printf %s \"$TOKEN\" | sha256sum>",
+      "peer_host": "myrmidon-bot-example",
+      "tools": ["file_put", "file_get", "file_list", "file_delete", "media_probe", "ffmpeg_submit", "job_status", "job_cancel", "image_transform"],
+      "quota_bytes": 4294967296,
+      "rate_per_min": 90
+    },
+    "example-office": {
+      "peer_host": "myrmidon-bot-example-2",
+      "tools": ["file_put", "file_get", "file_list", "file_delete", "office_to_pdf", "html_to_pdf", "pdf_to_images", "extract_text", "image_transform"]
+    }
+  }
+}

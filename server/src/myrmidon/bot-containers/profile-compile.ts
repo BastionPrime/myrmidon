@@ -14,6 +14,13 @@
 //     get-or-create by a deterministic name (the ports' job), never per-call.
 //   - warnings are reported when they change, not on every tick.
 
+import { isBotBoardGatewayEnabled } from "./board-gateway.js";
+import {
+  assertBotEgressSettings,
+  BOT_EGRESS_MODE_ENV,
+  buildBotEgressEnvEntries,
+  readBotEgressSettings,
+} from "./egress.js";
 import {
   compileHermesProfileDetailed,
   type HermesProfileEnvEntry,
@@ -25,6 +32,7 @@ import {
   buildHermesProfileInput,
   BotProfileInputError,
   BOT_MCP_SERVERS_ENV,
+  assertBotHindsightBankForCard,
   assertBotLlmSettingsForCard,
   assertBotProfileSettings,
   cardUsesLlmGateway,
@@ -68,14 +76,24 @@ export function createActivityWarningSink(activity: BotContainerActivitySink): B
 }
 
 /**
- * Said for every bot while the board tool gateway is not part of the profile
- * (`listMcpServers` unset). The gateway's run-scoped tokens live one hour and
- * cannot sit in a container's long-lived profile; a durable token is an owner
- * decision that is still open. The bot works without the gateway, but has no
- * board tools through MCP, and this line makes that visible instead of silent.
+ * Said for every bot when the ports provide no board tool gateway
+ * (`listMcpServers` unset; the database ports do provide it, see board-gateway.ts).
+ * The bot works without the gateway, but has no board tools through MCP, and this
+ * line makes that visible instead of silent.
  */
 export const NO_BOARD_GATEWAY_WARNING =
-  "the profile has no board tool gateway MCP server: a durable gateway token for containers is an open owner decision";
+  "the profile has no board tool gateway MCP server: the ports provide no gateway for containers";
+
+/** What compile tells `listMcpServers` about this instance. */
+export interface BotMcpServersContext {
+  /** MYRMIDON_BOT_BOARD_URL: the board as the container reaches it. */
+  boardUrl: string;
+  /** False when MYRMIDON_BOT_BOARD_GATEWAY switches per-bot board gateways off: the port releases what it made and delivers nothing. */
+  enabled: boolean;
+}
+
+/** What `listMcpServers` returns: the servers, optionally with notes for the activity log (an assigned connection left out, a failed cleanup). */
+export type BotMcpServersResult = BotMcpSource[] | { servers: BotMcpSource[]; warnings: string[] };
 
 /** Everything compile needs from the board. Implemented over the database in
  *  profile-ports.ts; faked in tests. Every method is read-or-get-or-create: none
@@ -101,11 +119,11 @@ export interface BotProfilePorts {
   loadInstructions(
     agent: BotProfileAgentRecord,
   ): Promise<{ files: HermesProfileWorkspaceFile[]; warnings: string[] }>;
-  /** MCP servers for the bot: the board tool gateway and assigned connections. Optional:
-   *  without it the profile carries no gateway server (compile then says so in its
+  /** MCP servers for the bot: the bot's OWN board tool gateway, with a token only this bot holds.
+   *  Optional: without it the profile carries no gateway server (compile then says so in its
    *  warnings). Instance-wide servers such as ragflow do not come through here: they
    *  are declared in MYRMIDON_BOT_MCP_SERVERS and resolved by compile itself. */
-  listMcpServers?(agent: BotProfileAgentRecord): Promise<BotMcpSource[]>;
+  listMcpServers?(agent: BotProfileAgentRecord, context: BotMcpServersContext): Promise<BotMcpServersResult>;
   /** Instance-wide compression/retention defaults. Optional. */
   instanceDefaults?(): Promise<HermesProfileInstanceDefaults>;
 }
@@ -175,9 +193,15 @@ export function createBotProfileCompile(
 
   return async function compile(agentId: string, botKey: string): Promise<CompiledProfile> {
     const settings = readBotProfileSettings(opts.env);
+    const boardGatewayEnabled = isBotBoardGatewayEnabled(opts.env);
     // Before any lookup or secret creation: an unconfigured instance fails here
     // and leaves nothing behind.
     assertBotProfileSettings(settings);
+    // myrmidon(EGRESS-A): same fail-fast slot. `log` without a proxy address
+    // would compile a profile that leaves every bot reaching outward directly,
+    // which is the one thing this item exists to stop.
+    const egress = readBotEgressSettings(opts.env);
+    assertBotEgressSettings(egress);
 
     const agent = await ports.loadAgent(agentId);
     if (!agent) throw new BotProfileInputError(`agent ${agentId} no longer exists`);
@@ -187,21 +211,37 @@ export function createBotProfileCompile(
     // A card that needs the LLM gateway (provider empty/auto/custom) fails here, by
     // the missing setting's name, before the ports below create any key for the bot.
     assertBotLlmSettingsForCard(settings, agent.adapterConfig);
+    // myrmidon(MEMORY-ISOLATION): a bank outside the allowlist fails here too,
+    // same fail-fast slot — no secret is created for a bot whose profile would
+    // have been wrong anyway.
+    assertBotHindsightBankForCard(settings, agent.adapterConfig);
 
     // Read-only lookups first: a missing MCP token secret fails here, before the
     // ports below create the bot's keys, so a broken instance setting leaves nothing behind.
     const staticMcpServers = await resolveStaticMcpServers(ports, agent.companyId, settings);
 
-    const [cardEnv, skills, instructions, apiServerKey, paperclipApiKey, gatewayMcpServers, instanceDefaults] =
+    const [cardEnv, skills, instructions, apiServerKey, paperclipApiKey, gatewayResult, instanceDefaults] =
       await Promise.all([
         ports.resolveCardEnv(agent),
         ports.loadSkills(agent),
         ports.loadInstructions(agent),
         ports.ensureApiServerKey(agent),
         ports.ensureAgentApiKey(agent),
-        ports.listMcpServers ? ports.listMcpServers(agent) : Promise.resolve([] as BotMcpSource[]),
+        ports.listMcpServers
+          ? // settings.boardUrl is non-null here: assertBotProfileSettings threw otherwise.
+            ports.listMcpServers(agent, { boardUrl: settings.boardUrl as string, enabled: boardGatewayEnabled })
+          : Promise.resolve([] as BotMcpSource[]),
         ports.instanceDefaults ? ports.instanceDefaults() : Promise.resolve(undefined),
       ]);
+
+    // The gateway URL is already built from MYRMIDON_BOT_BOARD_URL (the board as the container reaches it).
+    // MYRMIDON_HERMES_RUNTIME_MCP_URL_BASE is the host-side base (usually loopback), so it must not
+    // rewrite this URL: inside a container that would point the bot at its own loopback.
+    const gatewayMcpServers = (Array.isArray(gatewayResult) ? gatewayResult : gatewayResult.servers).map((server) => ({
+      ...server,
+      rewriteUrl: false,
+    }));
+    const gatewayWarnings = Array.isArray(gatewayResult) ? [] : gatewayResult.warnings;
 
     // The gateway key is only fetched for a card that goes through the gateway, and only
     // when the card's own env does not carry it: a card with a native provider gets neither
@@ -211,12 +251,20 @@ export function createBotProfileCompile(
       llmApiKey = await ports.readCompanySecret(agent.companyId, settings.llmApiKeySecret ?? settings.llmApiKeyEnv);
     }
 
+    // myrmidon(EGRESS-A): the instance's proxied-egress variables always win
+    // over the card's — they describe this instance's network, not the bot
+    // (the same rule the compiler applies to its own reserved .env names).
+    const egressEnv = buildBotEgressEnvEntries({ settings: egress, botKey, boardUrl: settings.boardUrl });
+    const egressWarnings = Object.keys(egressEnv)
+      .filter((name) => cardEnv.env[name] !== undefined)
+      .map((name) => `.env: "${name}" is set by ${BOT_EGRESS_MODE_ENV}; the card's value was dropped`);
+
     const built = buildHermesProfileInput(
       {
         botKey,
         adapterConfig: agent.adapterConfig,
         runtimeConfig: agent.runtimeConfig,
-        env: cardEnv.env,
+        env: { ...cardEnv.env, ...egressEnv },
         skills: skills.skills,
         // No workspace/AGENTS.md: the gateway injection-scans it and drops the whole file
         // on a match. The instructions reach the model through the run request instead
@@ -226,7 +274,8 @@ export function createBotProfileCompile(
         llmApiKey,
         apiServerKey: apiServerKey.value,
         paperclipApiKey: paperclipApiKey.value,
-        // Declared servers first: a same-named server from the gateway port loses to the operator's declaration.
+        // The gateway server's name cannot be declared (profile-input.ts rejects it), so it is never displaced;
+        // for any other name shared by two sources the declared server comes first and wins.
         mcpServers: [...staticMcpServers, ...gatewayMcpServers],
         instanceDefaults,
       },
@@ -236,7 +285,9 @@ export function createBotProfileCompile(
     const result = compileHermesProfileDetailed(built.input);
     await reportWarnings(agentId, botKey, [
       ...(ports.listMcpServers ? [] : [NO_BOARD_GATEWAY_WARNING]),
+      ...gatewayWarnings,
       ...cardEnv.warnings,
+      ...egressWarnings,
       ...(paperclipApiKey.warnings ?? []),
       ...skills.warnings,
       ...instructions.warnings,

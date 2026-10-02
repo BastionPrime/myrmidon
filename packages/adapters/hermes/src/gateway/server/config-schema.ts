@@ -47,6 +47,13 @@ export function getConfigSchema(): AdapterConfigSchema {
         default: DEFAULT_TIMEOUT_SEC,
       },
       {
+        // myrmidon(G5): per-agent run-create timeout
+        key: "createRequestTimeoutSec",
+        label: "Run create timeout seconds",
+        type: "number",
+        hint: "How long POST /v1/runs may take to be accepted (5-300). Empty uses the instance default.",
+      },
+      {
         key: "eventReconnectMs",
         label: "Event reconnect ms",
         type: "number",

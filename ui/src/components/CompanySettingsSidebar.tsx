@@ -8,6 +8,7 @@ import {
   MonitorCog,
   Puzzle,
   Shield,
+  ShieldCheck,
   SlidersHorizontal,
   Upload,
   UserRoundPen,
@@ -26,6 +27,7 @@ import { useCloudInstance } from "@/hooks/useCloudInstance";
 import { useHiddenSettings } from "@/hooks/useHiddenSettings";
 import { usePluginSlots } from "@/plugins/slots";
 import { SidebarNavItem } from "./SidebarNavItem";
+import { useAccessHubAvailability } from "@/components/myrmidon/access-hub/accessHubAvailability";
 import { ContextualSidebarFrame } from "./ContextualSidebarFrame";
 import { primarySidebarStyles } from "./primary-sidebar-styles";
 
@@ -46,6 +48,9 @@ export function CompanySettingsSidebar() {
   const { hidden: hiddenSettings } = useHiddenSettings();
   const showPage = (pageKey: string) => !hiddenSettings.has(pageKey);
   const showPlugins = showPage("instance.plugins");
+  // Probed only when the Access hub entry is visible; shares its cache entry
+  // with the screen itself.
+  const accessHubAvailability = useAccessHubAvailability(selectedCompanyId, showPage("company.secrets"));
   // Import is floored server-side on cloud-managed instances (403 cloud_managed), so the
   // nav entry is hidden rather than dead-ending. Export stays available.
   const isCloud = Boolean(useCloudInstance());
@@ -134,6 +139,18 @@ export function CompanySettingsSidebar() {
           {showPage("company.secrets") && (
             <SidebarNavItem to="/company/settings/secrets" label="Secrets" icon={KeyRound} end />
           )}
+          {showPage("company.secrets") && (
+            <SidebarNavItem
+              to="/company/settings/access-hub"
+              label="Access hub"
+              icon={ShieldCheck}
+              // The screen exists before its server API: while the instance
+              // answers 404/501 the entry says so instead of leading to a
+              // screen that only shows the not-available notice.
+              textBadge={accessHubAvailability === "unavailable" ? "soon" : undefined}
+              end
+            />
+          )}
           {showPage("instance.environments") && (
             <SidebarNavItem
               to={`${INSTANCE_SETTINGS_PATH_PREFIX}/environments`}
@@ -147,6 +164,15 @@ export function CompanySettingsSidebar() {
               to={`${INSTANCE_SETTINGS_PATH_PREFIX}/access`}
               label="Access"
               icon={Shield}
+              end
+            />
+          )}
+          {/* myrmidon(ROLE-SCOPED-TOKENS): scoped board API key management */}
+          {showPage("instance.access") && (
+            <SidebarNavItem
+              to={`${INSTANCE_SETTINGS_PATH_PREFIX}/board-api-keys`}
+              label="Board API keys"
+              icon={KeyRound}
               end
             />
           )}

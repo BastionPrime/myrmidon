@@ -11,6 +11,7 @@ interface FakeKey {
   name: string;
   token: string;
   revoked: boolean;
+  responsibleUserId?: string | null;
 }
 
 interface FakeOptions {
@@ -19,6 +20,9 @@ interface FakeOptions {
   failCreate?: boolean;
   failStore?: boolean;
   failRevokeOf?: string[];
+  /** The company's default responsible user (default "user-a"), and its oldest active owner (default none). */
+  defaultUser?: string | null;
+  ownerUser?: string | null;
 }
 
 function fake(options: FakeOptions = {}) {
@@ -33,21 +37,41 @@ function fake(options: FakeOptions = {}) {
       state.calls.push("readSecret");
       return state.secret ? { ...state.secret } : null;
     },
-    async findActiveKeyIdByToken(_agentId, token) {
-      state.calls.push("findActiveKeyIdByToken");
-      return state.keys.find((key) => key.token === token && !key.revoked)?.id ?? null;
+    async findActiveKeyByToken(_agentId, token) {
+      state.calls.push("findActiveKeyByToken");
+      const key = state.keys.find((candidate) => candidate.token === token && !candidate.revoked);
+      return key ? { id: key.id, responsibleUserId: key.responsibleUserId ?? null } : null;
     },
     async listActiveBotKeyIds() {
       state.calls.push("listActiveBotKeyIds");
       return state.keys.filter((key) => key.name === BOT_AGENT_API_KEY_NAME && !key.revoked).map((key) => key.id);
     },
-    async createKey() {
+    async readCompanyDefaultResponsibleUserId() {
+      return options.defaultUser === undefined ? "user-a" : options.defaultUser;
+    },
+    async findCompanyOwnerUserId() {
+      return options.ownerUser ?? null;
+    },
+    async createKey(_agentId, responsibleUserId) {
       state.calls.push("createKey");
       if (options.failCreate) throw new Error("agent is terminated");
       state.counter += 1;
-      const key = { id: `key-new-${state.counter}`, name: BOT_AGENT_API_KEY_NAME, token: `token-new-${state.counter}`, revoked: false };
+      const key = {
+        id: `key-new-${state.counter}`,
+        name: BOT_AGENT_API_KEY_NAME,
+        token: `token-new-${state.counter}`,
+        revoked: false,
+        responsibleUserId,
+      };
       state.keys.push(key);
       return { id: key.id, token: key.token };
+    },
+    async fillKeyResponsibleUser(_agentId, keyId, responsibleUserId) {
+      state.calls.push(`fillKeyResponsibleUser:${keyId}`);
+      const key = state.keys.find((candidate) => candidate.id === keyId);
+      if (!key || key.revoked || key.responsibleUserId) return false;
+      key.responsibleUserId = responsibleUserId;
+      return true;
     },
     async revokeKey(_agentId, keyId) {
       state.calls.push(`revokeKey:${keyId}`);
@@ -66,10 +90,16 @@ function fake(options: FakeOptions = {}) {
 
 /** Every call of the fake that changes something (a read is not one). */
 function isWrite(call: string): boolean {
-  return call === "createKey" || call.startsWith("revokeKey:") || call === "createSecret" || call === "rotateSecret";
+  return (
+    call === "createKey" ||
+    call.startsWith("revokeKey:") ||
+    call.startsWith("fillKeyResponsibleUser:") ||
+    call === "createSecret" ||
+    call === "rotateSecret"
+  );
 }
 
-const ACTIVE_KEY: FakeKey = { id: "key-1", name: BOT_AGENT_API_KEY_NAME, token: "token-1", revoked: false };
+const ACTIVE_KEY: FakeKey = { id: "key-1", name: BOT_AGENT_API_KEY_NAME, token: "token-1", revoked: false, responsibleUserId: "user-a" };
 const REVOKED_KEY: FakeKey = { id: "key-0", name: BOT_AGENT_API_KEY_NAME, token: "token-0", revoked: true };
 
 describe("myrmidon(W2a) ensureBotAgentKey", () => {
@@ -115,13 +145,15 @@ describe("myrmidon(W2a) ensureBotAgentKey", () => {
     const result = await ensureBotAgentKey(deps, AGENT_ID);
     expect(result.value).toBe("token-new-1");
     expect(state.calls).toContain("rotateSecret");
-    expect(state.calls).not.toContain("findActiveKeyIdByToken");
+    expect(state.calls).not.toContain("findActiveKeyByToken");
   });
 
   it("revokes the key it created when storing the secret fails, and reports the failure", async () => {
     const { deps, state } = fake({ failStore: true });
     await expect(ensureBotAgentKey(deps, AGENT_ID)).rejects.toThrow("secret provider is down");
-    expect(state.keys).toEqual([{ id: "key-new-1", name: BOT_AGENT_API_KEY_NAME, token: "token-new-1", revoked: true }]);
+    expect(state.keys).toEqual([
+      { id: "key-new-1", name: BOT_AGENT_API_KEY_NAME, token: "token-new-1", revoked: true, responsibleUserId: "user-a" },
+    ]);
     expect(state.secret).toBeNull();
   });
 
@@ -184,6 +216,33 @@ describe("myrmidon(W2a) ensureBotAgentKey", () => {
     expect(result.warnings[0]).toContain("revoke failed");
     // A revoke that failed is not a reason to lose the key that was just stored.
     expect(state.secret?.value).toBe("token-new-1");
+  });
+
+  it("issues the key with a responsible user: the company default, else its owner, else nothing", async () => {
+    const fromDefault = fake();
+    await ensureBotAgentKey(fromDefault.deps, AGENT_ID);
+    expect(fromDefault.state.keys[0]?.responsibleUserId).toBe("user-a");
+
+    const fromOwner = fake({ defaultUser: null, ownerUser: "user-b" });
+    await ensureBotAgentKey(fromOwner.deps, AGENT_ID);
+    expect(fromOwner.state.keys[0]?.responsibleUserId).toBe("user-b");
+
+    const nobody = fake({ defaultUser: null });
+    await expect(ensureBotAgentKey(nobody.deps, AGENT_ID)).rejects.toThrow("neither a default responsible user nor an active owner");
+    expect(nobody.state.calls.filter(isWrite)).toEqual([]);
+  });
+
+  it("fills the missing responsible user into a legacy key in place: same token, same secret, no new key", async () => {
+    const legacy: FakeKey = { ...ACTIVE_KEY, responsibleUserId: null };
+    const { deps, state } = fake({ keys: [legacy], secret: { secretId: "secret-1", value: "token-1" } });
+    expect(await ensureBotAgentKey(deps, AGENT_ID)).toEqual({ value: "token-1", warnings: [] });
+    expect(state.keys).toEqual([{ ...ACTIVE_KEY, responsibleUserId: "user-a" }]);
+    expect(state.secret).toEqual({ secretId: "secret-1", value: "token-1" });
+    expect(state.calls).not.toContain("createKey");
+    // Already filled: the next tick writes nothing.
+    const callsAfterFirst = state.calls.length;
+    await ensureBotAgentKey(deps, AGENT_ID);
+    expect(state.calls.slice(callsAfterFirst).filter(isWrite)).toEqual([]);
   });
 
   it("is stable across ticks: the second call reuses the first call's key and writes nothing", async () => {

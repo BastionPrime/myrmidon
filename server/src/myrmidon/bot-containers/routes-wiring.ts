@@ -11,12 +11,13 @@
 // that could not be built) the routes answer "runtime not configured" instead
 // of guessing.
 
-import { eq } from "drizzle-orm";
-import { agents, type Db } from "@paperclipai/db";
+import { and, desc, eq, gte } from "drizzle-orm";
+import { agents, heartbeatRuns, type Db } from "@paperclipai/db";
 import { forbidden } from "../../errors.js";
 import { accessService } from "../../services/index.js";
 import { authorizationDeniedDetails } from "../../services/authorization.js";
-import { applyBotContainerNow, type BotContainerRuntimeDeps } from "./index.js";
+import { applyBotContainerNow, type BotContainerAgent, type BotContainerRuntimeDeps } from "./index.js";
+import { GATEWAY_RATE_LIMITED_ERROR_CODE } from "./concurrency-sync.js";
 import { botContainerRoutes } from "./routes.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -29,6 +30,30 @@ export function setBotContainerRuntime(runtime: BotContainerRuntimeDeps | null):
 
 export function getBotContainerRuntime(): BotContainerRuntimeDeps | null {
   return registeredRuntime;
+}
+
+/**
+ * The runtime's fresh-card read (index.ts `BotContainerRuntimeDeps.readAgent`)
+ * over the database: the same row the card's status/apply read, in the shape a
+ * reconcile pass takes. Every pass re-reads its own agent under the per-bot
+ * lock, so the sweep's once-per-tick snapshot is never the template that gets
+ * applied.
+ */
+export function botContainerAgentReader(db: Db): (agentId: string) => Promise<BotContainerAgent | null> {
+  return async (agentId) => {
+    // A malformed id is "no such agent", not a database error (as in getAgent).
+    if (!UUID_PATTERN.test(agentId)) return null;
+    const row = await db
+      .select({
+        agentId: agents.id,
+        adapterType: agents.adapterType,
+        adapterConfig: agents.adapterConfig,
+      })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .then((rows) => rows[0] ?? null);
+    return row;
+  };
 }
 
 /** Router for app.ts: the agent card's container status and "Apply now". */
@@ -45,11 +70,36 @@ export function myrmidonBotContainerRoutes(db: Db) {
           companyId: agents.companyId,
           adapterType: agents.adapterType,
           adapterConfig: agents.adapterConfig,
+          // myrmidon(CONCURRENCY-SYNC): the card's heartbeat.maxConcurrentRuns, so the
+          // status route can report the limit the board would apply.
+          runtimeConfig: agents.runtimeConfig,
         })
         .from(agents)
         .where(eq(agents.id, id))
         .then((rows) => rows[0] ?? null);
       return row;
+    },
+    /**
+     * myrmidon(CONCURRENCY-SYNC): the newest run of this agent the hermes gateway
+     * refused with 429, inside the lookback window. Only asked for an agent whose
+     * gateway the board does not manage (see routes.ts): for a container of its own
+     * the board has the applied value and does not need to infer anything.
+     */
+    recentGatewayRateLimit: async (agent, { sinceIso }) => {
+      const row = await db
+        .select({ createdAt: heartbeatRuns.createdAt })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.agentId, agent.id),
+            eq(heartbeatRuns.errorCode, GATEWAY_RATE_LIMITED_ERROR_CODE),
+            gte(heartbeatRuns.createdAt, new Date(sinceIso)),
+          ),
+        )
+        .orderBy(desc(heartbeatRuns.createdAt))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      return row ? row.createdAt.toISOString() : null;
     },
     assertCanUpdateAgent: async (req, agent) => {
       access ??= accessService(db);

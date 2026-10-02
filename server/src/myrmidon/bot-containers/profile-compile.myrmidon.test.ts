@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BOT_BOARD_URL_ENV,
+  BOT_HINDSIGHT_ALLOWED_BANKS_ENV,
   BOT_HINDSIGHT_API_URL_ENV,
   BOT_HINDSIGHT_BANK_ENV,
   BOT_LLM_API_KEY_ENV_ENV,
@@ -19,6 +20,7 @@ import {
   type BotProfileAgentRecord,
   type BotProfilePorts,
 } from "./profile-compile.js";
+import { BOT_EGRESS_MODE_ENV, BOT_EGRESS_PROXY_ENV } from "./egress.js";
 import { classifyProfileChange, type CompiledProfile } from "./types.js";
 
 // Placeholder data only: fake ids, example.com URLs, obviously-fake secrets.
@@ -198,6 +200,110 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
     expect(second.restartHash).not.toBe(first.restartHash);
   });
 
+  describe("myrmidon(EGRESS-A) proxied egress", () => {
+    const EGRESS_ENV: NodeJS.ProcessEnv = {
+      ...INSTANCE_ENV,
+      [BOT_EGRESS_MODE_ENV]: "log",
+      [BOT_EGRESS_PROXY_ENV]: "http://egress.example.com:3128",
+    };
+
+    it("writes the instance's proxy into the bot's .env with the bot's key as the proxy user", async () => {
+      const board = fakeBoard();
+      const profile = await createBotProfileCompile(board.ports, { env: EGRESS_ENV })("agent-a", "agent-a");
+      const env = fileContent(profile, "hermes/.env");
+      const url = 'http://agent-a:egress@egress.example.com:3128/';
+      expect(env).toContain(`HTTP_PROXY="${url}"`);
+      expect(env).toContain(`HTTPS_PROXY="${url}"`);
+      expect(env).toContain(`ALL_PROXY="${url}"`);
+      expect(env).toContain('NODE_USE_ENV_PROXY="1"');
+      // The board stays direct: every bot calls it constantly, and it is on the bots' own network.
+      expect(env).toMatch(/NO_PROXY="[^"]*board\.example\.com/);
+    });
+
+    it("changes nothing about the profile while the mode is off (the fleet default)", async () => {
+      const board = fakeBoard();
+      const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+      expect(fileContent(profile, "hermes/.env")).not.toContain("HTTP_PROXY");
+      expect(fileContent(profile, "hermes/.env")).not.toContain("NODE_USE_ENV_PROXY");
+    });
+
+    it("gives the instance's proxy precedence over the card's own, and says so", async () => {
+      const warnings: string[][] = [];
+      const board = fakeBoard({
+        async resolveCardEnv() {
+          return {
+            env: { HTTP_PROXY: { value: "http://card.example.com:8080", secret: false } },
+            warnings: [],
+          };
+        },
+      });
+      const profile = await createBotProfileCompile(board.ports, {
+        env: EGRESS_ENV,
+        onWarnings: (_botKey, list) => {
+          warnings.push([...list]);
+        },
+      })("agent-a", "agent-a");
+      const env = fileContent(profile, "hermes/.env");
+      expect(env).toContain('HTTP_PROXY="http://agent-a:egress@egress.example.com:3128/"');
+      expect(env).not.toContain("card.example.com");
+      expect(warnings.flat().join("\n")).toContain('"HTTP_PROXY" is set by MYRMIDON_BOT_EGRESS_MODE');
+    });
+
+    it("refuses a log-mode profile with no address before reading the card at all", async () => {
+      const board = fakeBoard();
+      await expect(
+        createBotProfileCompile(board.ports, { env: { ...INSTANCE_ENV, [BOT_EGRESS_MODE_ENV]: "log" } })("agent-a", "agent-a"),
+      ).rejects.toThrow(/MYRMIDON_BOT_EGRESS_PROXY must be set/);
+      expect(board.calls).toEqual([]);
+    });
+  });
+
+  describe("myrmidon(MEMORY-ISOLATION) hindsight bank allowlist and observation scopes", () => {
+    const CARD_HINDSIGHT = { model: "some-model", provider: "custom", hindsight: { bankId: "bank-a", observationScopes: [["channel:board"], ["channel:telegram"]] } };
+
+    it("writes the card's observationScopes into hermes/hindsight/config.json", async () => {
+      const board = fakeBoard();
+      board.agent.current = agentRecord({ adapterConfig: CARD_HINDSIGHT });
+      const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+      const json = JSON.parse(fileContent(profile, "hermes/hindsight/config.json")) as Record<string, unknown>;
+      expect(json.observation_scopes).toEqual([["channel:board"], ["channel:telegram"]]);
+      expect(json.bank_id).toBe("bank-a");
+    });
+
+    it("fails the compile, creating no secret, when the card's bank is outside the allowlist", async () => {
+      const board = fakeBoard();
+      board.agent.current = agentRecord({ adapterConfig: CARD_HINDSIGHT });
+      const compile = createBotProfileCompile(board.ports, {
+        env: { ...INSTANCE_ENV, [BOT_HINDSIGHT_ALLOWED_BANKS_ENV]: "bank-c,bank-b" },
+      });
+      await expect(compile("agent-a", "agent-a")).rejects.toThrow(BotProfileInputError);
+      await expect(compile("agent-a", "agent-a")).rejects.toThrow(BOT_HINDSIGHT_ALLOWED_BANKS_ENV);
+      await expect(compile("agent-a", "agent-a")).rejects.toThrow("bank-a");
+      expect(board.calls).not.toContain("ensureApiServerKey");
+      expect(board.calls).not.toContain("ensureAgentApiKey");
+    });
+
+    it("compiles the same card once the bank is on the allowlist, and a card without scopes stays without", async () => {
+      const board = fakeBoard();
+      board.agent.current = agentRecord({ adapterConfig: CARD_HINDSIGHT });
+      const profile = await createBotProfileCompile(board.ports, {
+        env: { ...INSTANCE_ENV, [BOT_HINDSIGHT_ALLOWED_BANKS_ENV]: "bank-c,bank-a" },
+      })("agent-a", "agent-a");
+      expect(JSON.parse(fileContent(profile, "hermes/hindsight/config.json")).bank_id).toBe("bank-a");
+
+      const plain = fakeBoard();
+      const plainProfile = await createBotProfileCompile(plain.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+      expect(JSON.parse(fileContent(plainProfile, "hermes/hindsight/config.json")).observation_scopes).toBeUndefined();
+    });
+
+    it("no allowlist set: the previous behavior, any bank compiles", async () => {
+      const board = fakeBoard();
+      board.agent.current = agentRecord({ adapterConfig: CARD_HINDSIGHT });
+      const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+      expect(JSON.parse(fileContent(profile, "hermes/hindsight/config.json")).bank_id).toBe("bank-a");
+    });
+  });
+
   describe("instance-wide MCP servers (MYRMIDON_BOT_MCP_SERVERS)", () => {
     const RAGFLOW = [{ name: "ragflow", url: "https://example.com/ragflow/mcp", tokenSecret: "fleet-ragflow-token" }];
     const withMcp = (servers: unknown): NodeJS.ProcessEnv => ({
@@ -301,6 +407,20 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
       expect(config).not.toContain("https://example.com/other/mcp");
       expect(config).toContain("board:");
       expect(reported.flat().some((warning) => warning.includes("ragflow") && warning.includes("duplicate"))).toBe(true);
+    });
+
+    it("does not rewrite the board gateway URL with the runtime MCP URL base", async () => {
+      const board = fakeBoard({
+        async listMcpServers() {
+          return [{ name: "paperclip-assigned", url: "http://paperclip-server-1:3100/mcp/gateways/gw_x", token: "fake-mcp-token-0001" }];
+        },
+      });
+      const profile = await createBotProfileCompile(board.ports, {
+        env: { ...INSTANCE_ENV, [BOT_RUNTIME_MCP_URL_BASE_ENV]: "http://127.0.0.1:3100" },
+      })("agent-a", "agent-a");
+      const config = fileContent(profile, "hermes/config.yaml");
+      expect(config).toContain("http://paperclip-server-1:3100/mcp/gateways/gw_x");
+      expect(config).not.toContain("127.0.0.1");
     });
 
     it("is stable across ticks", async () => {
@@ -513,10 +633,13 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
       const compile = createBotProfileCompile(board.ports, { env: INSTANCE_ENV });
       const before = await compile("agent-a", "agent-a");
       const same = await compile("agent-a", "agent-a");
-      expect(classifyProfileChange({ restartHash: before.restartHash, filesHash: before.filesHash }, same)).toBe("none");
+      // The applied state comes from an apply of that same profile, so it reports the
+      // concurrency limit the profile carries (myrmidon(CONCURRENCY-SYNC)).
+      const applied = { restartHash: before.restartHash, filesHash: before.filesHash, maxConcurrentRuns: before.maxConcurrentRuns };
+      expect(classifyProfileChange(applied, same)).toBe("none");
       files = files.filter((file) => file.path !== "docs/style.md");
       const fewer = await compile("agent-a", "agent-a");
-      expect(classifyProfileChange({ restartHash: before.restartHash, filesHash: before.filesHash }, fewer)).toBe("files");
+      expect(classifyProfileChange(applied, fewer)).toBe("files");
     });
   });
 

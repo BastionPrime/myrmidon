@@ -8,13 +8,15 @@
 //
 // Two rules apply to everything in this file:
 //  - It runs on every reconcile tick (once a minute per bot), so it never writes
-//    unless something is missing, and it resolves the secrets it reads without
-//    a binding/audit context (no access event per secret per bot per minute):
-//    two secrets this file created itself, the instance-wide gateway key and
-//    the MCP tokens. The exception is the card's own env, which a card's author
-//    controls: card-env.ts resolves it WITH a binding context (the board checks
-//    that the secret is bound to this agent) and keeps the result in memory,
-//    re-resolving only when the card's bindings or those secrets' versions change.
+//    unless something is missing or due (an expiring gateway token), and it
+//    resolves the secrets it reads without a binding/audit context (no access
+//    event per secret per bot per minute): the secrets this file created itself
+//    (the bot's gateway key, its board API key and its board tool gateway token)
+//    and the MCP tokens. The exception is the card's own env, which a card's
+//    author controls: card-env.ts resolves it WITH a binding context (the board
+//    checks that the secret is bound to this agent) and keeps the result in
+//    memory, re-resolving only when the card's bindings or those secrets'
+//    versions change.
 //  - A secret it creates is get-or-create by a deterministic name, so a second
 //    call returns the same value (compile must give the same hashes tick after
 //    tick, or the bot restarts every minute).
@@ -23,8 +25,8 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { agentApiKeys, type Db } from "@paperclipai/db";
-import { and, eq, isNull } from "drizzle-orm";
+import { agentApiKeys, companies, companyMemberships, type Db } from "@paperclipai/db";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import {
   readPaperclipSkillSyncPreference,
   resolveLegacyPaperclipDesiredSkillNames,
@@ -39,6 +41,13 @@ import {
 } from "../../services/index.js";
 import { skillVersionSelectionMap } from "../../services/runtime-skill-selections.js";
 import { BOT_AGENT_API_KEY_NAME, ensureBotAgentKey } from "./agent-key.js";
+import { createBotBoardGatewayDeps, releaseStrayBotGateways } from "./board-gateway-ports.js";
+import {
+  BOT_BOARD_GATEWAY_SERVER_NAME,
+  botBoardGatewayUrl,
+  botGatewaySecretName,
+  ensureBotBoardGateway,
+} from "./board-gateway.js";
 import { createBotCardSync, type BotCardSyncPorts, type BotCardSyncResult } from "./card-sync.js";
 import { createCardEnvResolver } from "./card-env.js";
 import { loadBotInstructionsBundle } from "./instructions-source.js";
@@ -185,15 +194,15 @@ function toAgentRecord(row: {
 }
 
 /**
- * The board's data behind `createBotProfileCompile`. `listMcpServers` is NOT
- * provided: the board tool gateway's run-scoped tokens live one hour and cannot
- * sit in a container's long-lived profile, and a durable gateway token is a
- * security decision that has no owner yet (see the PR's "Решения без владельца").
- * Until that is decided, a bot's profile carries no board-gateway MCP server, and
- * compile says so in the activity log (a warning, once per change) instead of
- * staying silent. The instance-wide servers (ragflow and the like) do NOT depend
- * on this port: they are declared in MYRMIDON_BOT_MCP_SERVERS, and compile
- * resolves their tokens through `readCompanySecret`.
+ * The board's data behind `createBotProfileCompile`. `listMcpServers` gives the
+ * bot its OWN board tool gateway (board-gateway.ts): a gateway owned by this
+ * agent, and a token that opens only that gateway, kept as the company secret
+ * `myrmidon-bot-<agentId>-board-gateway-token`. The run-scoped tokens hermes_local
+ * uses live one hour and cannot sit in a container's long-lived profile; this one
+ * expires in 30 days and is rotated here. The instance-wide servers (ragflow and
+ * the like) do NOT come through this port: they are declared in
+ * MYRMIDON_BOT_MCP_SERVERS, and compile resolves their tokens through
+ * `readCompanySecret`.
  */
 export function createDbBotProfilePorts(db: Db): BotProfilePorts {
   const agents = agentService(db);
@@ -201,14 +210,19 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
   const skills = companySkillService(db);
   const instructions = agentInstructionsService();
   const instanceSettings = instanceSettingsService(db);
-  const resolveCardEnv = createCardEnvResolver({
-    resolveEnvBindings: (companyId, bindings, context) => secrets.resolveEnvBindings(companyId, bindings, context),
-    async readSecretStamp(companyId, secretId) {
-      const secret = await secrets.getById(secretId);
-      if (!secret || secret.companyId !== companyId) return null;
-      return `${secret.latestVersion}:${secret.status}`;
+  const resolveCardEnv = createCardEnvResolver(
+    {
+      resolveEnvBindings: (companyId, bindings, context) => secrets.resolveEnvBindings(companyId, bindings, context),
+      async readSecretStamp(companyId, secretId) {
+        const secret = await secrets.getById(secretId);
+        if (!secret || secret.companyId !== companyId) return null;
+        return `${secret.latestVersion}:${secret.status}`;
+      },
     },
-  });
+    // myrmidon(FLEETD-VMEXEC): the allowlist is re-read per resolve (per tick),
+    // like the other per-tick bot settings; the env source is process.env.
+    { env: process.env },
+  );
 
   return {
     async loadAgent(agentId) {
@@ -244,11 +258,11 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
             if (!secret) return null;
             return { secretId: secret.id, value: await secrets.resolveSecretValue(agent.companyId, secret.id, "latest") };
           },
-          async findActiveKeyIdByToken(agentId, token) {
+          async findActiveKeyByToken(agentId, token) {
             // The token's own hash against the key table: "a key with the bot's name is active"
             // says nothing about whether THIS token still opens the board.
             const rows = await db
-              .select({ id: agentApiKeys.id })
+              .select({ id: agentApiKeys.id, responsibleUserId: agentApiKeys.responsibleUserId })
               .from(agentApiKeys)
               .where(
                 and(
@@ -258,15 +272,59 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
                 ),
               )
               .limit(1);
-            return rows[0]?.id ?? null;
+            return rows[0] ? { id: rows[0].id, responsibleUserId: rows[0].responsibleUserId?.trim() || null } : null;
           },
           async listActiveBotKeyIds(agentId) {
             const keys = await agents.listKeys(agentId);
             return keys.filter((key) => key.name === BOT_AGENT_API_KEY_NAME && !key.revokedAt).map((key) => key.id);
           },
-          async createKey(agentId) {
-            const created = await agents.createApiKey(agentId, BOT_AGENT_API_KEY_NAME);
+          async readCompanyDefaultResponsibleUserId() {
+            // The same rule as the board's own work without an actor (routines): the company's
+            // explicit default first, then its oldest active owner.
+            const rows = await db
+              .select({ userId: companies.defaultResponsibleUserId })
+              .from(companies)
+              .where(eq(companies.id, agent.companyId))
+              .limit(1);
+            return rows[0]?.userId?.trim() || null;
+          },
+          async findCompanyOwnerUserId() {
+            const rows = await db
+              .select({ userId: companyMemberships.principalId })
+              .from(companyMemberships)
+              .where(
+                and(
+                  eq(companyMemberships.companyId, agent.companyId),
+                  eq(companyMemberships.principalType, "user"),
+                  eq(companyMemberships.status, "active"),
+                  eq(companyMemberships.membershipRole, "owner"),
+                ),
+              )
+              .orderBy(asc(companyMemberships.createdAt), asc(companyMemberships.id))
+              .limit(1);
+            return rows[0]?.userId?.trim() || null;
+          },
+          async createKey(agentId, responsibleUserId) {
+            const created = await agents.createApiKey(agentId, BOT_AGENT_API_KEY_NAME, { kind: "standard" }, { responsibleUserId });
             return { id: created.id, token: created.token };
+          },
+          async fillKeyResponsibleUser(agentId, keyId, responsibleUserId) {
+            // One conditional UPDATE: only this driver's own, still active key, and only while its
+            // field is empty (NULL or blank, which the board treats the same). Never overwrites.
+            const updated = await db
+              .update(agentApiKeys)
+              .set({ responsibleUserId })
+              .where(
+                and(
+                  eq(agentApiKeys.id, keyId),
+                  eq(agentApiKeys.agentId, agentId),
+                  eq(agentApiKeys.name, BOT_AGENT_API_KEY_NAME),
+                  isNull(agentApiKeys.revokedAt),
+                  sql`coalesce(btrim(${agentApiKeys.responsibleUserId}), '') = ''`,
+                ),
+              )
+              .returning({ id: agentApiKeys.id });
+            return updated.length > 0;
           },
           async revokeKey(agentId, keyId) {
             await agents.revokeKey(agentId, keyId);
@@ -290,6 +348,48 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
         },
         agent.id,
       );
+    },
+
+    async listMcpServers(agent, context) {
+      const secretName = botGatewaySecretName(agent.id);
+      const deps = createBotBoardGatewayDeps(db, agent, {
+        async readSecret() {
+          const secret = await secrets.getByName(agent.companyId, secretName);
+          if (!secret) return null;
+          return { secretId: secret.id, value: await secrets.resolveSecretValue(agent.companyId, secret.id, "latest") };
+        },
+        async storeSecret(existing, token) {
+          if (existing) {
+            await secrets.rotate(existing.secretId, { value: token }, SYSTEM_ACTOR);
+            return;
+          }
+          await secrets.create(
+            agent.companyId,
+            {
+              name: secretName,
+              provider: getConfiguredSecretProvider(),
+              value: token,
+              description: `Board tool gateway token of the bot container for agent ${agent.name}`,
+            },
+            SYSTEM_ACTOR,
+          );
+        },
+      });
+      // Switched off: the same path as "nothing assigned", which releases what was made and delivers nothing.
+      const ensured = await ensureBotBoardGateway(
+        context.enabled ? deps : { ...deps, resolveAssignment: async () => ({ assignment: null, warnings: [] }) },
+      );
+      if (!ensured.gateway) return { servers: [], warnings: ensured.warnings };
+      return {
+        servers: [
+          {
+            name: BOT_BOARD_GATEWAY_SERVER_NAME,
+            url: botBoardGatewayUrl(context.boardUrl, ensured.gateway.publicId),
+            token: ensured.gateway.token,
+          },
+        ],
+        warnings: ensured.warnings,
+      };
     },
 
     async loadSkills(agent) {
@@ -356,14 +456,14 @@ export function createDbBotCardSyncPorts(db: Db, profilePorts: BotProfilePorts =
 }
 
 /**
- * The two fields of `BotContainerRuntimeDeps` W2a fills, bound to the database:
+ * The fields of `BotContainerRuntimeDeps` W2a fills, bound to the database:
  *
  *   startBotContainerReconciliation(listAgents, { driver, maintenance, network, activity, ...botProfileWiring(db, { activity }) })
  *
  * (the call is startup.ts, `startBotContainers`, with `listAgents` from agents-query.ts).
  *
- * Profile warnings (a skipped skill, a bundle file over the limit, the missing board
- * gateway) go to `opts.onWarnings`, or, when only `opts.activity` is given, to that
+ * Profile warnings (a skipped skill, a bundle file over the limit, an assigned
+ * connection left out of the board gateway) go to `opts.onWarnings`, or, when only `opts.activity` is given, to that
  * activity log: the same place the reconciler writes its own events.
  */
 export function botProfileWiring(
@@ -372,6 +472,7 @@ export function botProfileWiring(
 ): {
   compile: (agentId: string, botKey: string) => Promise<CompiledProfile>;
   syncCard: (agentId: string, botKey: string) => Promise<BotCardSyncResult>;
+  releaseStrayGateways: (keepAgentIds: ReadonlySet<string>) => Promise<{ released: number; warnings: string[] }>;
 } {
   const ports = createDbBotProfilePorts(db);
   const { activity, ...compileOptions } = opts;
@@ -379,5 +480,6 @@ export function botProfileWiring(
   return {
     compile: createBotProfileCompile(ports, { ...compileOptions, ...(onWarnings ? { onWarnings } : {}) }),
     syncCard: createBotCardSync(createDbBotCardSyncPorts(db, ports)),
+    releaseStrayGateways: (keepAgentIds) => releaseStrayBotGateways(db, keepAgentIds),
   };
 }

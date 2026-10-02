@@ -1,0 +1,22 @@
+const fs=require('fs'),os=require('os'),path=require('path');
+const d=fs.mkdtempSync(path.join(os.tmpdir(),'nodesmoke-'));
+(async()=>{
+const PptxGenJS=require('pptxgenjs');
+const p=new PptxGenJS();p.addSlide().addText('Привет',{x:1,y:1,w:3,h:1});
+await p.writeFile({fileName:path.join(d,'t.pptx')});
+if(fs.statSync(path.join(d,'t.pptx')).size<1000)throw new Error('pptx too small');
+const {createCanvas,GlobalFonts}=require('@napi-rs/canvas');
+const c=createCanvas(200,80);const x=c.getContext('2d');x.font='24px Liberation Sans';x.fillText('Схема',10,40);
+const png=c.toBuffer('image/png');
+console.log('fonts',GlobalFonts.families.length);
+const sharp=require('sharp');
+const m=await sharp(png).resize(100).png().toBuffer();
+if((await sharp(m).metadata()).width!==100)throw new Error('sharp');
+const {imageSize}=require('image-size');
+if(imageSize(png).width!==200)throw new Error('image-size');
+const {PDFDocument}=require('pdf-lib');
+const doc=await PDFDocument.create();doc.addPage();
+if((await doc.save()).length<100)throw new Error('pdf-lib');
+await import(path.join(process.env.NODE_TOOLS_DIR||process.cwd(),'node_modules/pdfjs-dist/legacy/build/pdf.mjs'));
+console.log('ok');
+})().catch(e=>{console.error(e);process.exit(1)});

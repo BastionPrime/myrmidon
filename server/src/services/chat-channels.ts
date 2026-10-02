@@ -127,6 +127,9 @@ import {
 } from "../attachment-types.js";
 import { isUniqueViolation } from "../db-errors.js";
 import { coalescedOwnerId } from "../myrmidon/chat-reconciliation/owner-join.js";
+// myrmidon(D2): uuid-typed json comparisons for the board DB hot path. See
+// docs/myrmidon/DIVERGENCE.md.
+import { jsonTextUuid } from "../myrmidon/db-hot-path/json-uuid.js";
 import {
   bindTeamsPersonalRecipient,
   deriveTeamsPersonalRecipient,
@@ -241,6 +244,9 @@ import {
   refuseUnlinkedTelegramDm,
   type TelegramDmBridgeDeps,
 } from "../myrmidon/agent-chat-bridge/bridge.js";
+// myrmidon(U2): company-wide interaction lookup for callbacks on cards
+// delivered to the owner's Telegram conversation from other tasks.
+import { listInteractionForCallback } from "../myrmidon/owner-delivery/callback-interaction-lookup.js";
 import {
   authorizeNativeChatReviewPresentation,
   NativeChatReviewPresentationContentionError,
@@ -369,6 +375,12 @@ import {
   telegramDmConversationsConfigured,
   telegramDmConversationsEnabled,
 } from "../myrmidon/agent-chat-bridge/settings.js";
+// myrmidon(U1): settings for the editable DM status message and inline split
+// (release 1.4, item 3).
+import {
+  telegramDmStatusEnabled,
+  telegramSplitMaxParts,
+} from "../myrmidon/telegram-dm-status-settings.js";
 import type {
   ActionEvent,
   AdapterPostableMessage,
@@ -13973,7 +13985,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         and visible_queue.provider_message_id = queued_notice.provider_message_id
         and visible_queue.direction = 'outbound' and visible_queue.comment_id is null
       where queued_notice.company_id = ${chatActions.companyId}
-        and queued_notice.comment_id::text = ${chatActions.payload}->>'commentId'
+        and queued_notice.comment_id = ${jsonTextUuid(sql`${chatActions.payload}->>'commentId'`)}
         and queued_notice.state = 'published'
         and queued_notice.idempotency_key = 'wake:' || ${owner.id}::text || ':queued:' ||
           ${chatActions.endpointId}::text || ':' || ${chatActions.conversationId}::text)`;
@@ -14001,8 +14013,14 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         removedComment,
         and(
           eq(removedComment.companyId, chatActions.companyId),
-          sql`${removedComment.issueId}::text = ${chatActions.payload}->>'issueId'`,
-          sql`${removedComment.id}::text = ${chatActions.payload}->>'commentId'`,
+          // myrmidon(D2): uuid-typed comparisons instead of
+          // `removed_comment.id::text = payload->>'commentId'` (and the same for
+          // issue_id). The text cast defeated issue_comments' primary-key index
+          // and forced Postgres to sequentially scan the whole table on every
+          // sweep call. See jsonTextUuid's doc comment and
+          // docs/myrmidon/DIVERGENCE.md.
+          eq(removedComment.issueId, jsonTextUuid(sql`${chatActions.payload}->>'issueId'`)),
+          eq(removedComment.id, jsonTextUuid(sql`${chatActions.payload}->>'commentId'`)),
           isNotNull(removedComment.deletedAt),
         ),
       )
@@ -19728,9 +19746,14 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         );
       return false;
     }
-    const interaction = (
-      await issueThreadInteractionService(db).listForIssue(conversation.issueId)
-    ).find((candidate) => candidate.id === token.interactionId);
+    // myrmidon(U2): the confirmation card may belong to another task than the
+    // conversation's own issue (owner delivery); resolve company-wide, same
+    // kind/shape checks below.
+    const interaction = await listInteractionForCallback(db, {
+      companyId: action.companyId,
+      conversationIssueId: conversation.issueId,
+      interactionId: token.interactionId,
+    });
     if (
       !interaction ||
       interaction.kind !== "request_confirmation" ||
@@ -20755,13 +20778,18 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       return deny(safelyKnown);
     }
 
-    const interaction = (
-      await issueThreadInteractionService(db).listForIssue(conversation.issueId)
-    ).find((candidate) => candidate.id === payload.interactionId);
+    // myrmidon(U2): a card delivered to the owner's standing Telegram
+    // conversation (X8b) can belong to a different task than the
+    // conversation's own issue; resolve by interaction id company-wide while
+    // keeping every company/actor check below unchanged.
+    const interaction = await listInteractionForCallback(db, {
+      companyId: record.endpoint.companyId,
+      conversationIssueId: conversation.issueId,
+      interactionId: payload.interactionId,
+    });
     if (
       !interaction ||
-      interaction.companyId !== record.endpoint.companyId ||
-      interaction.issueId !== conversation.issueId
+      interaction.companyId !== record.endpoint.companyId
     ) {
       return deny(safelyKnown);
     }
@@ -20872,7 +20900,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         .where(
           and(
             eq(issues.companyId, record.endpoint.companyId),
-            eq(issues.id, conversation.issueId),
+            // myrmidon(U2): the confirmation card may belong to another task
+            // than the conversation's own issue (owner delivery); resolve the
+            // action's issue from the interaction, not the conversation.
+            eq(issues.id, interaction.issueId),
           ),
         )
         .then((rows) => rows[0] ?? null);
@@ -21255,7 +21286,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       .where(
         and(
           eq(issues.companyId, record.endpoint.companyId),
-          eq(issues.id, conversation.issueId),
+          // myrmidon(U2): the question card may belong to another task than
+          // the conversation's own issue (owner delivery); resolve the
+          // action's issue from the interaction, not the conversation.
+          eq(issues.id, interaction.issueId),
         ),
       )
       .then((rows) => rows[0] ?? null);
@@ -33529,6 +33563,15 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         input.telegramDraftControl !== undefined) &&
       shouldStreamSafePublicationText(text)
     ) {
+      // myrmidon(U1): the DM status row is a bounded single-line status; the
+      // streaming draft transport is for full answers, never for milestones.
+      const dmStatusRow = input.payload.progressState === "queued" ||
+        input.payload.progressState === "working";
+      if (input.endpoint.provider === "telegram" && dmStatusRow) {
+        return await attemptProviderPublication(async () =>
+          thread.post({ markdown: text }),
+        );
+      }
       return await attemptProviderPublication(async () =>
         input.telegramDraftControl
           ? endpointRuntime.streamTelegramDraft(
@@ -34001,8 +34044,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     publication: typeof chatPublications.$inferSelect,
   ): string | null {
     if (!publication.payload.progressState) return null;
+    // myrmidon(U1): the DM status row uses its own durable key shape
+    // (`run:<id>:dmstatus:<endpoint>`) but belongs to the same run lane.
     const match =
-      /^run:([^:]+):(?:queued|working|waiting_for_input|completed|failed):/.exec(
+      /^run:([^:]+):(?:queued|working|waiting_for_input|completed|failed|dmstatus):/.exec(
         publication.idempotencyKey,
       );
     const runId = match?.[1] ?? null;
@@ -34338,6 +34383,63 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         // control or another run can never donate its provider message here.
         return replacement.providerMessageId;
       });
+  }
+
+  // myrmidon(U1): resolves the provider message of this run's earlier DM
+  // status publication (`run:<id>:dmstatus:<endpoint>`) so the delivery lane
+  // edits that exact message when the status changes (queued -> working).
+  // Unlike the ordinary milestone lane, the SAME durable row is re-opened
+  // (enqueue coalesces queued and working into one row), so the publication
+  // currently being delivered carries its own providerMessageId — no
+  // `ne(id)` self-exclusion here, and the re-opened pending/streaming states
+  // must count as the replace candidate. The outbound-link guard below still
+  // proves a final answer has not consumed the lane.
+  async function dmStatusPublicationToReplace(
+    publication: typeof chatPublications.$inferSelect,
+  ): Promise<string | null> {
+    const match = /^run:([^:]+):dmstatus:([^:]+)$/.exec(
+      publication.idempotencyKey,
+    );
+    if (!match) return null;
+    const runId = match[1]!;
+    const rows = await db
+      .select({
+        id: chatPublications.id,
+        providerMessageId: chatPublications.providerMessageId,
+        payload: chatPublications.payload,
+      })
+      .from(chatPublications)
+      .where(
+        and(
+          eq(chatPublications.companyId, publication.companyId),
+          eq(chatPublications.endpointId, publication.endpointId),
+          eq(chatPublications.conversationId, publication.conversationId),
+          inArray(chatPublications.state, [
+            "pending",
+            "retry",
+            "streaming",
+            "published",
+            "delivery_unknown",
+          ]),
+          isNotNull(chatPublications.providerMessageId),
+          eq(
+            chatPublications.idempotencyKey,
+            `run:${runId}:dmstatus:${publication.endpointId}`,
+          ),
+        ),
+      )
+      .orderBy(desc(chatPublications.createdAt), desc(chatPublications.id))
+      .limit(1);
+    const candidate = rows[0];
+    if (!candidate?.providerMessageId) return null;
+    if (
+      await providerProgressLaneConsumed(
+        publication,
+        candidate.providerMessageId,
+      )
+    )
+      return null;
+    return candidate.providerMessageId;
   }
 
   async function receiptReactionCompletionRunId(
@@ -34910,8 +35012,9 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       )
       .orderBy(desc(chatPublications.createdAt), desc(chatPublications.id));
     const rowRunId = (row: (typeof rows)[number]) => {
+      // myrmidon(U1): include the DM status key shape in the run-lane match.
       const milestoneMatch =
-        /^run:([^:]+):(?:queued|working|waiting_for_input|completed|failed):/.exec(
+        /^run:([^:]+):(?:queued|working|waiting_for_input|completed|failed|dmstatus):/.exec(
           row.idempotencyKey,
         );
       return milestoneMatch?.[1] ?? row.commentRunId ?? null;
@@ -34980,7 +35083,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           eq(heartbeatRuns.companyId, publication.companyId),
           eq(heartbeatRuns.agentId, endpoint.assignedAgentId),
           sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${publication.issueId}`,
-          sql`split_part(${chatPublications.idempotencyKey}, ':', 2) = ${heartbeatRuns.id}::text`,
+          // myrmidon(D2): uuid-typed comparison instead of `split_part(...) =
+          // heartbeat_runs.id::text`; the text cast defeated heartbeat_runs'
+          // primary-key index.
+          eq(heartbeatRuns.id, jsonTextUuid(sql`split_part(${chatPublications.idempotencyKey}, ':', 2)`)),
         ),
       )
       .innerJoin(
@@ -35702,6 +35808,20 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       return publication;
     }
     if (telegramMarkdownRequiresAttachment(persisted.text)) {
+      // myrmidon(U1): with MYRMIDON_TELEGRAM_SPLIT_MAX_PARTS set, a long
+      // structured document may split inline into at most that many parts
+      // instead of becoming one attachment file. The plain-prose split below
+      // already produces the ordered outbox batch; reuse it when the cap
+      // admits the whole document.
+      const splitMaxParts = telegramSplitMaxParts();
+      const inlineParts =
+        splitMaxParts > 0
+          ? splitTelegramPublicationText(persisted.text)
+          : null;
+      if (inlineParts && inlineParts.length <= splitMaxParts) {
+        // fall through to the plain-prose inline split path below with these
+        // parts; the attachment branch is skipped for this publication.
+      } else {
       // Telegram parses each message independently. A fixed-size split can
       // turn the second half of a code fence, link, or list into unrelated
       // plain text even though concatenating the source parts is lossless.
@@ -35787,8 +35907,15 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         });
         return { ...current, payload: handoffPayload, updatedAt };
       });
+      }
     }
     const parts = splitTelegramPublicationText(persisted.text);
+    // myrmidon(U1): plain long prose splits inline (the vendor behavior).
+    // MYRMIDON_TELEGRAM_SPLIT_MAX_PARTS additionally allows structured long
+    // Markdown to split inline instead of becoming one attachment file: the
+    // vendor's `telegramMarkdownRequiresAttachment` above already returned
+    // false for plain documents, and structured documents only reach this
+    // point when the owner opted in to readable parts.
     if (parts.length === 1) return publication;
 
     return db.transaction(async (tx) => {
@@ -37364,6 +37491,12 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                     publication,
                     payload,
                   )) ??
+                  // myrmidon(U1): a DM status publication edits the run's
+                  // own earlier status row (queued -> working) in place
+                  // instead of stacking a new provider message.
+                  (publication.idempotencyKey.includes(":dmstatus:")
+                    ? await dmStatusPublicationToReplace(publication)
+                    : null) ??
                   (await runPublicationToReplace(publication, payload)) ??
                   (await inboundWakePublicationToReplace(
                     publication,

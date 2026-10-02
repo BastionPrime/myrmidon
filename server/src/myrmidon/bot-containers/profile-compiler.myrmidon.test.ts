@@ -268,6 +268,9 @@ describe("myrmidon(G2) compileHermesProfile — always-set config.yaml fields", 
     const profile = compileHermesProfile(baseInput({ maxConcurrentRuns: 7 }));
     const yaml = fileByPath(profile.files, "hermes/config.yaml").content;
     expect(yaml).toContain("gateway:\n  api_server:\n    max_concurrent_runs: 7");
+    // myrmidon(CONCURRENCY-SYNC): the same number rides along on the profile, which is
+    // what the driver records in the applied-state marker for the card to read back.
+    expect(profile.maxConcurrentRuns).toBe(7);
   });
 
   it.each([0, -1, 1.5, Number.NaN])("rejects a non-positive-integer maxConcurrentRuns (%s)", (value) => {
@@ -547,6 +550,7 @@ describe("myrmidon(G2) compileHermesProfile — hindsight settings", () => {
           mission: "Keep the shop running.",
           recallBudget: "high",
           tags: [" ops ", "shop", ""],
+          observationScopes: [["channel:board"], ["channel:telegram"]],
         },
       }),
     );
@@ -558,9 +562,47 @@ describe("myrmidon(G2) compileHermesProfile — hindsight settings", () => {
       bank_mission: "Keep the shop running.",
       memory_mode: "tools",
       mode: "local_external",
+      // myrmidon(MEMORY-ISOLATION): observation_scopes from the card, the same
+      // shape the live hermes_local profiles carry.
+      observation_scopes: [["channel:board"], ["channel:telegram"]],
       recall_budget: "high",
       retain_tags: ["ops", "shop"],
     });
+    // Deterministic key order: the file is diffed tick to tick.
+    expect(Object.keys(json)).toEqual([
+      "api_url",
+      "auto_retain",
+      "bank_id",
+      "bank_mission",
+      "memory_mode",
+      "mode",
+      "observation_scopes",
+      "recall_budget",
+      "retain_tags",
+    ]);
+  });
+
+  it("myrmidon(MEMORY-ISOLATION) folds empty scopes, blank tags and duplicates out of observation_scopes", () => {
+    const profile = compileHermesProfile(
+      baseInput({
+        hindsight: {
+          bankId: "agent-a",
+          apiUrl: "https://example.com/hindsight",
+          observationScopes: [[" channel:board ", ""], [] as string[], ["channel:board"], ["channel:telegram", "channel:telegram"]],
+        },
+      }),
+    );
+    const json = JSON.parse(fileByPath(profile.files, "hermes/hindsight/config.json").content);
+    expect(json.observation_scopes).toEqual([["channel:board"], ["channel:telegram", "channel:telegram"]]);
+  });
+
+  it("myrmidon(MEMORY-ISOLATION) omits observation_scopes entirely when unset or fully folded away", () => {
+    const unset = compileHermesProfile(baseInput({ hindsight: { bankId: "agent-a", apiUrl: "https://example.com/hindsight" } }));
+    expect(JSON.parse(fileByPath(unset.files, "hermes/hindsight/config.json").content).observation_scopes).toBeUndefined();
+    const folded = compileHermesProfile(
+      baseInput({ hindsight: { bankId: "agent-a", apiUrl: "https://example.com/hindsight", observationScopes: [[] as string[]] } }),
+    );
+    expect(JSON.parse(fileByPath(folded.files, "hermes/hindsight/config.json").content).observation_scopes).toBeUndefined();
   });
 
   it("still omits bank_mission, recall_budget and retain_tags when unset, but never mode/api_url/memory_mode/auto_retain", () => {
@@ -937,9 +979,13 @@ describe("myrmidon(G2) classifyProfileChange integration", () => {
 
   it("reports \"none\" once both hashes match the applied state", () => {
     const profile = compileHermesProfile(baseInput());
-    expect(classifyProfileChange({ restartHash: profile.restartHash, filesHash: profile.filesHash }, profile)).toBe(
-      "none",
-    );
+    // The applied marker of a profile compiled by this version reports its limit too.
+    expect(
+      classifyProfileChange(
+        { restartHash: profile.restartHash, filesHash: profile.filesHash, maxConcurrentRuns: profile.maxConcurrentRuns },
+        profile,
+      ),
+    ).toBe("none");
   });
 
   it("reports \"restart\" when a restart-class field changes (the model)", () => {

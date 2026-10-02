@@ -21,7 +21,36 @@ export const STOP_REQUEST_TIMEOUT_MS = 5_000;
 // at all, so a gateway that accepted the connection and never answered could
 // block execute() past waitForAdapterStop's 60s deadline even though the run
 // had never actually started.
-export const CREATE_REQUEST_TIMEOUT_MS = 15_000;
+//
+// myrmidon(G5): default raised from 15s to 60s — a busy multiplexed gateway
+// can need longer to accept a run (cold profile start). Configurable per
+// agent via adapterConfig.createRequestTimeoutSec and per instance via
+// MYRMIDON_HERMES_CREATE_TIMEOUT_SEC; see resolveCreateRequestTimeoutMs.
+export const CREATE_REQUEST_TIMEOUT_MS = 60_000;
+export const CREATE_REQUEST_TIMEOUT_MIN_SEC = 5;
+export const CREATE_REQUEST_TIMEOUT_MAX_SEC = 300;
+export const CREATE_TIMEOUT_ENV = "MYRMIDON_HERMES_CREATE_TIMEOUT_SEC";
+
+function parseCreateTimeoutSec(value: unknown): number | null {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() !== ""
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed < CREATE_REQUEST_TIMEOUT_MIN_SEC || parsed > CREATE_REQUEST_TIMEOUT_MAX_SEC) return null;
+  return parsed;
+}
+
+// myrmidon(G5): agent config wins, then the instance env, then the 60s
+// default. Values outside 5..300 s (or non-numeric) are ignored, not clamped.
+export function resolveCreateRequestTimeoutMs(
+  configValue: unknown,
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const sec = parseCreateTimeoutSec(configValue) ?? parseCreateTimeoutSec(env[CREATE_TIMEOUT_ENV]);
+  return sec === null ? CREATE_REQUEST_TIMEOUT_MS : Math.round(sec * 1000);
+}
 // myrmidon(G4): once operator cancellation arrives while the create request
 // is still in flight, give it this much longer to settle on its own (the
 // response, with a run_id, may already be on the wire) before the create

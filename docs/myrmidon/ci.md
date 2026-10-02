@@ -218,6 +218,31 @@ pnpm --filter @paperclipai/server exec tsx ../scripts/myrmidon/plugin-compat/che
 Новая версия плагина на установке: поменять версию в `plugins.json` и обновить снимок
 манифеста (JSON того, что экспортирует `dist/manifest.js` пакета).
 
+### Локальный форк hindsight
+
+Развёртывания, где память ботов разнесена по банкам, ставят не npm-пакет
+`@vectorize-io/hindsight-paperclip`, а его локальный форк
+`packages/plugins/hindsight-paperclip` (тот же id плагина `paperclip-plugin-hindsight`,
+версия `0.3.0-myrmidon.1`). Каталог `plugin-compat` это не отслеживает: он проверяет
+сторонние npm-пакеты, а форк живёт в репозитории. Его проверки:
+
+- юнит-тесты форка: `pnpm --filter @myrmidon/hindsight-paperclip test` (мок-транспорт,
+  сеть не нужна); lane — `scripts/myrmidon/ci/extra-test-lanes.json`, как у остальных
+  пакетов с тестами;
+- проверки хоста при установке: `check-fork-manifest.ts` в этом каталоге — схема
+  манифеста, версия API плагинов, согласованность возможностей и запуск воркера
+  через `createPluginWorkerHandle` (как `check.ts`, но манифест читается из собранного
+  `dist` форка):
+
+```sh
+pnpm --filter @myrmidon/hindsight-paperclip build
+pnpm --filter @paperclipai/server exec tsx ../scripts/myrmidon/plugin-compat/check-fork-manifest.ts
+```
+
+Установка на инстансе — как у любого локального плагина: `POST /api/plugins/install`
+с `localPath` на каталог пакета (загрузчик сам соберёт его: каталог внутри
+`packages/plugins`), либо при обновлении — `upgrade` с тем же путём.
+
 ## Образ
 
 Workflow [`myrmidon-image.yml`](../../.github/workflows/myrmidon-image.yml), job `image`.
@@ -257,6 +282,74 @@ Workflow [`myrmidon-image.yml`](../../.github/workflows/myrmidon-image.yml), job
 
 Сопровождающему: после первой публикации проверить видимость пакета
 `ghcr.io/itkadr-git/myrmidon` (Package settings) — новый пакет может оказаться закрытым.
+
+### Образ бота, его вариант с Node.js и вариант для команды разработки
+
+Workflow [`myrmidon-bot-image.yml`](../../.github/workflows/myrmidon-bot-image.yml) собирает
+из одного `docker/bot-runtime/Dockerfile` три образа, каждый своим job и с одинаковым
+условием публикации (только `push` в `main` и тег `myr-v*`; на PR образ собирается и
+проверяется, но не публикуется). hermes-agent ставится в образ из закреплённого тега
+нашего зеркала-форка (`HERMES_REPO` в том же Dockerfile,
+`https://github.com/BastionPrime/hermes-agent`; теги форка побайтово совпадают с
+вышестоящими, точное дерево пиннится `HERMES_GIT_SHA`; реестр отличий —
+[hermes-deltas.md](hermes-deltas.md)):
+
+- `ghcr.io/itkadr-git/myrmidon-hermes` — основной образ бота (стадия `runtime`), без Node.js;
+- `ghcr.io/itkadr-git/myrmidon-hermes-node` — вариант со стадией `runtime-node`: то же самое
+  плюс Node.js 22 LTS и набор пакетов для ботов, которые работают node-скриптами;
+- `ghcr.io/itkadr-git/myrmidon-hermes-dev` — вариант со стадией `runtime-dev`: то же самое
+  плюс набор инструментов, чтобы прогнать полный цикл правки в репозитории (установка,
+  типизация, тесты, `git push`) из контейнера бота.
+
+Вариант **временный**: пока нет песочницы на каждую задачу, ботам, у которых работа в
+node-скриптах (презентации и документы, отрисовка схем и картинок), проще дать образ с
+Node.js, чем переписывать их инструменты. Использовать его нужно только там, где это
+действительно так; остальным ботам он не нужен и в списке разрешённых образов
+(`MYRMIDON_BOT_IMAGE_ALLOWLIST`) не нужен.
+
+Кому нужен вариант с Node.js (по инспекции инструкций и прогонов ботов; список ролей, не имён):
+
+| Роль бота | Что делает на node |
+|---|---|
+| дизайнер (`work-designer`) | сборка презентаций `pptxgenjs`, отрисовка макетов `@napi-rs/canvas`, склейка PDF `pdf-lib` |
+| маркетолог (`work-marketolog`) | презентации `pptxgenjs`, отрисовка и сверка картинок `@napi-rs/canvas`, чтение PDF `pdfjs-dist` |
+| основной бот направления (`work`) | презентации `pptxgenjs`, обработка картинок `sharp` |
+| ГИП (`work-gip`) | чтение PDF `pdfjs-dist`, картинки `sharp` |
+| режиссёр видео (`bbq-video-director`) | подготовка кадров `sharp` |
+| оператор (`bbq-operator`) | подготовка кадров `sharp` |
+
+Что стоит в образе (точные версии — `docker/bot-runtime/node-tools/package.json`, транзитивные
+зависимости закреплены `package-lock.json`): Node.js по закреплённой версии и sha256, npm,
+`pptxgenjs`, `@napi-rs/canvas`, `sharp`, `image-size`, `pdf-lib`, `pdfjs-dist`, шрифты
+Liberation и DejaVu (иначе кириллица на отрисованной схеме превращается в квадраты).
+Chromium, `docx`, OCR, ffmpeg и офисные утилиты в образ не входят. Подробности, пути записи и
+ограничения — в `docker/bot-runtime/README.md`, раздел «Variant with Node.js».
+
+Проверки: на PR образ собирается и загружается локально в раннер; сборка сама запускает
+`smoke.cjs` от пользователя `10001` (пакеты загружаются и делают реальную работу), а job
+повторяет это на read-only корне с `tmpfs` вместо томов и проверяет, что npm пишет только
+в `/scratch`.
+
+Вариант `runtime-dev` (`ghcr.io/itkadr-git/myrmidon-hermes-dev`) — для команды разработки:
+в контейнере бота нет своего Docker (dockergate намеренно отказывает в произвольных
+контейнерах), а тесты и одноразовые контейнеры команда гоняет на движке отдельной
+машины-песочницы. Этот вариант даёт инструменты внутри образа: Node.js 24 LTS и pnpm (версия
+из `packageManager`), Go (для `tools/dockergate` и `tools/fleetd`), Rust (для
+`packages/paperclip-runner`; канал берётся из его `rust-toolchain.toml`), `git`, `gh`, `jq`,
+`zstd`, `make`, `gcc`/`g++` и `pkg-config` для нативных зависимостей, и **клиент Docker**
+(`docker`, только клиент — без `dockerd`, `containerd` и `runc`): движок остаётся на
+машине-песочнице, бот ходит к нему по сети. Каждый инструмент закреплён точной версией и
+sha256; склад pnpm по умолчанию — `/data/hermes/.pnpm-store` (долговечный том бота), все
+средства лежат под `/opt` и `/usr` — так требует проверка образа в dockergate (ни один
+элемент `PATH` не может быть под записываемым томом). Подробности, пути записи и ограничения —
+в `docker/bot-runtime/README.md`, раздел «Variant for the development team».
+
+Проверки варианта: на PR job собирает образ с `target: runtime-dev`, проверяет на готовом
+образе метку контракта (`myrmidon.bot-runtime.contract=1`) и пользователя (`10001:10001`), что
+ни один элемент `PATH` не лежит под записываемым томом, запускает весь набор инструментов
+(`node`, `pnpm`, `go`, `cargo`, `rustc`, `gh`, `jq`, `zstd`, `git`, `docker`) от пользователя
+`10001` на read-only корне с `tmpfs` вместо томов и падает, если в образе оказался `dockerd`
+(клиент без движка).
 
 ## Доказательство: проверки краснеют
 

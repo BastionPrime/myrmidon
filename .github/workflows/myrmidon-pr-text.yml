@@ -1,0 +1,50 @@
+name: Myrmidon PR text
+
+# Scans the title and body of a pull request with the publish scanner
+# (scripts/myrmidon/publish-scan.mjs): secrets, private addresses and the
+# forbidden patterns of the repository secret. gitleaks and the diff scans
+# look at commits; this closes the gap for the text around them, whoever
+# wrote it and whether or not a bot called the wrapper itself.
+#
+# `edited` is listed on purpose: a description edit re-runs only this light
+# job, not the whole Myrmidon CI (myrmidon-ci.yml does not listen to it).
+# Title and body reach the shell through the environment only; they are never
+# interpolated into the script text, so they cannot inject commands.
+# See docs/myrmidon/publish-scan.md.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: myrmidon-pr-text-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-text:
+    name: PR text scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Scan title and description
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          MYRMIDON_FORBIDDEN_PATTERNS: ${{ secrets.MYRMIDON_FORBIDDEN_PATTERNS }}
+        run: |
+          set -euo pipefail
+          printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" | node scripts/myrmidon/publish-scan.mjs

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BOT_CONTAINERS_ENV, CONTAINER_GROUP_UNSUPPORTED_REASON } from "./agent-config.js";
 import { createBotKeyLock } from "./bot-key-lock.js";
-import type { BotContainerDriver, BotContainerStatus } from "./driver.js";
+import type { BotContainerDriver, BotContainerSpec, BotContainerStatus } from "./driver.js";
 import {
   BOT_CONTAINER_ACTOR,
   applyBotContainerNow,
@@ -47,7 +47,7 @@ function minimalDriver(overrides: Partial<BotContainerDriver> = {}): BotContaine
   return {
     status: async (botKey) => ({ botKey, state: "running", restartHash: "r", filesHash: "f" }),
     list: async () => [],
-    templateDrift: async () => false,
+    templateDrift: async () => ({ drifted: false, fields: [] }),
     create: async () => {},
     recreate: async () => {},
     writeProfile: async () => {},
@@ -130,7 +130,7 @@ describe("applyBotContainerNow", () => {
       },
       async templateDrift() {
         events.push("drift");
-        return false;
+        return { drifted: false, fields: [] };
       },
     });
     const shared = deps(driver);
@@ -416,5 +416,134 @@ describe("applyBotContainerNow: syncCard hook (W2a)", () => {
     gate.resolve();
     await Promise.all([first, second]);
     expect(events).toEqual(["status", "sync:start", "sync:end", "status", "sync:start", "sync:end"]);
+  });
+});
+
+describe("applyBotContainerNow: the pass reconciles the card read at pass time", () => {
+  /**
+   * A driver that keeps one container's image: templateDrift is "the container's
+   * image is not the spec's", recreate swaps the image, restart leaves it. A
+   * reconcile that decides from an older card therefore restarts the old image
+   * and reports success — the shape of the reported incident.
+   */
+  function imageTrackingDriver(initialImage: string) {
+    const container = { image: initialImage };
+    const calls: string[] = [];
+    const recreated: BotContainerSpec[] = [];
+    const driver: BotContainerDriver = {
+      status: async (botKey): Promise<BotContainerStatus> => ({
+        botKey,
+        state: "running",
+        image: container.image,
+        restartHash: "r",
+        filesHash: "f",
+      }),
+      list: async () => [],
+      templateDrift: async (spec) => {
+        calls.push("templateDrift");
+        return { drifted: container.image !== spec.image, fields: [] };
+      },
+      create: async (spec) => {
+        container.image = spec.image;
+      },
+      recreate: async (spec) => {
+        calls.push("recreate");
+        recreated.push(spec);
+        container.image = spec.image;
+      },
+      writeProfile: async () => {},
+      start: async () => {},
+      restart: async () => {
+        calls.push("restart");
+      },
+      stop: async () => {},
+    };
+    return { driver, container, calls, recreated };
+  }
+
+  it("recreates on the image the card carries at pass time, not on the caller's snapshot", async () => {
+    // The caller's `agent` is the sweep's tick snapshot (still the old image);
+    // the card was changed after that read.
+    const { driver, container, calls } = imageTrackingDriver("old-image");
+    const outcome = await applyBotContainerNow(
+      agent({}, { image: "old-image" }),
+      deps(driver, { readAgent: async (agentId) => agent({ agentId }, { image: "new-image" }) }),
+      { env: ENABLED },
+    );
+    expect(outcome).toEqual({ kind: "applied_restart" });
+    expect(calls).toContain("recreate");
+    // Acceptance: right after apply returns, the container runs the card's image —
+    // no wait for the next reconcile pass.
+    expect(container.image).toBe("new-image");
+  });
+
+  it("a sweep tick that started before the change does not undo it: it reconciles the card, not the snapshot", async () => {
+    const { driver, container, calls } = imageTrackingDriver("old-image");
+    const shared = deps(driver, { readAgent: async (agentId) => agent({ agentId }, { image: "new-image" }) });
+    // The tick's listAgents snapshot, taken before the card was changed.
+    const stop = startBotContainerReconciliation(async () => [agent({}, { image: "old-image" })], shared, { env: ENABLED });
+    try {
+      await vi.waitFor(() => expect(calls).toContain("recreate"));
+      expect(container.image).toBe("new-image");
+      // A later pass of the same bot sees the card it already applied: no drift,
+      // nothing to do (no pulling the container back to the snapshot's image).
+      await flush();
+      expect(container.image).toBe("new-image");
+    } finally {
+      stop();
+    }
+  });
+
+  it("pins the image for one pass when asked (the bot image canary), keeping the card's limits", async () => {
+    const { driver, container, recreated } = imageTrackingDriver("old-image");
+    const outcome = await applyBotContainerNow(agent(), deps(driver), { env: ENABLED, specImage: "rollout-image" });
+    expect(outcome).toEqual({ kind: "applied_restart" });
+    expect(recreated[0]?.image).toBe("rollout-image");
+    expect(recreated[0]?.memoryMb).toBe(512);
+    expect(container.image).toBe("rollout-image");
+  });
+
+  it("fails the pass when the card cannot be read, instead of applying the older snapshot", async () => {
+    const sink = { entries: [] as Array<{ level: string; message: string; details?: Record<string, unknown> }>, record: (entry: { level: string; message: string; details?: Record<string, unknown> }) => void sink.entries.push(entry) };
+    const { driver, calls } = imageTrackingDriver("old-image");
+    const outcome = await applyBotContainerNow(
+      agent({}, { image: "old-image" }),
+      deps(driver, {
+        readAgent: async () => {
+          throw new Error("database is down");
+        },
+        activity: sink,
+      }),
+      { env: ENABLED },
+    );
+    expect(outcome.kind).toBe("error");
+    expect(calls).toEqual([]); // the driver was never asked anything
+    expect(sink.entries).toEqual([
+      {
+        level: "error",
+        agentId: "agent-a",
+        botKey: "agent-a",
+        message: "failed to read the agent card for a bot container pass",
+        details: { error: "database is down" },
+      },
+    ]);
+  });
+
+  it("is not applicable when the card read at pass time stopped qualifying", async () => {
+    const { driver, calls } = imageTrackingDriver("old-image");
+    const outcome = await applyBotContainerNow(
+      agent(),
+      deps(driver, { readAgent: async (agentId) => agent({ agentId }, { enabled: false }) }),
+      { env: ENABLED },
+    );
+    expect(outcome).toEqual({ kind: "not_applicable", reason: "adapterConfig.container.enabled is not true" });
+    expect(calls).toEqual([]);
+  });
+
+  it("is not applicable when the agent is gone by the time the pass runs", async () => {
+    const { driver, calls } = imageTrackingDriver("old-image");
+    const outcome = await applyBotContainerNow(agent(), deps(driver, { readAgent: async () => null }), { env: ENABLED });
+    expect(outcome).toEqual({ kind: "not_applicable", reason: "agent agent-a no longer exists" });
+    expect(calls).toEqual([]);
   });
 });

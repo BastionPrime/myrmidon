@@ -3,6 +3,7 @@ import {
   Activity,
   BadgeDollarSign,
   BookOpenText,
+  Brain,
   History,
   KeyRound,
   Library,
@@ -36,6 +37,7 @@ const localIcons = {
   secrets: ShieldCheck,
   tools: Wrench,
   channels: MessageSquare,
+  memory: Brain, // myrmidon(MEMORY-UI): agent card memory tab
   permissions: ShieldCheck,
   "api-keys": KeyRound,
   revisions: History,
