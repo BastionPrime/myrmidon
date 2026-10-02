@@ -44,12 +44,15 @@
 # (the image checks are read-only, so they run in a dry run too).
 #
 # TRACING-HEALTH: right after the health check the deploy verifies the LLM
-# tracing callbacks of the gateway (tracing-check.sh): the legacy `langfuse`
-# callback against a v4 Langfuse server is refused, and the deploy stops like a
-# failed health check — maintenance stays on and the rollback command is
-# printed. There is no flag that skips the refusal. Without a MYRMIDON_TRACING_*
-# setting the check logs that it is skipped, so an installation without a
-# tracing gateway still deploys.
+# tracing configuration (tracing-check.sh, step 7b): the callback set is the
+# OTLP-only one (a legacy `langfuse` callback against a v4 Langfuse server is
+# refused), the gateway delivers OTEL events (an install without an event in
+# `events_core`, or a delivery ratio below 50%, is refused), and the Langfuse
+# and gateway images carry a full version tag or a digest. A refusal stops the
+# deploy like a failed health check — maintenance stays on and the rollback
+# command is printed — and there is no flag that skips it. Without a
+# MYRMIDON_TRACING_* setting the step logs that it is skipped, so an
+# installation without a tracing gateway still deploys.
 set -euo pipefail
 # shellcheck source=lib.sh source-path=SCRIPTDIR
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -231,9 +234,13 @@ if ! "$MYR_SCRIPT_DIR/tracing-check.sh" \
   --gateway-config "${MYRMIDON_TRACING_GATEWAY_CONFIG:-}" \
   --callbacks-command "${MYRMIDON_TRACING_CALLBACKS_COMMAND:-}" \
   --intended-file "${MYRMIDON_TRACING_CALLBACKS_FILE:-$(tracing_callbacks_file_default)}" \
+  --delivery-command "${MYRMIDON_TRACING_DELIVERY_COMMAND:-}" \
+  --delivery-window "${MYRMIDON_TRACING_DELIVERY_WINDOW_SEC:-900}" \
+  --langfuse-image "${MYRMIDON_TRACING_LANGFUSE_IMAGE:-}" \
+  --gateway-image "${MYRMIDON_TRACING_GATEWAY_IMAGE:-}" \
   ${MYRMIDON_TRACING_TOKEN_FILE:+--token-file "$MYRMIDON_TRACING_TOKEN_FILE"}; then
-  log "DEPLOY FAILED: $ref is running and healthy, but the LLM tracing callbacks are refused. Maintenance stays on."
-  log "Fix the gateway callbacks (OTLP only, 'langfuse_otel') and run the deploy again."
+  log "DEPLOY FAILED: $ref is running and healthy, but the LLM tracing checks are refused. Maintenance stays on."
+  log "Fix the tracing configuration (OTLP only, 'langfuse_otel'; a delivering install; pinned images) and run the deploy again."
   log "Roll back with: $MYR_SCRIPT_DIR/rollback.sh --config $config"
   exit 1
 fi
