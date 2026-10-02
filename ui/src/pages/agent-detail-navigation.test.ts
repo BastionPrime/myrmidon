@@ -17,6 +17,7 @@ describe("agent detail navigation", () => {
       "secrets",
       "tools",
       "channels",
+      "memory",
       "permissions",
       "api-keys",
       "revisions",
@@ -27,6 +28,7 @@ describe("agent detail navigation", () => {
     expect(parseAgentDetailView("dashboard")).toBe("overview");
     expect(parseAgentDetailView("configuration")).toBe("runtime");
     expect(parseAgentDetailView("prompts")).toBe("instructions");
+    expect(parseAgentDetailView("memory")).toBe("memory");
     expect(agentDetailHref("codexcoder", "permissions")).toBe("/agents/codexcoder/permissions");
   });
 

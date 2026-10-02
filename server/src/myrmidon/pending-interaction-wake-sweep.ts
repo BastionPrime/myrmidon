@@ -118,14 +118,56 @@ export function decidePendingInteractionWakeAction(
   if (!facts.interactionExists || !facts.interactionWaitsForAddressee) {
     return { kind: "cancel", reason: PENDING_INTERACTION_WAKE_CANCELLED_INTERACTION_REASON };
   }
-  if (facts.issueStatus === null || (TERMINAL_ISSUE_STATUSES as readonly string[]).includes(facts.issueStatus)) {
+  if (facts.issueStatus === null) {
     return { kind: "cancel", reason: PENDING_INTERACTION_WAKE_CANCELLED_ISSUE_REASON };
   }
-  if (facts.activeRunHoldsIssue) return { kind: "skip", reason: "active_run_holds_issue" };
+  // myrmidon(N2): a card that still waits for its addressee and was never
+  // delivered keeps its delivery even after the task closed — the addressee
+  // answers the card, and only a receipt that already had its delivery (the
+  // task closed under an addressee who chose not to answer) is finalized by
+  // the task status. Without this the card dies unanswered the moment the
+  // task touches a terminal status, even when the task reopens a minute later.
+  const issueIsTerminal = (TERMINAL_ISSUE_STATUSES as readonly string[]).includes(facts.issueStatus);
+  if (issueIsTerminal && facts.reAdmissionAttempts > 0) {
+    return { kind: "cancel", reason: PENDING_INTERACTION_WAKE_CANCELLED_ISSUE_REASON };
+  }
+  if (!issueIsTerminal && facts.activeRunHoldsIssue) {
+    return { kind: "skip", reason: "active_run_holds_issue" };
+  }
   if (facts.reAdmissionAttempts >= options.maxReAdmissions) {
     return { kind: "cancel", reason: PENDING_INTERACTION_WAKE_RE_ADMISSION_LIMIT_REASON };
   }
   return { kind: "re_admit" };
+}
+
+/**
+ * myrmidon(N2): the interaction ids whose addressee wake never became a run.
+ *
+ * `expirePendingInteractionsForTerminalIssue` reads this set from the wake
+ * receipts (`interaction-pending:<interaction>` rows) before it expires
+ * pending cards on a terminal task: a card addressed to an agent that was
+ * never woken is not expired by the status flip, so the sweep above can still
+ * deliver it. Rows carry no interaction id of their own, so the set is derived
+ * from the receipt key with `interactionIds` as the allowlist.
+ */
+export function selectUndeliveredAddresseeInteractionIds(
+  rows: ReadonlyArray<{ idempotencyKey?: unknown; runId?: unknown }>,
+  interactionIds: readonly string[],
+): Set<string> {
+  const receipts = new Set<string>();
+  const delivered = new Set<string>();
+  for (const row of rows) {
+    const key = typeof row.idempotencyKey === "string" ? row.idempotencyKey : null;
+    if (!key || !key.startsWith(PENDING_INTERACTION_WAKE_IDEMPOTENCY_PREFIX)) continue;
+    const interactionId = key.slice(PENDING_INTERACTION_WAKE_IDEMPOTENCY_PREFIX.length);
+    receipts.add(interactionId);
+    if (typeof row.runId === "string" && row.runId.length > 0) delivered.add(interactionId);
+  }
+  const undelivered = new Set<string>();
+  for (const interactionId of interactionIds) {
+    if (receipts.has(interactionId) && !delivered.has(interactionId)) undelivered.add(interactionId);
+  }
+  return undelivered;
 }
 
 /** The interaction id a parked addressee receipt announced, or `null` when the payload carries none. */

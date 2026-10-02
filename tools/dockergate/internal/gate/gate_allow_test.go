@@ -82,7 +82,7 @@ func wantStatus(t testing.TB, res *resp, status int) {
 
 func wantNoCanary(t testing.TB, res *resp) {
 	t.Helper()
-	for _, c := range []string{envCanary, "canary-env-secret", bindCanary, "canary-bind", "secret-health-output",
+	for _, c := range []string{envCanary, "canary-env-secret", "secret-health-output",
 		"/host/secret/path", "secret-image-cmd"} {
 		if strings.Contains(res.str(), c) {
 			t.Errorf("the answer carries %q: %q", c, res.str())
@@ -175,10 +175,25 @@ func TestAllow_A2_ContainerInspectIsTrimmed(t *testing.T) {
 		t.Errorf("Health.Status %v", health["Status"])
 	}
 	hc := sub(t, m, "HostConfig")
-	wantKeys(t, "HostConfig", hc, "Memory", "NanoCpus", "PidsLimit", "NetworkMode")
+	wantKeys(t, "HostConfig", hc, "Memory", "NanoCpus", "PidsLimit", "NetworkMode", "Binds")
 	if hc["Memory"] != float64(1<<30) || hc["NanoCpus"] != float64(1_000_000_000) ||
 		hc["PidsLimit"] != float64(512) || hc["NetworkMode"] != r.m.Network {
 		t.Errorf("HostConfig %v", hc)
+	}
+	// The bind list is part of the template the driver's drift check compares:
+	// the answer must carry it, in the order the container was created with.
+	binds, ok := hc["Binds"].([]any)
+	if !ok {
+		t.Fatalf("HostConfig.Binds is not an array: %T", hc["Binds"])
+	}
+	want := policy.Binds(r.m.VolumeRoot, r.m.BotKey)
+	if len(binds) != len(want) {
+		t.Fatalf("HostConfig.Binds %v, want %v", binds, want)
+	}
+	for i, b := range want {
+		if binds[i] != b {
+			t.Errorf("HostConfig.Binds[%d] %v, want %q", i, binds[i], b)
+		}
 	}
 	r.wantURIs("GET " + r.target("", "/json"))
 	r.wantDaemonHeaders()

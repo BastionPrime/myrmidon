@@ -76,6 +76,14 @@ There is no bypass: no flag, no setting. `--force` (redeploying the same image) 
 `--expect-*` do not skip the check. To deploy an image that does not pass, the image must go
 through CI: a PR into `main`, a merge, a build.
 
+### Deploy the board and dockergate together
+
+When the release notes say the A2 contract changed on both sides, deploy the board image AND
+the dockergate image from the same tag together. A 1.3.2 board against a 1.3.1 dockergate
+still recreates every bot on every pass (the 01.10 incident); a 1.3.2 dockergate against a
+1.3.1 board is safe but pointless. fleetd from the same tag too. The digests are in the
+GitHub release notes.
+
 `--dry-run` runs the same check (it only reads the registry and updates `origin/main` in the
 clone), so a trial run shows the refusal in advance.
 
@@ -177,7 +185,21 @@ rules are the script's rules, not a second policy:
 - the job is marked succeeded only when the board's own `/api/health` agrees with the
   reported version and commit — a lying report cannot close a failed deploy;
 - a job stuck in one step longer than `MYRMIDON_DEPLOY_STEP_TIMEOUT_SEC` aborts itself and
-  leaves the window.
+  leaves the window;
+- **when the health check fails, the board rolls back automatically (R5-C).** The executor
+  immediately runs `rollback.sh` to the image `deploy.sh` remembered before the switch —
+  the locally known previous image (the rollback is the emergency path, so its CI-image
+  check only warns) — and reports `rolling-back`, then `rolled-back` (the previous image
+  is healthy again; the job ends `auto_rolled_back` and the maintenance window leaves: no
+  human took part) or `rollback-failed` (the job ends `failed_rollback` and the window
+  STAYS ON for the operator). `MYRMIDON_DEPLOY_AUTO_ROLLBACK=0` restores the manual
+  contract: the job ends `failed_health` with the window on and the rollback is the
+  operator's. The host side of the same switch is `AUTO_ROLLBACK` in `deploy.env` (1 by
+  default); both sides should agree;
+- **auto-update without a confirmation stays off (`MYRMIDON_DEPLOY_AUTO_UPDATE`, R5-C).**
+  Every deploy from the interface waits for an explicit confirmation; enabling unattended
+  deploys is a decision for after the release scenario has run on the staging stand
+  (STAND). The flag exists, is documented, and defaults to off.
 
 ### Enabling it
 
@@ -210,8 +232,18 @@ case the interface refuses — which is exactly the case the script would refuse
   is off.
 - The server log: migrations applied, no startup errors:
   `docker compose logs --since 10m <service>`.
+- Ad-hoc operator indexes: a migration may drop indexes created by hand outside the
+  migration history (the release migration drops the `myr_hotfix_*` expression indexes
+  once the hot-path predicates are uuid-typed). When the database was touched by hand,
+  compare it with the schema after the deploy: `pnpm db:generate` in a checkout of the
+  deployed tag must report no drift.
 - The interface opens, the agent list is in place, an issue opens.
 - Runs start again: queued wakes are delivered, a new run goes through.
+- Bot containers after a release that touches the reconciler or dockergate: for 30 minutes after
+  the deploy the board log must carry no `bot container recreated for a template change` and no
+  `bot container template drift detected` for a card nobody changed (including across a host
+  reboot). A real card change (for example `memoryMb`) still recreates that bot exactly once. When
+  one does appear, the drift line names the field and both values.
 - The plugins (hindsight and the rest) are `ready` in the plugin settings.
 - `$STATE_DIR/history.log` has the deploy line.
 

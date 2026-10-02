@@ -181,6 +181,9 @@ COPY --chown=node:node --from=build /app /app
 # Empty for local builds, preserving the server's normal version fallbacks.
 ARG PAPERCLIP_BUILD_VERSION=""
 ARG PAPERCLIP_BUILD_COMMIT=""
+# myrmidon(ABOUT): build date and vendor base for the About surface.
+ARG MYRMIDON_BUILD_DATE=""
+ARG MYRMIDON_BASE_PAPERCLIP=""
 ENV NODE_ENV=production \
   HOME=/paperclip \
   HOST=0.0.0.0 \
@@ -190,6 +193,8 @@ ENV NODE_ENV=production \
   PAPERCLIP_INSTANCE_ID=default \
   PAPERCLIP_BUILD_VERSION=${PAPERCLIP_BUILD_VERSION} \
   PAPERCLIP_BUILD_COMMIT=${PAPERCLIP_BUILD_COMMIT} \
+  MYRMIDON_BUILD_DATE=${MYRMIDON_BUILD_DATE} \
+  MYRMIDON_BASE_PAPERCLIP=${MYRMIDON_BASE_PAPERCLIP} \
   USER_UID=${USER_UID} \
   USER_GID=${USER_GID} \
   PAPERCLIP_CONFIG=/paperclip/instances/default/config.json \

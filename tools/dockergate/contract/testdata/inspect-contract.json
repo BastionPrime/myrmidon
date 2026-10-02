@@ -1,0 +1,79 @@
+{
+ "botKey": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+ "name": "myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+ "inspect": {
+  "Id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "Name": "/myrmidon-bot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "Image": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+  "Config": {
+   "Image": "ghcr.io/itkadr-git/myrmidon-hermes@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "User": "10001:10001",
+   "Labels": {
+    "myrmidon.bot": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "myrmidon.image": "ghcr.io/itkadr-git/myrmidon-hermes@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+   },
+   "Env": [
+    "PATH=/usr/local/bin:/usr/bin"
+   ]
+  },
+  "State": {
+   "Status": "running",
+   "Running": true,
+   "Pid": 4321,
+   "ExitCode": 0,
+   "Health": {
+    "Status": "healthy"
+   }
+  },
+  "HostConfig": {
+   "Memory": 1073741824,
+   "NanoCpus": 1000000000,
+   "PidsLimit": 512,
+   "NetworkMode": "myrmidon-bots",
+   "Binds": [
+    "/srv/myrmidon-bots/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/hermes:/data/hermes",
+    "/srv/myrmidon-bots/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/workspace:/workspace",
+    "/srv/myrmidon-bots/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/scratch:/scratch",
+    "/srv/shared/readonly:/srv/shared/readonly:ro"
+   ]
+  },
+  "Mounts": [
+   {
+    "Type": "bind",
+    "Source": "/host/noise-mount",
+    "Destination": "/noise"
+   }
+  ]
+ },
+ "fields": [
+  {
+   "path": "Config.Image",
+   "want": "ghcr.io/itkadr-git/myrmidon-hermes@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  {
+   "path": "HostConfig.Memory",
+   "want": 1073741824
+  },
+  {
+   "path": "HostConfig.NanoCpus",
+   "want": 1000000000
+  },
+  {
+   "path": "HostConfig.PidsLimit",
+   "want": 512
+  },
+  {
+   "path": "HostConfig.NetworkMode",
+   "want": "myrmidon-bots"
+  },
+  {
+   "path": "HostConfig.Binds",
+   "want": [
+    "/srv/myrmidon-bots/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/hermes:/data/hermes",
+    "/srv/myrmidon-bots/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/workspace:/workspace",
+    "/srv/myrmidon-bots/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/scratch:/scratch",
+    "/srv/shared/readonly:/srv/shared/readonly:ro"
+   ]
+  }
+ ]
+}

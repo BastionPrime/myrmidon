@@ -133,6 +133,7 @@ describe("CompanySettingsNav", () => {
           { value: "instance-experimental", label: "Experimental" },
           { value: "instance-plugins", label: "Plugins" },
           { value: "instance-adapters", label: "Adapters" },
+          { value: "browsers", label: "Browsers" }, // myrmidon(BROWSER-CONSOLE)
         ],
       }),
     );
@@ -175,6 +176,7 @@ describe("CompanySettingsNav", () => {
       "instance-board-api-keys",
       "instance-experimental",
       "instance-adapters",
+      "browsers", // myrmidon(BROWSER-CONSOLE)
     ]);
 
     await act(async () => {
