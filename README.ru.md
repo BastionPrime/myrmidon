@@ -72,7 +72,10 @@ Myrmidon, — колония: координация метками в обще�
   ([owner-telegram-cards](docs/myrmidon/guides/owner-telegram-cards.ru.md));
   прогон может показывать одно живое статусное сообщение в диалоге и делить
   длинные ответы
-  ([telegram-dm-status](docs/myrmidon/guides/telegram-dm-status.ru.md)).
+  ([telegram-dm-status](docs/myrmidon/guides/telegram-dm-status.ru.md));
+  планировщик чата с доской превращает свободный текст владельца в
+  предложенный эпик с дочерними задачами, согласовываемый карточкой
+  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.ru.md)).
 - **Память на агента.** Просмотр, выгрузка и удаление банка памяти агента из
   его карточки ([agent-memory-card](docs/myrmidon/guides/agent-memory-card.ru.md)).
 - **Окна обслуживания и безопасные выкаты.** Окно обслуживания останавливает

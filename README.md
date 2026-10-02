@@ -74,7 +74,10 @@ what exists as of 1.5:
   Telegram and can be answered there
   ([owner-telegram-cards](docs/myrmidon/guides/owner-telegram-cards.md));
   a run can show one live status message in the DM and split long answers
-  ([telegram-dm-status](docs/myrmidon/guides/telegram-dm-status.md)).
+  ([telegram-dm-status](docs/myrmidon/guides/telegram-dm-status.md)); the
+  board chat planner turns the owner's free text into a proposed epic with
+  child tasks, approved by a card
+  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.md)).
 - **Memory per agent.** View, export and remove an agent's memory bank from
   its card ([agent-memory-card](docs/myrmidon/guides/agent-memory-card.md)).
 - **Maintenance windows and safe deploys.** A maintenance window pauses new
