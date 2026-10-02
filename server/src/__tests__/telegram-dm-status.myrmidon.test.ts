@@ -5,7 +5,7 @@
 // server/src/__tests__/chat-telegram-dm-conversation.myrmidon.test.ts the same
 // way that file copies it from the vendor's integration suite (CONVENTIONS §7:
 // vendor test files are not edited).
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ import { and, eq, inArray, like } from "drizzle-orm";
 import {
   agents,
   authUsers,
+  chatActions,
   chatConversations,
   chatEndpoints,
   chatExternalPrincipals,
@@ -26,6 +27,7 @@ import {
   issueComments,
   issues,
   principalPermissionGrants,
+  toolConnections,
 } from "@paperclipai/db";
 import type { Author, Message, Thread } from "chat";
 import {
@@ -42,7 +44,15 @@ import { enqueueChatRunMilestones } from "../services/chat-run-publications.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { telegramConversationUserId } from "../myrmidon/agent-chat-bridge/identity.js";
 import { TELEGRAM_DM_CONVERSATIONS_ENV } from "../myrmidon/agent-chat-bridge/settings.js";
-import { TELEGRAM_DM_STATUS_ENV } from "../myrmidon/telegram-dm-status-settings.js";
+import {
+  TELEGRAM_DM_STATUS_ENV,
+  TELEGRAM_SPLIT_MAX_PARTS_ENV,
+} from "../myrmidon/telegram-dm-status-settings.js";
+import {
+  splitTelegramPublicationText,
+  telegramMarkdownRequiresAttachment,
+} from "../services/chat-publication-stream.js";
+import { projectSafeChatPublicationText } from "../services/chat-publication-projection.js";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -62,6 +72,7 @@ class FakeEndpointRuntime {
   readonly initialize = vi.fn(async () => undefined);
   readonly shutdown = vi.fn(async () => undefined);
   readonly posts: Array<{ threadId: string; message: unknown }> = [];
+  readonly postedIds: string[] = [];
   readonly edits: Array<{ threadId: string; messageId: string; message: unknown }> = [];
   constructor(
     private readonly options: CreateChatSdkEndpointRuntimeOptions,
@@ -71,17 +82,30 @@ class FakeEndpointRuntime {
     const post = vi.fn(async (message: unknown) => {
       const id = `fake-post-${randomUUID()}`;
       this.posts.push({ threadId, message });
+      this.postedIds.push(id);
       return { id, threadId };
     });
-    const editMessage = vi.fn(async (_messageId: string, message: unknown) => {
-      this.edits.push({ threadId, messageId: _messageId, message });
-      return { id: _messageId, threadId };
-    });
+    const editMessage = vi.fn(
+      async (messageId: string, message: unknown) => {
+        this.edits.push({ threadId, messageId, message });
+        return { id: messageId, threadId };
+      },
+    );
+    const adapterEditMessage = vi.fn(
+      async (threadIdForEdit: string, messageId: string, message: unknown) => {
+        this.edits.push({ threadId: threadIdForEdit, messageId, message });
+        return { id: messageId, threadId: threadIdForEdit };
+      },
+    );
     return {
       id: threadId,
       post,
       editMessage,
-      adapter: { editMessage, addReaction: vi.fn(async () => undefined) },
+      adapter: {
+        editMessage: adapterEditMessage,
+        addReaction: vi.fn(async () => undefined),
+        removeReaction: vi.fn(async () => undefined),
+      },
       startTyping: vi.fn(async () => undefined),
       subscribe: vi.fn(async () => undefined),
       postEphemeral: vi.fn(async () => ({
@@ -277,6 +301,7 @@ describeEmbeddedPostgres("Telegram DM run status (U1)", () => {
 
   const previousDmEnv = process.env[TELEGRAM_DM_CONVERSATIONS_ENV];
   const previousStatusEnv = process.env[TELEGRAM_DM_STATUS_ENV];
+  const previousSplitEnv = process.env[TELEGRAM_SPLIT_MAX_PARTS_ENV];
 
   beforeEach(async () => {
     process.env[TELEGRAM_DM_CONVERSATIONS_ENV] = "*";
@@ -293,6 +318,9 @@ describeEmbeddedPostgres("Telegram DM run status (U1)", () => {
     if (previousStatusEnv === undefined)
       delete process.env[TELEGRAM_DM_STATUS_ENV];
     else process.env[TELEGRAM_DM_STATUS_ENV] = previousStatusEnv;
+    if (previousSplitEnv === undefined)
+      delete process.env[TELEGRAM_SPLIT_MAX_PARTS_ENV];
+    else process.env[TELEGRAM_SPLIT_MAX_PARTS_ENV] = previousSplitEnv;
     vi.unstubAllEnvs();
   });
 
@@ -675,5 +703,173 @@ describeEmbeddedPostgres("Telegram DM run status (U1)", () => {
     const rows = await milestoneRows(fixture);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.payload.progressState).toBe("failed");
+  });
+
+  // The vendor's delivery lane reserves a Telegram streaming draft for long
+  // DM text unless the endpoint has a confirmed /stop subscription receipt
+  // (chat-channels.ts hasTelegramStopSubscription). The status milestones are
+  // short single-line texts that skip streaming anyway, but the receipt keeps
+  // the working milestone on the plain replace lane (edit-in-place).
+  async function seedTelegramStopSubscriptionReceipt(fixture: {
+    companyId: string;
+    endpointId: string;
+  }) {
+    const [endpoint] = await db
+      .select()
+      .from(chatEndpoints)
+      .where(eq(chatEndpoints.id, fixture.endpointId));
+    if (!endpoint) throw new Error("Expected Telegram endpoint row");
+    const [connection] = await db
+      .select()
+      .from(toolConnections)
+      .where(eq(toolConnections.id, endpoint.connectionId));
+    const refs = connection?.credentialSecretRefs ?? [];
+    const stable = refs
+      .map((ref: Record<string, unknown>) => ({
+        configPath: ref.configPath,
+        secretId: ref.secretId,
+        versionSelector: ref.versionSelector ?? "latest",
+      }))
+      .sort((left: Record<string, unknown>, right: Record<string, unknown>) =>
+        `${left.configPath}:${left.secretId}:${left.versionSelector}`.localeCompare(
+          `${right.configPath}:${right.secretId}:${right.versionSelector}`,
+        ),
+      );
+    const credentialFingerprint = createHash("sha256")
+      .update(JSON.stringify(stable))
+      .digest("hex");
+    const webhookUrlSha256 = createHash("sha256")
+      .update(
+        `https://paperclip.example/api/chat-webhooks/${endpoint.publicId}/telegram`,
+      )
+      .digest("hex");
+    const generation = Number(
+      (endpoint.setup as Record<string, unknown>).runtimeGeneration ?? 0,
+    );
+    await db
+      .insert(chatActions)
+      .values({
+        companyId: fixture.companyId,
+        endpointId: fixture.endpointId,
+        kind: "telegram_stop_subscription",
+        providerActionId: `telegram-stop-subscription:${generation}:${credentialFingerprint}:${webhookUrlSha256}`,
+        payload: {
+          version: 1,
+          botUserId: endpoint.botExternalId,
+          runtimeGeneration: generation,
+          credentialFingerprint,
+          webhookUrlSha256,
+        },
+        status: "processed",
+        result: { code: "telegram_stop_subscription_confirmed" },
+      })
+      .onConflictDoNothing({
+        target: [
+          chatActions.endpointId,
+          chatActions.providerActionId,
+        ],
+      });
+  }
+
+  it("delivers the status via the provider runtime and edits it in place from queued to working (U1 delivery)", async () => {
+    process.env[TELEGRAM_DM_STATUS_ENV] = "true";
+    const fixture = await seedBridgedConversation();
+    await seedTelegramStopSubscriptionReceipt(fixture);
+    // seedBridgedConversation built the service through createService(); the
+    // endpoint runtime it registered is the FakeChatSdkRuntime of that call.
+    const service = [...fixtureServices].at(-1);
+    if (!service) throw new Error("Expected a fixture chat channel service");
+    const serviceRuntime = service.runtime as unknown as FakeChatSdkRuntime;
+    const providerRuntime = serviceRuntime.endpoints.get(fixture.endpointId);
+    if (!providerRuntime) throw new Error("Expected Telegram provider runtime");
+    // The seeding DM leaves one delivered-inbound notice behind; drop it so
+    // the counts below observe only the status lane's provider traffic.
+    providerRuntime.posts.length = 0;
+    providerRuntime.edits.length = 0;
+    providerRuntime.postedIds.length = 0;
+
+    const runId = await insertRun(fixture, { status: "queued" });
+    await enqueueChatRunMilestones(db);
+    await service.processPendingPublications(1_000);
+
+    // One provider message for the whole status lane, not a stack.
+    expect(providerRuntime.posts).toHaveLength(1);
+    expect(providerRuntime.posts[0]!.message).toMatchObject({
+      markdown: expect.stringContaining("queued"),
+    });
+    const postedThreadId = providerRuntime.posts[0]!.threadId;
+    const postedMessageId = providerRuntime.postedIds[0]!;
+
+    await db
+      .update(heartbeatRuns)
+      .set({ status: "running", startedAt: new Date() })
+      .where(eq(heartbeatRuns.id, runId));
+    await enqueueChatRunMilestones(db);
+    await service.processPendingPublications(1_000);
+
+    // The working milestone edits the same provider message in place: the
+    // fake runtime's thread objects are recreated per runtime.thread() call,
+    // so the edit lands on a fresh thread double with the SAME thread id and
+    // the message id of the earlier post.
+    expect(providerRuntime.posts).toHaveLength(1);
+    expect(providerRuntime.edits).toHaveLength(1);
+    expect(providerRuntime.edits[0]!.threadId).toBe(postedThreadId);
+    expect(providerRuntime.edits[0]!.messageId).toBe(postedMessageId);
+    expect(
+      String((providerRuntime.edits[0]!.message as { markdown?: unknown }).markdown),
+    ).toContain("working");
+  });
+
+  it("splits a long structured answer inline when MYRMIDON_TELEGRAM_SPLIT_MAX_PARTS admits it (U1 delivery)", async () => {
+    process.env[TELEGRAM_DM_STATUS_ENV] = "true";
+    process.env[TELEGRAM_SPLIT_MAX_PARTS_ENV] = "6";
+    const fixture = await seedBridgedConversation();
+    const service = [...fixtureServices].at(-1);
+    if (!service) throw new Error("Expected a fixture chat channel service");
+    const serviceRuntime = service.runtime as unknown as FakeChatSdkRuntime;
+    const providerRuntime = serviceRuntime.endpoints.get(fixture.endpointId);
+    if (!providerRuntime) throw new Error("Expected Telegram provider runtime");
+
+    // The same shape the vendor's integration suite uses for its attachment
+    // case: heading + link + fenced code + long list.
+    const source = [
+      "## Complete result",
+      "[Open the evidence](https://example.test/evidence?case=telegram)",
+      "```ts",
+      ...Array.from({ length: 250 }, () => "const value = 1;"),
+      "```",
+      ...Array.from({ length: 100 }, (_v, index) => `- Finding ${index}`),
+    ].join("\n\n");
+    const providerSafeSource = projectSafeChatPublicationText(source);
+    // The vendor would send this as one attachment file.
+    expect(telegramMarkdownRequiresAttachment(providerSafeSource)).toBe(true);
+    const parts = splitTelegramPublicationText(providerSafeSource);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.length).toBeLessThanOrEqual(6);
+    expect(parts.join("")).toBe(providerSafeSource);
+
+    await db.insert(chatPublications).values({
+      companyId: fixture.companyId,
+      endpointId: fixture.endpointId,
+      conversationId: fixture.conversationId,
+      issueId: fixture.issueId,
+      commentId: null,
+      idempotencyKey: `test-split:${randomUUID()}`,
+      payload: { text: providerSafeSource },
+      state: "pending",
+    });
+    await service.processPendingPublications(1_000);
+
+    // Inline parts, not one attachment file: every post is text-only and the
+    // parts concatenate back to the source without losses.
+    expect(providerRuntime.posts.length).toBe(parts.length);
+    for (const post of providerRuntime.posts) {
+      const message = post.message as { markdown?: unknown; attachments?: unknown };
+      expect(message.attachments).toBeUndefined();
+    }
+    const delivered = providerRuntime.posts
+      .map((post) => String((post.message as { markdown?: unknown }).markdown))
+      .join("");
+    expect(delivered).toBe(providerSafeSource);
   });
 });
