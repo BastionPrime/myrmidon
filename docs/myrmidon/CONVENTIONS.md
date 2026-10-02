@@ -138,8 +138,11 @@ Dockerfile, workflows). All repository actions run under a single account, so Gi
 does not work here; instead review is recorded with the `review-approved` label, set by the
 reviewer role (adm-dev-review, a model of a different family than the author's) or by the
 maintainer — after reading the diff and checking that the test fails without the change. A
-new push drops the label and the review starts over. The required check is `hot files
-review`.
+new push drops the label and the review starts over. While review is pending the gate does
+not fail: the job always ends green and reports a commit status with context
+`hot-files-review` — `pending` while the label is missing, `success` when it is present or
+no hot files are touched. The `hot-files-review` status is the required check in the
+`main-protection` ruleset.
 
 ## 7. Tests
 

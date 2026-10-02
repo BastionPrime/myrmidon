@@ -6,7 +6,7 @@ Every change to an agent's instructions bundle — a file put, a file delete,
 a bundle patch — is snapshotted into the `agent_instructions_revisions` table
 (migration 0288). The snapshot holds the whole bundle (all files with their
 contents, the entry file, the source of the change, the author), not a delta.
-Any earlier revision can be restored from the agent card; the restore itself
+Any earlier revision can be restored through the API; the restore itself
 becomes a new revision, so the history stays append-only.
 
 ## What the API offers

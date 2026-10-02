@@ -129,10 +129,12 @@ import { startDeployJobs } from "./myrmidon/deploy-jobs/index.js"; // myrmidon(R
 import { startRuntimeLimits } from "./myrmidon/runtime-limits/index.js"; // myrmidon(C0)
 import { startBotContainers, stopBotContainers } from "./myrmidon/bot-containers/startup.js"; // myrmidon(W2a)
 import { startLitellmCostSweep, stopLitellmCostSweep } from "./myrmidon/litellm-costs/startup.js"; // myrmidon(M2-A)
+import { startTracingAttentionSweep, stopTracingAttentionSweep } from "./myrmidon/tracing-health/attention-sweep.js"; // myrmidon(TRACING-HEALTH)
 import { startBotCanary, stopBotCanary } from "./myrmidon/bot-containers/canary-index.js"; // myrmidon(R5-B)
 import { interactionContinuationOutboxService } from "./myrmidon/interaction-continuation-outbox.js"; // myrmidon(O1)
 import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
 import { createRunStallSweepFromHeartbeat } from "./myrmidon/run-stall/index.js"; // myrmidon(RUN-STALL)
+import { createTaskPrSyncScheduler } from "./myrmidon/task-pr-sync/index.js"; // myrmidon(TASK-PR-SYNC)
 import {
   createPendingInteractionWakeSweep,
   readPendingInteractionWakeContextSnapshot,
@@ -1317,6 +1319,12 @@ async function startServerWithDatabaseTeardown(
       logger.error({ err }, "pending interaction wake sweep failed");
     }));
   };
+  // myrmidon(TASK-PR-SYNC): links each task to the pull requests that deliver it
+  // through the work-products surface, refreshes their state from GitHub through
+  // the existing resolver, and settles the task (status done, one comment with the
+  // PR refs / merge sha / time) once every PR is merged — or returns it to the
+  // assignee when a PR was closed without merging.
+  const scheduleTaskPrSyncSweep = createTaskPrSyncScheduler({ db: db as any, track: trackHeartbeatSchedulerWork });
   // myrmidon(AUTO-RESUME): resumes an agent left in `error` once its 1/5/15 min
   // backoff step is due; the per-agent maintenance gate lives in the sweeper.
   // Runs on the same mutually-exclusive scheduler paths as the other
@@ -1538,6 +1546,7 @@ async function startServerWithDatabaseTeardown(
     startDeployJobs(db as any); // myrmidon(R5-A): resume an interface deploy job; no-op unless MYRMIDON_DEPLOY_ENABLED
     startBotContainers(db as any); // myrmidon(W2a): bot container sweep and the card's "Apply now" runtime; a no-op unless MYRMIDON_BOT_CONTAINERS is on
     startLitellmCostSweep(db as any); // myrmidon(M2-A): gateway spend sweep; a no-op unless MYRMIDON_LITELLM_* is set
+    startTracingAttentionSweep(db as any); // myrmidon(TRACING-HEALTH): keep the "LLM tracing" operator signal fresh; a no-op unless the tracing settings are on
     startBotCanary(db as any); // myrmidon(R5-B): resume an open bot image rollout; a no-op unless MYRMIDON_BOT_CANARY is on
     const heartbeatSchedulingSuppression = await heartbeat.resolveSchedulingSuppression();
 
@@ -1779,6 +1788,7 @@ async function startServerWithDatabaseTeardown(
         scheduleSetupTokenReaperSweep();
         scheduleEnvironmentLeaseCleanupSweep();
         schedulePendingInteractionWakeSweep(); // myrmidon(P12)
+        scheduleTaskPrSyncSweep(); // myrmidon(TASK-PR-SYNC)
         scheduleAutoResumeSweep(); // myrmidon(AUTO-RESUME)
 
         if (heartbeatSchedulerStopped) return;
@@ -2078,6 +2088,7 @@ async function startServerWithDatabaseTeardown(
     clearInterval(executionControlInterval);
     stopBotContainers(); // myrmidon(W2a)
     stopLitellmCostSweep(); // myrmidon(M2-A)
+    stopTracingAttentionSweep(); // myrmidon(TRACING-HEALTH)
     stopBotCanary(); // myrmidon(R5-B)
     if (heartbeatSchedulerInterval) {
       clearInterval(heartbeatSchedulerInterval);

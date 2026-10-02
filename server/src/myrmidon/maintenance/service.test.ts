@@ -164,8 +164,12 @@ describeEmbeddedPostgres("maintenance service and API", () => {
     expect((await svc.status()).windows[0]).toMatchObject({ state: "on", queuedRuns: 1, queuedWakeups: 1 });
     expect((await runStatuses(agentId)).sort()).toEqual(["queued", "succeeded"]);
 
+    // myrmidon(EXIT-ASYNC): exit returns as soon as the window is marked
+    // `leaving` (admission already reopened); the leave tail (queued-run
+    // resume, hook, retire) is finished by the tick, not by the exit call.
     const exited = await svc.exit({ type: "agent", id: agentId }, ADMIN);
-    expect(exited).toMatchObject({ state: "off", changed: true });
+    expect(exited).toMatchObject({ state: "leaving", changed: true });
+    await svc.tick();
     await heartbeatService(db).drainActiveRunExecutions();
     await waitFor(async () => (await runStatuses(agentId)).every((s) => s === "succeeded"));
     expect(await runStatuses(agentId)).toEqual(["succeeded", "succeeded"]);
@@ -205,7 +209,11 @@ describeEmbeddedPostgres("maintenance service and API", () => {
       status: 404,
     });
     expect(await svc.exit({ type: "instance" }, ADMIN)).toEqual({ scope: { type: "instance" }, state: "off", changed: false });
-    expect(await svc.exit({ type: "company", id: companyId }, ADMIN)).toMatchObject({ state: "off", changed: true });
+    // myrmidon(EXIT-ASYNC): the first exit marks `leaving` and returns; the
+    // leave tail belongs to the tick.
+    expect(await svc.exit({ type: "company", id: companyId }, ADMIN)).toMatchObject({ state: "leaving", changed: true });
+    await svc.tick();
+    expect((await svc.status()).active).toBe(false);
     expect(await svc.exit({ type: "company", id: companyId }, ADMIN)).toMatchObject({ state: "off", changed: false });
   });
 
@@ -255,7 +263,12 @@ describeEmbeddedPostgres("maintenance service and API", () => {
         .post("/api/myrmidon/maintenance")
         .send({ action: "exit", scope: { type: "instance" } })
         .expect(200);
-      expect(exit.body).toMatchObject({ state: "off", changed: true });
+      // myrmidon(EXIT-ASYNC): the POST returns the `leaving` view (the leave
+      // tail is async); the maintenance tick retires the window.
+      expect(exit.body).toMatchObject({ state: "leaving", changed: true });
+      await service().tick();
+      const after = await request(app(admin)).get("/api/myrmidon/maintenance").expect(200);
+      expect(after.body).toMatchObject({ active: false, instance: null });
     });
 
     it("shows the instance window in /api/health, also to anonymous callers", async () => {

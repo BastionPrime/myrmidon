@@ -121,7 +121,10 @@ describeEmbeddedPostgres("maintenance mode with Zabbix", () => {
       groups: [{ groupid: "11" }, { groupid: "12" }],
     });
 
+    // myrmidon(EXIT-ASYNC): exit returns at `leaving`; the onExited hook
+    // (maintenance.delete) runs when the tick finishes the leave.
     await svc.exit({ type: "instance" }, ADMIN);
+    await svc.tick();
     expect(fake.calls.map((c) => c.method)).toEqual(["hostgroup.get", "maintenance.create", "maintenance.delete"]);
     expect(fake.calls[2]!.params).toEqual(["501"]);
   });
@@ -132,7 +135,8 @@ describeEmbeddedPostgres("maintenance mode with Zabbix", () => {
       const entered = await svc.enter({ scope: { type: "instance" }, reason: "deploy" }, ADMIN);
       expect(entered).toMatchObject({ state: "on", changed: true });
       const exited = await svc.exit({ type: "instance" }, ADMIN);
-      expect(exited).toMatchObject({ state: "off", changed: true });
+      expect(exited).toMatchObject({ state: "leaving", changed: true });
+      await svc.tick();
       // No period was created, so there is nothing to delete.
       expect(fake.calls.map((c) => c.method)).not.toContain("maintenance.delete");
       const failures = await db.select().from(activityLog).where(eq(activityLog.action, "myrmidon.maintenance.zabbix_failed"));
@@ -148,6 +152,7 @@ describeEmbeddedPostgres("maintenance mode with Zabbix", () => {
     const svc = service(fake);
     await svc.enter({ scope: { type: "company", id: company!.id }, reason: "company work" }, ADMIN);
     await svc.exit({ type: "company", id: company!.id }, ADMIN);
+    await svc.tick();
     expect(fake.calls).toEqual([]);
     expect(await db.select().from(agents)).toEqual([]);
   });
