@@ -98,41 +98,6 @@ restores the board-only behavior (not for a release: the 01.10 incident was exac
 split). The settings are in [SETTINGS.md](SETTINGS.md); an example is in
 [`deploy.env.example`](../../scripts/myrmidon/deploy/deploy.env.example).
 
-### Upgrading from 1.4.0 to 1.5.0
-
-The 1.5.0 additions are additive on the host side: no new migrations to run by
-hand and no changes to the deploy script — the upgrade is the image switch of
-the release components, as in the 1.4.0 procedure above.
-
-What changes for operators:
-
-- **Set the bridge pepper before the first connector pairing.**
-  `MYRMIDON_BROWSER_BRIDGE_PEPPER` is the HMAC pepper for pairing codes and
-  bridge tokens; unset, the process takes a random pepper per start (one log
-  warning) and every paired device must pair again after each restart. Set it
-  once in the board's environment before issuing the first pairing code. See
-  [SETTINGS.md](SETTINGS.md) and
-  [guides/browser-bridge-gateway.md](guides/browser-bridge-gateway.md).
-- **The connector panel appears in Company settings → Connectors.** The bridge
-  state lives in `instance_settings.general.browserBridge` (domains, signing
-  policy); existing instances start with an empty allowlist and the default
-  signing policy (`enabled`, mode `auto`, no daily limit) — nothing pairs and
-  nothing is signed until an operator configures it. Panel writes need the
-  instance admin role. See
-  [guides/connector-panel.md](guides/connector-panel.md).
-- **The OCR path stays closed until configured.** Without
-  `MYRMIDON_OCR_BASE_URL` and `MYRMIDON_OCR_KEY_SECRET` the `ocr.pdf` tool
-  answers a stable `ocr_disabled` refusal and no request leaves the board; bots
-  that never call it are unaffected. To open the path, set the contour address,
-  the secret name and (for LiteLLM) the model — see [SETTINGS.md](SETTINGS.md)
-  and [guides/ocr.md](guides/ocr.md).
-- **External MCP connectors need no fork change.** An instance that already
-  runs `PAPERCLIP_DEPLOYMENT_MODE=authenticated` with
-  `PAPERCLIP_DEPLOYMENT_EXPOSURE=private` accepts private-network connector
-  containers; do not flip exposure to `public` while one is connected. The
-  connect/grant runbook is
-  [guides/external-mcp-connectors.md](guides/external-mcp-connectors.md).
-
 ### Upgrading from 1.3.2 to 1.4.0
 
 Deploy the board, dockergate and fleetd images from the same 1.4.0 tag together — with
@@ -265,6 +230,87 @@ DEGRADED line, and the rollback of the board and of each component is the operat
 
 `--dry-run` changes nothing (does not pull the image, does not dump, does not touch files)
 and prints the plan. The image check (step 0) does run in it: it only reads.
+
+## One boot path (systemd unit)
+
+The board container must be started at boot from **the same compose files the
+deploy scripts manage**. The 01.10 incident: a vendor-era `paperclip.service`
+ran `docker compose up -d` with the vendor compose file, and for 7 minutes the
+board ran the old `paperclip:2026.916.1` image on a database already migrated
+to 1.3.0.
+
+`deploy.sh` verifies this **before anything changes** (step 0, alongside the
+CI-image check, also in `--dry-run`): the unit `paperclip.service` must start
+the server with `docker compose --project-directory <COMPOSE_DIR>` and exactly
+the `-f` files this deploy manages (`COMPOSE_FILES` plus the override). A unit
+that reads another compose file, another directory, or misses the override file
+is a refusal — nothing is pulled, dumped or switched. There is no flag that
+skips it (`--force` does not skip it either).
+
+- The canonical unit ships as
+  [`paperclip.service.template`](../../scripts/myrmidon/deploy/paperclip.service.template):
+  `After=docker.service` (the nginx lesson: nothing that needs the docker
+  bridge address may start before docker), `Wants=network-online.target`, and
+  `ExecStart` naming the compose files of the installation. Install it once:
+  either copy the filled template to `/etc/systemd/system/paperclip.service`
+  by hand, or set `SYSTEMD_UNIT_INSTALL=1` in the settings file (the deploy
+  then installs it when it does not exist yet; needs root).
+- `SYSTEMD_UNIT_INSTALL=1` **never overwrites an existing unit**: a foreign
+  unit is a refusal, because silently replacing an unknown boot path is how
+  the incident happened. Remove or fix the foreign unit by hand, then deploy.
+- The unit references the compose **files**, not a digest: a new deploy writes
+  the new digest into the override file and the next boot picks it up with no
+  unit edit.
+- The settings file can point `SYSTEMD_UNIT_DIR` elsewhere (a stand VM, a
+  sandbox); the check is the same.
+
+## Post-boot check
+
+A systemd oneshot `myrmidon-post-boot.service` (template:
+[`myrmidon-post-boot.service.template`](../../scripts/myrmidon/deploy/myrmidon-post-boot.service.template))
+runs after `docker.service`, `paperclip.service` and `nginx.service` and calls
+[`post-boot-check.sh`](../../scripts/myrmidon/deploy/post-boot-check.sh) with
+the same settings file the deploy uses. It checks:
+
+1. the board `/api/health` reports `status: ok` **and** the running server
+   container matches the image pinned in the override file (a boot that
+   resurrected a different image is a failure);
+2. the dockergate container runs the image recorded in `DOCKERGATE_EXPECT_IMAGE`
+   (empty: the check is off with a log line);
+3. every `myrmidon-bot-*` container is running, and dockergate shows no deny
+   lines since boot (`DOCKERGATE_LOGS_COMMAND`);
+4. nginx, LiteLLM, RAGFlow and Hindsight answer their check URLs (each URL
+   unset: the check is off with a log line — nothing is silently skipped);
+5. the DNS names other services use resolve on the docker network
+   (`DNS_CHECK_NAMES`, default `mysql es01 paperclip-server-1` — the RAGFlow
+   lesson);
+6. `systemctl --failed` is empty.
+
+Every failure is listed (not just the first), the script exits 1 and the unit
+shows as failed in `systemctl --failed`. The machine-readable report goes to
+`$STATE_DIR/post-boot-check.json` — for the on-duty role's board issue, never
+to the owner directly.
+
+## Reboot rehearsal on the stand VM
+
+Before a production release, prove the boot path on the stand VM
+(`myrmidon-stand`, see [The release staging host](#the-release-staging-host)):
+
+1. install the units: the canonical `paperclip.service` and
+   `myrmidon-post-boot.service` (fill `__DEPLOY_ENV__` with the settings file
+   path; `SYSTEMD_UNIT_INSTALL=1` installs the first one via a deploy);
+2. run a deploy by digest (or a fresh install), let the board come up healthy;
+3. reboot the VM;
+4. after the boot settles, read the outcome: `systemctl --no-pager status
+   myrmidon-post-boot.service` (must be `active (exited)`) and
+   `$STATE_DIR/post-boot-check.json` (`ok: true`), plus `systemctl --failed`
+   (must be empty).
+
+Pass: the post-boot check reports green. A wrong boot path (a unit reading
+another compose file) is caught earlier: the deploy itself refuses. Attach the
+rehearsal log (the check output plus the JSON report) to the release task; for
+the Myrmidon release notes it is the acceptance record that the release
+survives a reboot.
 
 ## Rollback
 

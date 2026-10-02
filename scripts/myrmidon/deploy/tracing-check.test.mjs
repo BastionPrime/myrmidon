@@ -448,6 +448,15 @@ function deploySandbox({ langfuseHealth = { status: "OK", version: "4.2.1" }, tr
     path.join(composeDir, "docker-compose.myrmidon-image.yml"),
     `services:\n  server:\n    image: ${CI_IMAGE}@${OLD}\n`,
   );
+  // myrmidon(BOOT-PATH): deploy.sh verifies the boot unit; give the sandbox the canonical
+  // one in a sandbox dir (the same template the deploy scripts ship).
+  const unitDir = path.join(dir, "systemd");
+  fs.mkdirSync(unitDir, { recursive: true });
+  const unit = fs.readFileSync(path.join(HERE, "paperclip.service.template"), "utf8")
+    .replaceAll("__COMPOSE_DIR__", composeDir)
+    .replaceAll("__COMPOSE_FILE_ARGS__", `-f ${composeDir}/docker-compose.yml -f ${composeDir}/docker-compose.myrmidon-image.yml`)
+    .replaceAll("__COMPOSE_SERVICE__", "server");
+  fs.writeFileSync(path.join(unitDir, "paperclip.service"), unit);
 
   const lines = [
     `COMPOSE_DIR=${composeDir}`,
@@ -462,6 +471,7 @@ function deploySandbox({ langfuseHealth = { status: "OK", version: "4.2.1" }, tr
     `MAINTENANCE_ENTER_COMMAND='echo enter >> ${path.join(dir, "maintenance.log")}'`,
     `MAINTENANCE_EXIT_COMMAND='echo exit >> ${path.join(dir, "maintenance.log")}'`,
     "RUNNING_RUNS_COMMAND='echo 0'",
+    `SYSTEMD_UNIT_DIR=${unitDir}`,
     "MYR_DOCKERGATE_HEALTH_URL=http://127.0.0.1:3100/dockergate/health",
     "MYR_FLEETD_HEALTH_URL=http://127.0.0.1:3100/fleetd/health",
     "MYRMIDON_DEPLOY_SMOKE=0",
