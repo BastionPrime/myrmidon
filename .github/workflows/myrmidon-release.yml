@@ -1,0 +1,53 @@
+name: Myrmidon release publish
+
+# RELEASE-PUBLISH (the 02.10 gap): every myr-vX.Y.Z tag gets its GitHub
+# Release automatically. On 02.10 the tag myr-v1.5.0 existed for 40 minutes
+# and the board ran 1.5.0, but GitHub still showed 1.4.0 as Latest because
+# the Release object was never created. The publishing logic (CI gate,
+# CHANGELOG section, digest table, supersede) lives in
+# scripts/myrmidon/release/publish-github-release.sh; this workflow only
+# checks out the tag and calls it.
+
+on:
+  push:
+    tags:
+      - "myr-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to (re-)publish, e.g. myr-v1.5.0
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  # One publish per tag: a re-run must never race the original run.
+  group: myrmidon-release-${{ github.ref_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish
+    if: ${{ github.repository == 'itkadr-git/myrmidon' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # the release tag (push) or the tag input (workflow_dispatch)
+          ref: ${{ github.ref_name || inputs.tag }}
+          persist-credentials: false
+
+      - name: Publish the GitHub Release for the tag
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          ./scripts/myrmidon/release/publish-github-release.sh --tag "$TAG"
