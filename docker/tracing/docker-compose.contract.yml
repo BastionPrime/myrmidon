@@ -1,0 +1,207 @@
+# TRACING-HEALTH contract stack: LiteLLM (OTLP only) -> Langfuse v4 -> ClickHouse.
+#
+# Why this file exists: the 02.10 incident was a tracing path that nobody
+# checked. Langfuse v4 runs in the `events_only` write mode: the legacy
+# `/api/public/ingestion` endpoint rejects trace/observation events, while
+# LiteLLM keeps sending them for as long as the legacy `langfuse` callback is
+# configured. The result was ~12k "Bad request" events per hour and a gateway
+# burning CPU, with an empty dashboard. Only a live stack proves which path
+# actually ships events, so `tracing-contract-check.sh` starts this compose,
+# sends ONE completion and asserts exactly one OTEL event in ClickHouse
+# `events_core` with zero ingestion rejections.
+#
+# This is a TEST stack, not a deployment description:
+#   * every image carries an exact X.Y.Z pin (a major/minor tag such as
+#     `langfuse/langfuse:4` is not a pin, see the static guard in
+#     scripts/myrmidon/tracing/tracing-contract.myrmidon.test.mjs);
+#   * the Langfuse web and worker pin the SAME version - the pair is the
+#     contract, and `langfuse_otel` is the only callback LiteLLM is allowed
+#     to install against it;
+#   * no port is published beyond loopback, every credential comes from the
+#     run's generated env file (nothing here is a real secret);
+#   * the stack is stateless on purpose: the volumes below are removed by the
+#     check on the way out, so a run can never inherit another run's events.
+#
+# Neutral names only: no host names, no internal addresses, no real projects.
+name: tracing-contract
+
+services:
+  postgres:
+    # 17.9 is the newest 17.x patch; the digest makes the pin exact even if the
+    # tag is ever re-pushed (the operator rule: a full X.Y.Z tag or a digest).
+    image: postgres:17.9@sha256:2a0d0fe14825b0939f78a8cad5cd4e6aa68bf94d0e5dd96e24b6d23af4315545
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${TRACING_CONTRACT_POSTGRES_PASSWORD:?set by tracing-contract-check.sh}
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7.4.6
+    command: ["redis-server", "--requirepass", "${TRACING_CONTRACT_REDIS_PASSWORD:?set by tracing-contract-check.sh}", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${TRACING_CONTRACT_REDIS_PASSWORD:?set by tracing-contract-check.sh}
+    volumes:
+      - redis-data:/data
+
+  clickhouse:
+    # v4 requires ClickHouse 25.12+; 26.4 is the recommended line.
+    image: clickhouse/clickhouse-server:26.4.5.143
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: langfuse
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${TRACING_CONTRACT_CLICKHOUSE_PASSWORD:?set by tracing-contract-check.sh}
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8123/ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    ports:
+      - "127.0.0.1:${TRACING_CONTRACT_CLICKHOUSE_PORT:?set by tracing-contract-check.sh}:8123"
+
+  seaweedfs:
+    # S3-compatible blob storage is mandatory for Langfuse (raw event upload).
+    # The identity file is written by the check for this run only.
+    image: chrislusf/seaweedfs:3.90@sha256:bcdd9f405141ad332ed7ac8050f76f315e1fd2cdb64894182dd21545b8b9320f
+    command: ["server", "-dir=/data", "-s3", "-s3.config=/etc/seaweedfs/s3.json"]
+    environment:
+      WEED_S3_ALLOW_EMPTY_FOLDER: "true"
+    volumes:
+      - seaweedfs-data:/data
+      - ${TRACING_CONTRACT_S3_CONFIG:?set by tracing-contract-check.sh}:/etc/seaweedfs/s3.json:ro
+    ports:
+      - "127.0.0.1:${TRACING_CONTRACT_S3_PORT:?set by tracing-contract-check.sh}:8333"
+
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4.49.0
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
+    environment:
+      <<: &langfuse-common
+        NEXTAUTH_URL: http://127.0.0.1:${TRACING_CONTRACT_LANGFUSE_PORT:?set by tracing-contract-check.sh}
+        DATABASE_URL: postgresql://langfuse:${TRACING_CONTRACT_POSTGRES_PASSWORD:?}@postgres:5432/langfuse
+        SALT: ${TRACING_CONTRACT_SALT:?set by tracing-contract-check.sh}
+        ENCRYPTION_KEY: ${TRACING_CONTRACT_ENCRYPTION_KEY:?set by tracing-contract-check.sh}
+        TELEMETRY_ENABLED: "false"
+        CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+        CLICKHOUSE_URL: http://clickhouse:8123
+        CLICKHOUSE_USER: langfuse
+        CLICKHOUSE_PASSWORD: ${TRACING_CONTRACT_CLICKHOUSE_PASSWORD:?}
+        CLICKHOUSE_DB: langfuse
+        CLICKHOUSE_CLUSTER_ENABLED: "false"
+        REDIS_CONNECTION_STRING: redis://:${TRACING_CONTRACT_REDIS_PASSWORD:?}@redis:6379
+        LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+        LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+        LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+        LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://seaweedfs:8333
+        LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+        LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${TRACING_CONTRACT_S3_ACCESS_KEY:?set by tracing-contract-check.sh}
+        LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${TRACING_CONTRACT_S3_SECRET_KEY:?set by tracing-contract-check.sh}
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4.49.0
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
+    environment:
+      <<: *langfuse-common
+      NEXTAUTH_SECRET: ${TRACING_CONTRACT_NEXTAUTH_SECRET:?set by tracing-contract-check.sh}
+      # Headless initialization: the contract run never touches the UI. The
+      # project and its key pair exist before the first completion.
+      LANGFUSE_INIT_ORG_ID: ${TRACING_CONTRACT_ORG_ID:?set by tracing-contract-check.sh}
+      LANGFUSE_INIT_ORG_NAME: Tracing contract
+      LANGFUSE_INIT_PROJECT_ID: ${TRACING_CONTRACT_PROJECT_ID:?set by tracing-contract-check.sh}
+      LANGFUSE_INIT_PROJECT_NAME: Tracing contract
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${TRACING_CONTRACT_LANGFUSE_PUBLIC_KEY:?set by tracing-contract-check.sh}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${TRACING_CONTRACT_LANGFUSE_SECRET_KEY:?set by tracing-contract-check.sh}
+      LANGFUSE_INIT_USER_EMAIL: contract@example.invalid
+      LANGFUSE_INIT_USER_NAME: Tracing contract
+      LANGFUSE_INIT_USER_PASSWORD: ${TRACING_CONTRACT_USER_PASSWORD:?set by tracing-contract-check.sh}
+    ports:
+      - "127.0.0.1:${TRACING_CONTRACT_LANGFUSE_PORT:?}:3000"
+
+  # The stub model provider: one OpenAI-compatible completion, no provider and
+  # no provider key. It publishes NOTHING - the completion has to travel
+  # through the gateway, not around it. (A provider on the invoking host's
+  # loopback is not reachable from a container through host.docker.internal:
+  # the host binds 127.0.0.1 while the container connects to the bridge
+  # address. Keeping the stub on the compose network is both simpler and
+  # stricter than publishing it.)
+  stub-provider:
+    image: python:3.13-alpine@sha256:2dd78ad5cf13a0b68f5134dc49aa9950203a8cf4b7463431b9f3b398287c5059
+    command: ["python3", "/srv/stub-provider.py", "8080"]
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - ./stub-provider.py:/srv/stub-provider.py:ro
+
+  litellm:
+    # The gateway under test: OTLP only (`langfuse_otel`), never the legacy
+    # `langfuse` callback that Langfuse v4 rejects.
+    image: ghcr.io/berriai/litellm:v1.103.2
+    restart: "no"
+    depends_on:
+      langfuse-web:
+        condition: service_started
+      stub-provider:
+        condition: service_healthy
+    environment:
+      TRACING_CONTRACT_MOCK_BASE_URL: http://stub-provider:8080/v1
+      TRACING_CONTRACT_MOCK_API_KEY: ${TRACING_CONTRACT_MOCK_API_KEY:?set by tracing-contract-check.sh}
+      LITELLM_MASTER_KEY: ${TRACING_CONTRACT_MASTER_KEY:?set by tracing-contract-check.sh}
+      LANGFUSE_PUBLIC_KEY: ${TRACING_CONTRACT_LANGFUSE_PUBLIC_KEY:?}
+      LANGFUSE_SECRET_KEY: ${TRACING_CONTRACT_LANGFUSE_SECRET_KEY:?}
+      LANGFUSE_HOST: http://langfuse-web:3000
+      # Nothing here should ever reach out beyond the compose network.
+      LITELLM_LOG: INFO
+    volumes:
+      - ./litellm.config.yaml:/etc/litellm/config.yaml:ro
+    command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
+    ports:
+      - "127.0.0.1:${TRACING_CONTRACT_LITELLM_PORT:?set by tracing-contract-check.sh}:4000"
+
+volumes:
+  postgres-data:
+  redis-data:
+  clickhouse-data:
+  clickhouse-logs:
+  seaweedfs-data:
