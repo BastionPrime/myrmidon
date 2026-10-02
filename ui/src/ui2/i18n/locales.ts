@@ -162,6 +162,26 @@ const en = {
   "ui2.settings.language.preview.decisionTitle": "Raise the soft limit for the day",
   "ui2.settings.language.preview.decisionBody": "The colony spends faster than planned. Choose how to continue.",
   "ui2.settings.language.note": "Agent-written text (task bodies, run logs, comments) is never translated. Identifiers never change.",
+  "ui2.screens.placeholderTitle": "This screen is being rebuilt",
+  "ui2.screens.placeholderBody": "The redesigned screen for this section arrives in the next wave; the legacy view carries the data today.",
+  "ui2.screens.placeholderLegacyLink": "Open the legacy view",
+
+  "ui2.owner": "Owner",
+  "ui2.ownerChannel": "Owner channel",
+  "ui2.nav.railLabel": "Navigation",
+  "ui2.nav.badge.attention": "Needs attention",
+  "ui2.nests.all": "All nests",
+  "ui2.phone.status": "Status",
+  "ui2.chip.colony": "Colony",
+  "ui2.chip.fleet": "Fleet",
+  "ui2.chip.fleetAttention": "Fleet needs attention",
+  "ui2.chip.forecast": "Forecast",
+  "ui2.decisions.badge": "decisions",
+  "ui2.commander.aria": "Open command palette",
+  "ui2.commander.placeholder": "Type a command…",
+  "ui2.commander.openChat": "Open chat",
+  "ui2.commander.stubNote": "The command palette lands in a later wave; chat opens the legacy inbox.",
+  "ui2.settings.navLabel": "Settings",
 } as const;
 
 export type Ui2MessageKey = keyof typeof en;
@@ -307,6 +327,26 @@ const ru: Record<Ui2MessageKey, string> = {
   "ui2.settings.language.preview.decisionTitle": "Поднять мягкий лимит на день",
   "ui2.settings.language.preview.decisionBody": "Колония тратит быстрее плана. Выберите, как продолжить.",
   "ui2.settings.language.note": "Тексты, написанные агентами (тела задач, логи прогонов, комментарии), не переводятся. Идентификаторы не меняются.",
+  "ui2.screens.placeholderTitle": "Этот экран переделывается",
+  "ui2.screens.placeholderBody": "Переработанный экран этого раздела появится в следующей волне; данные сегодня — в прежнем виде.",
+  "ui2.screens.placeholderLegacyLink": "Открыть прежний вид",
+
+  "ui2.owner": "Владелец",
+  "ui2.ownerChannel": "Канал владельца",
+  "ui2.nav.railLabel": "Навигация",
+  "ui2.nav.badge.attention": "Требует внимания",
+  "ui2.nests.all": "Все гнёзда",
+  "ui2.phone.status": "Статус",
+  "ui2.chip.colony": "Колония",
+  "ui2.chip.fleet": "Флот",
+  "ui2.chip.fleetAttention": "Флоту нужно внимание",
+  "ui2.chip.forecast": "Прогноз",
+  "ui2.decisions.badge": "решений",
+  "ui2.commander.aria": "Открыть палитру команд",
+  "ui2.commander.placeholder": "Введите команду…",
+  "ui2.commander.openChat": "Открыть чат",
+  "ui2.commander.stubNote": "Палитра команд появится в одной из следующих волн; чат открывает прежние входящие.",
+  "ui2.settings.navLabel": "Настройки",
 };
 
 export const ui2Messages: Record<Ui2Locale, Record<Ui2MessageKey, string>> = {
