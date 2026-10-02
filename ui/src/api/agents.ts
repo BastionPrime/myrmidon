@@ -88,6 +88,8 @@ export interface AgentWakeRequest {
   source?: "timer" | "assignment" | "on_demand" | "automation";
   triggerDetail?: "manual" | "ping" | "callback" | "system";
   reason?: string | null;
+  // myrmidon(WAKE-BIND): first-class task binding for the wakeup API.
+  issueId?: string;
   payload?: Record<string, unknown> | null;
   idempotencyKey?: string | null;
   forceFreshSession?: boolean;

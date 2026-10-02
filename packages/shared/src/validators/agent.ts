@@ -221,6 +221,12 @@ export const wakeAgentSchema = z.object({
   reason: z.string().optional().nullable(),
   /** Select an exact failed run; its chat request and actor are server-derived. */
   failedRunId: z.string().uuid().optional(),
+  /**
+   * myrmidon(WAKE-BIND): first-class task binding for the wakeup API. The run
+   * wakes for this issue (and may comment on it). Without it, a manual wake
+   * binds to the agent's top ready task or is refused.
+   */
+  issueId: z.string().uuid().optional(),
   payload: z.record(z.string(), z.unknown()).optional().nullable(),
   idempotencyKey: z.string().optional().nullable(),
   forceFreshSession: z.preprocess(
