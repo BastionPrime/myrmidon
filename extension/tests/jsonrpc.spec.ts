@@ -4,7 +4,7 @@ import { jsonRpcError, jsonRpcRequest, jsonRpcSuccess, parseIncoming, parseBridg
 const READY_RESULT = {
   protocolVersion: 1,
   deviceId: "device-1",
-  capabilities: ["open", "read", "click", "screenshot"],
+  capabilities: ["open", "read", "click", "fill", "download", "screenshot"],
   allowlist: ["tender.example"],
   actionTimeoutMs: 30000,
   confirmationTimeoutMs: 180000,
@@ -39,11 +39,12 @@ describe("parseIncoming", () => {
     expect(incoming.reply.error?.code).toBe(-32600);
   });
 
-  it("refuses a frame without a usable id", () => {
-    const incoming = parseIncoming(JSON.stringify({ jsonrpc: "2.0", method: "browser.read" }));
-    expect(incoming.kind).toBe("invalid");
-    if (incoming.kind !== "invalid") return;
-    expect(incoming.reply.error?.code).toBe(-32600);
+  it("parses a notification (no id) as the gateway's cancellation", () => {
+    const incoming = parseIncoming(JSON.stringify({ jsonrpc: "2.0", method: "browser.cancel", params: { id: "gw-3" } }));
+    expect(incoming.kind).toBe("notification");
+    if (incoming.kind !== "notification") return;
+    expect(incoming.method).toBe("browser.cancel");
+    expect((incoming.params as { id: string }).id).toBe("gw-3");
   });
 
   it("refuses a frame with a wrong jsonrpc version", () => {

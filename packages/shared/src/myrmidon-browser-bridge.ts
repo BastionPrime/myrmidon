@@ -40,6 +40,15 @@ export const BRIDGE_PROTOCOL_VERSION = 1;
 export const BRIDGE_ACTION_TIMEOUT_MS = 30_000;
 export const BRIDGE_CONFIRMATION_TIMEOUT_MS = 180_000;
 
+/**
+ * Ceiling of one `browser.download` (part D). A download larger than this is
+ * refused by the extension instead of being carried over the bridge: the bridge
+ * exists to hand a bot a tender document, not to move arbitrary files, and an
+ * unbounded frame would cost both sides the whole transfer before anyone can
+ * say no.
+ */
+export const BROWSER_DOWNLOAD_MAX_BYTES = 25 * 1024 * 1024;
+
 /** Human-readable, one-shot code lifetime (design note §4.2). */
 export const PAIRING_CODE_TTL_MS = 15 * 60 * 1000;
 
@@ -310,6 +319,7 @@ export const BROWSER_BRIDGE_ERROR_CODES = {
   protocolVersionUnsupported: -32018,
   confirmationNotGranted: -32019,
   signingDisabled: -32020,
+  downloadTooLarge: -32021,
 } as const;
 
 export type BrowserBridgeErrorCode =

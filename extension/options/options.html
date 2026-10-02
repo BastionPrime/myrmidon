@@ -18,14 +18,14 @@
     </p>
     <p>What this build implements:</p>
     <ul>
-      <li>read-only actions: open, read, click, screenshot</li>
-      <li>allowlist of tender-site domains, checked locally before every action</li>
+      <li>actions: open, read, click, fill, download, screenshot</li>
+      <li>a confirmation step: an action the board marks for confirmation runs only after you press Confirm</li>
+      <li>allowlist of company domains, checked locally before every action</li>
       <li>the bridge token stays in <code>chrome.storage.local</code> on this computer</li>
     </ul>
     <p>
-      Signing steps are never automated: the person at this computer presses
-      the button on the final step; the extension does not hold the key or the
-      PIN.
+      Signing steps are never automated here: the extension does not hold the key
+      or the PIN, and it declares no sign capability at all.
     </p>
     <script type="module" src="../entry-options.js"></script>
   </body>
