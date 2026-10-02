@@ -105,11 +105,21 @@ scripts/myrmidon/deploy/deploy.sh --config /path/to/deploy.env --digest sha256:<
    отказ, образ не меняется.
 4. Вход в режим обслуживания (`MAINTENANCE_MODE`):
    - `api` — `POST /api/myrmidon/maintenance` по контракту из
-     [design/maintenance-mode.md](design/maintenance-mode.md), раздел 7 (трек 5, R3);
+     [design/maintenance-mode.md](design/maintenance-mode.md), раздел 7 (трек 5, R3).
+     Окно открывается с `onTimeout: interrupt_and_retry` и
+     `drainTimeoutSec: MAINTENANCE_DRAIN_GRACE_SEC` (по умолчанию 300 с), чтобы плановый
+     выкат не ждал длинных прогонов. `MAINTENANCE_ON_TIMEOUT=wait` возвращает прежнее
+     поведение: окно открывается с `onTimeout: wait` и
+     `drainTimeoutSec: MAINTENANCE_DRAIN_TIMEOUT_SEC` (1800 с);
    - `hook` — свои команды `MAINTENANCE_ENTER_COMMAND` / `MAINTENANCE_EXIT_COMMAND`;
    - `pause` — пока API режима нет: пауза `MAINTENANCE_PAUSE_SEC` секунд.
 5. Ожидание, пока идущих прогонов не станет 0: `RUNNING_RUNS_COMMAND` или, в режиме `api`,
-   `instance.runningRuns` из API. Таймаут `RUNS_WAIT_TIMEOUT_SEC` (или сломанный счётчик) — выкат
+   `instance.runningRuns` из API. С умолчанием `onTimeout: interrupt_and_retry` окно
+   дренирует grace (`MAINTENANCE_DRAIN_GRACE_SEC`, 300 с) и затем прерывает оставшиеся
+   прогоны: каждый помечается прерванным режимом обслуживания (не сбой), задача сохраняет
+   своё место, а прогон автоматически повторяется при закрытии окна. Именно это заставляет
+   ожидание сходиться быстро, а не упираться в длинный прогон. Таймаут `RUNS_WAIT_TIMEOUT_SEC`
+   (или сломанный счётчик) — выкат
    прерывается до смены образа, **режим обслуживания снимается перед аварийным выходом**: доска не
    остаётся в обслуживании до ручного снятия. Не сработавшее снятие (обслуживание уже выключено)
    — предупреждение, не двойной отказ; причина выхода остаётся «слив не завершился». Счётчик не

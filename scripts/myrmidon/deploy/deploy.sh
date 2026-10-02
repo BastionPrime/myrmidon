@@ -15,10 +15,14 @@
 #
 # Steps: pull the image by digest; remember the current digest as "previous";
 # dump the database (DUMP_COMMAND, refuses an empty dump); enter maintenance;
-# wait until no runs are in progress (a drain timeout lifts maintenance again
-# and aborts before the image changes); switch the image line in the compose
-# override file and recreate only the server service; verify /api/health
-# (status, version, commit); leave maintenance.
+# wait until no runs are in progress. The window drains for the short grace
+# (MAINTENANCE_DRAIN_GRACE_SEC, 300 s by default) and then interrupts whatever
+# is still running; the interrupted runs are retried when the window closes
+# (MAINTENANCE_ON_TIMEOUT=wait keeps the old "wait for the long timeout"
+# behaviour). A drain timeout lifts maintenance again and aborts before the
+# image changes; then switch the image line in the compose override file and
+# recreate only the server service; verify /api/health (status, version,
+# commit); leave maintenance.
 #
 # On a failed health check the script stops with maintenance still on and
 # prints the rollback command. --dry-run changes nothing and prints the plan
@@ -70,8 +74,8 @@ if [[ "$DRY_RUN" == "1" ]]; then
   plan "1. docker pull $ref"
   plan "2. remember previous image: ${previous_image:-<none>} -> $PREVIOUS_IMAGE_FILE"
   plan "3. dump database with DUMP_COMMAND into $DUMP_DIR (refuse if smaller than $DUMP_MIN_BYTES bytes)"
-  plan "4. enter maintenance (MAINTENANCE_MODE=$MAINTENANCE_MODE)"
-  plan "5. wait for zero running runs (timeout ${RUNS_WAIT_TIMEOUT_SEC}s); on a drain timeout maintenance is lifted and the deploy aborts before the image changes"
+  plan "4. enter maintenance (MAINTENANCE_MODE=$MAINTENANCE_MODE, onTimeout=$MAINTENANCE_ON_TIMEOUT, grace ${MAINTENANCE_DRAIN_GRACE_SEC}s)"
+  plan "5. wait for zero running runs (timeout ${RUNS_WAIT_TIMEOUT_SEC}s); onTimeout=$MAINTENANCE_ON_TIMEOUT drains for the grace and then interrupts what is still running (retried after the window closes); on a drain timeout maintenance is lifted and the deploy aborts before the image changes"
   plan "6. set image in $OVERRIDE_PATH to $ref; docker compose up -d --no-deps $COMPOSE_SERVICE"
   plan "7. verify $HEALTH_URL: status ok, version ${expect_version:-<from image label>}, commit ${expect_commit:-<from image label>}"
   plan "8. leave maintenance"

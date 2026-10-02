@@ -174,6 +174,82 @@ describeEmbeddedPostgres("maintenance interrupt_and_retry", () => {
     expect(actions.map((a) => a.action)).toContain("myrmidon.maintenance.run_interrupted");
   }, 45_000);
 
+  /**
+   * Replay of the production scenario: a planned deploy enters the window with
+   * `interrupt_and_retry` and a short drain grace, and five long runs outlast
+   * the grace. After the grace the window interrupts all five (no
+   * reconciliation hold, so no task is left blocked) and the deploy can switch
+   * the image; when the window closes, the five retries start on their own.
+   */
+  it("a deploy that outlasts the grace interrupts five long runs and resumes all five tasks", async () => {
+    const seeds: Awaited<ReturnType<typeof seedIssueRun>>[] = [];
+    for (let i = 0; i < 5; i += 1) seeds.push(await seedIssueRun(SLOW));
+    await waitFor(
+      async () => (await Promise.all(seeds.map((s) => run(s.runId)))).every((r) => r.status === "running"),
+      30_000,
+    );
+
+    const svc = maintenanceService(db, { heartbeat: maintenanceHeartbeatPort(heartbeatService(db)) });
+    // The grace is compressed for the test: the "drain, then interrupt"
+    // semantics and the resume after exit are what the replay proves.
+    await svc.enter(
+      { scope: { type: "instance" }, reason: "deploy", drainTimeoutSec: 3, onTimeout: "interrupt_and_retry" },
+      ADMIN,
+    );
+    await svc.tick();
+    // Inside the grace the window is still draining; nothing is interrupted yet.
+    expect((await svc.status()).instance).toMatchObject({ state: "entering", runningRuns: 5, interruptedRuns: 0 });
+
+    await new Promise((resolve) => setTimeout(resolve, 3_300));
+    await svc.tick();
+    // The grace is over: every run is interrupted and leaves `running`.
+    expect((await svc.status()).instance).toMatchObject({ interruptedRuns: 5, runningRuns: 0 });
+
+    for (const seed of seeds) {
+      const interrupted = await run(seed.runId);
+      expect(interrupted).toMatchObject({ status: "cancelled", errorCode: MAINTENANCE_INTERRUPT_ERROR_CODE });
+      expect(await holds(seed.issueId)).toEqual([]);
+      const issue = (await db.select().from(issues).where(eq(issues.id, seed.issueId)))[0]!;
+      expect(issue.status).not.toBe("blocked");
+    }
+
+    // Each interrupted run has exactly one held retry; the admission gate keeps
+    // it from starting while the window is open.
+    const retryIds: string[] = [];
+    for (const seed of seeds) {
+      const retries = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.retryOfRunId, seed.runId));
+      expect(retries).toHaveLength(1);
+      retryIds.push(retries[0]!.id);
+    }
+    await heartbeatService(db).promoteDueScheduledRetries();
+    await heartbeatService(db).resumeQueuedRuns();
+    for (const id of retryIds) {
+      expect(["queued", "scheduled_retry"]).toContain((await run(id)).status);
+    }
+
+    // Nothing is running: the window moves to `on` and the deploy can switch.
+    await svc.tick();
+    expect((await svc.status()).instance).toMatchObject({ state: "on", runningRuns: 0, interruptedRuns: 5 });
+
+    // The window closes: every task continues on its own, none is left blocked.
+    for (const seed of seeds) {
+      await db
+        .update(agents)
+        .set({ adapterConfig: { command: process.execPath, args: ["-e", FAST] } })
+        .where(eq(agents.id, seed.agentId));
+    }
+    await svc.exit({ type: "instance" }, ADMIN);
+    await waitFor(
+      async () => (await Promise.all(retryIds.map((id) => run(id)))).every((r) => r.status === "succeeded"),
+      30_000,
+    );
+    for (const seed of seeds) {
+      expect(await holds(seed.issueId)).toEqual([]);
+      const issue = (await db.select().from(issues).where(eq(issues.id, seed.issueId)))[0]!;
+      expect(issue.status).not.toBe("blocked");
+    }
+  }, 90_000);
+
   it("keeps the vendor hold for a real failure, inside or outside maintenance", async () => {
     const outside = await seedIssueRun("process.exit(3)");
     await waitFor(async () => (await run(outside.runId)).status === "failed");
