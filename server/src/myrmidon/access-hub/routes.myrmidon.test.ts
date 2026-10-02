@@ -70,6 +70,7 @@ function fakeService() {
     grantAccess: vi.fn(async () => ({ bindingId: "binding-1" })),
     revokeAccess: vi.fn(async () => ({ revoked: 1 })),
     listBindings: vi.fn(async () => [{ id: "binding-1", targetType: "agent", targetId: AGENT_ID }]),
+    getSshPublicKey: vi.fn(async () => "ssh-ed25519 AAAAfakepublickey myrmidon-access-hub"),
     listJournal: vi.fn(async () => [
       {
         id: "activity-1",
@@ -110,6 +111,7 @@ function app(actor: unknown, opts: {
   svc?: ReturnType<typeof fakeService>["svc"];
   hosts?: ReturnType<typeof fakeHosts>;
   deploy?: ReturnType<typeof createFakeDeployPort>;
+  restartBound?: (secretId: string) => Promise<Array<{ agentId: string; kind: string }>>;
 } = {}) {
   const { svc } = fakeService();
   const hosts = fakeHosts();
@@ -129,6 +131,7 @@ function app(actor: unknown, opts: {
       writeHosts: (opts.hosts ?? hosts).writeHosts as never,
       listHostReferencingCompanies: async () => [COMPANY_ID],
       deploy: opts.deploy ?? createFakeDeployPort(),
+      restartBound: opts.restartBound ?? (async () => []),
     }),
   );
   server.use(errorHandler);
@@ -386,8 +389,53 @@ describe("myrmidon(SEC1) access-hub routes: host registry", () => {
     expect(res.body.outcome).toBe("deployed");
     expect(deploy.calls).toHaveLength(1);
     expect(deploy.calls[0].input.fingerprint).toBe("SHA256:abc");
+    // Part C: the port now receives the public part, not an empty string.
+    expect(deploy.calls[0].input.publicKey).toContain("ssh-ed25519");
     await request(app(member, { deploy, hosts }))
       .post(`${BASE}/hosts/nope/deploy/${SECRET_ID}`)
       .expect(404);
+  });
+
+  it("revoke and dry-run endpoints go through the same port", async () => {
+    const deploy = createFakeDeployPort();
+    const hosts = fakeHosts();
+    await hosts.writeHosts((current) => ({
+      next: [
+        ...current,
+        { id: "h1", name: "build-1", address: "example.com", targetUser: "agent-a", enabled: true },
+      ],
+      result: null as never,
+    }));
+    const revoked = await request(app(member, { deploy, hosts }))
+      .post(`${BASE}/hosts/h1/revoke/${SECRET_ID}`)
+      .expect(200);
+    expect(revoked.body.outcome).toBe("not_deployed");
+    expect(deploy.calls.some((call) => call.op === "revoke")).toBe(true);
+    const dry = await request(app(member, { deploy, hosts }))
+      .post(`${BASE}/hosts/h1/dry-run/${SECRET_ID}`)
+      .expect(200);
+    expect(dry.body.outcome).toBe("dry_run");
+    expect(deploy.calls.some((call) => call.op === "dryRun")).toBe(true);
+  });
+
+  it("rotate-ssh-key reports the restart of the bound agents' containers", async () => {
+    const restarts: string[] = [];
+    const res = await request(
+      app(member, {
+        restartBound: async (secretId) => {
+          restarts.push(secretId);
+          return [
+            { agentId: AGENT_ID, kind: "applied_restart" },
+            { agentId: "agent-b", kind: "not_applicable" },
+          ];
+        },
+      }),
+    )
+      .post(`${BASE}/secrets/${SECRET_ID}/rotate-ssh-key`)
+      .expect(200);
+    expect(restarts).toEqual([SECRET_ID]);
+    expect(res.body.restartedContainers).toHaveLength(2);
+    expect(res.body.restartedContainers[0].kind).toBe("applied_restart");
+    expect(res.body.publicKey).toContain("ssh-ed25519");
   });
 });

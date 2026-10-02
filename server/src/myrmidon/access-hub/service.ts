@@ -492,6 +492,20 @@ export function accessHubService(db: Db, deps: AccessHubServiceDeps = {}) {
     return secrets.listBindingReferences(companyId, secretId);
   }
 
+  /** Part C: the PUBLIC part of an ssh-key secret, for the deploy operations.
+   * Public by design (it is what lands in authorized_keys); the private value
+   * never passes through this module. Null for non-ssh secrets or rows where
+   * generation never stored the public part. */
+  async function getSshPublicKey(companyId: string, secretId: string): Promise<string | null> {
+    const row = await queries.findSecretRow(companyId, secretId);
+    if (!row) return null;
+    const metadata = asRecord(row.secret.providerMetadata);
+    const kind = readAccessHubKind(metadata);
+    if (kind !== "ssh_key") return null;
+    const value = metadata?.[ACCESS_HUB_PUBLIC_KEY_KEY];
+    return typeof value === "string" ? value : null;
+  }
+
   /** The journal: activity rows of our actions, newest first. Details never
    * contain values in the first place (the redaction pipeline is the second
    * line of defense). */
@@ -516,6 +530,7 @@ export function accessHubService(db: Db, deps: AccessHubServiceDeps = {}) {
     grantAccess,
     revokeAccess,
     listBindings,
+    getSshPublicKey,
     listJournal,
     usageHosts,
   };
