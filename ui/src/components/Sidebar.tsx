@@ -5,6 +5,7 @@ import {
   Target,
   LayoutDashboard,
   DollarSign,
+  Gauge, // myrmidon(1.6-BASELINE): quality nav item
   History,
   Search,
   SquarePen,
@@ -267,6 +268,7 @@ export function Sidebar({ children }: { children?: ReactNode }) {
               <SidebarNavItem to="/apps" label={t("nav.connectors")} icon={Unplug} />
               <SidebarNavItem to="/timeline" label={t("nav.timeline")} icon={GanttChartSquare} />
               <SidebarNavItem to="/costs" label={t("nav.costs")} icon={DollarSign} />
+              <SidebarNavItem to="/quality" label={t("nav.quality")} icon={Gauge} /> {/* myrmidon(1.6-BASELINE) */}
               <SidebarNavItem to="/activity" label={t("nav.activity")} icon={History} />
               <SidebarNavItem to="/company/settings" label={t("nav.settings")} icon={Settings} />
             </SidebarSection>

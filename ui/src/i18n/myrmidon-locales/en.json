@@ -28,7 +28,8 @@
     "settings": "Settings",
     "home": "Home",
     "unread": "unread",
-    "decisionsBadge": "decisions"
+    "decisionsBadge": "decisions",
+    "quality": "Quality"
   },
   "common": {
     "cancel": "Cancel",

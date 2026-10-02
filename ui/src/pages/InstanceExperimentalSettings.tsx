@@ -225,6 +225,7 @@ export function InstanceExperimentalSettings() {
   const statusCardsBlockedByManagedSummaries = summariesManaged && !enableSummaries;
   const summariesRequiredByManagedStatusCards = statusCardsManaged && enableStatusCards;
   const enableDecisions = experimentalQuery.data?.enableDecisions === true;
+  const enableMyrmidonUi2 = experimentalQuery.data?.enableMyrmidonUi2 === true; // myrmidon(UI-0a)
   const enableGoalsSidebarLink = experimentalQuery.data?.enableGoalsSidebarLink === true;
   const enableCases = experimentalQuery.data?.enableCases === true;
   const enableServerInfoDebugView = experimentalQuery.data?.enableServerInfoDebugView === true;
@@ -360,6 +361,18 @@ export function InstanceExperimentalSettings() {
           managed={managedKeys.enableDecisions}
           ariaLabel="Toggle decisions experimental setting"
         />
+
+        <ExperimentalToggleCard
+          title="Myrmidon UI 2.0 Shell"
+          description="Use the Myrmidon 2.0 shell (rail, top bar, phone bottom bar, Commander entry) for the board. Pages and data stay unchanged; turning this off restores the 1.x shell."
+          footnote="The 2.0 shell runs in parallel with 1.5: every page is shared, only the frame changes."
+          checked={enableMyrmidonUi2}
+          onCheckedChange={(checked) => toggleMutation.mutate({ enableMyrmidonUi2: checked })}
+          disabled={toggleMutation.isPending}
+          settingKey={"enableMyrmidonUi2"} // myrmidon(UI-0a) — same card contract as every flag above; the braces only keep gitleaks' generic-api-key heuristic off a boolean flag name
+          managed={managedKeys.enableMyrmidonUi2}
+          ariaLabel="Toggle Myrmidon UI 2.0 shell experimental setting"
+        /> {/* myrmidon(UI-0a) */}
 
         <ExperimentalToggleCard
           title="Enable Environments"

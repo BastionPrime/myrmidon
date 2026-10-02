@@ -28,7 +28,8 @@
     "settings": "Настройки",
     "home": "Главная",
     "unread": "непрочитано",
-    "decisionsBadge": "решений"
+    "decisionsBadge": "решений",
+    "quality": "Качество"
   },
   "common": {
     "cancel": "Отмена",
