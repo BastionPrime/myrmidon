@@ -33,6 +33,13 @@ import { CHAT_RUN_PRESENTATION_AUTHORIZATION_REASON } from "./heartbeat-run-summ
 import { resolveChatOriginPublicationBindings } from "./issues.js";
 import { authorizeNativeChatReviewPresentation } from "./native-runtime/native-chat-review-presentation.js";
 import { inboundCommentCandidateIds } from "../myrmidon/chat-reconciliation/inbound-comment-candidates.js";
+// myrmidon(U1): the bridged Telegram DM gets an editable in-place status
+// message (release 1.4, item 3) when MYRMIDON_TELEGRAM_DM_STATUS is enabled.
+// The milestone key is one durable row per run so the later milestone edits
+// the same provider message instead of stacking noise (see the delivery-side
+// replacement in chat-channels.ts).
+import { telegramDmStatusEnabled } from "../myrmidon/telegram-dm-status-settings.js";
+import { parseTelegramConversationUserId } from "../myrmidon/agent-chat-bridge/identity.js";
 import {
   SAFE_NATIVE_CHAT_PROGRESS_EVENT_TYPES,
   safeNativeChatProgressForEvent,
@@ -107,6 +114,10 @@ type ChatRunMilestoneCandidate = {
   endpointId: string;
   conversationId: string;
   agentName: string;
+  /** `chat_conversations.is_direct_message`, read for the bridged-DM noise rule (myrmidon(X8h)). */
+  isDirectMessage: boolean;
+  /** `issues.conversation_user_id`; a `telegram:` value marks the bridged Telegram DM conversation. */
+  conversationUserId: string | null;
 };
 
 type SafeNativeChatProgressCandidate = {
@@ -660,6 +671,11 @@ export async function enqueueChatRunMilestones(
         endpointId: chatConversations.endpointId,
         conversationId: chatConversations.id,
         agentName: agents.name,
+        // myrmidon(X8h): the bridged Telegram DM is a chat the owner reads on
+        // a phone, not a status board; the vendor's routine progress
+        // milestones are noise there (see the skip in the loop below).
+        isDirectMessage: chatConversations.isDirectMessage,
+        conversationUserId: issues.conversationUserId,
       })
       .from(heartbeatRuns)
       .innerJoin(
@@ -668,6 +684,13 @@ export async function enqueueChatRunMilestones(
           eq(chatConversations.companyId, heartbeatRuns.companyId),
           sql`${issueIdFromContext} = ${chatConversations.issueId}::text`,
           inArray(chatConversations.state, ["active", "waiting"]),
+        ),
+      )
+      .innerJoin(
+        issues,
+        and(
+          eq(issues.companyId, chatConversations.companyId),
+          eq(issues.id, chatConversations.issueId),
         ),
       )
       .innerJoin(
@@ -840,6 +863,37 @@ export async function enqueueChatRunMilestones(
       if (inserted >= limit) break;
       const milestone = milestoneForStatus(row.runStatus, row.runErrorCode);
       if (!milestone) continue;
+      // myrmidon(X8h): the bridged Telegram DM is a conversation, not a status
+      // board — the agent's own answer is what the person waits for. The
+      // vendor's routine progress milestones ("… is queued.", "… is working…")
+      // are pure noise there, and so is the terminal milestone of a turn the
+      // chat owner stopped with `/stop` from the chat itself: that command has
+      // already answered. Failure, admin-attention and completion milestones
+      // keep publishing: they are the only signal a turn ended badly or ended
+      // without a chat-visible answer.
+      // myrmidon(U1): with MYRMIDON_TELEGRAM_DM_STATUS enabled, the same
+      // bridged DM keeps exactly one editable status row per run
+      // (`run:<id>:dmstatus:<endpoint>`) instead of the vendor's per-milestone
+      // noise: queued and working coalesce into that row and every later
+      // milestone edits the same provider message (chat-channels.ts resolves
+      // the replace lane at delivery). The /stop terminal milestone stays
+      // suppressed either way — the command has already answered.
+      const bridgedTelegramDm =
+        row.isDirectMessage &&
+        parseTelegramConversationUserId(row.conversationUserId) !== null;
+      const dmStatusMilestone =
+        bridgedTelegramDm &&
+        telegramDmStatusEnabled() &&
+        (milestone === "queued" || milestone === "working");
+      if (
+        bridgedTelegramDm &&
+        !dmStatusMilestone &&
+        (milestone === "queued" ||
+          milestone === "working" ||
+          row.runErrorCode === "chat_session_stopped")
+      ) {
+        continue;
+      }
       const bindingCacheKey = `${row.companyId}:${row.issueId}:${row.runId}`;
       let bindings = bindingsCache.get(bindingCacheKey);
       if (!bindings) {
@@ -900,30 +954,89 @@ export async function enqueueChatRunMilestones(
           .limit(1);
         if (explicitlyAuthoredPublication.length > 0) continue;
       }
-      const result = await db
-        .insert(chatPublications)
-        .values({
-          companyId: row.companyId,
-          endpointId: row.endpointId,
-          conversationId: row.conversationId,
-          issueId: row.issueId,
-          idempotencyKey: `run:${row.runId}:${milestone}:${row.endpointId}`,
-          payload: projectSafeChatPublication({
-            classification: "external",
-            source: "safe_milestone",
-            text: safeMilestoneText({
-              agentName: row.agentName,
-              errorCode: row.runErrorCode,
-              milestone,
-              issueId: row.issueId,
-              publicBaseUrl: input.publicBaseUrl,
-            }),
-            progressState: milestone,
+      let insertedRows: { id: string }[] = [];
+      if (dmStatusMilestone) {
+        // myrmidon(U1): the text stays the vendor's safe milestone wording;
+        // only the durable key differs (one row per run, not per milestone).
+        const dmStatusPayload = projectSafeChatPublication({
+          classification: "external",
+          source: "safe_milestone",
+          text: safeMilestoneText({
+            agentName: row.agentName,
+            errorCode: row.runErrorCode,
+            milestone,
+            issueId: row.issueId,
+            publicBaseUrl: input.publicBaseUrl,
           }),
-          state: "pending",
-        })
-        .onConflictDoNothing()
-        .returning({ id: chatPublications.id });
+          progressState: milestone,
+        });
+        // myrmidon(U1): one durable status row per run for the bridged DM.
+        // queued and working coalesce here; a later milestone updates the
+        // same row (payload only — the state stays pending/retry so the
+        // delivery lane can edit the same provider message in place).
+        insertedRows = await db
+          .insert(chatPublications)
+          .values({
+            companyId: row.companyId,
+            endpointId: row.endpointId,
+            conversationId: row.conversationId,
+            issueId: row.issueId,
+            idempotencyKey: `run:${row.runId}:dmstatus:${row.endpointId}`,
+            payload: dmStatusPayload,
+            state: "pending",
+          })
+          .onConflictDoUpdate({
+            target: [chatPublications.companyId, chatPublications.idempotencyKey],
+            set: { payload: dmStatusPayload, updatedAt: new Date() },
+            setWhere: sql`${chatPublications.state} in ('pending', 'retry', 'published', 'streaming', 'delivery_unknown')`,
+          })
+          .returning({ id: chatPublications.id });
+        // A published status row is being superseded by a newer milestone:
+        // re-open it for delivery so the sweep picks the update up and edits
+        // the existing provider message. A pending/retry row is already queued.
+        const updated = insertedRows[0];
+        if (updated && milestone === "working") {
+          await db
+            .update(chatPublications)
+            .set({ state: "pending", updatedAt: new Date() })
+            .where(
+              and(
+                eq(chatPublications.id, updated.id),
+                inArray(chatPublications.state, [
+                  "published",
+                  "streaming",
+                  "delivery_unknown",
+                ]),
+              ),
+            );
+        }
+      } else {
+        insertedRows = await db
+          .insert(chatPublications)
+          .values({
+            companyId: row.companyId,
+            endpointId: row.endpointId,
+            conversationId: row.conversationId,
+            issueId: row.issueId,
+            idempotencyKey: `run:${row.runId}:${milestone}:${row.endpointId}`,
+            payload: projectSafeChatPublication({
+              classification: "external",
+              source: "safe_milestone",
+              text: safeMilestoneText({
+                agentName: row.agentName,
+                errorCode: row.runErrorCode,
+                milestone,
+                issueId: row.issueId,
+                publicBaseUrl: input.publicBaseUrl,
+              }),
+              progressState: milestone,
+            }),
+            state: "pending",
+          })
+          .onConflictDoNothing()
+          .returning({ id: chatPublications.id });
+      }
+      const result = insertedRows;
       inserted += result.length;
     }
     if (rows.length < pageSize) break;

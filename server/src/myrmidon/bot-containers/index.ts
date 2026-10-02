@@ -32,6 +32,7 @@ import {
   isBotContainersEnabled,
   readBotContainerAgentConfig,
 } from "./agent-config.js";
+import type { BotContainerAgentConfig } from "./agent-config.js";
 import { botKeyLock, type BotKeyLock } from "./bot-key-lock.js";
 import type { BotContainerDriver } from "./driver.js";
 import {
@@ -127,6 +128,15 @@ export interface BotContainerRuntimeDeps {
    *  tool gateways made for any other agent (deleted, terminated, switched to another adapter or with the
    *  container turned off), which no reconcile pass reaches any more (board-gateway-ports.ts). */
   releaseStrayGateways?: (keepAgentIds: ReadonlySet<string>) => Promise<{ released: number; warnings: string[] }>;
+  /** Optional. Reads one agent's card again at the moment of a pass, inside the
+   *  per-bot lock, so a reconcile never applies a template captured earlier.
+   *  The periodic sweep lists every bot once per tick and reconciles them
+   *  afterwards: a card changed while that tick runs (or shortly before) would
+   *  otherwise be reconciled from the tick's snapshot — the pass would restart
+   *  the pre-change container, or pull a just-applied new one back, and still
+   *  report success. Without this port the pass uses the `agent` value the
+   *  caller passed (the sweep's snapshot). */
+  readAgent?: (agentId: string) => Promise<BotContainerAgent | null>;
   maintenance: BotMaintenancePort;
   activity?: BotContainerActivitySink;
   network: string;
@@ -136,16 +146,32 @@ export interface BotContainerRuntimeDeps {
 
 export type ApplyBotContainerOutcome = ReconcileOutcome | { kind: "not_applicable"; reason: string };
 
-/** The "apply now" entry point for one agent — wired to a button on the card, or
- *  called right after a card/project save, per containers-plan-senior-2026-09-28.md
- *  §2.2. A no-op ({kind: "not_applicable"}) while MYRMIDON_BOT_CONTAINERS is off
- *  and for any agent that is not an enabled hermes_gateway bot. Waits for any
- *  reconcile of the same bot already in progress (sweep or another "apply now")
- *  to finish first; reconcileBot itself never throws. */
+export interface ApplyBotContainerOptions {
+  /** Read per request; defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
+  /** Template image for this pass, in place of the card's own. The bot image
+   *  canary (canary-index.ts) drives a rollout image through this same entry
+   *  point: the spec's limits and mounts still come from the card, only the
+   *  image is the rollout's. */
+  specImage?: string;
+}
+
+/**
+ * The "apply now" entry point for one agent — wired to a button on the card, or
+ * called right after a card/project save, per containers-plan-senior-2026-09-28.md
+ * §2.2. A no-op ({kind: "not_applicable"}) while MYRMIDON_BOT_CONTAINERS is off
+ * and for any agent that is not an enabled hermes_gateway bot. Waits for any
+ * reconcile of the same bot already in progress (sweep or another "apply now")
+ * to finish first; reconcileBot itself never throws.
+ *
+ * The card is read again through `deps.readAgent` once the per-bot lock is held,
+ * and the spec for the pass is built from THAT card: the caller's `agent` is a
+ * snapshot (the sweep's whole tick reads the agents table once), and a template
+ * taken from it can be older than the change the pass was meant to apply. */
 export async function applyBotContainerNow(
   agent: BotContainerAgent,
   deps: BotContainerRuntimeDeps,
-  opts: { env?: NodeJS.ProcessEnv } = {},
+  opts: ApplyBotContainerOptions = {},
 ): Promise<ApplyBotContainerOutcome> {
   if (!isBotContainersEnabled(opts.env)) {
     return { kind: "not_applicable", reason: `${BOT_CONTAINERS_ENV} is not enabled` };
@@ -154,9 +180,11 @@ export async function applyBotContainerNow(
   if (!parsed.ok) return { kind: "not_applicable", reason: parsed.reason };
   const botKey = botKeyForAgent(agent.agentId);
   if (!botKey) return { kind: "not_applicable", reason: `agent id "${agent.agentId}" cannot be used as a bot key` };
-  const spec = botContainerSpec(botKey, parsed.config, deps.network);
   const lock = deps.lock ?? botKeyLock;
   return lock.run(botKey, async () => {
+    const current = await readAgentForPass(agent, botKey, deps);
+    if (!current.ok) return current.outcome;
+    const spec = botContainerSpec(botKey, opts.specImage ? { ...current.config, image: opts.specImage } : current.config, deps.network);
     const outcome = await reconcileBot({
       agentId: agent.agentId,
       botKey,
@@ -171,6 +199,46 @@ export async function applyBotContainerNow(
     }
     return outcome;
   });
+}
+
+type FreshAgentResult =
+  | { ok: true; config: BotContainerAgentConfig }
+  | { ok: false; outcome: ApplyBotContainerOutcome };
+
+/**
+ * The card the pass must reconcile: `deps.readAgent`'s fresh read when the
+ * runtime has it, the caller's snapshot otherwise. A card that has since stopped
+ * qualifying (container turned off, another adapter, bad numbers) is
+ * not-applicable, exactly as if the caller had passed it; a card that can no
+ * longer be read at all fails the pass instead of silently falling back to the
+ * older snapshot (the next tick retries). */
+async function readAgentForPass(
+  agent: BotContainerAgent,
+  botKey: string,
+  deps: BotContainerRuntimeDeps,
+): Promise<FreshAgentResult> {
+  let current = agent;
+  if (deps.readAgent) {
+    let fresh: BotContainerAgent | null;
+    try {
+      fresh = await deps.readAgent(agent.agentId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await deps.activity?.record({
+        level: "error",
+        agentId: agent.agentId,
+        botKey,
+        message: "failed to read the agent card for a bot container pass",
+        details: { error: message },
+      });
+      return { ok: false, outcome: { kind: "error", message: `agent ${agent.agentId} could not be read: ${message}` } };
+    }
+    if (!fresh) return { ok: false, outcome: { kind: "not_applicable", reason: `agent ${agent.agentId} no longer exists` } };
+    current = fresh;
+  }
+  const parsed = readBotContainerAgentConfig(current.adapterType, current.adapterConfig);
+  if (!parsed.ok) return { ok: false, outcome: { kind: "not_applicable", reason: parsed.reason } };
+  return { ok: true, config: parsed.config };
 }
 
 /** `deferred` (a change waiting for a maintenance window) and `error` say nothing
@@ -376,6 +444,16 @@ export type {
 export { reconcileBot } from "./reconciler.js";
 export { classifyProfileChange } from "./types.js";
 export type { AppliedProfileState, CompiledProfile, CompiledProfileFile, ProfileChangeClass } from "./types.js";
+export {
+  APPLIED_LIMIT_PENDING_NOTE,
+  compareGatewayConcurrency,
+  EXTERNAL_GATEWAY_NOTE,
+  externalGatewayRateLimitWarning,
+  GATEWAY_RATE_LIMITED_ERROR_CODE,
+  GATEWAY_RATE_LIMIT_LOOKBACK_MS,
+  NO_APPLIED_STATE_NOTE,
+} from "./concurrency-sync.js";
+export type { GatewayConcurrencyStatus } from "./concurrency-sync.js";
 export { dockerBotContainerDriver, readDockerDriverConfig } from "./docker-driver.js";
 export { botProfileWiring } from "./profile-ports.js";
 export { createActivityWarningSink, createBotProfileCompile } from "./profile-compile.js";

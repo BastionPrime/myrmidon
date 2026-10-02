@@ -51,9 +51,20 @@ describe("decideQueuedRunStaleness: pending interaction addressee (P2)", () => {
     });
   });
 
-  it("does not bypass a terminal issue status", () => {
+  // myrmidon(N2): a card that is still pending outlives the status flip that
+  // closed the task it was opened on, so the addressee's run answers it
+  // instead of being cancelled as terminal.
+  it("bypasses a terminal issue status for a pending card's addressee", () => {
+    for (const issueStatus of ["done", "cancelled"]) {
+      expect(
+        decideQueuedRunStaleness(facts({ isPendingInteractionAddresseeWake: true, issueStatus }), NOW),
+      ).toEqual({ stale: false });
+    }
+  });
+
+  it("still cancels a terminal issue for a wake that is not a card addressee", () => {
     expect(
-      decideQueuedRunStaleness(facts({ isPendingInteractionAddresseeWake: true, issueStatus: "done" }), NOW),
+      decideQueuedRunStaleness(facts({ isInteractionWake: true, issueStatus: "done" }), NOW),
     ).toMatchObject({ stale: true, errorCode: "issue_terminal_status" });
   });
 });

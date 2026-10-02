@@ -80,12 +80,16 @@ export interface AgentPermissionUpdate {
   canAssignTasks: boolean;
   trustPreset?: AgentPermissions["trustPreset"];
   authorizationPolicy?: AgentPermissions["authorizationPolicy"];
+  // myrmidon(S6)
+  toolAccess?: { mode: "all" | "listed"; tools?: string[]; connections?: string[] };
 }
 
 export interface AgentWakeRequest {
   source?: "timer" | "assignment" | "on_demand" | "automation";
   triggerDetail?: "manual" | "ping" | "callback" | "system";
   reason?: string | null;
+  // myrmidon(WAKE-BIND): first-class task binding for the wakeup API.
+  issueId?: string;
   payload?: Record<string, unknown> | null;
   idempotencyKey?: string | null;
   forceFreshSession?: boolean;
@@ -175,6 +179,12 @@ export const agentsApi = {
       agentPath(id, companyId, `/instructions-bundle/file?path=${encodeURIComponent(relativePath)}`),
     ),
   pause: (id: string, companyId?: string) => api.post<Agent>(agentPath(id, companyId, "/pause"), {}),
+  // myrmidon(EMERGENCY-STOP): immediately cancel the runs a draining pause left running
+  emergencyStop: (id: string, companyId?: string) =>
+    api.post<{ agentId: string; runsCancelled: number }>(
+      withCompanyScope(`/myrmidon/agents/${encodeURIComponent(id)}/emergency-stop`, companyId),
+      {},
+    ),
   resume: (id: string, companyId?: string) => api.post<Agent>(agentPath(id, companyId, "/resume"), {}),
   clearError: (id: string, companyId?: string) =>
     api.post<ClearAgentErrorResponse>(agentPath(id, companyId, "/clear-error"), {}),

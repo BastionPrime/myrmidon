@@ -360,6 +360,13 @@ import {
   evaluateIssueRewakeThrottle,
   isThrottleCandidateIssueRewake,
 } from "./issue-rewake-throttle.js";
+// myrmidon(WAKE-GUARD): admission-side half of TASK-PR-SYNC — skips a run for a
+// task whose delivering PRs are all merged and settles it instead.
+import {
+  createTaskPrSyncWakeGuard,
+  readTaskPrSyncWakeGuardEnabled,
+  TASK_PR_SYNC_WAKE_SKIP_REASON,
+} from "../myrmidon/task-pr-sync/wake-guard.js";
 import {
   logActivity,
   publishPluginDomainEvent,
@@ -625,11 +632,26 @@ import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { serverVersion } from "../version.js";
 // myrmidon(R3): maintenance mode admission gate
 import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/maintenance/gate.js";
+// myrmidon(D2): uuid-typed json comparisons for the board DB hot path. See
+// docs/myrmidon/DIVERGENCE.md.
+import { jsonTextUuid } from "../myrmidon/db-hot-path/json-uuid.js";
 // myrmidon(P1): stale active environment lease sweep
 import { createStaleActiveLeaseSweep } from "../myrmidon/leases-stale-sweep.js";
 // myrmidon(M3): skip idle timer heartbeats
 import { hasOtherActionableWork, skipIdleHeartbeatsEnabled } from "../myrmidon/heartbeat-idle-skip.js";
+// myrmidon(IDLE-PICKUP): the board wakes an idle agent on its next ready task
+import {
+  createIdlePickupSweeper,
+  idlePickupForAgent,
+} from "../myrmidon/idle-pickup.js";
+// myrmidon(AUTO-RESUME): the board resumes an agent left in `error` with backoff
+import { createAutoResumeSweeper } from "../myrmidon/auto-resume.js";
 import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
+// myrmidon(S2-hostcred): a run never inherits the host's GitHub credentials
+import {
+  filterHostGitHubCredentialEnv,
+  resolveRunHostGitHubCredentials,
+} from "../myrmidon/host-github-credentials.js";
 // myrmidon(L3): pause drains instead of cancelling; resume wakes stranded work
 import {
   isSkippableStartupRecoveryConflict,
@@ -644,6 +666,14 @@ import {
   appendCrossChannelDelta,
   buildCrossChannelContext,
 } from "../myrmidon/agent-chat-bridge/cross-channel.js";
+
+// myrmidon(M3): owner signal on a budget hard-stop (see budget-signal.ts)
+import {
+  budgetSignalEnabled,
+  deliverBudgetHardStopSignal,
+  type BudgetHardStopSignalInput as BudgetSignalInput,
+  type BudgetSignalPorts,
+} from "../myrmidon/budget-signal.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -9079,6 +9109,8 @@ export function heartbeatService(
 ) {
   let shutdownInProgress = false;
   const instanceSettings = instanceSettingsService(db);
+  // myrmidon(WAKE-GUARD): one cache per server process; see wake-guard.ts.
+  const taskPrSyncWakeGuard = createTaskPrSyncWakeGuard();
   const getCurrentUserRedactionOptions = async () => ({
     enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
   });
@@ -9146,6 +9178,13 @@ export function heartbeatService(
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
   const issuesSvc = issueService(db);
+  // myrmidon(M3): comment-writing port for the budget hard-stop signal.
+  const budgetSignalPorts: BudgetSignalPorts = {
+    addComment: (issueId, body, actor, options) =>
+      issuesSvc.addComment(issueId, body, actor, options),
+    now: () => new Date(),
+    log: logger,
+  };
   const treeControlSvc = issueTreeControlService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const environmentsSvc = environmentService(db);
@@ -9166,6 +9205,14 @@ export function heartbeatService(
   };
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
+    // myrmidon(M3): owner signal on a budget hard-stop — delivered into the
+    // interrupted issue threads, deduped per incident, off via
+    // MYRMIDON_BUDGET_SIGNAL_MODE=off.
+    signalBudgetHardStop:
+      budgetSignalEnabled(runtimeEnv)
+        ? (input: BudgetSignalInput) =>
+            deliverBudgetHardStopSignal(db, budgetSignalPorts, input).then(() => undefined)
+        : undefined,
   };
   const budgets = budgetService(db, budgetHooks);
   const recovery = recoveryService(db, {
@@ -9963,7 +10010,10 @@ export function heartbeatService(
             !["issue_commented", "issue_reopened_via_comment"].includes(reason ?? "")) continue;
         const [comment] = await db.select().from(issueComments).where(and(
           eq(issueComments.companyId, run.companyId), eq(issueComments.issueId, issueId),
-          sql`${issueComments.id}::text = ${commentId}`, eq(issueComments.authorType, "user"),
+          // myrmidon(D2): uuid-typed comparison instead of `issue_comments.id::text
+          // = $commentId`; the text cast defeated the primary-key index. The guard
+          // keeps a malformed saved id a no-match instead of a UUID cast error.
+          eq(issueComments.id, jsonTextUuid(sql`${commentId}`)), eq(issueComments.authorType, "user"),
           eq(issueComments.authorUserId, requestedByActorId), isNull(issueComments.deletedAt),
           isNull(issueComments.createdByRunId),
           stoppedNativeContinuation ? undefined : gt(issueComments.createdAt, run.finishedAt),
@@ -17951,6 +18001,69 @@ export function heartbeatService(
     },
   });
 
+  // myrmidon(IDLE-PICKUP): the periodic safety net. The release path below
+  // wakes the finishing agent directly; this sweeper catches everything the
+  // release path cannot see (a missed release, a server restart, a
+  // reassignment) once per MYRMIDON_IDLE_PICKUP_INTERVAL_SEC for every
+  // invokable agent. All admission gates (pause, maintenance, limits,
+  // concurrency, budget) are enforced by enqueueWakeup itself.
+  const idlePickupSweeper = createIdlePickupSweeper({
+    db,
+    enqueueWakeup: (agentId, opts) => enqueueWakeup(agentId, opts),
+    logActivity: async (input) => {
+      await logActivity(db, {
+        companyId: input.companyId,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        agentId: input.agentId,
+        runId: input.runId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        details: input.details,
+      });
+    },
+    isAgentInvokable: async (agent) => {
+      // The sweeper passes a narrow org row; resolve the full agent row the
+      // invokability evaluator reads (status, reportsTo chain) by id.
+      const full = await getAgent(agent.id);
+      if (!full || full.companyId !== agent.companyId) return false;
+      const invokability = await getAgentInvokability(full);
+      return invokability.invokable;
+    },
+    isAgentUnderMaintenance: (agentId) => isAgentUnderMaintenance(db, agentId),
+  });
+
+  // myrmidon(AUTO-RESUME): the periodic pass that brings an agent left in
+  // `error` back, with a 1/5/15 min backoff and a give-up card to the operator
+  // after the attempt cap. It reuses the L3 resume wake chain, so a resumed
+  // agent also wakes the work it was stranded on. Settings and the pure policy
+  // live in myrmidon/auto-resume.ts; state is kept in agents.metadata.
+  const autoResumeSweeper = createAutoResumeSweeper({
+    db,
+    resumeWake: (agentId) => pauseResumeWakeAgent({ db, startNextQueuedRunForAgent, enqueueWakeup }, agentId),
+    logActivity: async (input) => {
+      await logActivity(db, {
+        companyId: input.companyId,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        agentId: input.agentId,
+        runId: input.runId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        details: input.details,
+      });
+    },
+    isAgentInvokable: async (agent) => {
+      const full = await getAgent(agent.id);
+      if (!full || full.companyId !== agent.companyId) return false;
+      const invokability = await getAgentInvokability(full);
+      return invokability.invokable;
+    },
+    isAgentUnderMaintenance: (agentId) => isAgentUnderMaintenance(db, agentId),
+  });
+
   async function sweepPendingCleanupLeases(opts?: {
     backoffMs?: number;
     /** One cleanup attempt per explicit user Retry, for this failed run only.
@@ -18870,7 +18983,13 @@ export function heartbeatService(
       .select({ id: heartbeatRuns.id, companyId: heartbeatRuns.companyId })
       .from(agentWakeupRequests)
       .innerJoin(heartbeatRuns, and(
-        sql`${heartbeatRuns.resultJson}->>'queuedCommentInterruptQueueId' = ${agentWakeupRequests.id}::text`,
+        // myrmidon(D2): uuid-typed comparison instead of
+        // `heartbeat_runs.result_json->>'queuedCommentInterruptQueueId' =
+        // agent_wakeup_requests.id::text`. The text cast defeated
+        // agent_wakeup_requests' primary-key index and forced a sequential
+        // scan of the whole table on every recovery sweep. See jsonTextUuid's
+        // doc comment and docs/myrmidon/DIVERGENCE.md.
+        eq(jsonTextUuid(sql`${heartbeatRuns.resultJson}->>'queuedCommentInterruptQueueId'`), agentWakeupRequests.id),
         eq(heartbeatRuns.companyId, agentWakeupRequests.companyId),
         eq(heartbeatRuns.agentId, agentWakeupRequests.agentId),
       ))
@@ -20740,11 +20859,15 @@ export function heartbeatService(
         ["local", "ssh"].includes(
           selectedEnvironmentForConfig?.driver ?? "local",
         );
+      // myrmidon(S2-hostcred): the run takes the managed side of the GitHub
+      // credential choice — host-credential inheritance is off unless the
+      // emergency switch is set. See ../myrmidon/host-github-credentials.ts.
+      const runHostGitHubCredentials = resolveRunHostGitHubCredentials(useHostGitHub);
       const aiBinding = agent.runtimeConfig?.aiConnection ? aiConnectionBindingSchema.parse(agent.runtimeConfig.aiConnection) : undefined;
       const { resolvedConfig, secretKeys, secretManifest } =
         await resolveExecutionRunAdapterConfig({
           managedAiCredentials: Boolean(aiBinding),
-          managedGitHubCredentials: !useHostGitHub,
+          managedGitHubCredentials: !runHostGitHubCredentials,
           companyId: agent.companyId,
           agentId: agent.id,
           adapterType: agent.adapterType,
@@ -21852,17 +21975,23 @@ export function heartbeatService(
             (entry): entry is [string, string] => typeof entry[1] === "string",
           ),
         ),
-        hostCredentials: useHostGitHub,
+        hostCredentials: runHostGitHubCredentials,
         // Networking is a controller-owned trust decision, independent of
         // whether GitHub is configured or a credential can be acquired.
         networkAccess:
           trustPreset.kind === "standard" &&
           process.env.PAPERCLIP_RUNNER_NETWORK_ACCESS !== "disabled",
       });
-      runtimeConfig = { ...runtimeConfig, env: gitExecutionEnv };
+      // myrmidon(S2-hostcred): belt to the decision above — even a host-mode
+      // probe or an upstream binding leaves no host credential name in the run
+      // environment. The emergency host mode keeps the vendor env untouched.
+      const runGitHubEnv = runHostGitHubCredentials
+        ? gitExecutionEnv
+        : filterHostGitHubCredentialEnv(gitExecutionEnv);
+      runtimeConfig = { ...runtimeConfig, env: runGitHubEnv };
       for (const key of MANAGED_GITHUB_TOKEN_KEYS) secretKeys.add(key);
-      context.githubAuthenticationMode = useHostGitHub ? "host" : "managed";
-      if (!useHostGitHub) {
+      context.githubAuthenticationMode = runHostGitHubCredentials ? "host" : "managed";
+      if (!runHostGitHubCredentials) {
         const githubBrokerToken = createRuntimeToolsToken({
           agentId: agent.id,
           companyId: agent.companyId,
@@ -21870,7 +21999,7 @@ export function heartbeatService(
           responsibleUserId: responsibleUserId ?? "",
           scope: "github_credentials",
         });
-        const githubBrokerEnv = githubBrokerEnvironment(gitExecutionEnv, {
+        const githubBrokerEnv = githubBrokerEnvironment(runGitHubEnv, {
           url: configuredPaperclipApiBaseUrl() ?? "",
           token: githubBrokerToken?.token ?? "",
         });
@@ -25571,6 +25700,50 @@ export function heartbeatService(
       }
       throw error;
     }
+    // myrmidon(IDLE-PICKUP): the release path is the primary trigger. The
+    // finishing agent gets a chance at its next ready task immediately, so
+    // the acceptance window ("the next run starts within N minutes") does
+    // not wait for the periodic sweep. Best-effort: the periodic sweeper
+    // catches anything this pass misses, and every admission gate still
+    // applies inside enqueueWakeup.
+    if (options.suppressImmediateRecovery !== true) {
+      try {
+        const releasedRun = await getRun(run.id);
+        if (releasedRun) {
+          const releasedIssueId = readNonEmptyString(
+            parseObject(releasedRun.contextSnapshot).issueId,
+          );
+          await idlePickupForAgent(
+            {
+              db,
+              enqueueWakeup: (agentId, opts) => enqueueWakeup(agentId, opts),
+              logActivity: async (input) => {
+                await logActivity(db, {
+                  companyId: input.companyId,
+                  actorType: input.actorType,
+                  actorId: input.actorId,
+                  agentId: input.agentId,
+                  runId: input.runId,
+                  action: input.action,
+                  entityType: input.entityType,
+                  entityId: input.entityId,
+                  details: input.details,
+                });
+              },
+            },
+            { id: releasedRun.agentId, companyId: releasedRun.companyId },
+            // The just-released issue is the past work: waking it again right
+            // after its run finished is the runaway loop the review caught.
+            { excludeIssueId: releasedIssueId },
+          );
+        }
+      } catch (idlePickupErr) {
+        logger.warn(
+          { err: idlePickupErr, runId: run.id },
+          "idle pickup after issue execution release failed",
+        );
+      }
+    }
   }
 
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}, executionWaitRequestId?: string) {
@@ -27189,6 +27362,60 @@ export function heartbeatService(
             }
             // admission.kind === "proceed": no active run absorbed this wake,
             // so fall through to the ordinary queue path below.
+          }
+
+          // myrmidon(WAKE-GUARD): an event-free wake for a task whose pull
+          // request work products are all terminal with at least one merged
+          // would only race the settle sweep (TASK-PR-SYNC part C). Skip it
+          // with the vendor's skipped-wakeup-request mechanism and let the
+          // sweep close the task; human comment and interaction wakes carry
+          // events and are never suppressed. Guarded by the same event-free
+          // predicate the vendor's rewake throttle applies, so a wake that
+          // bypasses the throttle can never be skipped here.
+          if (
+            readTaskPrSyncWakeGuardEnabled() &&
+            isThrottleCandidateIssueRewake({
+              reason,
+              wakeCommentId: wakeCommentId ?? null,
+              requestedByActorType: opts.requestedByActorType ?? null,
+              forceFreshSession:
+                enrichedContextSnapshot.forceFreshSession === true,
+              hasExplicitResume: Boolean(explicitResumeSession),
+            }) &&
+            issue.status !== "done" &&
+            issue.status !== "cancelled"
+          ) {
+            const wakeGuardNow = new Date();
+            // Sync fast path first: a cached decision answers without a DB hit.
+            const cachedDecision = taskPrSyncWakeGuard.peek(issue.id);
+            const suppress =
+              cachedDecision ??
+              (await taskPrSyncWakeGuard.shouldSuppressWake(issue.id, tx as unknown as Db));
+            if (suppress) {
+              await tx.insert(agentWakeupRequests).values({
+                ...durableReceiptFields,
+                companyId: agent.companyId,
+                agentId,
+                source,
+                triggerDetail,
+                reason: TASK_PR_SYNC_WAKE_SKIP_REASON,
+                payload: {
+                  ...(payload ?? {}),
+                  issueId,
+                  heartbeatSkip: {
+                    reason: TASK_PR_SYNC_WAKE_SKIP_REASON,
+                    requestedReason: reason,
+                    cached: cachedDecision !== null,
+                  },
+                },
+                status: "skipped",
+                requestedByActorType: opts.requestedByActorType ?? null,
+                requestedByActorId: opts.requestedByActorId ?? null,
+                idempotencyKey: opts.idempotencyKey ?? null,
+                finishedAt: wakeGuardNow,
+              });
+              return { kind: "skipped" as const };
+            }
           }
 
           // PAP-13775: no live run holds the lock, so this wake would start a
@@ -29043,6 +29270,14 @@ export function heartbeatService(
     sweepPendingCleanupLeases,
     // myrmidon(P1): exposed for tests and operators
     sweepStaleActiveEnvironmentLeases,
+    // myrmidon(IDLE-PICKUP): periodic idle-pickup pass, exposed for the
+    // scheduler tick in index.ts and for tests and operators
+    sweepIdlePickup: (now?: Date) => idlePickupSweeper.sweep(now),
+
+    // myrmidon(AUTO-RESUME): resumes an agent left in `error` once its backoff
+    // step is due; logic in myrmidon/auto-resume.ts. Called by the scheduler
+    // tick in server/src/index.ts on its own single-flight queue.
+    sweepAutoResume: (now?: Date) => autoResumeSweeper.sweep(now),
     // Override-aware scheduling-suppression check (honors the worktree
     // run-execution experimental setting). Callers outside the service that
     // gate on suppression should prefer this over the env-only resolver.
