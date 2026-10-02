@@ -192,8 +192,8 @@ describeEmbeddedPostgres(
         label: "Telegram DM",
         enabled: true,
         availability: "available",
-        addedAt: new Date(),
-        lastSeenAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
       });
       const [dmIssue] = await db
         .insert(issues)
@@ -244,6 +244,7 @@ describeEmbeddedPostgres(
       const fixture = await seedFixture();
       const question = {
         kind: "ask_user_questions" as const,
+        continuationPolicy: "wake_assignee" as const,
         payload: {
           version: 1 as const,
           questions: [
@@ -295,13 +296,15 @@ describeEmbeddedPostgres(
       const interaction = await issueThreadInteractionService(db).create(
         { id: fixture.workIssue.id, companyId: fixture.companyId },
         {
-          kind: "request_confirmation",
+          kind: "request_confirmation" as const,
+          continuationPolicy: "wake_assignee" as const,
           payload: {
-            version: 1,
+            version: 1 as const,
             prompt: "Proceed with the deploy?",
             detailsMarkdown: "Deploy build to production.",
             acceptLabel: "Accept",
             rejectLabel: "Reject",
+            allowDeclineReason: true,
           },
         },
         { agentId: fixture.agentId },
@@ -339,6 +342,7 @@ describeEmbeddedPostgres(
         { id: fixture.workIssue.id, companyId: fixture.companyId },
         {
           kind: "ask_user_questions" as const,
+          continuationPolicy: "wake_assignee" as const,
           payload: {
             version: 1 as const,
             questions: [
@@ -381,6 +385,7 @@ describeEmbeddedPostgres(
         { id: fixture.workIssue.id, companyId: fixture.companyId },
         {
           kind: "ask_user_questions" as const,
+          continuationPolicy: "wake_assignee" as const,
           payload: {
             version: 1 as const,
             questions: [

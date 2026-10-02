@@ -120,14 +120,15 @@ describeEmbeddedPostgres("callback interaction lookup (U2)", () => {
     const created = await service.create(
       { id: fixture.workIssue.id, companyId: fixture.companyId },
       {
-        kind: "ask_user_questions",
+        kind: "ask_user_questions" as const,
+        continuationPolicy: "wake_assignee" as const,
         payload: {
-          version: 1,
+          version: 1 as const,
           questions: [
             {
               id: "one",
               prompt: "Pick one",
-              selectionMode: "single",
+              selectionMode: "single" as const,
               allowOther: false,
               options: [{ id: "a", label: "A" }],
             },
@@ -153,14 +154,15 @@ describeEmbeddedPostgres("callback interaction lookup (U2)", () => {
     const created = await service.create(
       { id: fixture.conversationIssue.id, companyId: fixture.companyId },
       {
-        kind: "ask_user_questions",
+        kind: "ask_user_questions" as const,
+        continuationPolicy: "wake_assignee" as const,
         payload: {
-          version: 1,
+          version: 1 as const,
           questions: [
             {
               id: "one",
               prompt: "Pick one",
-              selectionMode: "single",
+              selectionMode: "single" as const,
               allowOther: false,
               options: [{ id: "a", label: "A" }],
             },
@@ -201,14 +203,15 @@ describeEmbeddedPostgres("callback interaction lookup (U2)", () => {
     const foreign = await issueThreadInteractionService(db).create(
       { id: otherIssue.id, companyId: fixture.otherCompanyId },
       {
-        kind: "ask_user_questions",
+        kind: "ask_user_questions" as const,
+        continuationPolicy: "wake_assignee" as const,
         payload: {
-          version: 1,
+          version: 1 as const,
           questions: [
             {
               id: "one",
               prompt: "Pick one",
-              selectionMode: "single",
+              selectionMode: "single" as const,
               allowOther: false,
               options: [{ id: "a", label: "A" }],
             },
