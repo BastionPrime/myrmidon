@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Myrmidon Bridge",
+  "version": "0.1.0",
+  "description": "Tender-site browser actions and the pairing client of the Myrmidon browser bridge. Opens an outbound connection to the bridge gateway only.",
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "entry-background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Myrmidon Bridge",
+    "default_popup": "popup/popup.html"
+  },
+  "options_page": "options/options.html",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["wss://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["entry-content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

@@ -35,6 +35,23 @@ type Archive struct {
 	File      string `json:"file"`
 }
 
+// InspectField is one field of a container inspect that the board's
+// template-drift check reads, with the value it expects to read.
+type InspectField struct {
+	Path string          `json:"path"`
+	Want json.RawMessage `json:"want"`
+}
+
+// InspectContract is inspect-contract.json: the container inspect as the daemon
+// writes it (written by the driver's own code, not hand-copied), and every
+// field of it the drift check compares.
+type InspectContract struct {
+	BotKey  string          `json:"botKey"`
+	Name    string          `json:"name"`
+	Inspect json.RawMessage `json:"inspect"`
+	Fields  []InspectField  `json:"fields"`
+}
+
 // Manifest is manifest.json.
 type Manifest struct {
 	BotKey     string    `json:"botKey"`
@@ -108,6 +125,16 @@ func Traffic(t testing.TB) []Record {
 	return recs
 }
 
+// Inspect reads inspect-contract.json.
+func Inspect(t testing.TB) *InspectContract {
+	t.Helper()
+	var c InspectContract
+	if err := json.Unmarshal(Read(t, "inspect-contract.json"), &c); err != nil {
+		t.Fatalf("inspect-contract: %v", err)
+	}
+	return &c
+}
+
 // Body reads the bytes of a recorded body.
 func (m *Manifest) Body(t testing.TB, b Body) []byte { return Read(t, b.File) }
 
@@ -133,3 +160,34 @@ func Script(t testing.TB, name string) string {
 
 // ArchiveBytes returns the bytes of a recorded tar.
 func ArchiveBytes(t testing.TB, a Archive) []byte { return Read(t, a.File) }
+
+// Marker is one applied marker emitted by contract/emit-marker-contract.mjs.
+type Marker struct {
+	ID       string `json:"id"`
+	File     string `json:"file"`
+	HasLimit bool   `json:"hasLimit"`
+}
+
+// MarkerContract is marker-contract.json.
+type MarkerContract struct {
+	Index []Marker `json:"index"`
+}
+
+// MarkerContractAll reads marker-contract.json.
+func MarkerContractAll(t testing.TB) *MarkerContract {
+	t.Helper()
+	var mc MarkerContract
+	if err := json.Unmarshal(Read(t, "marker-contract.json"), &mc); err != nil {
+		t.Fatalf("marker contract: %v", err)
+	}
+	if len(mc.Index) == 0 {
+		t.Fatal("marker contract is empty: the emitter did not run or produced no markers")
+	}
+	return &mc
+}
+
+// MarkerBytes returns the bytes of one emitted marker.
+func MarkerBytes(t testing.TB, m Marker) []byte {
+	t.Helper()
+	return Read(t, m.File)
+}

@@ -1,0 +1,78 @@
+diff --git a/hermes_state.py b/hermes_state.py
+index 8ecc3b5..9d64020 100644
+--- a/hermes_state.py
++++ b/hermes_state.py
+@@ -497,6 +497,11 @@ class SessionDB(
+     _IMPORT_MAX_SESSION_BYTES, _IMPORT_MAX_TOTAL_BYTES = 5 * 1024 * 1024, 25 * 1024 * 1024
+     # Accounting workers retire when idle so a bound-method target can't keep an abandoned SessionDB alive.
+     _TOKEN_WRITER_IDLE_SECONDS = 30.0
++    # myrmidon(G1): floor between two /proc/self/fd generation probes on one handle (see
++    # _wal_generation_was_lost). The probe costs one readlink per open descriptor and ran on the
++    # gateway's event loop; one second keeps a lost generation detected promptly while keeping a
++    # burst of writes off the descriptor table.
++    _WAL_PROBE_MIN_INTERVAL_S = 1.0
+ 
+     @staticmethod
+     def _store_system_prompt(conn, system_prompt: Optional[str]) -> Optional[str]:
+@@ -589,6 +594,9 @@ class SessionDB(
+         self._db_file_application_id: int = 0
+         self._db_sidecar_identity: Dict[str, tuple] = {}
+         self._db_replaced = self._db_wal_generation_lost = False
++        # myrmidon(G1): last /proc/self/fd probe verdict (see _wal_generation_was_lost).
++        self._wal_probe_at: float = 0.0
++        self._wal_probe_lost: bool = False
+         # Durable capture of a lost WAL generation (see _capture_retired_generation): once per handle.
+         self._retired_generation_capture: Optional[Path] = None
+         self._retired_capture_lock = threading.Lock()
+@@ -1202,7 +1210,10 @@ class SessionDB(
+         """True when the WAL/SHM generation this handle opened is gone. Recorded
+         generation: pure stat (no /proc walk on healthy writes). Empty identity
+         (WAL appeared after open, or cleared by a clean close()): probe
+-        /proc/self/fd for deleted sidecars and adopt the current ones once clean."""
++        /proc/self/fd for deleted sidecars and adopt the current ones once clean,
++        at most once per ``_WAL_PROBE_MIN_INTERVAL_S`` — the walk costs one
++        readlink per open descriptor and the caller may be the gateway's event
++        loop."""
+         recorded = self._db_sidecar_identity or {}
+         base = os.fspath(self.db_path)
+         if recorded:
+@@ -1212,15 +1223,30 @@ class SessionDB(
+         if not self._wal_active:  # no sidecar generation to lose; keep /proc off the hot path
+             return False
+         if sys.platform.startswith("linux"):
+-            watched = _watched_sqlite_sidecar_paths(self.db_path)
+-            try:
+-                for target, fd_path in _proc_fd_targets(os.getpid()):
+-                    canonical = _state_holders.canonical_sqlite_path(target)
+-                    if (" (deleted)" in target and canonical in watched
+-                            and _fd_is_truly_unlinked(fd_path, watched[canonical])):
+-                        return True
+-            except OSError:
+-                return False
++            # myrmidon(G1): the /proc/self/fd walk below is O(open descriptors) and runs on the
++            # caller's thread — the gateway's event loop — every time a handle has no recorded
++            # sidecar identity. A multi-profile host carries hundreds of descriptors, so a burst
++            # of writes spends the loop inside readlink() and starves the liveness watchdog. Same
++            # verdict, re-probed at most once per interval (mirrors _fd_headroom_ok()'s cache for
++            # the sibling descriptor probe in hermes_state_readpool): the caller's sticky
++            # generation-lost flag keeps a detection durable once it is made, so only the first
++            # probe after a loss can be delayed, never missed.
++            now = time.monotonic()
++            if now - self._wal_probe_at >= self._WAL_PROBE_MIN_INTERVAL_S:
++                self._wal_probe_at = now
++                self._wal_probe_lost = False
++                watched = _watched_sqlite_sidecar_paths(self.db_path)
++                try:
++                    for target, fd_path in _proc_fd_targets(os.getpid()):
++                        canonical = _state_holders.canonical_sqlite_path(target)
++                        if (" (deleted)" in target and canonical in watched
++                                and _fd_is_truly_unlinked(fd_path, watched[canonical])):
++                            self._wal_probe_lost = True
++                            break
++                except OSError:
++                    self._wal_probe_lost = False
++            if self._wal_probe_lost:
++                return True
+         # Probe clean (or unavailable): adopt the current sidecar generation.
+         current_identity = _stat_sqlite_sidecar_identity(self.db_path)
+         if current_identity:

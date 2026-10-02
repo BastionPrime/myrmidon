@@ -7,6 +7,7 @@ import type {
 import { forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { assertAgentModelsKnown } from "./agent-model-validation.js";
+import { checkCardFallbackChains } from "./litellm-keys/fallback-cycles.js";
 
 /**
  * myrmidon(S4): an agent never changes its own card or adapter configuration.
@@ -107,6 +108,9 @@ export async function assertMyrmidonAgentConfigChange(
     previousAdapterConfig,
     nextAdapterConfig,
   });
+  // myrmidon(M2-B): a fallback chain that loops is refused before it is saved,
+  // whatever else changed on the card — a loop retries the request that failed.
+  checkCardFallbackChains(nextAdapterConfig);
   await assertAgentModelsKnown({
     adapterType: nextAdapterType,
     previousAdapterConfig: nextAdapterType === existing.adapterType ? previousAdapterConfig : null,

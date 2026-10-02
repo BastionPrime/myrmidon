@@ -20,6 +20,10 @@ function runnerProfileFor(adapterType: string): Record<string, unknown> {
   return { adapterDispatch: { adapterType } };
 }
 const dialogAdapterRun = { runnerProfileJson: runnerProfileFor("hermes_local") };
+// myrmidon(RECOVERY-HERMES-GATEWAY): the gateway adapter qualifies through the
+// same conversation-adapter route as the local ones — its own overlap guard
+// (gateway/server/execute.ts) is what makes a blind retry safe there.
+const gatewayConversationAdapterRun = { runnerProfileJson: runnerProfileFor("hermes_gateway") };
 const gatewayAdapterRun = { runnerProfileJson: runnerProfileFor("openclaw_gateway") };
 const processAdapterRun = { runnerProfileJson: runnerProfileFor("process") };
 // myrmidon(L1), release 1.1.2: not a conversation adapter, but its create
@@ -148,6 +152,20 @@ describe("shouldSkipReconciliationForInfraInterrupt", () => {
         ...dialogAdapterRun,
       }),
     ).toBe(true);
+  });
+
+  it("skips the reconciliation hold for a fresh infra-interrupted run claimed by the gateway adapter", () => {
+    // myrmidon(RECOVERY-HERMES-GATEWAY): the same relief as the local
+    // conversation adapters, for every infra-interrupt code.
+    for (const errorCode of ["agent_paused", "process_lost", "server_shutdown_interrupted", "issue_reassigned"]) {
+      expect(
+        shouldSkipReconciliationForInfraInterrupt({
+          errorCode,
+          scheduledRetryAttempt: 0,
+          ...gatewayConversationAdapterRun,
+        }),
+      ).toBe(true);
+    }
   });
 
   it("keeps the hold once the shared retry budget is exhausted", () => {
@@ -331,12 +349,19 @@ describe("adapterQualifiesForInfraInterruptRelief", () => {
   it("qualifies every conversation adapter", () => {
     for (const adapterType of [
       "claude_local", "codex_local", "cursor", "gemini_local", "opencode_local",
-      "pi_local", "grok_local", "kimi_local", "hermes_local",
+      "pi_local", "grok_local", "kimi_local", "hermes_local", "hermes_gateway",
     ]) {
       expect(
         adapterQualifiesForInfraInterruptRelief({ runnerProfileJson: runnerProfileFor(adapterType) }),
       ).toBe(true);
     }
+  });
+
+  it("qualifies the gateway adapter through the conversation-adapter route, not through an idempotency key", () => {
+    // The gateway is not in IDEMPOTENT_INFRA_INTERRUPT_ADAPTER_TYPES (it has
+    // no claimed idempotency key here): its relief comes from being a
+    // conversation adapter, which is exactly what this pin keeps honest.
+    expect(adapterQualifiesForInfraInterruptRelief(gatewayConversationAdapterRun)).toBe(true);
   });
 
   it("does not qualify a process/webhook-style adapter", () => {
@@ -370,12 +395,33 @@ describe("shouldRetryOriginalExecutorForInfraInterrupt", () => {
     }
   });
 
+  it("retries the original executor for the gateway adapter on a pause, a lost process, or a shutdown", () => {
+    // myrmidon(RECOVERY-HERMES-GATEWAY): the platform reads this predicate to
+    // schedule the bounded retry, so the gateway adapter qualifies here too.
+    for (const errorCode of ["agent_paused", "process_lost", "server_shutdown_interrupted"]) {
+      expect(
+        shouldRetryOriginalExecutorForInfraInterrupt({
+          errorCode,
+          scheduledRetryAttempt: 0,
+          ...gatewayConversationAdapterRun,
+        }),
+      ).toBe(true);
+    }
+  });
+
   it("never schedules the original executor a retry on reassignment: the new assignee wakes itself", () => {
     expect(
       shouldRetryOriginalExecutorForInfraInterrupt({
         errorCode: "issue_reassigned",
         scheduledRetryAttempt: 0,
         ...dialogAdapterRun,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetryOriginalExecutorForInfraInterrupt({
+        errorCode: "issue_reassigned",
+        scheduledRetryAttempt: 0,
+        ...gatewayConversationAdapterRun,
       }),
     ).toBe(false);
   });

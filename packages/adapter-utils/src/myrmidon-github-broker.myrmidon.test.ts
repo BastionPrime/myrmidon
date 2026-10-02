@@ -40,8 +40,22 @@ function response(status: number): FakeResponse {
   };
 }
 
-/** Load the launcher snippet with a scripted fetch; returns the snippet's functions. */
-function loadWalk(handler: (call: FetchCall) => Promise<FakeResponse>) {
+/** A manual clock: time moves only when a test calls `advance`. */
+function manualClock(start = 1_000_000) {
+  let now = start;
+  return {
+    now: () => now,
+    advance: (ms: number) => {
+      now += ms;
+    },
+  };
+}
+
+/**
+ * Load the launcher snippet with a scripted fetch; returns the snippet's functions.
+ * Pass `clock` to replace the snippet's `Date.now()` with a deterministic clock.
+ */
+function loadWalk(handler: (call: FetchCall) => Promise<FakeResponse>, clock?: { now: () => number }) {
   const calls: FetchCall[] = [];
   const fakeFetch = async (url: string, init: { signal?: AbortSignal & { __timeoutMs?: number }; headers: Record<string, string> }) => {
     const call = { url, timeoutMs: init.signal?.__timeoutMs ?? null, headers: init.headers };
@@ -51,7 +65,18 @@ function loadWalk(handler: (call: FetchCall) => Promise<FakeResponse>) {
   const FakeAbortSignal = {
     timeout: (ms: number) => ({ __timeoutMs: ms }),
   };
-  const context = vm.createContext({ fetch: fakeFetch, AbortSignal: FakeAbortSignal, setTimeout, Date, JSON, Math, Set, Array, String, Promise });
+  const context = vm.createContext({
+    fetch: fakeFetch,
+    AbortSignal: FakeAbortSignal,
+    setTimeout,
+    Date: clock ? { now: clock.now } : Date,
+    JSON,
+    Math,
+    Set,
+    Array,
+    String,
+    Promise,
+  });
   const walk = vm.runInContext(
     `${githubBrokerCandidatesLauncherSource()}\n({ paperclipBrokerCandidateUrls, paperclipRequestBrokerCredentials })`,
     context,
@@ -160,12 +185,13 @@ describe("GitHub broker candidate walk (myrmidon P6)", () => {
   });
 
   it("gives later requests only the time left in the overall budget", async () => {
-    const { walk, calls } = loadWalk(
-      (call) =>
-        new Promise((resolve) => {
-          setTimeout(() => resolve(response(503)), Math.min(call.timeoutMs ?? 0, 60));
-        }),
-    );
+    // Each request takes 60 ms (or its whole timeout, if shorter) on a manual
+    // clock, so the budget arithmetic does not depend on real timer jitter.
+    const clock = manualClock();
+    const { walk, calls } = loadWalk(async (call) => {
+      clock.advance(Math.min(call.timeoutMs ?? 0, 60));
+      return response(503);
+    }, clock);
     const result = await walk.paperclipRequestBrokerCredentials(BASE_ENV, urls, {
       requestTimeoutMs: 60,
       totalTimeoutMs: 100,
@@ -173,6 +199,7 @@ describe("GitHub broker candidate walk (myrmidon P6)", () => {
     expect(result.response?.status).toBe(503);
     expect(calls[0]?.timeoutMs).toBe(60);
     expect(calls[1]?.timeoutMs).toBeLessThan(60);
+    expect(calls[1]?.timeoutMs).toBe(40);
     // The third candidate is never tried: the overall budget ran out.
     expect(calls.length).toBeLessThan(urls.length);
   });

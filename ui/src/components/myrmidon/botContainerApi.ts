@@ -5,6 +5,15 @@ import { api, ApiError } from "@/api/client";
 
 export type BotContainerState = "running" | "stopped" | "missing" | "unhealthy";
 
+/** myrmidon(CONCURRENCY-SYNC): the board's concurrency limit against the one the bot's
+ *  gateway was actually given (server/src/myrmidon/bot-containers/concurrency-sync.ts). */
+export interface GatewayConcurrencyStatus {
+  board: number;
+  applied: number | null;
+  diverged: boolean;
+  checkedAt: string;
+}
+
 export interface BotContainerStatus {
   /** The instance switch for bot containers is on. */
   enabled: boolean;
@@ -20,6 +29,14 @@ export interface BotContainerStatus {
   imageAllowed: boolean | null;
   container: { state: BotContainerState; image: string | null } | null;
   containerError: string | null;
+  /** runtimeConfig.heartbeat.maxConcurrentRuns, normalized by the server. */
+  boardMaxConcurrentRuns: number;
+  /** Board value against the applied one; null when there is nothing to compare. */
+  gatewayConcurrency: GatewayConcurrencyStatus | null;
+  /** Why gatewayConcurrency is null, or a caveat about its value. */
+  gatewayConcurrencyNote: string | null;
+  /** The gateway limits runs below the board's limit (unmanaged gateway, recently 429). */
+  gatewayConcurrencyWarning: string | null;
 }
 
 export type BotContainerApplyOutcome =

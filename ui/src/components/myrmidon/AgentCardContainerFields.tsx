@@ -127,6 +127,42 @@ export interface AgentCardContainerFieldsViewProps {
   onRefresh: () => void;
 }
 
+/** myrmidon(CONCURRENCY-SYNC): what the "Concurrent runs limit" block shows. */
+export interface ConcurrencyView {
+  /** The value the card asks for (the server normalizes it). */
+  board: string;
+  /** The value the gateway was given, or why there is none to show. */
+  gateway: string;
+  diverged: boolean;
+  note: string | null;
+  warning: string | null;
+}
+
+/**
+ * The limit block's content, or null when the status says nothing about it (no status
+ * yet, or an agent the server does not treat as a managed or unmanaged gateway).
+ *
+ * An applied value the container's profile does not report reads as "not reported
+ * yet", never as a match: the reading only compares what the board and the gateway
+ * each say, and a missing number is not a number.
+ */
+export function concurrencyView(status: BotContainerStatus | null): ConcurrencyView | null {
+  if (!status) return null;
+  const limit = status.gatewayConcurrency;
+  if (!limit && !status.gatewayConcurrencyNote && !status.gatewayConcurrencyWarning) return null;
+  return {
+    board: `Board: ${limit?.board ?? status.boardMaxConcurrentRuns}`,
+    gateway: limit
+      ? limit.applied === null
+        ? "Gateway: not reported yet"
+        : `Gateway: ${limit.applied}`
+      : "Gateway: not managed by the board",
+    diverged: limit?.diverged ?? false,
+    note: status.gatewayConcurrencyNote,
+    warning: status.gatewayConcurrencyWarning,
+  };
+}
+
 export function AgentCardContainerFieldsView({
   value,
   onChange,
@@ -148,6 +184,7 @@ export function AgentCardContainerFieldsView({
   const allowlist = status?.imageAllowlist ?? null;
   // The server judges the SAVED image; an edited one is judged after saving.
   const savedImageNotAllowed = status?.imageAllowed === false && !unsaved;
+  const concurrency = concurrencyView(status);
 
   return (
     <CollapsibleSection title="Container" open={expanded} onToggle={() => setExpanded((open) => !open)}>
@@ -277,6 +314,38 @@ export function AgentCardContainerFieldsView({
             </p>
           )}
         </div>
+
+        {concurrency && (
+          <div className="space-y-1 rounded-md border border-border px-2.5 py-2" data-testid="myrmidon-bot-container-concurrency">
+            <div className="text-xs text-muted-foreground">Concurrent runs limit</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm" data-testid="myrmidon-bot-container-concurrency-board">
+                {concurrency.board}
+              </span>
+              <span className="text-sm" data-testid="myrmidon-bot-container-concurrency-gateway">
+                {concurrency.gateway}
+              </span>
+              {concurrency.diverged && (
+                <span
+                  className="rounded-full border border-border px-2 py-0.5 text-xs text-amber-400"
+                  data-testid="myrmidon-bot-container-concurrency-diverged"
+                >
+                  Diverged from the board
+                </span>
+              )}
+            </div>
+            {concurrency.note && (
+              <p className="text-xs text-muted-foreground" data-testid="myrmidon-bot-container-concurrency-note">
+                {concurrency.note}
+              </p>
+            )}
+            {concurrency.warning && (
+              <p className="text-xs text-amber-400" data-testid="myrmidon-bot-container-concurrency-warning">
+                {concurrency.warning}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </CollapsibleSection>
   );

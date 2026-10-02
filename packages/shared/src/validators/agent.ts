@@ -221,6 +221,12 @@ export const wakeAgentSchema = z.object({
   reason: z.string().optional().nullable(),
   /** Select an exact failed run; its chat request and actor are server-derived. */
   failedRunId: z.string().uuid().optional(),
+  /**
+   * myrmidon(WAKE-BIND): first-class task binding for the wakeup API. The run
+   * wakes for this issue (and may comment on it). Without it, a manual wake
+   * binds to the agent's top ready task or is refused.
+   */
+  issueId: z.string().uuid().optional(),
   payload: z.record(z.string(), z.unknown()).optional().nullable(),
   idempotencyKey: z.string().optional().nullable(),
   forceFreshSession: z.preprocess(
@@ -275,12 +281,21 @@ export const testAdapterEnvironmentSchema = z.object({
 
 export type TestAdapterEnvironment = z.infer<typeof testAdapterEnvironmentSchema>;
 
+// myrmidon(S6): the operator-settable per-agent tool/connection permission.
+// `all` is the explicit default; `listed` is an allow-list.
+export const agentToolAccessSchema = z.object({
+  mode: z.enum(["all", "listed"]),
+  tools: z.array(z.string().trim().min(1).max(200)).max(500).optional(),
+  connections: z.array(z.string().trim().min(1).max(200)).max(500).optional(),
+});
+
 export const updateAgentPermissionsSchema = z.object({
   canCreateAgents: z.boolean(),
   canCreateSkills: z.boolean().optional(),
   canAssignTasks: z.boolean(),
   trustPreset: trustPresetSchema.optional(),
   authorizationPolicy: trustAuthorizationPolicySchema.optional(),
+  toolAccess: agentToolAccessSchema.optional(), // myrmidon(S6)
 });
 
 export type UpdateAgentPermissions = z.infer<typeof updateAgentPermissionsSchema>;

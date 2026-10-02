@@ -18,6 +18,9 @@ import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { cn } from "../lib/utils";
 import { useSignOut } from "@/hooks/useSignOut";
 import { MaintenanceSettingsPanel } from "@/components/myrmidon/MaintenanceSettingsPanel"; // myrmidon(R3)
+import { RuntimeLimitsSettingsPanel } from "@/components/myrmidon/RuntimeLimitsSettingsPanel"; // myrmidon(C0)
+import { AboutSettingsPanel } from "@/components/myrmidon/AboutSettingsPanel"; // myrmidon(ABOUT)
+import { DeployJobsPanel } from "@/components/myrmidon/DeployJobsPanel"; // myrmidon(R5-A)
 import { PRODUCT_NAME, UPSTREAM_ATTRIBUTION } from "@/lib/myrmidon-product"; // myrmidon(B1a)
 
 const FEEDBACK_TERMS_URL = import.meta.env.VITE_FEEDBACK_TERMS_URL?.trim() || "https://paperclip.ing/tos";
@@ -125,6 +128,8 @@ export function InstanceGeneralSettings({ embedded = false }: { embedded?: boole
       )}
 
       <MaintenanceSettingsPanel /> {/* myrmidon(R3) */}
+      <RuntimeLimitsSettingsPanel /> {/* myrmidon(C0) */}
+      <DeployJobsPanel /> {/* myrmidon(R5-A) */}
 
       {showDeploymentStatus && (
       <section>
@@ -410,24 +415,8 @@ export function InstanceGeneralSettings({ embedded = false }: { embedded?: boole
       </section>
       )}
 
-      {/* myrmidon(B1a): About section — product name and required upstream attribution. */}
-      <section>
-        <div className="space-y-1.5">
-          <h2 className="text-sm font-semibold">About</h2>
-          <p className="max-w-2xl text-sm text-muted-foreground">
-            {PRODUCT_NAME}.{" "}
-            <a
-              href={UPSTREAM_ATTRIBUTION.href}
-              target="_blank"
-              rel="noreferrer"
-              className="underline underline-offset-2 hover:text-foreground"
-            >
-              {UPSTREAM_ATTRIBUTION.text}
-            </a>
-            .
-          </p>
-        </div>
-      </section>
+      {/* myrmidon(ABOUT): About section — product, version and build metadata. */}
+      <AboutSettingsPanel />
     </div>
   );
 }
