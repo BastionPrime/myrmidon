@@ -24,9 +24,10 @@ MYRMIDON_BOT_MOUNT_SOURCES=/srv/shared/sources,/srv/shared/tools
 * A card can only name a directory from this list, and only by its exact path —
   there is no prefix rule, so naming `/srv/shared` does not allow
   `/srv/shared/sources`.
-* The value is read at server start (`startBotContainers`, W2a). Changing it
-  takes effect for the next reconcile pass; a bot whose mount set changes is
-  recreated, because the bind list is part of the container template.
+* The value is read once at server start (`startBotContainers`, W2a). Changing
+  it takes effect after the board server restarts; a bot whose mount set then
+  differs from its card is recreated, because the bind list is part of the
+  container template.
 
 ## Card setting: `adapterConfig.container.extraMounts`
 

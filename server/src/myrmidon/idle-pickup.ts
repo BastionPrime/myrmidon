@@ -144,6 +144,22 @@ function emptyIdlePickupResult(): IdlePickupResult {
   return { ...IDLE_PICKUP_RESULT_ZERO, issueIds: [] };
 }
 
+/**
+ * The candidate order the idle-pickup scheduler picks in — and the order the
+ * manual-wake task binding (WAKE-BIND) reuses, so both agree on which ready task
+ * is "top": highest priority first, oldest blocked-transition breaks ties.
+ */
+export function orderIdlePickupCandidates(
+  candidates: readonly IdlePickupIssueCandidate[],
+): IdlePickupIssueCandidate[] {
+  return [...candidates].sort((left, right) => {
+    const leftRank = issuePriorityRank(left.priority);
+    const rightRank = issuePriorityRank(right.priority);
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    return (left.blockedTransitionAt?.getTime() ?? 0) - (right.blockedTransitionAt?.getTime() ?? 0);
+  });
+}
+
 function issuePriorityRank(priority: string | null | undefined): number {
   switch (priority) {
     case "critical":
@@ -301,12 +317,7 @@ export async function idlePickupForAgent(
 
   // Highest priority first, oldest blocked-transition breaks ties: the same
   // order the queued-run start path uses for one agent's runs.
-  const ordered = [...candidates].sort((left, right) => {
-    const leftRank = issuePriorityRank(left.priority);
-    const rightRank = issuePriorityRank(right.priority);
-    if (leftRank !== rightRank) return leftRank - rightRank;
-    return (left.blockedTransitionAt?.getTime() ?? 0) - (right.blockedTransitionAt?.getTime() ?? 0);
-  });
+  const ordered = orderIdlePickupCandidates(candidates);
 
   for (const candidate of ordered) {
     // The release path passes the issue whose execution was just released:
@@ -334,24 +345,7 @@ export async function idlePickupForAgent(
     // A wake already covers this issue in any non-terminal status (queued,
     // deferred_issue_execution, claimed — not only "queued"): the admission
     // path owns it; a second wake would only coalesce into the first anyway.
-    const coveringWake = await deps.db
-      .select({ id: agentWakeupRequests.id })
-      .from(agentWakeupRequests)
-      .where(
-        and(
-          eq(agentWakeupRequests.companyId, agent.companyId),
-          eq(agentWakeupRequests.agentId, agent.id),
-          inArray(agentWakeupRequests.status, [
-            "queued",
-            "deferred_issue_execution",
-            "claimed",
-          ]),
-          sql`${agentWakeupRequests.payload} ->> 'issueId' = ${candidate.id}`,
-        ),
-      )
-      .limit(1)
-      .then((rows) => Boolean(rows[0]));
-    if (coveringWake) {
+    if (await hasCoveringWake(deps.db, agent, candidate.id)) {
       result.alreadyActive += 1;
       continue;
     }
@@ -408,6 +402,79 @@ export async function idlePickupForAgent(
     }
   }
   return result;
+}
+
+/** A wake already covers this issue in any non-terminal status (queued/deferred/claimed). */
+async function hasCoveringWake(
+  db: Db,
+  agent: { id: string; companyId: string },
+  issueId: string,
+): Promise<boolean> {
+  return db
+    .select({ id: agentWakeupRequests.id })
+    .from(agentWakeupRequests)
+    .where(
+      and(
+        eq(agentWakeupRequests.companyId, agent.companyId),
+        eq(agentWakeupRequests.agentId, agent.id),
+        inArray(agentWakeupRequests.status, [
+          "queued",
+          "deferred_issue_execution",
+          "claimed",
+        ]),
+        sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issueId}`,
+      ),
+    )
+    .limit(1)
+    .then((rows) => Boolean(rows[0]));
+}
+
+/** Issue ids the agent currently has a live (queued/running/scheduled_retry) run for. */
+async function loadAgentLiveIssueIds(
+  db: Db,
+  agent: { id: string; companyId: string },
+): Promise<Set<string>> {
+  const rows = await db
+    .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
+    .from(heartbeatRuns)
+    .where(
+      and(
+        eq(heartbeatRuns.companyId, agent.companyId),
+        eq(heartbeatRuns.agentId, agent.id),
+        inArray(heartbeatRuns.status, [...LIVE_HEARTBEAT_RUN_STATUSES]),
+      ),
+    );
+  return new Set(
+    rows
+      .map((run) => readNonEmptyString(run.contextSnapshot?.issueId))
+      .filter((id): id is string => Boolean(id)),
+  );
+}
+
+/**
+ * The agent's top ready task — the same candidate set and candidate ranking the
+ * idle-pickup scheduler uses — or null when the agent has none.
+ *
+ * The manual wake endpoint (WAKE-BIND) uses this so a wake without an explicit
+ * issue can bind to the work the board would pick anyway, instead of producing
+ * an issue-less run that cannot write to its task. Candidates already covered
+ * by a live run or a pending wake are skipped: their next step belongs to the
+ * in-flight work, and binding a fresh wake to them would only queue a duplicate
+ * run on a task that is already being worked.
+ */
+export async function findTopReadyIssueForAgent(
+  db: Db,
+  agent: { id: string; companyId: string },
+): Promise<IdlePickupIssueCandidate | null> {
+  const candidates = await idlePickupCandidateRows(db, agent.companyId, agent.id);
+  if (candidates.length === 0) return null;
+  const liveIssueIds = await loadAgentLiveIssueIds(db, agent);
+  for (const candidate of orderIdlePickupCandidates(candidates)) {
+    if (liveIssueIds.has(candidate.id)) continue;
+    if (await hasCoveringWake(db, agent, candidate.id)) continue;
+    return candidate;
+  }
+  return null;
 }
 
 /**

@@ -51,6 +51,21 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   nested start from the same chain skips the wait and no longer stalls for
   `AGENT_START_LOCK_STALE_MS` (30 s) on every cancellation that promotes a queued
   run (#174).
+- RELEASE-GATE: the board and the release's component images deploy together,
+  enforced by the deploy script itself. `deploy.sh` resolves the dockergate and
+  fleetd digests of the SAME release (the `myr-vX.Y.Z` tag from the board image
+  version label, else the `sha-<short>` tag of its commit) and refuses a release
+  whose components are missing from the registry before anything changes — the
+  01.10 incident deployed the board alone while production dockergate still
+  rejected the new `maxConcurrentRuns` marker key and every bot apply was denied
+  for ~40 minutes. Each component now rolls out in the same run with its own
+  health probe (`MYR_<COMPONENT>_HEALTH_URL`), and a post-deploy smoke
+  (`bot-apply-smoke.sh`) waits for at least one bot container to re-apply, else
+  the deploy reports DEGRADED with the rollback commands
+  (`rollback-component.sh` per component). CI gained the applied-marker contract:
+  the markers `serializeAppliedMarker()` writes are emitted from the server code
+  of every commit and fed through the dockergate validator, so a marker the
+  validator would deny turns CI red before any image exists (#276).
 
 ## 1.3.2
 
