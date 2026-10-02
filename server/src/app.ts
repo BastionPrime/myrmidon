@@ -119,6 +119,8 @@ import { myrmidonAutonomyRoutes } from "./myrmidon/autonomy/index.js"; // myrmid
 import { accessHubRoutes } from "./myrmidon/access-hub/routes.js"; // myrmidon(SEC1)
 import { ui2LanguageRoutes } from "./myrmidon/ui2-language/routes.js"; // myrmidon(UI2-I18N)
 import { myrmidonAgentMemoryRoutes } from "./myrmidon/agent-memory/index.js"; // myrmidon(MEMORY-UI)
+// myrmidon(1.6-SKILL-LIFE): company skill lifecycle (candidate/verified/deprecated, rollback)
+import { myrmidonSkillLifecycleRoutes } from "./myrmidon/skill-lifecycle/index.js";
 import {
   myrmidonBrowserBridgePublicRoutes,
   myrmidonBrowserBridgeRoutes,
@@ -846,6 +848,7 @@ export async function createApp(
   api.use(myrmidonWorkspaceHygieneRoutes(db)); // myrmidon(WORKSPACE-HYGIENE)
   api.use(myrmidonEmergencyStopRoutes(db)); // myrmidon(EMERGENCY-STOP)
   api.use(myrmidonAgentMemoryRoutes(db)); // myrmidon(MEMORY-UI): agent card Memory tab
+  api.use(myrmidonSkillLifecycleRoutes(db)); // myrmidon(1.6-SKILL-LIFE): skill lifecycle API
   api.use(myrmidonStackRegistryRoutes(db)); // myrmidon(SUA)
   api.use(agentInstructionsRevisionsRoutes(db)); // myrmidon(H2)
   api.use(myrmidonFleetConsoleRoutes(db)); // myrmidon(SC1)

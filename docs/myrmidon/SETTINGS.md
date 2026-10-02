@@ -508,7 +508,6 @@ board uses; it adds no token or credential. Operator guide:
 | `MYRMIDON_TASK_PR_SYNC_BATCH_MAX` | TASK-PR-SYNC | `50` | How many candidate tasks one pass inspects at most (each task costs one GitHub resolve per PR) | From 1 to 500; values outside the range or non-numeric — the default |
 | `MYRMIDON_TASK_PR_SYNC_SETTLE_DISABLED` | TASK-PR-SYNC | unset (settling on) | Instance-wide lever to make the sweep read and log but never flip a task to `done` — for a deliberate post-deploy hold on every task at once. A task with its own post-deploy gate is already deferred per task (a pending card, a pending approval, or a monitor scheduled for the future) | `1`/`true`/`on`/`yes` — settling off; anything else — settling on. The per-task gate check cannot be disabled by this switch |
 
-
 ## TASK-PR-SYNC WAKE-GUARD — no run for a task whose pull requests all merged
 
 The admission-side half of TASK-PR-SYNC: before the board dispatches a run for
@@ -524,6 +523,21 @@ database hit per wake.
 |---|---|---|---|---|
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_ENABLED` | WAKE-GUARD | `1` (on) | Master switch of the wake guard: on — an event-free wake to a settle-pending task is skipped instead of dispatching a run | `0`/`false`/`off`/`no` — disable (wakes dispatch runs as before). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_TTL_SEC` | WAKE-GUARD | `60` | How long a suppress decision stays cached for one task (matches the sweep's default poll); the cache holds at most 1000 issues, least-recently-used eviction | From 1 to 3600; non-numeric, non-positive or above the cap — the default (60) |
+
+## 1.6 — SKILL-LIFECYCLE: company skill lifecycle
+
+Settings of `server/src/myrmidon/skill-lifecycle/`. A company skill is
+`candidate`, `verified` or `deprecated`; only a verified revision is delivered
+to agents by default, a candidate goes to the pilot agent set, a deprecated
+skill reaches nobody. A skill with no lifecycle row keeps the pre-feature
+behaviour and reaches everyone. Promotion needs an approved approval of type
+`skill_promotion`; a rollback restores the previous verified revision on the
+next compile of every agent that uses the skill. The lifecycle API lives under
+`GET/POST /api/myrmidon/companies/:companyId/skill-lifecycle`.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_SKILL_PILOT_AGENTS` | SKILL-LIFECYCLE | unset (empty set) | Comma-separated agent ids that receive `candidate` skills. Any other agent gets a candidate withheld, with a profile warning; `verified` skills reach everyone regardless | Unset or blank — the pilot set is empty, so a candidate reaches nobody (the safe reading of "no pilot configured"). Only agent ids are matched; whitespace around an entry is trimmed |
 
 ## 1.6 — AUTONOMY-MATRIX (Part A: matrix, enforcement, regulations API)
 
