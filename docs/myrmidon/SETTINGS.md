@@ -519,3 +519,24 @@ database hit per wake.
 |---|---|---|---|---|
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_ENABLED` | WAKE-GUARD | `1` (on) | Master switch of the wake guard: on — an event-free wake to a settle-pending task is skipped instead of dispatching a run | `0`/`false`/`off`/`no` — disable (wakes dispatch runs as before). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_TTL_SEC` | WAKE-GUARD | `60` | How long a suppress decision stays cached for one task (matches the sweep's default poll); the cache holds at most 1000 issues, least-recently-used eviction | From 1 to 3600; non-numeric, non-positive or above the cap — the default (60) |
+
+
+## 1.6 — CTO-CHAT B (the board chat planner: owner text -> proposed epic)
+
+The planner behind the CTO chat (the 1.6 CTO-CHAT epic, part B): the owner's free text
+(`POST /api/myrmidon/cto-chat/plan`, body `{ "text": "..." }`, or the same call
+from the Telegram DM bridge) becomes a proposed epic with child tasks and
+per-task acceptance criteria. The proposal is a plan only: it validates against
+the shared zod contract before any card, and nothing is created until the
+owner accepts the `suggest_tasks` card on the standing Agent Chat conversation
+task. Off unless both the address and the key secret are set: with either
+missing the route answers a stable 503 `planner_disabled` with the names of the
+missing settings (names only, never values), and not a single request goes out.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_CTO_CHAT_BASE_URL` | 1.6-CTO-CHAT-B | unset (planner closed) | Address of the OpenAI-compatible LLM gateway (e.g. LiteLLM) the planner calls for one completion. Together with `MYRMIDON_CTO_CHAT_KEY_SECRET` it opens the path; without either the route answers 503 `planner_disabled` naming the missing settings | Empty/unset — the path is closed |
+| `MYRMIDON_CTO_CHAT_KEY_SECRET` | 1.6-CTO-CHAT-B | unset | **Name** of the company secret holding the gateway API key (not the value). The value is read on every call for the calling company; it never appears in the setting, logs, errors or the journal | Empty/unset — the path is closed. The secret is created by the company's operator in the "Secrets" section |
+| `MYRMIDON_CTO_CHAT_MODEL` | 1.6-CTO-CHAT-B | `dashscope-qwen-flash` | The model name sent to the gateway for the planning completion | Empty/unset — the default; an unknown name fails at the gateway and the route answers 400 `backend_failed` |
+| `MYRMIDON_CTO_CHAT_TIMEOUT_SEC` | 1.6-CTO-CHAT-B | `90` | Timeout of the planning request (raised to at least 5, capped at 600) | Non-numeric, `0`, negative or above the cap — the default (90) |
+| `MYRMIDON_CTO_CHAT_MAX_TASKS` | 1.6-CTO-CHAT-B | `8` | Ceiling on child tasks in one proposal (a proposal can never be unbounded work); the hard absolute cap is 20 | Non-numeric, `0`, negative or above 20 — the default (8) |
