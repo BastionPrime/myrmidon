@@ -69,6 +69,12 @@ const mockWorkspaceOperationService = vi.hoisted(() => ({
   readLog: vi.fn(),
 }));
 
+// myrmidon(WAKE-BIND): the manual-wake task binding resolves the top ready task
+// through the idle-pickup module; mocked here to keep the route test hermetic.
+const mockIdlePickup = vi.hoisted(() => ({
+  findTopReadyIssueForAgent: vi.fn(),
+}));
+
 const routeAgentId = "11111111-1111-4111-8111-111111111111";
 const failedChatRunId = "22222222-2222-4222-8222-222222222222";
 const failedChatIssueId = "33333333-3333-4333-8333-333333333333";
@@ -147,6 +153,9 @@ function registerModuleMocks() {
     findActiveServerAdapter: vi.fn(),
     requireServerAdapter: vi.fn(),
   }));
+
+  // myrmidon(WAKE-BIND): wake-binding resolves the top ready task via idle-pickup.
+  vi.doMock("../myrmidon/idle-pickup.js", () => mockIdlePickup);
 }
 
 async function createApp(
@@ -283,8 +292,13 @@ describe("agent live run routes", () => {
     vi.doUnmock("../routes/agents.js");
     vi.doUnmock("../routes/authz.js");
     vi.doUnmock("../middleware/index.js");
+    vi.doUnmock("../myrmidon/idle-pickup.js");
     registerModuleMocks();
     vi.clearAllMocks();
+    // myrmidon(WAKE-BIND): default — the agent has no ready task, so an
+    // issue-less manual wake is refused unless a test seeds a ready task.
+    mockIdlePickup.findTopReadyIssueForAgent.mockReset();
+    mockIdlePickup.findTopReadyIssueForAgent.mockResolvedValue(null);
     mockChatRunRetries.prepareFailedChatRunRetry.mockReset();
     mockChatRunRetries.processFailedChatRunRetry.mockReset();
     mockAccessService.canUser.mockResolvedValue(true);
@@ -882,12 +896,106 @@ describe("agent live run routes", () => {
     mockAccessService.decide.mockImplementation(async ({ action }) => ({
       allowed: action === "agent:wake", explanation: "Missing permission: agents:create",
     }));
+    // myrmidon(WAKE-BIND): the wakeup endpoint now binds an issue-less wake to
+    // the agent's top ready task instead of starting an issue-less run, so the
+    // operator wake needs a ready task to succeed.
+    mockIdlePickup.findTopReadyIssueForAgent.mockResolvedValue({
+      id: "ready-issue-1",
+      identifier: "T-1",
+      priority: "high",
+      blockedTransitionAt: null,
+    });
     const res = await requestApp(await createApp(undefined, {
       type: "board", userId: "operator", source: "session", companyIds: ["company-1"],
     }), url => request(url).post(`/api/agents/${routeAgentId}/${endpoint}`).send({}));
     expect(res.status, JSON.stringify(res.body)).toBe(202);
     expect(mockAccessService.decide).toHaveBeenCalledWith(expect.objectContaining({ action: "agent:wake" }));
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(routeAgentId, expect.objectContaining({ manualUserWake: true }));
+  });
+
+  // myrmidon(WAKE-BIND): a manual wake must always carry its task.
+  describe("wake binding", () => {
+    const readyTask = {
+      id: "55555555-5555-4555-8555-555555555555",
+      identifier: "T-555",
+      priority: "high",
+      blockedTransitionAt: null,
+    };
+
+    it("binds an issue-less manual wake to the agent's top ready task", async () => {
+      mockIdlePickup.findTopReadyIssueForAgent.mockResolvedValue(readyTask);
+
+      const res = await requestApp(await createApp(), (url) =>
+        request(url)
+          .post(`/api/agents/${routeAgentId}/wakeup`)
+          .send({ source: "on_demand", triggerDetail: "manual" }),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(202);
+      expect(mockIdlePickup.findTopReadyIssueForAgent).toHaveBeenCalledWith(expect.anything(), {
+        id: routeAgentId,
+        companyId: "company-1",
+      });
+      expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+        routeAgentId,
+        expect.objectContaining({ payload: { issueId: readyTask.id } }),
+      );
+    });
+
+    it("refuses an issue-less manual wake when the agent has no ready task", async () => {
+      const res = await requestApp(await createApp(), (url) =>
+        request(url).post(`/api/agents/${routeAgentId}/wakeup`).send({ source: "on_demand", triggerDetail: "manual" }),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+      expect(res.body.details?.code).toBe("wakeup_requires_ready_task");
+      expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+    });
+
+    it("keeps an explicit top-level issueId unchanged and does not auto-bind", async () => {
+      const explicitIssueId = "66666666-6666-4666-8666-666666666666";
+
+      const res = await requestApp(await createApp(), (url) =>
+        request(url)
+          .post(`/api/agents/${routeAgentId}/wakeup`)
+          .send({ source: "on_demand", triggerDetail: "manual", issueId: explicitIssueId }),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(202);
+      expect(mockIdlePickup.findTopReadyIssueForAgent).not.toHaveBeenCalled();
+      expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+        routeAgentId,
+        expect.objectContaining({ payload: { issueId: explicitIssueId } }),
+      );
+    });
+
+    it("keeps an explicit payload.issueId unchanged and does not auto-bind", async () => {
+      const explicitIssueId = "77777777-7777-4777-8777-777777777777";
+
+      const res = await requestApp(await createApp(), (url) =>
+        request(url)
+          .post(`/api/agents/${routeAgentId}/wakeup`)
+          .send({ source: "on_demand", triggerDetail: "manual", payload: { issueId: explicitIssueId } }),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(202);
+      expect(mockIdlePickup.findTopReadyIssueForAgent).not.toHaveBeenCalled();
+      expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+        routeAgentId,
+        expect.objectContaining({ payload: { issueId: explicitIssueId } }),
+      );
+    });
+
+    it("leaves non-manual (system) wakes untouched", async () => {
+      const res = await requestApp(await createApp(), (url) =>
+        request(url)
+          .post(`/api/agents/${routeAgentId}/wakeup`)
+          .send({ source: "automation", triggerDetail: "system" }),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(202);
+      expect(mockIdlePickup.findTopReadyIssueForAgent).not.toHaveBeenCalled();
+    });
   });
 
   describe("exact failed chat run retry", () => {

@@ -13,6 +13,7 @@ const mockOpenNewIssue = vi.hoisted(() => vi.fn());
 const mockPushToast = vi.hoisted(() => vi.fn());
 const mockAgentsApi = vi.hoisted(() => ({
   invoke: vi.fn(),
+  wakeup: vi.fn(),
   pause: vi.fn(),
   resume: vi.fn(),
   clearError: vi.fn(),
@@ -109,6 +110,7 @@ describe("AgentActionButtons", () => {
     mockAgentsApi.resume.mockResolvedValue(makeAgent({ status: "idle" }));
     mockAgentsApi.terminate.mockResolvedValue(makeAgent({ status: "terminated" }));
     mockAgentsApi.invoke.mockResolvedValue({ id: "run-1" });
+    mockAgentsApi.wakeup.mockResolvedValue({ id: "run-1" });
     mockAgentsApi.resetSession.mockResolvedValue(undefined);
   });
 
@@ -191,9 +193,12 @@ describe("AgentActionButtons", () => {
     });
     await flushReact();
 
-    expect(mockAgentsApi.invoke).toHaveBeenCalledWith("agent-1", "company-1", {
+    // myrmidon(WAKE-BIND): traced runs now wake through the wakeup API.
+    expect(mockAgentsApi.wakeup).toHaveBeenCalledWith("agent-1", {
+      source: "on_demand",
+      triggerDetail: "manual",
       debug: { providerTrace: "raw" },
-    });
+    }, "company-1");
     expect(mockNavigate).toHaveBeenCalledWith("/agents/alpha/runs/run-1");
   });
 

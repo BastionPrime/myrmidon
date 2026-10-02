@@ -244,6 +244,8 @@ import {
   readPauseDrainsEnabled,
   shouldCancelActiveRunsOnOperatorPause,
 } from "../myrmidon/pause-drain.js";
+// myrmidon(WAKE-BIND): a manual wake binds to the agent's top ready task
+import { findTopReadyIssueForAgent } from "../myrmidon/idle-pickup.js";
 import {
   AGENT_PROFILE_CHANGE_CONSENT_FIELDS,
   agentInstructionsChangeTargetKey,
@@ -5855,15 +5857,38 @@ export function agentRoutes(
         ),
       );
     }
+    // myrmidon(WAKE-BIND): a wake must always carry its task. Accept the
+    // documented top-level issueId, and for a manual wake with no issue at all
+    // bind the agent's top ready task — the same candidate ranking the
+    // idle-pickup scheduler uses — or refuse it. This never starts an
+    // issue-less run that could do the work but not write to its task
+    // (403 cross_issue_influence).
+    const actorScopedWakePayload = req.actor.type === "agent" && wakePayload
+      ? { ...wakePayload, commentId: undefined, wakeCommentId: undefined, wakeCommentIds: undefined } // myrmidon(WAKE-BIND)
+      : wakePayload;
+    wakePayload = req.body.issueId // myrmidon(WAKE-BIND)
+      ? { ...(actorScopedWakePayload ?? {}), issueId: req.body.issueId } // myrmidon(WAKE-BIND)
+      : actorScopedWakePayload;
+    const wakeHasIssueBinding = typeof wakePayload?.issueId === "string" // myrmidon(WAKE-BIND)
+      || typeof wakePayload?.taskId === "string" // myrmidon(WAKE-BIND)
+      || typeof wakePayload?.wakeCommentId === "string"; // myrmidon(WAKE-BIND)
+    if (!req.body.failedRunId && !wakeHasIssueBinding && (opts.source ?? "on_demand") === "on_demand") { // myrmidon(WAKE-BIND)
+      const topReadyTask = await findTopReadyIssueForAgent(db, { id, companyId: agent.companyId }); // myrmidon(WAKE-BIND)
+      if (!topReadyTask) { // myrmidon(WAKE-BIND)
+        throw conflict( // myrmidon(WAKE-BIND)
+          "This agent has no ready task to wake for. Pass issueId (or payload.issueId) to wake it for a specific task.", // myrmidon(WAKE-BIND)
+          { code: "wakeup_requires_ready_task" }, // myrmidon(WAKE-BIND)
+        );
+      }
+      wakePayload = { ...(wakePayload ?? {}), issueId: topReadyTask.id }; // myrmidon(WAKE-BIND)
+    }
     const run = await heartbeat.wakeup(id, {
       failedRunId: req.body.failedRunId ?? null,
       ...(req.actor.type === "board" && !req.body.failedRunId ? { manualUserWake: true } : {}),
       source: opts.source,
       triggerDetail: req.body.triggerDetail ?? "manual",
       reason: req.body.reason ?? null,
-      payload: req.actor.type === "agent" && wakePayload
-        ? { ...wakePayload, commentId: undefined, wakeCommentId: undefined, wakeCommentIds: undefined }
-        : wakePayload,
+      payload: wakePayload, // myrmidon(WAKE-BIND)
       idempotencyKey: req.body.idempotencyKey ?? null,
       requestedByActorType: req.actor.type === "agent" ? "agent" : "user",
       requestedByActorId: req.actor.type === "agent" ? req.actor.agentId ?? null : req.actor.userId ?? null,
