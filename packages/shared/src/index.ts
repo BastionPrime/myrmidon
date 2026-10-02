@@ -2776,6 +2776,10 @@ export * from "./announcements.js";
 export * from "./myrmidon-workspace-hygiene.js";
 // myrmidon(C0): live run-admission limits shared by the server, the UI and the settings validator.
 export * from "./myrmidon-runtime-limits.js";
+// myrmidon(EXTCASE-M): the mail path of the first third-party case — the module contract, the
+// client rules, the decision vocabulary and the tender dossier, shared by the server, the panel
+// and the connector service's mail module.
+export * from "./myrmidon-client-mail.js";
 // myrmidon(S6): per-agent tool and connection permissions.
 export * from "./myrmidon-agent-tool-permissions.js";
 // myrmidon(M2-B): per-agent gateway key names and fallback-chain cycle checks.
