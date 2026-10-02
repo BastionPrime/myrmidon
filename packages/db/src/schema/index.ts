@@ -6,6 +6,8 @@ export { authUsers, authSessions, authAccounts, authVerifications } from "./auth
 export { instanceSettings } from "./instance_settings.js";
 export { instanceUserRoles } from "./instance_user_roles.js";
 export { userSidebarPreferences } from "./user_sidebar_preferences.js";
+// myrmidon(UI2-I18N): per-user UI language preference (2.0 UI tree).
+export { userUiLanguage } from "./user_ui_language.js";
 export { agents } from "./agents.js";
 export { builtInManagedResources } from "./built_in_managed_resources.js";
 export { agentMemberships } from "./agent_memberships.js";
