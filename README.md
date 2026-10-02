@@ -117,7 +117,7 @@ what exists as of 1.5:
   that survive a mass wake ([run-limits](docs/myrmidon/guides/run-limits.md)).
 - **UI 2.0 shell.** The first piece of the 2.0 interface — the rail, the
   nest switcher, the design tokens — behind an instance flag, off by
-  default.
+  default ([ui2-shell](docs/myrmidon/guides/ui2-shell.md)).
 
 Myrmidon sends no telemetry to the vendor. All settings are
 `MYRMIDON_*` environment variables documented in
