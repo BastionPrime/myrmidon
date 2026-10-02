@@ -17,6 +17,9 @@ extension/
     pairing.ts           pairing-code client (code -> bridge token)
     actions.ts           read-only browser actions
     gateway-client.ts    outbound WSS connection + bridge.hello/ready handshake
+    native-host-contract.ts  generic native-messaging contract for local
+                          signing hosts (types/validators only; concrete
+                          helpers live outside the public fork)
     entry-background.ts  the MV3 service worker
     entry-content.ts     isolated-world content script (read/click only)
     entry-popup.ts       pairing UI
