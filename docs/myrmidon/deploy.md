@@ -183,6 +183,19 @@ Order:
    the server service is recreated.
 7. The `/api/health` check (`verify-health.sh`): `status` is `ok`, the version and commit
    match.
+7b. The LLM tracing guard (`tracing-check.sh`, TRACING-HEALTH): the gateway must carry the
+   OTLP-only callback set. The script compares the intended list the bundle generates (one
+   source of truth, `tracing_intended_callbacks()` in `lib.sh`) with the effective callbacks
+   — the union of `MYRMIDON_TRACING_CALLBACKS_COMMAND` (the live gateway or its database)
+   and the `callbacks:` list of `MYRMIDON_TRACING_GATEWAY_CONFIG` — and refuses the legacy
+   `langfuse` callback while the Langfuse server is v4 (`GET
+   <MYRMIDON_TRACING_LANGFUSE_URL>/api/public/health` reports 4.x) or while the version
+   cannot be proven (the release bundle pins it in `MYRMIDON_TRACING_LANGFUSE_VERSION`). v4
+   in `events_only` mode rejects the legacy `/api/public/ingestion` endpoint: about 12k
+   rejected events per hour and burned gateway CPU while everything looked healthy. A
+   refusal fails the deploy like a failed health check (maintenance stays on, the rollback
+   command is printed) and there is no flag that skips it. Without any `MYRMIDON_TRACING_*`
+   setting the check logs a skip and the deploy continues.
 8. Leaving maintenance mode. The `exit` call returns as soon as the server marks the window
    `leaving` (the leave tail — resuming the queue, the exit hook, retiring the window — runs on
    the server's maintenance tick), and the script then waits for the window to retire: it polls
@@ -207,7 +220,7 @@ Order:
     rollback commands. With the company unset the smoke is skipped with a warning;
     `MYRMIDON_DEPLOY_SMOKE=0` disables it entirely (not for a release).
 
-If step 7 fails, the script exits with an error, **maintenance stays on**, and the output
+If step 7 or 7b fails, the script exits with an error, **maintenance stays on**, and the output
 carries the rollback command and the dump path. A failure at steps 9–10 happens after the
 board is healthy and maintenance is already lifted: the script exits with an error and the
 DEGRADED line, and the rollback of the board and of each component is the operator's call.

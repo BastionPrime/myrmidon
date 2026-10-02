@@ -494,3 +494,232 @@ record_history() {
   mkdir -p "$STATE_DIR"
   printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" >>"$HISTORY_FILE"
 }
+
+# --- TRACING-HEALTH: one source of truth for the tracing callbacks -----------
+# Langfuse v4 in the default `events_only` write mode rejects legacy trace and
+# observation events on `/api/public/ingestion`. LiteLLM keeps sending them for
+# as long as the legacy `langfuse` callback is enabled: the 02.10 incident was
+# about 12k "Bad request" responses per hour, burned gateway CPU, and nobody
+# noticed because nothing checked tracing. Tracing therefore runs over OTLP
+# only, and the callback list has ONE source of truth: the function below.
+# The generated file, the gateway config the bundle renders and the check all
+# read that function, so a hand-written second list cannot drift away from it.
+#
+# Deploy settings (all optional; without them the check logs that it is
+# skipped, so an installation without a tracing gateway still deploys):
+#   MYRMIDON_TRACING_LANGFUSE_URL       base URL of the Langfuse server
+#   MYRMIDON_TRACING_LANGFUSE_VERSION   version pinned in the bundle; the
+#                                       fallback when the probe cannot answer
+#   MYRMIDON_TRACING_GATEWAY_CONFIG     deployed LiteLLM config file
+#   MYRMIDON_TRACING_CALLBACKS_COMMAND  command printing the effective callbacks
+#   MYRMIDON_TRACING_CALLBACKS_FILE     generated file with the intended list
+#   MYRMIDON_TRACING_TOKEN_FILE         token file for a guarded health route
+
+# The only callback list the bundle installs. OpenTelemetry reaches Langfuse
+# through the OTLP endpoint on v3 and v4; the legacy `langfuse` callback posts
+# to `/api/public/ingestion`, which v4 rejects. One place, nothing else writes
+# a second list.
+tracing_intended_callbacks() {
+  printf '%s\n' "langfuse_otel"
+}
+
+# Default location of the generated intended list (a file, so the check reads
+# the same bytes the installer wrote).
+tracing_callbacks_file_default() {
+  printf '%s\n' "${STATE_DIR:-.}/tracing-callbacks.txt"
+}
+
+# Generates the intended callback list from the function above (one callback
+# per line). The installer renders the gateway config and the start check from
+# this file, so the bundle never carries two hand-written lists.
+tracing_write_callbacks_file() {
+  local file="$1" dir
+  [[ -n "$file" ]] || die "tracing_write_callbacks_file needs a target file"
+  dir="$(dirname "$file")"
+  [[ -d "$dir" ]] || mkdir -p "$dir"
+  tracing_intended_callbacks >"$file"
+}
+
+# Prints the callback names of a generated/readable list file, one per line,
+# skipping blanks and comments.
+tracing_read_callbacks_file() {
+  local file="$1"
+  [[ -r "$file" ]] || return 0
+  grep -v '^[[:space:]]*$' "$file" | grep -v '^[[:space:]]*#' || true
+}
+
+# Normalizes a callback list (spaces, commas or newlines) to one name per line.
+tracing_normalize_callbacks() {
+  tr ',' '\n' | tr -s '[:space:]' '\n' | grep -v '^[[:space:]]*$' || true
+}
+
+# Major version of a version string ("4.2.0", "v4.2.0"), or empty.
+tracing_major_of_version() {
+  local version="${1#v}"
+  if [[ "$version" =~ ^([0-9]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '%s\n' ""
+  fi
+  return 0
+}
+
+# Major version of the Langfuse server, or empty when it cannot be read. The
+# first probe works without credentials: Langfuse serves `GET /api/public/health`
+# (public route) with `{"status":...,"version":"4.x.y"}`, and the version is the
+# documented v4 marker (on v4 the legacy ingestion endpoint rejects events with
+# "events_only"). The documented fallback is the version the release bundle
+# pins (MYRMIDON_TRACING_LANGFUSE_VERSION), used when the route is unreachable,
+# guarded or answers without a version.
+tracing_langfuse_major() {
+  local url="$1" token_file="${2:-}" body version
+  if [[ -z "$url" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+  body="$(http_get "${url%/}/api/public/health" "$token_file" 2>/dev/null)" || body=""
+  version="$(jq -r '.version // empty' <<<"$body" 2>/dev/null)" || version=""
+  tracing_major_of_version "$version"
+}
+
+# Prints the callbacks of a LiteLLM gateway config file, one per line. Reads
+# the `callbacks:` key of the `litellm_settings:` block and understands both
+# the inline form (`callbacks: ["langfuse_otel"]`) and the block form
+# (`callbacks:` plus `- langfuse_otel` lines). An unknown shape prints nothing
+# rather than a guess.
+tracing_callbacks_from_config() {
+  local file="$1"
+  [[ -n "$file" && -r "$file" ]] || return 0
+  awk '
+    function clean(s) {
+      gsub(/"/, "", s)
+      gsub("\047", "", s)
+      sub(/^[ \t]+/, "", s)
+      sub(/[ \t]+$/, "", s)
+      sub(/,$/, "", s)
+      return s
+    }
+    /^[ \t]*#/ { next }
+    /^[ \t]*$/ { next }
+    /^[^ \t]/ {
+      in_litellm = ($0 ~ /^litellm_settings[ \t]*:/)
+      block = 0
+      next
+    }
+    !in_litellm { next }
+    /^[ \t]+callbacks[ \t]*:/ {
+      rest = $0
+      sub(/^[ \t]*callbacks[ \t]*:[ \t]*/, "", rest)
+      if (rest ~ /^\[/) {
+        sub(/^\[/, "", rest)
+        sub(/\][ \t]*$/, "", rest)
+        n = split(rest, parts, ",")
+        for (i = 1; i <= n; i++) { v = clean(parts[i]); if (v != "") print v }
+        block = 0
+      } else if (rest != "") {
+        v = clean(rest); if (v != "") print v
+        block = 0
+      } else {
+        block = 1
+      }
+      next
+    }
+    block && /^[ \t]*-[ \t]*/ {
+      v = $0
+      sub(/^[ \t]*-[ \t]*/, "", v)
+      v = clean(v)
+      if (v != "") print v
+      next
+    }
+    block { block = 0 }
+  ' "$file"
+}
+
+# Effective LiteLLM callbacks, one per line. Two sources are read and the union
+# is taken, because the gateway config file and the gateway database disagree
+# and the database only ADDS callbacks (a legacy one can stay in memory while
+# the file looks clean):
+#   * MYRMIDON_TRACING_CALLBACKS_COMMAND — the live gateway (or its database),
+#     whatever the deployment trusts to read it;
+#   * MYRMIDON_TRACING_GATEWAY_CONFIG — the deployed config file.
+tracing_effective_callbacks() {
+  local command="${1:-}" config="${2:-}" out=""
+  if [[ -n "$command" ]]; then
+    out="$(bash -c "$command" 2>/dev/null)" || out=""
+    tracing_normalize_callbacks <<<"$out"
+  fi
+  if [[ -n "$config" ]]; then
+    tracing_callbacks_from_config "$config"
+  fi
+}
+
+# True when the stream on stdin contains the legacy `langfuse` callback (as
+# opposed to `langfuse_otel` or any other name).
+tracing_has_legacy_callback() {
+  local token
+  while IFS= read -r token; do
+    token="$(printf '%s' "$token" | tr -d '[:space:]')"
+    [[ "$token" == "langfuse" ]] && return 0
+  done
+  return 1
+}
+
+# The guard. Returns 0 when the bundle's OTLP-only list is what the gateway
+# uses; returns 1 after a log line naming the reason when a legacy `langfuse`
+# callback is installed against a v4 (or unproven) Langfuse server. There is
+# deliberately no flag or setting that skips the refusal: callers die on 1.
+# Arguments: langfuse_url, pinned_version, intended_file, gateway_config,
+# callbacks_command, token_file.
+tracing_check() {
+  local url="${1:-}" pinned="${2:-}" intended_file="${3:-}" config="${4:-}" command="${5:-}" token_file="${6:-}"
+  local major intended effective reason=""
+
+  if [[ -z "$url$pinned$config$command" ]]; then
+    log "tracing: no MYRMIDON_TRACING_* input configured; the callback check is skipped"
+    return 0
+  fi
+
+  if [[ -z "$config" && -z "$command" ]]; then
+    log "tracing: ERROR: tracing is configured but the effective callback set cannot be read; set MYRMIDON_TRACING_GATEWAY_CONFIG (the deployed gateway config) or MYRMIDON_TRACING_CALLBACKS_COMMAND (the live gateway). The check refuses rather than assuming the list is clean."
+    return 1
+  fi
+
+  major="$(tracing_langfuse_major "$url" "$token_file")"
+  if [[ -z "$major" && -n "$pinned" ]]; then
+    major="$(tracing_major_of_version "$pinned")"
+    [[ -n "$major" ]] && log "tracing: the Langfuse version pinned in the bundle is $pinned; the server probe gave no version"
+  fi
+
+  intended="$(tracing_read_callbacks_file "$intended_file")"
+  [[ -n "$intended" ]] || intended="$(tracing_intended_callbacks)"
+  effective="$(tracing_effective_callbacks "$command" "$config")"
+
+  log "tracing: intended callbacks: $(tr '\n' ' ' <<<"$intended" | sed 's/ *$//')"
+  log "tracing: effective callbacks: $(tr '\n' ' ' <<<"$effective" | sed 's/ *$//')"
+
+  if tracing_has_legacy_callback <<<"$intended"; then
+    if [[ "$major" == "4" || -z "$major" ]]; then
+      reason="the callback list the bundle itself installs"
+    else
+      log "tracing: the bundle list carries the legacy 'langfuse' callback; Langfuse $major accepts it (the v4 refusal is what this check exists for)"
+    fi
+  fi
+
+  if [[ -z "$reason" ]] && tracing_has_legacy_callback <<<"$effective"; then
+    if [[ "$major" == "4" ]]; then
+      reason="the effective gateway callbacks"
+    elif [[ -z "$major" ]]; then
+      reason="the effective gateway callbacks, and the Langfuse version cannot be proven (pin MYRMIDON_TRACING_LANGFUSE_VERSION or expose GET /api/public/health)"
+    else
+      log "tracing: the gateway carries the legacy 'langfuse' callback; Langfuse $major accepts it (the v4 refusal is what this check exists for)"
+    fi
+  fi
+
+  if [[ -n "$reason" ]]; then
+    log "tracing: REFUSED: the legacy 'langfuse' callback is in $reason while the Langfuse server is v4 (or its version cannot be proven). Langfuse v4 in events_only mode rejects /api/public/ingestion with 'Bad request' per event and burns gateway CPU; install the OTLP callback 'langfuse_otel' only. This check cannot be skipped."
+    return 1
+  fi
+
+  log "tracing: callbacks ok (OTLP only)"
+  return 0
+}
