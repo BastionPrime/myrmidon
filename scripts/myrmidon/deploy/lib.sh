@@ -211,6 +211,7 @@ load_config() {
   : "${MAINTENANCE_ENTER_COMMAND:=}"
   : "${MAINTENANCE_EXIT_COMMAND:=}"
   : "${MAINTENANCE_PAUSE_SEC:=0}"
+  : "${MAINTENANCE_EXIT_WAIT_SEC:=120}"
   : "${RUNNING_RUNS_COMMAND:=}"
   : "${RUNS_WAIT_TIMEOUT_SEC:=1800}"
   : "${ALLOW_UNKNOWN_RUNS:=0}"
@@ -335,9 +336,22 @@ maintenance_enter() {
 }
 
 maintenance_exit() {
+  # myrmidon(EXIT-ASYNC): the exit POST returns as soon as the server marks the
+  # window `leaving` (the server finishes the leave asynchronously on its
+  # maintenance tick; admission already reopens in `leaving`). The deploy
+  # therefore waits on the STATE, not on the HTTP call: poll GET /maintenance
+  # until the instance window is gone (state `off`), bounded by
+  # MAINTENANCE_EXIT_WAIT_SEC. Without this wait the script reported success
+  # while the window was still `leaving`, and the next enter raced the previous
+  # exit (409 "still leaving"). A wait timeout does not fail an already
+  # switched and healthy deploy: the window is `leaving` (admission open) and
+  # the tick retires it, so the timeout is logged loudly and the deploy moves
+  # on. A failed POST still aborts (unchanged): the window would stay `on`.
   case "$MAINTENANCE_MODE" in
     api)
-      run http_post_json "$MAINTENANCE_API_URL" '{"action":"exit","scope":{"type":"instance"}}' "$MAINTENANCE_TOKEN_FILE" >/dev/null
+      run http_post_json "$MAINTENANCE_API_URL" '{"action":"exit","scope":{"type":"instance"}}' "$MAINTENANCE_TOKEN_FILE" >/dev/null || return 1
+      wait_for_maintenance_off \
+        || log "WARNING: the exit request was accepted, but the instance window did not retire within ${MAINTENANCE_EXIT_WAIT_SEC}s (MAINTENANCE_EXIT_WAIT_SEC); it stays 'leaving' (admission is open) and the maintenance tick retires it"
       ;;
     hook)
       [[ -n "$MAINTENANCE_EXIT_COMMAND" ]] || die "MAINTENANCE_MODE=hook needs MAINTENANCE_EXIT_COMMAND"
@@ -345,6 +359,22 @@ maintenance_exit() {
       ;;
     pause) log "maintenance: nothing to exit (MAINTENANCE_MODE=pause)" ;;
   esac
+}
+
+# myrmidon(EXIT-ASYNC): poll the maintenance status until the instance window
+# is retired (state `off`, or no instance window at all), or give up after
+# MAINTENANCE_EXIT_WAIT_SEC (default 120). A missing state field means the
+# board is not in maintenance — that is success, not something to wait for.
+# Returns 1 on timeout so the caller can report it.
+wait_for_maintenance_off() {
+  local deadline=$((SECONDS + MAINTENANCE_EXIT_WAIT_SEC)) body state
+  while :; do
+    body="$(http_get "$MAINTENANCE_API_URL" "$MAINTENANCE_TOKEN_FILE" 2>/dev/null)" || body=""
+    state="$(jq -r '.instance.state // "off"' <<<"$body" 2>/dev/null || echo off)"
+    [[ "$state" == "off" ]] && return 0
+    ((SECONDS < deadline)) || { log "maintenance: instance window still '$state' after ${MAINTENANCE_EXIT_WAIT_SEC}s (MAINTENANCE_EXIT_WAIT_SEC)"; return 1; }
+    sleep "$POLL_INTERVAL_SEC"
+  done
 }
 
 # Prints the number of running agent runs, or nothing when unknown.

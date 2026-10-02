@@ -22,7 +22,10 @@
 # behaviour). A drain timeout lifts maintenance again and aborts before the
 # image changes; then switch the image line in the compose override file and
 # recreate only the server service; verify /api/health (status, version,
-# commit); leave maintenance.
+# commit); leave maintenance (myrmidon EXIT-ASYNC: the exit call returns as soon
+# as the window is `leaving`, then the script waits for the window to retire,
+# not for the HTTP call); run the post-deploy fleet check (no issue became
+# blocked in the deploy window, the window retired).
 #
 # RELEASE-GATE (the 01.10 incident): the release's component images roll out
 # together with the board, in this same run. After the board image check
@@ -130,7 +133,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   plan "5. wait for zero running runs (timeout ${RUNS_WAIT_TIMEOUT_SEC}s); onTimeout=$MAINTENANCE_ON_TIMEOUT drains for the grace and then interrupts what is still running (retried after the window closes); on a drain timeout maintenance is lifted and the deploy aborts before the image changes"
   plan "6. set image in $OVERRIDE_PATH to $ref; docker compose up -d --no-deps $COMPOSE_SERVICE"
   plan "7. verify $HEALTH_URL: status ok, version ${expect_version:-<from image label>}, commit ${expect_commit:-<from image label>}"
-  plan "8. leave maintenance"
+  plan "8. leave maintenance (the exit POST returns when the window is marked leaving; the deploy waits for the state off, MAINTENANCE_EXIT_WAIT_SEC=${MAINTENANCE_EXIT_WAIT_SEC}s); then the post-deploy fleet check (no issue blocked in the deploy window, the window retired; needs BOARD_API_URL/BOARD_COMPANY_ID, otherwise skipped)"
   if [[ -n "$component_digests" ]]; then
     plan "9. roll out release components together with the board: $MYR_RELEASE_COMPONENTS (${component_resolution}; one rollout-component.sh per component, each with its own pull, switch and health check)"
     plan "10. post-deploy smoke: wait for a bot container to re-apply (bot-apply-smoke.sh, timeout ${MYR_SMOKE_TIMEOUT_SEC}s); on failure the deploy reports DEGRADED and prints the rollback commands"
