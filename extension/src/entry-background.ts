@@ -10,10 +10,20 @@
 // Security shape (design note §4.6): the service worker trusts only the
 // gateway (origin from settings, token from chrome.storage.local). The
 // tender-platform page cannot command the extension: the content script runs
-// in an isolated world and exposes exactly two read-only operations to the
-// service worker, and neither lets a page initiate anything.
+// in an isolated world and exposes only the operations the worker asks for,
+// and none of them lets a page initiate anything.
 
-import { executeAction, extensionCapabilityList, type ActionParams, type BrowserTabPort, type ContentScriptPort } from "./actions";
+import {
+  DownloadTooLargeError,
+  executeAction,
+  extensionCapabilityList,
+  type ActionParams,
+  type BrowserTabPort,
+  type ConfirmationPrompt,
+  type ContentScriptPort,
+  type DownloadedFile,
+} from "./actions";
+import { createConfirmationPort, createConfirmationRegistry, type ConfirmationUi } from "./confirmation";
 import { BridgeConnection, NodeTimerPort, type WebSocketFactory, type WebSocketLike } from "./gateway-client";
 import { BROWSER_BRIDGE_WS_PATH, BRIDGE_ACTION_TIMEOUT_MS, EXTENSION_CAPABILITIES } from "./protocol";
 import { FetchPairingGateway } from "./pairing";
@@ -84,7 +94,58 @@ class RuntimeContentScriptPort implements ContentScriptPort {
     if (typeof response !== "object" || response === null) throw new Error("content script did not answer");
     return (response as { clicked?: unknown }).clicked === true;
   }
+
+  async fillElement(tabId: number, target: string, value: string): Promise<boolean> {
+    const response = await chrome.tabs.sendMessage(tabId, { type: "bridge-page-fill", target, value });
+    if (typeof response !== "object" || response === null) throw new Error("content script did not answer");
+    return (response as { filled?: unknown }).filled === true;
+  }
+
+  async downloadFile(tabId: number, url: string): Promise<DownloadedFile> {
+    const response = await chrome.tabs.sendMessage(tabId, { type: "bridge-page-download", url });
+    if (typeof response !== "object" || response === null) throw new Error("content script did not answer");
+    const answer = response as { ok?: unknown; file?: unknown; tooLarge?: unknown; message?: unknown };
+    if (answer.ok === true && typeof answer.file === "object" && answer.file !== null) {
+      const file = answer.file as { name?: unknown; mimeType?: unknown; byteLength?: unknown; base64?: unknown };
+      if (typeof file.name === "string" && typeof file.base64 === "string" && typeof file.byteLength === "number") {
+        return {
+          name: file.name,
+          mimeType: typeof file.mimeType === "string" ? file.mimeType : "application/octet-stream",
+          byteLength: file.byteLength,
+          base64: file.base64,
+        };
+      }
+    }
+    if (typeof answer.tooLarge === "number") throw new DownloadTooLargeError(answer.tooLarge);
+    throw new Error(typeof answer.message === "string" ? answer.message : "download answered without a file");
+  }
 }
+
+// Confirmation primitive wiring: the person-facing window and the bookkeeping.
+const confirmations = createConfirmationRegistry();
+const confirmationWindows = new Map<string | number, number>();
+
+const confirmationUi: ConfirmationUi = {
+  open(prompt: ConfirmationPrompt) {
+    const query = new URLSearchParams({ requestId: String(prompt.requestId ?? ""), summary: prompt.summary });
+    void chrome.windows
+      .create({ url: chrome.runtime.getURL(`confirm/confirm.html?${query.toString()}`), type: "popup", width: 440, height: 280, focused: true })
+      .then((created) => {
+        if (typeof created?.id === "number" && prompt.requestId !== undefined) {
+          confirmationWindows.set(prompt.requestId, created.id);
+        }
+      })
+      .catch(() => undefined);
+  },
+  close(requestId: string | number) {
+    const windowId = confirmationWindows.get(requestId);
+    if (windowId === undefined) return;
+    confirmationWindows.delete(requestId);
+    void chrome.windows.remove(windowId).catch(() => undefined);
+  },
+};
+
+const confirmPort = createConfirmationPort(confirmations, confirmationUi);
 
 interface BridgeStatus {
   phase: "unpaired" | "idle" | "connecting" | "awaiting-ready" | "ready" | "closed";
@@ -114,11 +175,17 @@ function currentAllowlist(): string[] {
   return connection ? liveAllowlist : [];
 }
 
-async function dispatchAction(method: string, params: unknown) {
+async function dispatchAction(method: string, params: unknown, requestId: string | number) {
   const settings = await loadOrCreateSettings();
   const capabilities = settings.paired ? settings.paired.capabilities : [];
   const allowlist = settings.paired ? settings.paired.allowlist : liveAllowlist;
-  return executeAction(method as never, params as ActionParams, { capabilities, allowlist }, { tabs: tabsPort, content: contentPort });
+  return executeAction(
+    method as never,
+    params as ActionParams,
+    { capabilities, allowlist },
+    { tabs: tabsPort, content: contentPort, confirm: confirmPort },
+    { requestId },
+  );
 }
 
 async function connect(): Promise<{ ok: boolean; failure: string | null }> {
@@ -151,6 +218,7 @@ async function connect(): Promise<{ ok: boolean; failure: string | null }> {
         if (current) void store.save(applyAllowlistUpdate(current, { domains }));
       });
     },
+    onCancel: (requestId) => confirmPort.cancel(requestId),
     readyTimeoutMs: BRIDGE_ACTION_TIMEOUT_MS,
     timers,
   });
@@ -236,6 +304,15 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     }
     if (type === "bridge-disconnect") {
       disconnect();
+      sendResponse({ ok: true });
+      return;
+    }
+    if (type === "bridge-confirm-answer") {
+      const { requestId, confirmed } = message as { requestId?: unknown; confirmed?: unknown };
+      if (typeof requestId === "string" && requestId.length > 0) {
+        confirmations.settle(requestId, confirmed === true ? "confirmed" : "refused");
+        confirmationUi.close(requestId);
+      }
       sendResponse({ ok: true });
       return;
     }

@@ -116,6 +116,7 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MYR_DOCKERGATE_HEALTH_URL` | RELEASE-GATE | unset | REQUIRED health probe of dockergate in the joint rollout: the value goes to curl verbatim (URL + arguments, e.g. `--unix-socket /run/myrmidon-dockergate/engine.sock http://localhost/_ping`) | Unset — the component rollout refuses after the switch (fail-closed): no success is reported without a check |
 | `MYR_FLEETD_HEALTH_URL` | RELEASE-GATE | unset | The same for fleetd (e.g. `http://127.0.0.1:8080/v1/bots` with the auth header) | Unset — refuses after the switch, like dockergate |
 | `MYR_DOCKERGATE_COMPOSE_SERVICE` / `MYR_DOCKERGATE_OVERRIDE_FILE` | RELEASE-GATE | `dockergate` / `docker-compose.myrmidon-dockergate.yml` | Service name and override file of dockergate in `$COMPOSE_DIR` when an installation differs | Override variables; for fleetd the same with `FLEETD` |
+| `MYR_DOCKERGATE_HOST` / `MYR_FLEETD_HOST` | RELEASE-GATE (02.10 follow-ups) | `local` | Where the component actually runs: `local` — this host's compose project (the rollout proves the service is part of it via `docker compose config --services` and refuses before pulling or writing anything when it is not, fail-closed); `remote:<user>@<host>` — the service runs on another host (fleetd on the second host): docker/compose through ssh (key auth), the override is written there, the health URL is probed from the deploy host; `skip` — the component is not managed by this deploy (its own procedure rolls it out elsewhere), the rollout logs a loud SKIP and still CI-checks the digest | The 1.4.0 rollout created `paperclip-fleetd-1` on the board host (no config there, exited, removed by hand): point fleetd at the host it really runs on |
 | `MYRMIDON_DEPLOY_SMOKE` | RELEASE-GATE | `1` (on) | Post-deploy smoke: within the timeout at least one bot container must re-apply (its status is `running`), else the deploy reports DEGRADED and prints the rollback commands | `0` — the smoke does not run at all (not for a release) |
 | `MYRMIDON_DEPLOY_SMOKE_COMPANY` | RELEASE-GATE | unset | UUID of the company whose agents the smoke polls (the agents list is per-company) | Unset — the smoke is skipped with a warning in the `deploy.sh` output |
 | `MYRMIDON_DEPLOY_SMOKE_AGENT` | RELEASE-GATE | unset | UUID of one specific agent for the smoke instead of polling all bots of the company | Unset — all `hermes_gateway` agents of the company are polled |
@@ -318,6 +319,22 @@ The bot's tool is `ocr.pdf` (input: `name`, `base64`, optional `origin`, `source
 (JSON-RPC: `initialize`, `tools/list`, `tools/call`); only metadata goes to the activity journal
 (`name`, `sizeBytes`, `pages`, `origin`, `sourceId`, `backend`, `chars`, `truncated`) — the text and bytes
 never enter the journal.
+
+## EXTCASE-B — browser bridge to the client's extension
+
+Settings of the server module `server/src/myrmidon/browser-bridge/` (the first third-party case: browser
+actions run in the client's browser, the board cannot reach it). The bridge is configured not by an
+environment variable but by the `instance_settings.general.browserBridge` record
+(`GET`/`PATCH /api/myrmidon/browser-bridge/settings`, read — board, write — instance-admin):
+`domains` — the allowlist of support domains, `signing` — the client signing policy
+(`enabled` — emergency off, `mode` — `auto`/`manual`/`types`, `types` — action types that require
+a human under `mode: types`). The one-button emergency off is
+`POST /api/myrmidon/browser-bridge/signing/disable`; after it the gateway rejects any sign action
+(fail-closed) and the fact is written to the company journal.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_BROWSER_BRIDGE_PEPPER` | EXTCASE-B | unset | HMAC pepper for pairing codes and bridge tokens of the bridge: only digests live in the database; the presented code (exchanged for a device token) and the token at the extension's `/bridge/v1` connection are verified against them | Unset — the process takes a random pepper at its startup and logs a warning: everything issued before the restart stops validating, devices re-pair (the panel issues a new code). Set in the board's environment; the value is a secret, never stored in the repo or logs. The pepper is per-instance, which is why it is not kept in the settings the panel reads and edits |
 
 ## Settings in the agent record (not environment variables)
 
