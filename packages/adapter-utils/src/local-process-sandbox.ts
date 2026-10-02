@@ -3,8 +3,6 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 export type LocalProcessSandboxAccess = "ro" | "rw";
 export type LocalProcessNetworkScope = "deny" | "allowlist";
@@ -13,6 +11,8 @@ export interface LocalProcessSandboxPath {
   path: string;
   access: LocalProcessSandboxAccess;
 }
+// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
+import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 export interface LocalProcessSandboxPathAlias {
   path: string;

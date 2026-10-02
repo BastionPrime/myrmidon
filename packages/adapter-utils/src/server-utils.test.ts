@@ -464,7 +464,7 @@ describe("adapter skill snapshots", () => {
       ]),
       externalLocationLabel: "~/.claude/skills",
       externalDetail:
-        "Installed outside Paperclip management in the Claude skills home.",
+        "Installed outside Myrmidon management in the Claude skills home.",
     });
 
     expect(snapshot.entries).toContainEqual(

@@ -566,7 +566,7 @@ function formatSshFailure(
     || combinedOutput.includes(EXE_DEV_SSH_EMAIL_PROMPT)
   ) {
     return [
-      `Failed to ${action} exe.dev VM ${vmName}: the Paperclip host SSH key is not registered with exe.dev.`,
+      `Failed to ${action} exe.dev VM ${vmName}: the Myrmidon host SSH key is not registered with exe.dev.`,
       "Complete exe.dev's one-time SSH onboarding on this host by running `ssh exe.dev` and following the email verification prompt, then retry.",
     ].join(" ");
   }
@@ -772,7 +772,7 @@ const plugin = definePlugin({
     }
 
     warnings.push(
-      "The Paperclip host must have SSH access to the created exe.dev VM, and its SSH key must be registered with exe.dev. The API token only covers provisioning.",
+      `"The Myrmidon host must have SSH access to the created exe.dev VM, and its SSH key must be registered with exe.dev. The API token only covers provisioning."`,
     );
     if (config.reuseLease) {
       warnings.push("reuseLease keeps the VM alive between runs; this provider does not suspend retained VMs.");

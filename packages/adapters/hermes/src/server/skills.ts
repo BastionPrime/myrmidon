@@ -18,8 +18,6 @@ import {
   resolveHermesSkillsHome,
   SKILL_BACKUP_DIR,
 } from "./myrmidon-skills-home.js";
-// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,6 +32,8 @@ interface SkillFrontmatter {
   category?: string;
   metadata?: Record<string, unknown>;
 }
+// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
+import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 function parseSkillFrontmatter(content: string): SkillFrontmatter {
   const match = content.match(/^---\s*\n([\s\S]*?)\n---/);

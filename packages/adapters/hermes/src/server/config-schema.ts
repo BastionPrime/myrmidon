@@ -5,8 +5,6 @@ import {
   DEFAULT_TIMEOUT_SEC,
   VALID_PROVIDERS,
 } from "../shared/constants.js";
-// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
-import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 function providerLabel(provider: string): string {
   if (provider === "auto") return "Auto";
@@ -18,6 +16,8 @@ function providerLabel(provider: string): string {
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 }
+// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
+import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 export function getConfigSchema(): AdapterConfigSchema {
   return {
