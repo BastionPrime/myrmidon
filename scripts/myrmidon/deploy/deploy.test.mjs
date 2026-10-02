@@ -1060,7 +1060,19 @@ describe("deploy.sh: one boot path (BOOT-PATH)", () => {
         const file = tokens[i + 1];
         assert.ok(file.endsWith(".yml"), `-f argument is a .yml path, got '${file}' in: ${line}`);
         assert.ok(fs.existsSync(file), `-f argument exists on disk: ${file}`);
-        assert.ok(!/-f/.test(file), `-f argument must not itself contain '-f': ${file}`);
+        // The value after -f must be a path, never a flag (e.g. "-f -f x.yml").
+        assert.ok(!file.startsWith("-"), `-f argument must be a path, not a flag: ${file}`);
+        // A stray "-f" glued into the rendered path (e.g. "a.yml-f", "dir/-f/x.yml")
+        // is checked only on the part the template renders. The sandbox prefix
+        // comes from mkdtemp with a random suffix (it may legitimately contain
+        // "-f", e.g. ".../myrmidon-deploy-fAbc12/"), so it is stripped first.
+        const composeDir = path.join(sb.dir, "compose");
+        const rel = path.relative(composeDir, file);
+        assert.ok(!rel.startsWith("..") && !path.isAbsolute(rel), `-f argument lives in the compose dir: ${file}`);
+        assert.ok(
+          !/(^|\/)-f|\.ya?ml-f/.test(rel),
+          `-f argument must not itself contain a stray '-f': ${file}`,
+        );
         assert.ok(fs.statSync(file).isFile(), `-f argument is a file, not a directory: ${file}`);
       }
     }

@@ -155,7 +155,14 @@ describeEmbeddedPostgres("stack registry", () => {
     expect(proxmox.local.version).toBeNull();
     expect(proxmox.local.unknownReason).toBe("not visible from the board server process");
     for (const component of doc.components) {
-      expect(component.local.patches).toEqual([]);
+      // Part B seeds the carried deltas; only the seeded component has them.
+      if (component.name === "hermes-agent") {
+        expect(component.local.patches.map((patch) => patch.title)).toEqual([
+          "gateway turn-body thread pool patch",
+        ]);
+      } else {
+        expect(component.local.patches).toEqual([]);
+      }
       expect(component.local.checkedAt).toBe("2026-09-30T12:00:00.000Z");
     }
   });
@@ -193,7 +200,7 @@ describeEmbeddedPostgres("stack registry", () => {
       .from(instanceSettings)
       .where(eq(instanceSettings.singletonKey, "default"))
       .then((rows) => rows[0]);
-    expect(row?.general?.[STACK_GENERAL_KEY]).toMatchObject({ version: 1 });
+    expect(row?.general?.[STACK_GENERAL_KEY]).toMatchObject({ version: 2 });
     const seen = await request(app(member, collectOptions())).get("/api/myrmidon/stack").expect(200);
     expect(seen.body.refreshedAt).toBe("2026-09-30T12:00:00.000Z");
     expect(seen.body.components.find((c: { name: string }) => c.name === "myrmidon").local.commit).toBe(BOARD_COMMIT);
