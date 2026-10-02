@@ -320,6 +320,29 @@ The bot's tool is `ocr.pdf` (input: `name`, `base64`, optional `origin`, `source
 (`name`, `sizeBytes`, `pages`, `origin`, `sourceId`, `backend`, `chars`, `truncated`) — the text and bytes
 never enter the journal.
 
+## 1.6 — EVALS-A (reference tasks and the LLM judge)
+
+Settings of the module `server/src/myrmidon/evals/` (the 1.6 evals path: a seeded corpus of neutral
+reference tasks for the pilot role, an LLM judge behind the company's LLM gateway, scores stored in
+`myrmidon_eval_runs`, a threshold+repeat regression verdict). Reads are company-scoped; run mutations
+need a board actor. While the contour below is not configured, reads still work and mutations answer
+`503` with the names of the missing settings instead of guessing.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_EVALS_BASE_URL` | EVALS-A | unset (judge disabled) | Address of the company's LLM gateway contour (OpenAI-compatible, e.g. LiteLLM). Together with `MYRMIDON_EVALS_KEY_SECRET` it opens the judge path; without either the evals mutations answer `503` with the reason | Empty/unset — the judge is disabled (reads still work). The address may end with `/v1` (then it is not duplicated) |
+| `MYRMIDON_EVALS_KEY_SECRET` | EVALS-A | unset | **Name** of the company secret holding the gateway key (not the value). The value is read per company on every run; it never appears in the setting, logs or journal | Empty/unset — the judge is disabled |
+| `MYRMIDON_EVALS_MODEL` | EVALS-A | `qwen-plus-free` | The judge model behind the gateway. The 1.6 wave rule applies: a free DashScope model by default; paid models stay a deploy-repo concern | Any value the gateway serves |
+| `MYRMIDON_EVALS_TIMEOUT_SEC` | EVALS-A | `120` | Timeout of one judge chat-completions call (from 5 to 600; below 5 is raised to 5) | Non-numeric, `0`, negative — the default is taken |
+| `MYRMIDON_EVALS_LANGFUSE` | EVALS-A | unset | Master flag for the Langfuse score export: `true` enables exporting run scores to Langfuse when the contour below is configured. Scoring is written locally (eval_runs) regardless of this flag | Empty/unset/anything but `true` — no Langfuse export, local scoring only |
+| `MYRMIDON_EVALS_LANGFUSE_BASE_URL` | EVALS-A | unset | Langfuse ingestion base URL (the `/api/public/ingestion` suffix is appended). Used only when `MYRMIDON_EVALS_LANGFUSE=true` | Empty — the export is a no-op |
+| `MYRMIDON_EVALS_LANGFUSE_KEY` | EVALS-A | unset | Langfuse public ingestion key. Used only when `MYRMIDON_EVALS_LANGFUSE=true` | Empty — the export is a no-op |
+| `MYRMIDON_EVALS_LANGFUSE_TIMEOUT_SEC` | EVALS-A | `30` | Timeout of the Langfuse ingestion request (from 1 to 600) | Non-numeric, `0`, negative — the default is taken |
+
+The board API is `GET/POST /api/myrmidon/companies/:companyId/evals/{tasks,seed,runs,runs/:runId,runs/:runId/confirm,verdict}`.
+The judge never executes code: for `code`-kind reference tasks the CI pass rate arrives as a request
+parameter and is folded into the aggregate as a separate score line.
+
 ## EXTCASE-B — browser bridge to the client's extension
 
 Settings of the server module `server/src/myrmidon/browser-bridge/` (the first third-party case: browser
