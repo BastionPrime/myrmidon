@@ -5,7 +5,7 @@
 //   GET  /api/myrmidon/companies/:companyId/evals/tasks?role
 //   POST /api/myrmidon/companies/:companyId/evals/seed            (board only)
 //   POST /api/myrmidon/companies/:companyId/evals/runs            (board only)
-//   POST /api/myrmidon/companies/:companyId/evals/runs/:runId/confirm  (board only)
+//   POST /api/myrmidon/companies/:companyId/evals/runs/:runId/confirm  (board only, answers required)
 //   POST /api/myrmidon/companies/:companyId/evals/verdict         (board only)
 //   GET  /api/myrmidon/companies/:companyId/evals/runs?role&limit
 //   GET  /api/myrmidon/companies/:companyId/evals/runs/:runId
@@ -82,7 +82,9 @@ export function myrmidonEvalsRoutes(db: Db, deps: Partial<EvalsRoutesDeps> = {})
   const settings = (): EvalsSettings => readEvalsSettings(env);
   const now = deps.now ?? (() => new Date());
 
-  async function buildService(): Promise<{ service: EvalsService; problem: string | null }> {
+  // myrmidon(1.6-EVALS): resolve the gateway key per company on every call,
+  // not once for a placeholder company at service-build time.
+  async function buildService(companyId: string): Promise<{ service: EvalsService; problem: string | null }> {
     if (deps.service) return { service: deps.service, problem: null };
     const current = settings();
     const problem = evalsSettingsProblem(current);
@@ -99,7 +101,7 @@ export function myrmidonEvalsRoutes(db: Db, deps: Partial<EvalsRoutesDeps> = {})
         if (!row) return null;
         return secrets.resolveSecretValue(companyId, row.id, "latest");
       });
-    const key = current.keySecret ? await readCompanyKey("unknown-company", current.keySecret) : null;
+        const key = current.keySecret ? await readCompanyKey(companyId, current.keySecret) : null;
     if (!key) {
       return {
         service: createEvalsService(db, { judge: createJudge({ fetch: fetch, apiKey: "", baseUrl: "http://127.0.0.1:9", model: DEFAULT_EVALS_MODEL, timeoutMs: 1 }), model: current.model, now }),
@@ -135,7 +137,7 @@ export function myrmidonEvalsRoutes(db: Db, deps: Partial<EvalsRoutesDeps> = {})
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const role = typeof req.query.role === "string" ? req.query.role : EVALS_PILOT_ROLE;
-    const { service } = await buildService();
+    const { service } = await buildService(companyId);
     const tasks = await service.loadTasks(companyId, role);
     res.json({ role, count: tasks.length, tasks });
   });
@@ -167,7 +169,7 @@ export function myrmidonEvalsRoutes(db: Db, deps: Partial<EvalsRoutesDeps> = {})
       res.status(400).json({ error: parsed.error });
       return;
     }
-    const { service, problem } = await buildService();
+    const { service, problem } = await buildService(companyId);
     if (problem) {
       res.status(503).json({ error: problem, enabled: false });
       return;
@@ -199,13 +201,26 @@ export function myrmidonEvalsRoutes(db: Db, deps: Partial<EvalsRoutesDeps> = {})
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     assertBoard(req);
-    const { service, problem } = await buildService();
+    const { service, problem } = await buildService(companyId);
     if (problem) {
       res.status(503).json({ error: problem, enabled: false });
       return;
     }
-    const answers =
-      typeof req.body?.answers === "object" && req.body.answers !== null ? (req.body.answers as Record<string, string>) : undefined;
+    // myrmidon(1.6-EVALS): answers are not persisted with the run, so a
+    // confirmation re-run must carry them again. Without this the fallback
+    // would score every task zero and could "confirm" a regression that
+    // never existed.
+    if (typeof req.body?.answers !== "object" || req.body.answers === null || Array.isArray(req.body.answers)) {
+      res.status(400).json({ error: "answers is required for a confirmation run (task slug -> text)" });
+      return;
+    }
+    const answers = req.body.answers as Record<string, string>;
+    for (const [slug, value] of Object.entries(answers)) {
+      if (typeof value !== "string") {
+        res.status(400).json({ error: `answers["${slug}"] must be a string` });
+        return;
+      }
+    }
     try {
       const outcome = await service.runConfirmation(req.params.runId as string, answers);
       if (outcome.run.companyId !== companyId) {
@@ -241,7 +256,7 @@ export function myrmidonEvalsRoutes(db: Db, deps: Partial<EvalsRoutesDeps> = {})
       res.status(400).json({ error: "role, subject and baselineRunId are required" });
       return;
     }
-    const { service } = await buildService();
+    const { service } = await buildService(companyId);
     try {
       const verdict = await service.verdictForCandidate({
         companyId,
@@ -262,7 +277,7 @@ export function myrmidonEvalsRoutes(db: Db, deps: Partial<EvalsRoutesDeps> = {})
     const role = typeof req.query.role === "string" ? req.query.role : undefined;
     const rawLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
     const limit = rawLimit && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 50;
-    const { service } = await buildService();
+    const { service } = await buildService(companyId);
     const runs = await service.listRuns(companyId, role, limit);
     res.json({ runs });
   });
@@ -270,7 +285,7 @@ export function myrmidonEvalsRoutes(db: Db, deps: Partial<EvalsRoutesDeps> = {})
   router.get("/myrmidon/companies/:companyId/evals/runs/:runId", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const { service } = await buildService();
+    const { service } = await buildService(companyId);
     const run = await service.getRun(companyId, req.params.runId as string);
     if (!run) {
       res.status(404).json({ error: "run not found" });

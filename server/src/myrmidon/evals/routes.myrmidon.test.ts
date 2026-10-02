@@ -151,6 +151,72 @@ describeEmbeddedPostgres("myrmidon(1.6-EVALS): routes", () => {
     expect(res.body.error).toContain("MYRMIDON_EVALS_BASE_URL");
   });
 
+  it("resolves the configured gateway key per company, so mutations run instead of 503", async () => {
+    await seedTasks();
+    const tasks = await loadTasks();
+    const answers: Record<string, string> = {};
+    for (const t of tasks) answers[t.slug] = GOOD;
+    // The configured contour: settings name a key secret, readCompanyKey
+    // resolves it for the requesting company. A placeholder company would
+    // return null and mutations would 503 even with the secret present.
+    const seen: string[] = [];
+    const expressApp = express();
+    expressApp.use(express.json());
+    expressApp.use((req, _res, next) => {
+      (req as unknown as { actor: unknown }).actor = boardActor(companyId);
+      next();
+    });
+    expressApp.use(
+      "/api",
+      myrmidonEvalsRoutes(db, {
+        env: {
+          MYRMIDON_EVALS_BASE_URL: "http://example-gateway.invalid",
+          MYRMIDON_EVALS_KEY_SECRET: "company-gateway-key",
+        } as unknown as NodeJS.ProcessEnv,
+        now: () => new Date(),
+        readCompanyKey: async (company, _secret) => {
+          seen.push(company);
+          return company === companyId ? "test-gateway-key" : null;
+        },
+      }),
+    );
+    expressApp.use(errorHandler);
+    // The gateway host is unreachable here, so the run ends with a 502 from
+    // the gateway call. That is the proof the contour was configured and the
+    // key resolved for the real company: before the fix this was a 503
+    // "secret is not available" because the key lookup used a placeholder
+    // company.
+    const res = await request(expressApp).post(`${base(companyId)}/runs`).send({ role: "engineer", subject: "s", answers }).expect(502);
+    expect(res.body.error).toBeTruthy();
+    // The key must have been resolved for the real requesting company —
+    // never a placeholder company — on this request path.
+    expect(seen).toContain(companyId);
+    expect(seen).not.toContain("unknown-company");
+  });
+
+  it("refuses a confirmation run without answers (400, not a zero-score confirm)", async () => {
+    await seedTasks();
+    const tasks = await loadTasks();
+    const good: Record<string, string> = {};
+    for (const t of tasks) good[t.slug] = GOOD;
+    const baseline = await request(app(boardActor(companyId)))
+      .post(`${base(companyId)}/runs`)
+      .send({ role: "engineer", subject: "skill-a@v1", answers: good })
+      .expect(200);
+    const candidate = await request(app(boardActor(companyId)))
+      .post(`${base(companyId)}/runs`)
+      .send({ role: "engineer", subject: "skill-b@v1", answers: good, baselineRunId: baseline.body.run.id })
+      .expect(200);
+    await request(app(boardActor(companyId)))
+      .post(`${base(companyId)}/runs/${candidate.body.run.id}/confirm`)
+      .send({})
+      .expect(400);
+    await request(app(boardActor(companyId)))
+      .post(`${base(companyId)}/runs/${candidate.body.run.id}/confirm`)
+      .send({ answers: { some: 1 } })
+      .expect(400);
+  });
+
   it("catches a broken candidate through threshold and repeat, and answers the lifecycle verdict", async () => {
     await seedTasks();
     const tasks = await loadTasks();

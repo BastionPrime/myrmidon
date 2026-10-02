@@ -7,7 +7,7 @@
 // scores the answer against the task rubric, and the aggregate decides
 // whether the subject is promoted, needs a confirmation run, or regressed.
 // This file has no database and no Express: it holds the types, the score
-// threshold logic, and the SKILL-LIFECYCLE seam (OPE-3598). The store-bound
+// threshold logic, and the SKILL-LIFECYCLE seam. The store-bound
 // service and the routes sit on top.
 
 /**

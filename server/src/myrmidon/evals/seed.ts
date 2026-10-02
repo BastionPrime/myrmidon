@@ -182,7 +182,7 @@ export const ENGINEER_REFERENCE_TASKS: SeedReferenceTask[] = [
     ),
   },
   {
-    slug: "negotiate-scope-319",
+    slug: "negotiate-scope-request",
     title: "Answer a scope request",
     prompt:
       "A stakeholder asks to \"just also export to PDF\" in a ticket about fixing an export bug. Draft the reply that keeps the ticket scoped and offers a path for the new request.",
