@@ -64,6 +64,10 @@ echo "curl $*" >> "$SANDBOX/calls.log"
 cat "$SANDBOX/health.json"
 `;
 
+// The real boot-unit template, read from the deploy directory, so the tests
+// verify what ships (myrmidon BOOT-PATH).
+const UNIT_TEMPLATE = fs.readFileSync(path.join(HERE, "paperclip.service.template"), "utf8");
+
 const VENDOR = "ghcr.io/paperclipai/paperclip:2026.916.1";
 
 function sandbox({
@@ -82,12 +86,19 @@ function sandbox({
   onMain = true,
   tags = "",
   noGit = false,
+  // BOOT-PATH: the boot unit in the sandbox. A function (gets the template
+  // renderer) written into systemd/paperclip.service; null = no unit.
+  // Default: the canonical unit for this sandbox's compose dir.
+  bootUnit = sbCanonical,
 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myrmidon-deploy-"));
   const bin = path.join(dir, "bin");
   const composeDir = path.join(dir, "compose");
   fs.mkdirSync(bin);
   fs.mkdirSync(composeDir);
+  // BOOT-PATH: the canonical unit names COMPOSE_DIR/<COMPOSE_FILES> in -f
+  // arguments; the files themselves must exist (a real compose dir does).
+  fs.writeFileSync(path.join(composeDir, "docker-compose.yml"), "services: {}\n");
   fs.writeFileSync(path.join(bin, "docker"), FAKE_DOCKER, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "curl"), FAKE_CURL, { mode: 0o755 });
   if (!noGit) fs.writeFileSync(path.join(bin, "git"), FAKE_GIT, { mode: 0o755 });
@@ -139,6 +150,14 @@ function sandbox({
   } else if (current) {
     fs.writeFileSync(override, `services:\n  server:\n    image: ghcr.io/itkadr-git/myrmidon@${current}\n`);
   }
+  // Boot-unit sandbox (BOOT-PATH): the deploy now verifies the systemd unit,
+  // so every standard sandbox gets one, in a sandbox directory, from the
+  // real template with the sandbox paths filled in.
+  const unitDir = path.join(dir, "systemd");
+  fs.mkdirSync(unitDir, { recursive: true });
+  if (bootUnit !== null) {
+    fs.writeFileSync(path.join(unitDir, "paperclip.service"), bootUnit(sbPaths(composeDir)));
+  }
   const config = path.join(dir, "deploy.env");
   fs.writeFileSync(
     config,
@@ -155,6 +174,7 @@ function sandbox({
       `MAINTENANCE_ENTER_COMMAND='echo enter >> ${path.join(dir, "maintenance.log")}'`,
       `MAINTENANCE_EXIT_COMMAND='echo exit >> ${path.join(dir, "maintenance.log")}'`,
       "RUNNING_RUNS_COMMAND='echo 0'",
+      `SYSTEMD_UNIT_DIR=${unitDir}`,
       // RELEASE-GATE: the release components answer their health probes here
       // (the fake curl serves every URL with the health file).
       "MYR_DOCKERGATE_HEALTH_URL=http://127.0.0.1:3100/dockergate/health",
@@ -162,8 +182,20 @@ function sandbox({
       "",
     ].join("\n"),
   );
-  return { dir, bin, config, override, noGit };
+  return { dir, bin, config, override, unitDir, noGit };
 }
+
+// The canonical unit rendered for a sandbox compose dir: exactly what
+// render_boot_unit() produces (the template with the -f arguments expanded).
+function sbPaths(composeDir) {
+  return (template) => template
+    .replaceAll("__COMPOSE_DIR__", composeDir)
+    .replaceAll("__COMPOSE_FILE_ARGS__", `-f ${composeDir}/docker-compose.yml -f ${composeDir}/docker-compose.myrmidon-image.yml`)
+    .replaceAll("__COMPOSE_SERVICE__", "server");
+}
+
+// bootUnit= values for sandbox().
+const sbCanonical = (render) => render(UNIT_TEMPLATE);
 
 // A PATH with the tools the scripts need but without git.
 function pathWithoutGit(sb) {
@@ -680,6 +712,159 @@ describe("deploy.sh: drain-interrupt enter body", () => {
   });
 });
 
+describe("lib.sh: async maintenance exit and post-deploy fleet check", () => {
+  // Runs the real lib.sh functions against a fake `curl` that answers the
+  // maintenance status from a file the test controls. No registry, board or
+  // server is touched.
+  function libSandbox() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myrmidon-lib-"));
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    // curl answers the maintenance URL from maintenance.json. With a
+    // `flip-on-read` file present, the answer switches to retired after the
+    // first read, so a test can exercise "wait, then retire".
+    const fakeCurl = `#!/usr/bin/env bash
+echo "curl $*" >> "$SANDBOX/calls.log"
+case "$*" in *"-X POST"*) if [ -e "$SANDBOX/post-fails" ]; then echo 'curl: (22) The requested URL returned error' >&2; exit 22; fi ;; esac
+url="$*"
+case "$url" in
+  *maintenance*)
+    cat "$SANDBOX/maintenance.json" 2>/dev/null || echo '{"active":false,"instance":null,"windows":[]}'
+    if [ -e "$SANDBOX/flip-on-read" ]; then rm -f "$SANDBOX/flip-on-read"; echo '{"active":false,"instance":null,"windows":[]}' > "$SANDBOX/maintenance.json"; fi ;;
+  *issues*) cat "$SANDBOX/issues.json" 2>/dev/null || echo '[]' ;;
+  *) echo '{"status":"ok"}' ;;
+esac
+`;
+    fs.writeFileSync(path.join(bin, "curl"), fakeCurl, { mode: 0o755 });
+    const config = path.join(dir, "lib-test.env");
+    fs.writeFileSync(
+      config,
+      [
+        `COMPOSE_DIR=${dir}`,
+        "COMPOSE_SERVICE=server",
+        "HEALTH_URL=http://127.0.0.1:3100/api/health",
+        "POLL_INTERVAL_SEC=0",
+        "MAINTENANCE_MODE=api",
+        "MAINTENANCE_API_URL=http://127.0.0.1:3100/api/myrmidon/maintenance",
+        "MAINTENANCE_EXIT_WAIT_SEC=2",
+        "",
+      ].join("\n"),
+    );
+    return { dir, bin, config };
+  }
+
+  // Sources lib.sh the way deploy.sh does and calls one function.
+  function callLib(sb, functionCall) {
+    const libScript = path.join(sb.dir, "call-lib.sh");
+    fs.writeFileSync(libScript, `source "$MYR_SCRIPT_DIR/lib.sh"; load_config "$LIB_CONFIG"; ${functionCall}\n`, { mode: 0o755 });
+    const result = spawnSync(bashPath(), [libScript], {
+      env: {
+        ...process.env,
+        PATH: `${sb.bin}:${process.env.PATH}`,
+        SANDBOX: sb.dir,
+        LIB_CONFIG: sb.config,
+        MYR_SCRIPT_DIR: HERE,
+      },
+      encoding: "utf8",
+    });
+    return { code: result.status, out: `${result.stdout}${result.stderr}` };
+  }
+
+  it("wait_for_maintenance_off returns 0 at once when the instance window is retired", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    const { code, out } = callLib(sb, "wait_for_maintenance_off");
+    assert.equal(code, 0, out);
+  });
+
+  it("wait_for_maintenance_off waits while the window is `leaving`, then succeeds", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    // The first read answers `leaving`, then the answer switches to retired.
+    fs.writeFileSync(path.join(sb.dir, "flip-on-read"), "");
+    const { code, out } = callLib(sb, "wait_for_maintenance_off");
+    assert.equal(code, 0, out);
+    assert.match(read(path.join(sb.dir, "calls.log")), /maintenance/);
+  });
+
+  it("wait_for_maintenance_off fails after MAINTENANCE_EXIT_WAIT_SEC when the window never retires", () => {
+    const sb = libSandbox();
+    // No `flip-on-read`: every read keeps reporting the `leaving` window.
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    const { code, out } = callLib(sb, "wait_for_maintenance_off");
+    assert.notEqual(code, 0);
+    assert.match(out, /still 'leaving' after 2s/);
+  });
+
+  it("maintenance_exit posts the exit and returns 0 once the window retires", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "flip-on-read"), "");
+    const { code, out } = callLib(sb, "maintenance_exit");
+    assert.equal(code, 0, out);
+    assert.match(read(path.join(sb.dir, "calls.log")), /-X POST/);
+  });
+
+  it("maintenance_exit fails when the exit POST fails (abort semantics unchanged)", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "on" }, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "post-fails"), "");
+    const { code } = callLib(sb, "maintenance_exit");
+    assert.notEqual(code, 0);
+    // The wait never runs after a failed POST: the only call is the POST.
+    assert.equal(read(path.join(sb.dir, "calls.log")).trim().split("\n").length, 1);
+  });
+
+  it("post_deploy_fleet_check passes when no issue is blocked and the window retired", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 0, out);
+    assert.match(out, /no blocked issues in the deploy window, maintenance retired/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when an issue became blocked in the window", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([{ id: "i1", status: "blocked" }]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1);
+    assert.match(out, /degraded: 1 blocked issue/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when the board answers an unexpected shape", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: false, instance: null, windows: [] }));
+    // A body that is neither an array nor {issues: []}: the check cannot count
+    // it, so it reports degraded instead of passing.
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify({ error: "boom" }));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1, out);
+    assert.match(out, /degraded: board issue list unreadable/);
+  });
+
+  it("post_deploy_fleet_check reports degraded when the window did not retire", () => {
+    const sb = libSandbox();
+    fs.writeFileSync(path.join(sb.dir, "maintenance.json"), JSON.stringify({ active: true, instance: { state: "leaving" }, windows: [] }));
+    fs.writeFileSync(path.join(sb.dir, "issues.json"), JSON.stringify([]));
+    fs.appendFileSync(sb.config, "BOARD_API_URL=http://127.0.0.1:3100/api\nBOARD_COMPANY_ID=c1\n");
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 1);
+    assert.match(out, /degraded: maintenance window did not retire after exit/);
+  });
+
+  it("post_deploy_fleet_check is skipped without BOARD_API_URL/BOARD_COMPANY_ID", () => {
+    const sb = libSandbox();
+    const { code, out } = callLib(sb, 'post_deploy_fleet_check "2026-10-01T00:00:00Z"');
+    assert.equal(code, 0, out);
+    assert.match(out, /skipping the fleet check/);
+  });
+});
+
 describe("rollback.sh", () => {
   it("returns to the previous digest without restoring the database", () => {
     const sb = sandbox();
@@ -770,6 +955,134 @@ describe("rollback.sh", () => {
     assert.equal(code, 0, out);
     assert.equal(read(path.join(sb.dir, "restore.log")).trim(), dump);
     assert.match(calls(sb), /compose .* stop server/);
+  });
+});
+
+describe("deploy.sh: one boot path (BOOT-PATH)", () => {
+  function assertNothingChanged(sb, before) {
+    assert.equal(read(sb.override), before);
+    assert.doesNotMatch(calls(sb), /docker (pull|compose)/);
+    assert.equal(maintenance(sb), "");
+    assert.ok(!fs.existsSync(path.join(sb.dir, "dumps")));
+    assert.ok(!fs.existsSync(path.join(sb.dir, "state")));
+  }
+
+  it("refuses when the boot unit does not exist", () => {
+    const sb = sandbox({ bootUnit: null });
+    const before = read(sb.override);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /boot unit not verified, nothing was changed: the boot unit .* does not exist/);
+    assertNothingChanged(sb, before);
+  });
+
+  it("refuses a unit that starts the vendor compose file (the 01.10 incident)", () => {
+    const sb = sandbox();
+    // The sandbox compose dir is known only after sandbox(); patch the unit
+    // file directly: replace the first -f argument with a vendor compose file.
+    const unitFile = path.join(sb.unitDir, "paperclip.service");
+    fs.writeFileSync(unitFile, read(unitFile).replace(/-f [^ ]+\/docker-compose\.yml/, "-f /srv/myrmidon/docker-compose.vendor.yml"));
+    const before = read(sb.override);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /boot unit .* does not match the canonical unit/);
+    assert.match(out, /COMPOSE_FILES/);
+    assertNothingChanged(sb, before);
+  });
+
+  it("refuses a unit that reads a different compose dir", () => {
+    const sb = sandbox();
+    const unitFile = path.join(sb.unitDir, "paperclip.service");
+    fs.writeFileSync(unitFile, read(unitFile).replaceAll(path.dirname(sb.override), "/opt/other"));
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /boot unit .* does not match/);
+  });
+
+  it("refuses a unit without the override file (a new digest would not take effect at boot)", () => {
+    const sb = sandbox();
+    const unitFile = path.join(sb.unitDir, "paperclip.service");
+    fs.writeFileSync(unitFile, read(unitFile).replace(` -f ${sb.override}`, ""));
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /boot unit .* does not match/);
+  });
+
+  it("refuses even with --force: the gate cannot be skipped", () => {
+    const sb = sandbox({ bootUnit: null });
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW, "--force"]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /boot unit not verified/);
+  });
+
+  it("the refusal also happens in a dry run (read-only check)", () => {
+    const sb = sandbox({ bootUnit: null });
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW, "--dry-run"]);
+    assert.notEqual(code, 0, out);
+    assert.match(out, /boot unit not verified/);
+  });
+
+  it("a dry run with the canonical unit prints the boot-unit step and installs nothing", () => {
+    const sb = sandbox();
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW, "--dry-run"]);
+    assert.equal(code, 0, out);
+    assert.match(out, /boot unit ok: .*paperclip\.service/);
+    assert.match(out, /boot unit check passed/);
+  });
+
+  it("SYSTEMD_UNIT_INSTALL=1 installs the canonical unit and deploys", () => {
+    const sb = sandbox({ bootUnit: null });
+    fs.appendFileSync(sb.config, "SYSTEMD_UNIT_INSTALL=1\n");
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.equal(code, 0, out);
+    assert.match(out, /boot unit installed/);
+    const installed = read(path.join(sb.unitDir, "paperclip.service"));
+    assert.match(installed, /After=docker\.service/);
+    assert.match(installed, new RegExp(`-f ${sb.override}`));
+    assert.match(installed, /up -d --no-deps server/);
+    // BOOT-PATH review hardening: the rendered ExecStart must tokenize as a
+    // valid compose command. Every -f argument is a real existing .yml path;
+    // no token may be a directory or carry a stray "-f" inside the path.
+    for (const line of installed.split("\n")) {
+      if (!line.startsWith("ExecStart=") && !line.startsWith("ExecStop=")) continue;
+      const tokens = line.replace(/^ExecStop=-/, "").replace(/^Exec(Start|Stop)=/, "").split(/\s+/).filter(Boolean);
+      const composeIdx = tokens.indexOf("compose");
+      assert.ok(composeIdx > 0, `tokenizes with a compose subcommand: ${line}`);
+      for (let i = composeIdx + 1; i < tokens.length - 1; i++) {
+        if (tokens[i] !== "-f") continue;
+        const file = tokens[i + 1];
+        assert.ok(file.endsWith(".yml"), `-f argument is a .yml path, got '${file}' in: ${line}`);
+        assert.ok(fs.existsSync(file), `-f argument exists on disk: ${file}`);
+        assert.ok(!/-f/.test(file), `-f argument must not itself contain '-f': ${file}`);
+        assert.ok(fs.statSync(file).isFile(), `-f argument is a file, not a directory: ${file}`);
+      }
+    }
+  });
+
+  it("SYSTEMD_UNIT_INSTALL=1 never overwrites a foreign unit", () => {
+    const sb = sandbox();
+    const unitFile = path.join(sb.unitDir, "paperclip.service");
+    fs.writeFileSync(unitFile, read(unitFile).replace("up -d --no-deps server", "up -d   # vendor-legacy"));
+    fs.appendFileSync(sb.config, "SYSTEMD_UNIT_INSTALL=1\n");
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.notEqual(code, 0, out);
+    // A foreign unit is always a refusal; with SYSTEMD_UNIT_INSTALL=1 the
+    // reason can be either "does not match" (install path runs only when the
+    // unit file is missing) — both refuse and leave the unit untouched.
+    assert.match(out, /boot unit .* (does not match the canonical unit|cannot be verified)/);
+    // the foreign unit is still there, unchanged
+    assert.match(read(unitFile), /vendor-legacy/);
+  });
+
+  it("a deployed unit keeps working after the digest changes (no unit edit)", () => {
+    const sb = sandbox();
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.equal(code, 0, out);
+    // The unit references the override file, not the digest: a second deploy
+    // to another digest passes the same gate with the same unit.
+    const again = run(sb, "deploy.sh", ["--digest", OLD]);
+    assert.equal(again.code, 0, again.out);
+    assert.match(again.out, /boot unit ok/);
   });
 });
 

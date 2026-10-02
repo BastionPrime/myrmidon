@@ -177,6 +177,98 @@ check_ci_image_for_repo() {
   commit_is_reviewed "$revision"
 }
 
+# The boot unit (one boot path). The board container is started at boot by a
+# systemd unit; the incident of 01.10 was exactly a unit that read a *different*
+# compose file than the one deploy.sh maintains, so an old vendor image replaced
+# the board for 7 minutes. verify_boot_unit() refuses a deploy unless the unit
+# points at the same compose files (COMPOSE_DIR + COMPOSE_FILES + the override)
+# this deploy manages, and can install the canonical unit from the template.
+# Settings (all optional, see deploy.env.example; read by load_config):
+#   SYSTEMD_UNIT_NAME     default paperclip.service
+#   SYSTEMD_UNIT_DIR      default /etc/systemd/system (sandboxable for stands)
+#   SYSTEMD_UNIT_INSTALL  1 = install the canonical unit from the template when
+#                         none exists yet (needs root); unset = verify only.
+#                         A unit that exists but does not match is ALWAYS a
+#                         refusal, even with SYSTEMD_UNIT_INSTALL=1: repairing a
+#                         foreign unit silently is how the incident happened.
+
+# Fills the paperclip.service template: __COMPOSE_DIR__, __COMPOSE_FILE_ARGS__
+# (the colon-separated COMPOSE_FILES expanded into -f arguments plus the
+# override file) and __COMPOSE_SERVICE__.
+render_boot_unit() {
+  local -a files=()
+  local f
+  IFS=':' read -r -a _boot_files <<<"$COMPOSE_FILES"
+  for f in "${_boot_files[@]}"; do files+=("$COMPOSE_DIR/$f"); done
+  files+=("$OVERRIDE_PATH")
+  local file_args=""
+  for f in "${files[@]}"; do file_args+="${file_args:+ }-f $f"; done
+  sed -e "s|__COMPOSE_DIR__|$COMPOSE_DIR|g" \
+    -e "s|__COMPOSE_FILE_ARGS__|$file_args|g" \
+    -e "s|__COMPOSE_SERVICE__|$COMPOSE_SERVICE|g" \
+    "$MYR_SCRIPT_DIR/paperclip.service.template"
+}
+
+# The install path of the unit (absolute).
+boot_unit_path() { printf '%s/%s\n' "${SYSTEMD_UNIT_DIR%/}" "$SYSTEMD_UNIT_NAME"; }
+
+# Checks the installed unit against the compose set this deploy manages.
+# Returns 0 and sets BOOT_UNIT_OK=1 when the unit is the canonical one (its
+# ExecStart names exactly COMPOSE_DIR, every COMPOSE_FILES entry and the
+# override, in any order, with no other compose file); returns 1 with
+# BOOT_UNIT_REASON set otherwise. Missing unit, uninstalled systemd or a
+# foreign unit are all "not verified": the deploy refuses.
+verify_boot_unit() {
+  BOOT_UNIT_OK=0 BOOT_UNIT_REASON=""
+  local unit expected
+  unit="$(boot_unit_path)"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    BOOT_UNIT_REASON="systemctl is not available: the boot unit $SYSTEMD_UNIT_NAME cannot be verified; install it from scripts/myrmidon/deploy/paperclip.service.template or set SYSTEMD_UNIT_INSTALL=1 on a host with systemd"
+    return 1
+  fi
+  if [[ ! -f "$unit" ]]; then
+    if [[ "$SYSTEMD_UNIT_INSTALL" == "1" && "$DRY_RUN" != "1" ]]; then
+      install_boot_unit || return 1
+    else
+      BOOT_UNIT_REASON="the boot unit $unit does not exist; install it (SYSTEMD_UNIT_INSTALL=1 or copy scripts/myrmidon/deploy/paperclip.service.template) so the board starts from the compose files this deploy manages"
+      return 1
+    fi
+  fi
+  expected="$(render_boot_unit)"
+  if [[ "$(cat "$unit")" != "$expected" ]]; then
+    BOOT_UNIT_REASON="the boot unit $unit does not match the canonical unit for COMPOSE_DIR=$COMPOSE_DIR (COMPOSE_FILES=$COMPOSE_FILES + $COMPOSE_OVERRIDE_FILE): it may start the board from other compose files, as on 01.10. Fix: SYSTEMD_UNIT_INSTALL=1 on the unit host, or make the unit match scripts/myrmidon/deploy/paperclip.service.template. The deploy is refused while the unit differs (nothing was changed)"
+    return 1
+  fi
+  BOOT_UNIT_OK=1
+  return 0
+}
+
+# Installs the canonical unit (needs write access to SYSTEMD_UNIT_DIR, i.e.
+# root on a real host) and reloads systemd. Existing foreign unit: refusal.
+install_boot_unit() {
+  local unit
+  unit="$(boot_unit_path)"
+  if [[ -f "$unit" ]]; then
+    BOOT_UNIT_REASON="refusing to overwrite the existing unit $unit with the canonical one automatically: a foreign unit is exactly the 01.10 incident; remove or fix it by hand, then deploy"
+    return 1
+  fi
+  if ! mkdir -p "$SYSTEMD_UNIT_DIR" 2>/dev/null; then
+    BOOT_UNIT_REASON="cannot create $SYSTEMD_UNIT_DIR (need root to install the boot unit $SYSTEMD_UNIT_NAME); install it by hand from scripts/myrmidon/deploy/paperclip.service.template"
+    return 1
+  fi
+  local tmp
+  tmp="$(mktemp "$SYSTEMD_UNIT_DIR/.paperclip.XXXXXX")" || { BOOT_UNIT_REASON="cannot write to $SYSTEMD_UNIT_DIR"; return 1; }
+  render_boot_unit >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$unit" || { rm -f "$tmp"; BOOT_UNIT_REASON="cannot install the unit at $unit"; return 1; }
+  if command -v systemctl >/dev/null 2>&1; then
+    run systemctl daemon-reload || log "WARNING: systemctl daemon-reload failed; run it by hand"
+    run systemctl enable "$SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || log "WARNING: could not enable $SYSTEMD_UNIT_NAME; run: systemctl enable $SYSTEMD_UNIT_NAME"
+  fi
+  log "boot unit installed: $unit (from paperclip.service.template; After=docker.service, reads the compose files of this deploy)"
+  return 0
+}
+
 # Loads the settings file (see deploy.env.example) and applies defaults.
 load_config() {
   local file="$1"
@@ -211,10 +303,14 @@ load_config() {
   : "${MAINTENANCE_ENTER_COMMAND:=}"
   : "${MAINTENANCE_EXIT_COMMAND:=}"
   : "${MAINTENANCE_PAUSE_SEC:=0}"
+  : "${MAINTENANCE_EXIT_WAIT_SEC:=120}"
   : "${RUNNING_RUNS_COMMAND:=}"
   : "${RUNS_WAIT_TIMEOUT_SEC:=1800}"
   : "${ALLOW_UNKNOWN_RUNS:=0}"
   : "${POLL_INTERVAL_SEC:=5}"
+  : "${SYSTEMD_UNIT_NAME:=paperclip.service}"
+  : "${SYSTEMD_UNIT_DIR:=/etc/systemd/system}"
+  : "${SYSTEMD_UNIT_INSTALL:=}"
   case "$MAINTENANCE_MODE" in
     api|hook|pause) ;;
     *) die "MAINTENANCE_MODE must be api, hook or pause (got $MAINTENANCE_MODE)" ;;
@@ -335,9 +431,22 @@ maintenance_enter() {
 }
 
 maintenance_exit() {
+  # myrmidon(EXIT-ASYNC): the exit POST returns as soon as the server marks the
+  # window `leaving` (the server finishes the leave asynchronously on its
+  # maintenance tick; admission already reopens in `leaving`). The deploy
+  # therefore waits on the STATE, not on the HTTP call: poll GET /maintenance
+  # until the instance window is gone (state `off`), bounded by
+  # MAINTENANCE_EXIT_WAIT_SEC. Without this wait the script reported success
+  # while the window was still `leaving`, and the next enter raced the previous
+  # exit (409 "still leaving"). A wait timeout does not fail an already
+  # switched and healthy deploy: the window is `leaving` (admission open) and
+  # the tick retires it, so the timeout is logged loudly and the deploy moves
+  # on. A failed POST still aborts (unchanged): the window would stay `on`.
   case "$MAINTENANCE_MODE" in
     api)
-      run http_post_json "$MAINTENANCE_API_URL" '{"action":"exit","scope":{"type":"instance"}}' "$MAINTENANCE_TOKEN_FILE" >/dev/null
+      run http_post_json "$MAINTENANCE_API_URL" '{"action":"exit","scope":{"type":"instance"}}' "$MAINTENANCE_TOKEN_FILE" >/dev/null || return 1
+      wait_for_maintenance_off \
+        || log "WARNING: the exit request was accepted, but the instance window did not retire within ${MAINTENANCE_EXIT_WAIT_SEC}s (MAINTENANCE_EXIT_WAIT_SEC); it stays 'leaving' (admission is open) and the maintenance tick retires it"
       ;;
     hook)
       [[ -n "$MAINTENANCE_EXIT_COMMAND" ]] || die "MAINTENANCE_MODE=hook needs MAINTENANCE_EXIT_COMMAND"
@@ -345,6 +454,78 @@ maintenance_exit() {
       ;;
     pause) log "maintenance: nothing to exit (MAINTENANCE_MODE=pause)" ;;
   esac
+}
+
+# myrmidon(EXIT-ASYNC): poll the maintenance status until the instance window
+# is retired (state `off`, or no instance window at all), or give up after
+# MAINTENANCE_EXIT_WAIT_SEC (default 120). A missing state field means the
+# board is not in maintenance — that is success, not something to wait for.
+# Returns 1 on timeout so the caller can report it.
+wait_for_maintenance_off() {
+  local deadline=$((SECONDS + MAINTENANCE_EXIT_WAIT_SEC)) body state
+  while :; do
+    body="$(http_get "$MAINTENANCE_API_URL" "$MAINTENANCE_TOKEN_FILE" 2>/dev/null)" || body=""
+    state="$(jq -r '.instance.state // "off"' <<<"$body" 2>/dev/null || echo off)"
+    [[ "$state" == "off" ]] && return 0
+    ((SECONDS < deadline)) || { log "maintenance: instance window still '$state' after ${MAINTENANCE_EXIT_WAIT_SEC}s (MAINTENANCE_EXIT_WAIT_SEC)"; return 1; }
+    sleep "$POLL_INTERVAL_SEC"
+  done
+}
+
+# myrmidon(POST-DEPLOY-CHECK): after the image switch, the health check and the
+# maintenance exit, prove the deploy did not leave the fleet stalled.
+# Read-only against the board API the deploy already talks to. Two facts:
+#   1. No issue is `blocked` with an update inside the deploy window
+#      (GET /companies/<id>/issues?status=blocked&updatedSince=<deploy start>).
+#      A planned restart must not turn in-flight work into blocked; any hit is
+#      the failure signature this step exists for.
+#   2. The maintenance window retired (`off`): the admission gate that closed
+#      during the drain is gone, so the vendor periodic resumeQueuedRuns
+#      re-admits what queued up.
+# BOARD_API_URL and BOARD_COMPANY_ID are optional: when unset, the check is
+# skipped with a log line, so a standalone install without board credentials
+# stays deployable. A configured but unreadable board is a degraded deploy, not
+# a pass. Returns 1 (and logs "degraded:") when the deploy must be reported
+# degraded; 0 on a clean check.
+post_deploy_fleet_check() {
+  local started_at="$1" rc=0
+  if [[ -z "${BOARD_API_URL:-}" || -z "${BOARD_COMPANY_ID:-}" ]]; then
+    log "post-deploy check: BOARD_API_URL/BOARD_COMPANY_ID not set; skipping the fleet check (set them in the deploy env to enable)"
+    return 0
+  fi
+  local -a auth=()
+  mapfile -t auth < <(auth_header_args "$MAINTENANCE_TOKEN_FILE")
+  local body blocked
+  body="$(curl -fsS --max-time 30 "${auth[@]}" \
+    "$BOARD_API_URL/companies/$BOARD_COMPANY_ID/issues?status=blocked&updatedSince=$started_at&limit=100" 2>/dev/null)" || body=""
+  if [[ -z "$body" ]]; then
+    log "post-deploy check: board issue list unreadable (BOARD_API_URL=$BOARD_API_URL)"
+    log "degraded: board issue list unreadable after deploy"
+    return 1
+  fi
+  blocked="$(jq -r 'if type == "array" then length elif type == "object" and (.issues | type == "array") then (.issues | length) else "?" end' <<<"$body" 2>/dev/null || echo "?")"
+  if [[ "$blocked" == "?" || -z "$blocked" ]]; then
+    log "post-deploy check: unexpected board answer shape for blocked issues"
+    log "degraded: board issue list unreadable after deploy"
+    return 1
+  fi
+  if ((blocked > 0)); then
+    log "post-deploy check: $blocked blocked issue(s) updated since the deploy started ($started_at) — inspect them before waking agents by hand"
+    log "degraded: $blocked blocked issue(s) in the deploy window"
+    rc=1
+  fi
+  local mstate mbody
+  mbody="$(http_get "$MAINTENANCE_API_URL" "$MAINTENANCE_TOKEN_FILE" 2>/dev/null)" || mbody=""
+  mstate="$(jq -r '.instance.state // "off"' <<<"$mbody" 2>/dev/null || echo off)"
+  if [[ "$mstate" != "off" ]]; then
+    log "post-deploy check: maintenance window still '$mstate' after exit"
+    log "degraded: maintenance window did not retire after exit"
+    rc=1
+  fi
+  if ((rc == 0)); then
+    log "post-deploy check: no blocked issues in the deploy window, maintenance retired"
+  fi
+  return "$rc"
 }
 
 # Prints the number of running agent runs, or nothing when unknown.
@@ -407,4 +588,356 @@ take_dump() {
 record_history() {
   mkdir -p "$STATE_DIR"
   printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" >>"$HISTORY_FILE"
+}
+
+# --- TRACING-HEALTH: one source of truth for the tracing callbacks -----------
+# Langfuse v4 in the default `events_only` write mode rejects legacy trace and
+# observation events on `/api/public/ingestion`. LiteLLM keeps sending them for
+# as long as the legacy `langfuse` callback is enabled: the 02.10 incident was
+# about 12k "Bad request" responses per hour, burned gateway CPU, and nobody
+# noticed because nothing checked tracing. Tracing therefore runs over OTLP
+# only, and the callback list has ONE source of truth: the function below.
+# The generated file, the gateway config the bundle renders and the check all
+# read that function, so a hand-written second list cannot drift away from it.
+#
+# Deploy settings (all optional; without them the check logs that it is
+# skipped, so an installation without a tracing gateway still deploys):
+#   MYRMIDON_TRACING_LANGFUSE_URL       base URL of the Langfuse server
+#   MYRMIDON_TRACING_LANGFUSE_VERSION   version pinned in the bundle; the
+#                                       fallback when the probe cannot answer
+#   MYRMIDON_TRACING_GATEWAY_CONFIG     deployed LiteLLM config file
+#   MYRMIDON_TRACING_CALLBACKS_COMMAND  command printing the effective callbacks
+#   MYRMIDON_TRACING_CALLBACKS_FILE     generated file with the intended list
+#   MYRMIDON_TRACING_TOKEN_FILE         token file for a guarded health route
+
+# The only callback list the bundle installs. OpenTelemetry reaches Langfuse
+# through the OTLP endpoint on v3 and v4; the legacy `langfuse` callback posts
+# to `/api/public/ingestion`, which v4 rejects. One place, nothing else writes
+# a second list.
+tracing_intended_callbacks() {
+  printf '%s\n' "langfuse_otel"
+}
+
+# Default location of the generated intended list (a file, so the check reads
+# the same bytes the installer wrote).
+tracing_callbacks_file_default() {
+  printf '%s\n' "${STATE_DIR:-.}/tracing-callbacks.txt"
+}
+
+# Generates the intended callback list from the function above (one callback
+# per line). The installer renders the gateway config and the start check from
+# this file, so the bundle never carries two hand-written lists.
+tracing_write_callbacks_file() {
+  local file="$1" dir
+  [[ -n "$file" ]] || die "tracing_write_callbacks_file needs a target file"
+  dir="$(dirname "$file")"
+  [[ -d "$dir" ]] || mkdir -p "$dir"
+  tracing_intended_callbacks >"$file"
+}
+
+# Prints the callback names of a generated/readable list file, one per line,
+# skipping blanks and comments.
+tracing_read_callbacks_file() {
+  local file="$1"
+  [[ -r "$file" ]] || return 0
+  grep -v '^[[:space:]]*$' "$file" | grep -v '^[[:space:]]*#' || true
+}
+
+# Normalizes a callback list (spaces, commas or newlines) to one name per line.
+tracing_normalize_callbacks() {
+  tr ',' '\n' | tr -s '[:space:]' '\n' | grep -v '^[[:space:]]*$' || true
+}
+
+# Major version of a version string ("4.2.0", "v4.2.0"), or empty.
+tracing_major_of_version() {
+  local version="${1#v}"
+  if [[ "$version" =~ ^([0-9]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '%s\n' ""
+  fi
+  return 0
+}
+
+# Major version of the Langfuse server, or empty when it cannot be read. The
+# first probe works without credentials: Langfuse serves `GET /api/public/health`
+# (public route) with `{"status":...,"version":"4.x.y"}`, and the version is the
+# documented v4 marker (on v4 the legacy ingestion endpoint rejects events with
+# "events_only"). The documented fallback is the version the release bundle
+# pins (MYRMIDON_TRACING_LANGFUSE_VERSION), used when the route is unreachable,
+# guarded or answers without a version.
+tracing_langfuse_major() {
+  local url="$1" token_file="${2:-}" body version
+  if [[ -z "$url" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+  body="$(http_get "${url%/}/api/public/health" "$token_file" 2>/dev/null)" || body=""
+  version="$(jq -r '.version // empty' <<<"$body" 2>/dev/null)" || version=""
+  tracing_major_of_version "$version"
+}
+
+# Prints the callbacks of a LiteLLM gateway config file, one per line. Reads
+# the `callbacks:` key of the `litellm_settings:` block and understands both
+# the inline form (`callbacks: ["langfuse_otel"]`) and the block form
+# (`callbacks:` plus `- langfuse_otel` lines). An unknown shape prints nothing
+# rather than a guess.
+tracing_callbacks_from_config() {
+  local file="$1"
+  [[ -n "$file" && -r "$file" ]] || return 0
+  awk '
+    function clean(s) {
+      gsub(/"/, "", s)
+      gsub("\047", "", s)
+      sub(/^[ \t]+/, "", s)
+      sub(/[ \t]+$/, "", s)
+      sub(/,$/, "", s)
+      return s
+    }
+    /^[ \t]*#/ { next }
+    /^[ \t]*$/ { next }
+    /^[^ \t]/ {
+      in_litellm = ($0 ~ /^litellm_settings[ \t]*:/)
+      block = 0
+      next
+    }
+    !in_litellm { next }
+    /^[ \t]+callbacks[ \t]*:/ {
+      rest = $0
+      sub(/^[ \t]*callbacks[ \t]*:[ \t]*/, "", rest)
+      if (rest ~ /^\[/) {
+        sub(/^\[/, "", rest)
+        sub(/\][ \t]*$/, "", rest)
+        n = split(rest, parts, ",")
+        for (i = 1; i <= n; i++) { v = clean(parts[i]); if (v != "") print v }
+        block = 0
+      } else if (rest != "") {
+        v = clean(rest); if (v != "") print v
+        block = 0
+      } else {
+        block = 1
+      }
+      next
+    }
+    block && /^[ \t]*-[ \t]*/ {
+      v = $0
+      sub(/^[ \t]*-[ \t]*/, "", v)
+      v = clean(v)
+      if (v != "") print v
+      next
+    }
+    block { block = 0 }
+  ' "$file"
+}
+
+# Effective LiteLLM callbacks, one per line. Two sources are read and the union
+# is taken, because the gateway config file and the gateway database disagree
+# and the database only ADDS callbacks (a legacy one can stay in memory while
+# the file looks clean):
+#   * MYRMIDON_TRACING_CALLBACKS_COMMAND — the live gateway (or its database),
+#     whatever the deployment trusts to read it;
+#   * MYRMIDON_TRACING_GATEWAY_CONFIG — the deployed config file.
+tracing_effective_callbacks() {
+  local command="${1:-}" config="${2:-}" out=""
+  if [[ -n "$command" ]]; then
+    out="$(bash -c "$command" 2>/dev/null)" || out=""
+    tracing_normalize_callbacks <<<"$out"
+  fi
+  if [[ -n "$config" ]]; then
+    tracing_callbacks_from_config "$config"
+  fi
+}
+
+# True when the stream on stdin contains the legacy `langfuse` callback (as
+# opposed to `langfuse_otel` or any other name).
+tracing_has_legacy_callback() {
+  local token
+  while IFS= read -r token; do
+    token="$(printf '%s' "$token" | tr -d '[:space:]')"
+    [[ "$token" == "langfuse" ]] && return 0
+  done
+  return 1
+}
+
+# The guard. Returns 0 when the bundle's OTLP-only list is what the gateway
+# uses; returns 1 after a log line naming the reason when a legacy `langfuse`
+# callback is installed against a v4 (or unproven) Langfuse server. There is
+# deliberately no flag or setting that skips the refusal: callers die on 1.
+# Arguments: langfuse_url, pinned_version, intended_file, gateway_config,
+# callbacks_command, token_file.
+tracing_check() {
+  local url="${1:-}" pinned="${2:-}" intended_file="${3:-}" config="${4:-}" command="${5:-}" token_file="${6:-}"
+  local major intended effective reason=""
+
+  if [[ -z "$url$pinned$config$command" ]]; then
+    log "tracing: no MYRMIDON_TRACING_* input configured; the callback check is skipped"
+    return 0
+  fi
+
+  if [[ -z "$config" && -z "$command" ]]; then
+    log "tracing: ERROR: tracing is configured but the effective callback set cannot be read; set MYRMIDON_TRACING_GATEWAY_CONFIG (the deployed gateway config) or MYRMIDON_TRACING_CALLBACKS_COMMAND (the live gateway). The check refuses rather than assuming the list is clean."
+    return 1
+  fi
+
+  major="$(tracing_langfuse_major "$url" "$token_file")"
+  if [[ -z "$major" && -n "$pinned" ]]; then
+    major="$(tracing_major_of_version "$pinned")"
+    [[ -n "$major" ]] && log "tracing: the Langfuse version pinned in the bundle is $pinned; the server probe gave no version"
+  fi
+
+  intended="$(tracing_read_callbacks_file "$intended_file")"
+  [[ -n "$intended" ]] || intended="$(tracing_intended_callbacks)"
+  effective="$(tracing_effective_callbacks "$command" "$config")"
+
+  log "tracing: intended callbacks: $(tr '\n' ' ' <<<"$intended" | sed 's/ *$//')"
+  log "tracing: effective callbacks: $(tr '\n' ' ' <<<"$effective" | sed 's/ *$//')"
+
+  if tracing_has_legacy_callback <<<"$intended"; then
+    if [[ "$major" == "4" || -z "$major" ]]; then
+      reason="the callback list the bundle itself installs"
+    else
+      log "tracing: the bundle list carries the legacy 'langfuse' callback; Langfuse $major accepts it (the v4 refusal is what this check exists for)"
+    fi
+  fi
+
+  if [[ -z "$reason" ]] && tracing_has_legacy_callback <<<"$effective"; then
+    if [[ "$major" == "4" ]]; then
+      reason="the effective gateway callbacks"
+    elif [[ -z "$major" ]]; then
+      reason="the effective gateway callbacks, and the Langfuse version cannot be proven (pin MYRMIDON_TRACING_LANGFUSE_VERSION or expose GET /api/public/health)"
+    else
+      log "tracing: the gateway carries the legacy 'langfuse' callback; Langfuse $major accepts it (the v4 refusal is what this check exists for)"
+    fi
+  fi
+
+  if [[ -n "$reason" ]]; then
+    log "tracing: REFUSED: the legacy 'langfuse' callback is in $reason while the Langfuse server is v4 (or its version cannot be proven). Langfuse v4 in events_only mode rejects /api/public/ingestion with 'Bad request' per event and burns gateway CPU; install the OTLP callback 'langfuse_otel' only. This check cannot be skipped."
+    return 1
+  fi
+
+  log "tracing: callbacks ok (OTLP only)"
+  return 0
+}
+
+# --- TRACING-HEALTH: delivery and image pins ---------------------------------
+# The installer sends a test request through the gateway and waits for an OTEL
+# event in `events_core`. Without that event the install is NOT complete, and a
+# silent success is exactly what the incident was about. The same window
+# carries the delivery ratio: OTEL events against LiteLLM SpendLogs requests,
+# refused below 50 %. Parts 1 and 2 of the deploy-side tracing guard.
+#
+#   MYRMIDON_TRACING_DELIVERY_COMMAND     prints two integers for the window:
+#                                         "<otel events> <spend requests>"
+#   MYRMIDON_TRACING_DELIVERY_WINDOW_SEC  the window the command reads; 900
+#                                         (15 min) by default, exported to it
+#   MYRMIDON_TRACING_LANGFUSE_IMAGE       Langfuse image reference of the bundle
+#   MYRMIDON_TRACING_GATEWAY_IMAGE        gateway (LiteLLM) image reference
+# The two image settings must carry a full X.Y.Z tag or a digest: a major or
+# minor tag moves under the deployment and is not a pin.
+
+# Prints a non-negative integer from a piece of text, or nothing.
+tracing_integer_of() {
+  local value="$1"
+  value="${value//[[:space:]]/}"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' ""
+  fi
+  return 0
+}
+
+# Reads the two counts of the delivery command ("<events> <requests>") with the
+# window exported to it. Prints "<events> <requests>", or nothing when the
+# command is unreadable or does not print two integers.
+tracing_delivery_counts() {
+  local command="$1" window="$2" out events requests
+  [[ -n "$command" ]] || return 0
+  out="$(MYRMIDON_TRACING_DELIVERY_WINDOW_SEC="$window" bash -c "$command" 2>/dev/null)" || out=""
+  events=""
+  requests=""
+  read -r events requests <<<"$out" || true
+  events="$(tracing_integer_of "${events:-}")"
+  requests="$(tracing_integer_of "${requests:-}")"
+  if [[ -z "$events" || -z "$requests" ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+  printf '%s %s\n' "$events" "$requests"
+}
+
+# The delivery check. Returns 1 (after a log line) when the install must be
+# treated as failed: unreadable counts, no OTEL event while the gateway served
+# requests, or a ratio below 50 %. Returns 0 when the install is proven, and
+# also 0 with a log line when the window holds no gateway request at all
+# (nothing to measure yet).
+tracing_delivery_check() {
+  local command="${1:-}" window="${2:-900}" counts events requests percent
+  if [[ -z "$command" ]]; then
+    log "tracing: no MYRMIDON_TRACING_DELIVERY_COMMAND configured; the delivery check is skipped"
+    return 0
+  fi
+  counts="$(tracing_delivery_counts "$command" "$window")"
+  if [[ -z "$counts" ]]; then
+    log "tracing: REFUSED: the delivery command did not print the two integers of the ${window}s window (OTEL events, SpendLogs requests); the tracing install cannot be proven complete"
+    return 1
+  fi
+  read -r events requests <<<"$counts"
+  if ((requests == 0)); then
+    log "tracing: no gateway request in the last ${window}s; the delivery ratio is not measurable yet"
+    return 0
+  fi
+  if ((events == 0)); then
+    log "tracing: REFUSED: no OTEL event arrived in the last ${window}s while the gateway served $requests request(s); the tracing install is not complete (events_core is empty for the window)"
+    return 1
+  fi
+  percent=$((events * 100 / requests))
+  if ((events * 2 < requests)); then
+    log "tracing: REFUSED: the delivery ratio is ${percent}% (${events} OTEL events against ${requests} gateway requests in ${window}s), below the 50% floor"
+    return 1
+  fi
+  log "tracing: delivery ok: ${percent}% (${events} OTEL events against ${requests} gateway requests in ${window}s)"
+  return 0
+}
+
+# Explains why an image reference is not pinned, or prints nothing when it is
+# (a full X.Y.Z tag, or a digest). A major or minor tag, `latest`, or no tag at
+# all moves under the deployment and is not a pin.
+tracing_image_pin_problem() {
+  local ref="$1" tag
+  [[ -n "$ref" ]] || return 0
+  if [[ "$ref" == *@sha256:* ]]; then
+    valid_digest "sha256:${ref#*@sha256:}" && return 0
+    printf '%s\n' "$ref carries @sha256: without 64 lowercase hex characters"
+    return 0
+  fi
+  if [[ "$ref" != *:* ]]; then
+    printf '%s\n' "$ref has no tag: an untagged reference resolves to latest, which is not a pin"
+    return 0
+  fi
+  tag="${ref##*:}"
+  if [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9._-]+)?$ ]]; then
+    return 0
+  fi
+  printf '%s\n' "$ref is pinned by '$tag', which is not a full X.Y.Z version: a major or minor tag moves; pin it by X.Y.Z or by digest"
+}
+
+# The image-pin check: both images must be pinned when they are configured.
+# Returns 1 with a log line on the first unpinned reference, 0 otherwise.
+tracing_check_image_pins() {
+  local langfuse_image="${1:-}" gateway_image="${2:-}" problem
+  problem="$(tracing_image_pin_problem "$langfuse_image")"
+  if [[ -n "$problem" ]]; then
+    log "tracing: REFUSED: the Langfuse image is not pinned: $problem"
+    return 1
+  fi
+  problem="$(tracing_image_pin_problem "$gateway_image")"
+  if [[ -n "$problem" ]]; then
+    log "tracing: REFUSED: the gateway image is not pinned: $problem"
+    return 1
+  fi
+  if [[ -n "$langfuse_image$gateway_image" ]]; then
+    log "tracing: image pins ok (langfuse='${langfuse_image:-<unset>}', gateway='${gateway_image:-<unset>}')"
+  fi
+  return 0
 }

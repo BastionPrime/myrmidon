@@ -75,7 +75,7 @@ labelling and the protocol conformance notes.
    paste `http://<host>:<port>/mcp` → **Check link**. Choose
    authentication:
    - no sign-in — the service is open on the network;
-   - key or token — sent as `Authorization: Bearer …`;
+   - key or token — sent as `Authorization: Bearer ***`
    - custom headers — when the service names its own header(s);
    - advanced paste — when the service README ships an `mcpServers`
      snippet (custom header names survive this route).
