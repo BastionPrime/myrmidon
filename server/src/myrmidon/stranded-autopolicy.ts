@@ -88,7 +88,7 @@ export const STRANDED_AUTO_POLICY_RETRY_SOURCE = "myrmidon.stranded_autopolicy_r
  * agent has already been asked for once. The check alone is a snapshot read
  * and cannot close the window, so the key is also backed by a partial unique
  * index (`agent_wakeup_requests_stranded_autopolicy_retry_idempotency_uq`,
- * migration `0282_wakeup_key_partial_unique_indexes`): the second insert is
+ * migration `0290_wakeup_key_partial_unique_indexes`): the second insert is
  * rejected by the database and the racer stands down on the error.
  */
 export function buildStrandedAutoPolicyRetryIdempotencyKey(input: {

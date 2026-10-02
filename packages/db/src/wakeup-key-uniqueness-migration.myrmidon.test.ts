@@ -1,5 +1,5 @@
 // myrmidon(WAKE-KEYS-UNIQUE): companion test for migration
-// 0282_wakeup_key_partial_unique_indexes.sql. The migrated test database
+// 0290_wakeup_key_partial_unique_indexes.sql. The migrated test database
 // already carries both indexes, so the test drops them first: the seeded
 // duplicates have to model the pre-migration table the repair has to fix.
 // See docs/myrmidon/DIVERGENCE.md.
@@ -29,7 +29,7 @@ async function migrationStatements(): Promise<string[]> {
   const migrationSql = await readFile(
     fileURLToPath(
       new URL(
-        "./migrations/0282_wakeup_key_partial_unique_indexes.sql",
+        "./migrations/0290_wakeup_key_partial_unique_indexes.sql",
         import.meta.url,
       ),
     ),
