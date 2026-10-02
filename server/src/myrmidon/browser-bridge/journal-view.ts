@@ -37,7 +37,8 @@ export interface BridgeJournalRow {
   id: string;
   createdAt: string;
   action: string;
-  deviceId: string;
+  /** The device the row is about; null for device-independent rows (allowlist, signing policy). */
+  deviceId: string | null;
   label: string | null;
   method: string | null;
   url: string | null;

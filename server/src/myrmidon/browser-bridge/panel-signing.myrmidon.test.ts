@@ -21,7 +21,7 @@ import {
   browserBridgeSigningSchema,
 } from "@paperclipai/shared";
 import { isSignatureRow } from "./journal-view.js";
-import { BROWSER_BRIDGE_ACTIONS } from "./journal.js";
+import { BROWSER_BRIDGE_ACTIONS, type BrowserBridgeJournalEntry } from "./journal.js";
 import { browserBridgeService, type BrowserBridgeService, type BrowserBridgeServiceDeps } from "./service.js";
 import { InMemoryBridgeDeviceStore, InMemoryPairingCodeStore } from "./store.js";
 
@@ -64,8 +64,8 @@ function makeDeps(overrides: Partial<BrowserBridgeServiceDeps> = {}): BrowserBri
       },
     },
     listCompanyIds: async () => [COMPANY_A],
-    logActivity: async (entry: Record<string, unknown>) => {
-      entries.push(entry);
+    logActivity: async (entry: BrowserBridgeJournalEntry) => {
+      entries.push(entry as unknown as Record<string, unknown>);
       return {};
     },
     pepper: PEPPER,
@@ -112,8 +112,8 @@ describe("myrmidon(EXTCASE-PANEL) daily signature limit", () => {
         }),
         updateGeneral: async () => ({}),
       },
-      logActivity: async (entry: Record<string, unknown>) => {
-        entries.push(entry);
+      logActivity: async (entry: BrowserBridgeJournalEntry) => {
+        entries.push(entry as unknown as Record<string, unknown>);
         return {};
       },
       signCounter: { countToday: async () => 2 },
