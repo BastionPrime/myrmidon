@@ -25,7 +25,21 @@ version file to edit. Base Paperclip version is in the image label
   `dashscope-qwen-flash`; one proposal is capped at 8 child tasks (hard
   ceiling 20) and one planning call is never retried. Operator guide:
   [guides/cto-chat-planner.md](guides/cto-chat-planner.md). The portal chat
-  screen (part A) ships separately and calls the same route.
+  screen (part A) is below.
+
+### CTO chat (CTO-CHAT)
+
+- The Commander chat screen of the 2.0 shell (route `commander-chat`, reached
+  from the rail, the phone bottom bar and the `Ctrl K` "Tell the Commander"
+  palette with the typed draft carried over): the owner writes one free-text
+  request, the screen calls the board chat planner
+  (`POST /api/myrmidon/companies/:companyId/cto-chat/plan`) and renders the
+  proposed epic read-only — the epic, every child task, acceptance criteria
+  line by line. The pending `suggest_tasks` approval card from the standing
+  Agent Chat issue renders through the existing card component; accepting
+  the card creates the issues, rejecting creates nothing. The same flow is
+  reachable from the owner's Telegram DM. Operator guide:
+  [guides/commander-chat.md](guides/commander-chat.md).
 
 ## 1.5.0
 
