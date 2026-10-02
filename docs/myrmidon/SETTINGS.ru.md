@@ -87,6 +87,8 @@
 | Переменная | Функция | По умолчанию | Что делает | Как выключить / особое |
 |---|---|---|---|---|
 | `MYRMIDON_MAINTENANCE_DRAIN_TIMEOUT_SEC` | R3 | `900` | Таймаут дренажа окна обслуживания, если в запросе нет `drainTimeoutSec` | `0` — таймаут сразу; предел 86400 |
+| `MAINTENANCE_ON_TIMEOUT` | DRAIN-INTERRUPT | `interrupt_and_retry` | Настройка скриптов выката (`deploy.env`): что делает окно обслуживания на дедлайне дренажа. `interrupt_and_retry` дренирует `MAINTENANCE_DRAIN_GRACE_SEC` и затем прерывает оставшиеся прогоны; каждый повторяется при закрытии окна, поэтому плановый выкат не ждёт длинных прогонов. Читают `scripts/myrmidon/deploy/{lib,deploy}.sh`, не сервер | `wait` — держать допуск закрытым и ждать `MAINTENANCE_DRAIN_TIMEOUT_SEC` (поведение до drain-interrupt). Любое другое значение — выкат отказывает, ничего не тронув |
+| `MAINTENANCE_DRAIN_GRACE_SEC` | DRAIN-INTERRUPT | `300` | Настройка скриптов выката (`deploy.env`): сколько окно дренирует до прерывания оставшихся прогонов (`drainTimeoutSec` запроса enter в режиме interrupt) | Игнорируется при `MAINTENANCE_ON_TIMEOUT=wait` — там используется `MAINTENANCE_DRAIN_TIMEOUT_SEC` |
 | `MYRMIDON_MAINTENANCE_TICK_SEC` | R3 | `5` | Как часто сервис режима пересчитывает окна: `entering → on`, таймауты, завершение выхода | От 1 до 3600 |
 | `MYRMIDON_MAINTENANCE_CACHE_TTL_SEC` | R3 | `5` | Сколько секунд шлюз допуска кэширует окна обслуживания и оргструктуру (членство в отделе) | `0` — без кэша, чтение БД на каждую проверку. Переходы, сделанные этим процессом, видны сразу |
 | `MYRMIDON_ZABBIX_URL` | R3 | не задан | Адрес API Zabbix (`…/api_jsonrpc.php`) для окна обслуживания инстанса | Не задан — интеграция выключена, вызовов нет |

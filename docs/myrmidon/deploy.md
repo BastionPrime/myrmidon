@@ -139,11 +139,21 @@ Order:
    `DUMP_MIN_BYTES`, the deploy refuses and the image does not change.
 4. Entering maintenance mode (`MAINTENANCE_MODE`):
    - `api` — `POST /api/myrmidon/maintenance` per the contract of
-     [design/maintenance-mode.md](design/maintenance-mode.md), section 7 (track 5, R3);
+     [design/maintenance-mode.md](design/maintenance-mode.md), section 7 (track 5, R3).
+     The window is entered with `onTimeout: interrupt_and_retry` and
+     `drainTimeoutSec: MAINTENANCE_DRAIN_GRACE_SEC` (300 s by default), so a planned
+     deploy does not wait for long runs. `MAINTENANCE_ON_TIMEOUT=wait` keeps the old
+     behaviour: the window is entered with `onTimeout: wait` and
+     `drainTimeoutSec: MAINTENANCE_DRAIN_TIMEOUT_SEC` (1800 s) instead;
    - `hook` — your own `MAINTENANCE_ENTER_COMMAND` / `MAINTENANCE_EXIT_COMMAND`;
    - `pause` — while there is no maintenance API: pause for `MAINTENANCE_PAUSE_SEC` seconds.
 5. Waiting until no runs are in progress: `RUNNING_RUNS_COMMAND` or, in `api` mode,
-   `instance.runningRuns` from the API. A `RUNS_WAIT_TIMEOUT_SEC` timeout (or a broken
+   `instance.runningRuns` from the API. With the default `onTimeout: interrupt_and_retry`
+   the window drains for the grace (`MAINTENANCE_DRAIN_GRACE_SEC`, 300 s) and then
+   interrupts the runs that are still going: each one is marked interrupted by maintenance
+   (not a failure), its task keeps its place, and the run is retried automatically when the
+   window closes. That is what makes the wait converge quickly instead of blocking on a long
+   run. A `RUNS_WAIT_TIMEOUT_SEC` timeout (or a broken
    counter) aborts the deploy before the image changes, and **maintenance is lifted before
    the abort exit**: the board does not stay in maintenance until someone lifts it by hand.
    A failed lift (maintenance already off) is a warning, not a second failure; the exit
