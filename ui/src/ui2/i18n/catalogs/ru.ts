@@ -154,42 +154,193 @@ export const ru: Ui2Catalog = {
     updated: "Обновлено {{time}}",
   },
   ui2: {
-    owner: "Владелец",
-    ownerChannel: "Веб",
-    nests: {
-      all: "Все гнёзда",
-    },
-    phone: {
-      status: "Владелец · Веб",
-    },
-    chip: {
-      colony: "{{active}} из {{total}}",
-      fleet: "Флот",
-      fleetAttention: "Флот: 1 требует внимания",
-      forecast: "{{spend}} из {{budget}}",
-    },
-    commander: {
-      aria: "Сказать Командиру (Ctrl K)",
-      placeholder: "Сказать Командиру…",
-      stubNote: "Заглушка: сообщение пока не отправляется. Оно открывает существующий чат; диалог Командира появится с обновлением чата 1.6.",
-      openChat: "Открыть чат",
-    },
-    nav: {
-      railLabel: "Основная навигация",
-      badge: {
-        attention: "{{count}} пунктов требуют внимания",
+      agent: {
+        overview: {
+          budget: {
+            none: "Без бюджета",
+            title: "Бюджет",
+            utilization: "Использовано {{spent}} из {{budget}}",
+          },
+          lastRun: "Последний прогон",
+          missing: "Агент не найден",
+          noRuns: "Прогонов пока нет",
+          runCost: "Стоимость",
+          runResult: "Результат",
+          runTokens: "Токены",
+          runs: {
+            empty: "За период прогонов нет",
+            title: "Прогоны",
+          },
+          spend: {
+            month: "Расход за месяц",
+          },
+          status: "Статус",
+          title: "Обзор агента",
+        },
       },
-    },
-    settings: {
-      navLabel: "Разделы настроек",
-    },
-    decisions: {
-      badge: "{{count}} решений ожидают",
-    },
-    screens: {
-      placeholderTitle: "Этот экран появится в 2.0",
-      placeholderBody: "Макет 2.0 для этой зоны ещё не подключён; рабочий экран ниже сохраняет поток.",
-      placeholderLegacyLink: "Вернуться к текущему макету",
-    },
+      common: {
+        emptyDoneSr: "Нет завершённых пунктов",
+        emptyFilteredSr: "Под фильтры ничего не попадает",
+        error: "Что-то пошло не так",
+        retry: "Повторить",
+        unknown: "Неизвестно",
+      },
+      costs: {
+        agents: {
+          agent: "Агент",
+          cost: "Стоимость",
+          empty: "За период нет расходов по агентам",
+          runs: "Прогоны",
+          title: "Расход по агентам",
+          tokens: "Токены",
+          unnamed: "Агент без имени",
+        },
+        incidents: {
+          keepPaused: "Оставить на паузе",
+          raiseAndResume: "Поднять и продолжить",
+          title: "Инциденты стоимости",
+        },
+        policies: {
+          amount: "Сумма",
+          empty: "Политик стоимости нет",
+          observed: "Наблюдается: {{amount}}",
+          scope: "Область",
+          scopeType: {
+            agent: "Агент",
+            company: "Компания",
+            project: "Проект",
+          },
+          title: "Политики стоимости",
+          window: {
+            calendar_month_utc: "Календарный месяц (UTC)",
+            lifetime: "За всё время",
+          },
+        },
+        tile: {
+          budget: "Бюджет",
+          incidents: "Инциденты",
+          pausedAgents: "Агенты на паузе",
+          spent: "Израсходовано",
+          utilization: "Утилизация",
+        },
+        title: "Стоимость",
+      },
+      decisions: {
+        badge: "{{count}} решений ожидают",
+        card: {
+          age: "{{age}} назад",
+          decide: "Решить",
+          dismiss: "Отклонить",
+          expired: "Истекло",
+          expires: "Истекает {{time}}",
+          optionExecutes: "При принятии выполнится: {{action}}",
+          options: "Варианты",
+          preparedBy: "Подготовил: {{who}}",
+          summary: "Суть",
+        },
+        empty: {
+          body: "Сейчас ничего не ждёт решения.",
+          filtered: {
+            body: "Под текущие фильтры решений нет.",
+            title: "Нет совпадений",
+          },
+          title: "Нет решений",
+        },
+        filter: {
+          all: "Все",
+          external: "Внешние",
+          money: "Деньги",
+          policies: "Политики",
+        },
+        subtitle: "Ожидают вашего выбора",
+        title: "Решения",
+      },
+      settings: {
+        language: {
+          note: "Вывод агентов и идентификаторы не переводятся.",
+          preview: {
+            decisionBody: "Превью карточки решения: варианты, срок и автор подготовки.",
+            decisionTitle: "Карточка решения",
+            title: "Превью",
+          },
+          subtitle: "Язык интерфейса",
+          title: "Язык и форматы",
+        },
+        runs: {
+          off: "Прогоны выключены",
+          reset: "Сбросить",
+          save: "Сохранить",
+          saveError: "Не удалось сохранить. Значение останется применённым до перезагрузки.",
+          source: {
+            default: "По умолчанию",
+            env: "Окружение",
+            settings: "Настройки",
+          },
+          subtitle: "Как настроен запуск прогонов",
+          title: "Прогоны",
+        },
+        system: {
+          changelog: {
+            actor: "Автор",
+            empty: "Изменений нет",
+            title: "Журнал изменений",
+          },
+          channels: {
+            title: "Каналы",
+            web: "Веб",
+          },
+          denied: "Доступ запрещён",
+          deniedHint: "У вас нет прав на этот экран.",
+          keys: {
+            created: "Создан",
+            empty: "Ключей нет",
+            expires: "Истекает",
+            lastUsed: "Последнее использование",
+            never: "Никогда",
+            revoked: "Отозван",
+            title: "Ключи",
+          },
+          members: {
+            empty: "Участников нет",
+            role: "Роль",
+            status: "Статус",
+            title: "Участники",
+          },
+          subtitle: "Настройки уровня инстанса",
+          title: "Система",
+        },
+        navLabel: "Разделы настроек",
+      },
+      owner: "Владелец",
+      ownerChannel: "Веб",
+      nests: {
+        all: "Все гнёзда",
+      },
+      phone: {
+        status: "Владелец · Веб",
+      },
+      chip: {
+        colony: "{{active}} из {{total}}",
+        fleet: "Флот",
+        fleetAttention: "Флот: 1 требует внимания",
+        forecast: "{{spend}} из {{budget}}",
+      },
+      commander: {
+        aria: "Сказать Командиру (Ctrl K)",
+        placeholder: "Сказать Командиру…",
+        stubNote: "Заглушка: сообщение пока не отправляется. Оно открывает существующий чат; диалог Командира появится с обновлением чата 1.6.",
+        openChat: "Открыть чат",
+      },
+      nav: {
+        railLabel: "Основная навигация",
+        badge: {
+          attention: "{{count}} пунктов требуют внимания",
+        },
+      },
+      screens: {
+        placeholderTitle: "Этот экран появится в 2.0",
+        placeholderBody: "Макет 2.0 для этой зоны ещё не подключён; рабочий экран ниже сохраняет поток.",
+        placeholderLegacyLink: "Вернуться к текущему макету",
+      },
   },
 };
