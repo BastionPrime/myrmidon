@@ -16,7 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import { and, eq, like } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
   agentRuntimeState,
@@ -204,20 +204,27 @@ describeEmbeddedPostgres("maintenance leave-always: hooks never pin a `leaving` 
           return Promise.resolve();
         },
       },
-      hookTimeoutMs: 60_000, // long: only the interleaving is under test here
+      hookTimeoutMs: 25_000, // long enough that the tick must not await it
     });
     await svc.enter({ scope: { type: "agent", id: first.agentId }, reason: "one" }, ADMIN);
     await svc.enter({ scope: { type: "agent", id: second.agentId }, reason: "two" }, ADMIN);
     await svc.exit({ type: "agent", id: first.agentId }, ADMIN);
     await svc.exit({ type: "agent", id: second.agentId }, ADMIN);
 
-    // The guard: one tick retires the second window even though the first
-    // window's hook is still pending (the sequential loop retired none).
-    await svc.tick();
-    const status = await svc.status();
-    expect(status.windows.map((w) => w.scope.id)).toEqual([first.agentId]);
-    expect(status.windows.map((w) => w.state)).toEqual(["leaving"]);
+    // The guard: the tick retires the second window even though the first
+    // window's hook is still pending (the sequential loop retired none). The
+    // tick is NOT awaited: it is still stuck on the first window's hung hook.
+    const ticking = svc.tick();
+    await vi.waitFor(() =>
+      expect(svc.status().then((s) => s.windows.map((w) => w.scope.id))).resolves.toEqual([
+        first.agentId,
+      ]),
+    );
+    expect(await svc.status()).toMatchObject({
+      windows: [{ state: "leaving" }],
+    });
     hung.resolve();
+    await ticking;
   }, 30_000);
 
   it("still retires when onEntered throws at enter time (the mode enters regardless)", async () => {
