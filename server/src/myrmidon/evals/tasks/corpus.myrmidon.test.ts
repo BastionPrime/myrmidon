@@ -115,16 +115,29 @@ describe("engineer reference corpus", () => {
     expect(slugs).toEqual([...slugs].sort((a, b) => a.localeCompare(b)));
   });
 
-  it("carries a version trail with at least the initial release and the 1.1.0 addition", () => {
+  it("carries a version trail: the 1.1.0 addition and the 1.2.0 re-mirror", () => {
     const versions = new Set(corpus.tasks.map((t) => t.corpusVersion));
-    expect(versions.has("1.0.0")).toBe(true);
     expect(versions.has("1.1.0")).toBe(true);
-    expect(latestCorpusVersion(corpus.tasks)).toBe("1.1.0");
+    expect(versions.has("1.2.0")).toBe(true);
+    expect(latestCorpusVersion(corpus.tasks)).toBe("1.2.0");
+  });
+
+  it("keeps 1.2.0 and 1.1.0 score-comparable (same major)", () => {
+    expect(versionsComparable("1.2.0", "1.1.0")).toBe(true);
+  });
+
+  it("marks the 24 re-mirrored tasks with an honest changeNote", () => {
+    const reMirrored = corpus.tasks.filter((t) => t.corpusVersion === "1.2.0");
+    expect(reMirrored).toHaveLength(24);
+    for (const t of reMirrored) {
+      expect(t.changeNote).toContain("re-mirrored from the final Part A seed");
+      expect(t.changeNote).not.toBe("initial release");
+    }
   });
 
   it("reports the baseline subject for the pilot role", () => {
-    expect(corpus.latestVersion).toBe("1.1.0");
-    expect(corpus.baselineSubject).toBe("baseline-engineer-1.1.0");
+    expect(corpus.latestVersion).toBe("1.2.0");
+    expect(corpus.baselineSubject).toBe("baseline-engineer-1.2.0");
   });
 
   it("mixes general and code tasks (code tasks take a CI pass rate later)", () => {
