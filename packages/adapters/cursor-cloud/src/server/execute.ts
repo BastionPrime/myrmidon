@@ -25,6 +25,8 @@ import {
   isPaperclipRecoveryWakePayload,
   renderTemplate,
 } from "@paperclipai/adapter-utils/server-utils";
+// myrmidon(B1c): product name in the runtime notes; see shared myrmidon-product.
+import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 type CursorCloudSession = {
   cursorAgentId: string;
@@ -218,7 +220,7 @@ function renderPaperclipEnvNote(env: Record<string, string>): string {
     .sort();
   if (keys.length === 0) return "";
   return [
-    "Paperclip runtime note:",
+    `${PRODUCT_NAME} runtime note:`,
     `The following PAPERCLIP_* environment variables are available in the cloud agent shell: ${keys.join(", ")}`,
     "Use them directly instead of assuming they are absent.",
   ].join("\n");

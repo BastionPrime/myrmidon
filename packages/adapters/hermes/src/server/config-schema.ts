@@ -5,6 +5,8 @@ import {
   DEFAULT_TIMEOUT_SEC,
   VALID_PROVIDERS,
 } from "../shared/constants.js";
+// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
+import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 function providerLabel(provider: string): string {
   if (provider === "auto") return "Auto";
@@ -61,7 +63,7 @@ export function getConfigSchema(): AdapterConfigSchema {
         label: "Persist session",
         type: "toggle",
         default: true,
-        hint: "Resume Hermes sessions across Paperclip heartbeats.",
+        hint: `Resume Hermes sessions across ${PRODUCT_NAME} heartbeats.`,
       },
       {
         key: "worktreeMode",

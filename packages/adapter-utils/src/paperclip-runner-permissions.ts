@@ -1,3 +1,5 @@
+// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
+import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 export type PaperclipRunnerProvider =
   "codex" | "opencode" | "claude_managed" | "aws_agentcore" | "acpx";
 
@@ -61,7 +63,7 @@ export const PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES = {
         value: "never",
         label: "Automatic (isolated)",
         description:
-          "Run without Codex approval pauses while Paperclip keeps its independent workspace, network, and environment restrictions.",
+          `Run without Codex approval pauses while ${PRODUCT_NAME} keeps its independent workspace, network, and environment restrictions.`,
       },
     ],
   },
@@ -70,7 +72,7 @@ export const PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES = {
     configKey: "opencodePermissionMode",
     defaultMode: "ask",
     description:
-      "Controls OpenCode tool permissions inside the assigned Paperclip environment.",
+      `Controls OpenCode tool permissions inside the assigned ${PRODUCT_NAME} environment.`,
     options: [
       {
         value: "allow",

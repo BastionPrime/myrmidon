@@ -3,6 +3,8 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
+import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 export type LocalProcessSandboxAccess = "ro" | "rw";
 export type LocalProcessNetworkScope = "deny" | "allowlist";
@@ -252,11 +254,11 @@ async function startNetworkAllowlistProxy(
     }
     const port = target.port || (target.protocol === "https:" ? "443" : "80");
     if (target.protocol !== "http:") {
-      writeProxyError(response, 400, "https_requires_connect", "HTTPS targets must use CONNECT through the Paperclip sandbox proxy.");
+      writeProxyError(response, 400, "https_requires_connect", `HTTPS targets must use CONNECT through the ${PRODUCT_NAME} sandbox proxy.`);
       return;
     }
     if (!isNetworkTargetAllowed(target.hostname, port, rules)) {
-      writeProxyError(response, 403, "network_target_denied", "Network target denied by Paperclip sandbox policy.");
+      writeProxyError(response, 403, "network_target_denied", `Network target denied by ${PRODUCT_NAME} sandbox policy.`);
       return;
     }
     const upstream = http.request(target, {
@@ -276,7 +278,7 @@ async function startNetworkAllowlistProxy(
     if (!hostname || !/^\d+$/.test(port) || !isNetworkTargetAllowed(hostname, port, rules)) {
       clientSocket.end(connectProxyError(
         "network_target_denied",
-        "Network target denied by Paperclip sandbox policy.",
+        `Network target denied by ${PRODUCT_NAME} sandbox policy.`,
       ));
       return;
     }

@@ -64,6 +64,8 @@ import { isPiUnknownSessionError, parsePiJsonl } from "./parse.js";
 import { ensurePiModelConfiguredAndAvailable } from "./models.js";
 import { preparePiRuntimeConfig } from "./runtime-config.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
+// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
+import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -548,7 +550,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (runtimeSessionId && !canResumeSession) {
       const staleSessionCwdNote =
         savedSessionCwd !== null && !sessionHeaderCwdMatches
-          ? ` Pi stored cwd "${savedSessionCwd}" in the session header, so Paperclip will start a fresh session for "${effectiveExecutionCwd}".`
+          ? ` Pi stored cwd "${savedSessionCwd}" in the session header, so ${PRODUCT_NAME} will start a fresh session for "${effectiveExecutionCwd}".`
           : "";
       await onLog(
         "stdout",

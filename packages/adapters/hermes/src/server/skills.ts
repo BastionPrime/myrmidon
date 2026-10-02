@@ -18,6 +18,8 @@ import {
   resolveHermesSkillsHome,
   SKILL_BACKUP_DIR,
 } from "./myrmidon-skills-home.js";
+// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
+import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -150,7 +152,7 @@ async function buildHermesSkillSnapshot(config: Record<string, unknown>): Promis
       managed: true,
       state: desired ? "configured" : "available",
       origin: "company_managed",
-      originLabel: "Managed by Paperclip",
+      originLabel: `Managed by ${PRODUCT_NAME}`,
       readOnly: false,
       sourcePath: entry.source,
       targetPath: null,
@@ -171,7 +173,7 @@ async function buildHermesSkillSnapshot(config: Record<string, unknown>): Promis
   for (const desiredSkill of desiredSkills) {
     if (availableByKey.has(desiredSkill) || hermesKeys.has(desiredSkill)) continue;
     warnings.push(
-      `Desired skill "${desiredSkill}" is not available in Paperclip or Hermes skills.`,
+      `Desired skill "${desiredSkill}" is not available in ${PRODUCT_NAME} or Hermes skills.`,
     );
     entries.push({
       key: desiredSkill,
@@ -185,7 +187,7 @@ async function buildHermesSkillSnapshot(config: Record<string, unknown>): Promis
       sourcePath: null,
       targetPath: null,
       detail:
-        "Cannot find this skill in Paperclip or ~/.hermes/skills/.",
+        `Cannot find this skill in ${PRODUCT_NAME} or ~/.hermes/skills/.`,
     });
   }
 

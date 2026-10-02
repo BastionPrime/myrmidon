@@ -11,6 +11,8 @@ import {
   readInstalledSkillTargets,
   resolveLegacyPaperclipDesiredSkillNames,
 } from "@paperclipai/adapter-utils/server-utils";
+// myrmidon(B1c): product name in user-facing texts; see shared myrmidon-product.
+import { PRODUCT_NAME } from "@paperclipai/shared/myrmidon-product";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -37,10 +39,10 @@ async function buildClaudeSkillSnapshot(config: Record<string, unknown>): Promis
     adapterType: "claude_local",
     availableEntries,
     desiredSkills,
-    configuredDetail: "Will be materialized into the stable Paperclip-managed Claude prompt bundle on the next run.",
+    configuredDetail: `Will be materialized into the stable ${PRODUCT_NAME}-managed Claude prompt bundle on the next run.`,
     externalInstalled: installed,
     externalLocationLabel: "~/.claude/skills",
-    externalDetail: "Installed outside Paperclip management in the Claude skills home.",
+    externalDetail: `Installed outside ${PRODUCT_NAME} management in the Claude skills home.`,
     skillsHome,
   });
 }
