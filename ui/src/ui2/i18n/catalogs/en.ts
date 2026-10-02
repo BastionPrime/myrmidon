@@ -346,45 +346,6 @@ export type Ui2Catalog = {
     updated: string;
   };
   ui2: {
-    owner: "Owner",
-    ownerChannel: "Web",
-    nests: {
-      all: "All nests",
-    },
-    phone: {
-      status: "Owner · Web",
-    },
-    chip: {
-      colony: "{{active}} of {{total}}",
-      fleet: "Fleet",
-      fleetAttention: "Fleet: 1 attention",
-      forecast: "{{spend}} of {{budget}}",
-    },
-    commander: {
-      aria: "Tell the Commander (Ctrl K)",
-      placeholder: "Tell the Commander…",
-      stubNote: "Stub: the message is not sent yet. It opens the existing chat; the Commander conversation arrives with the 1.6 chat update.",
-      openChat: "Open chat",
-    },
-    nav: {
-      railLabel: "Main navigation",
-      badge: {
-        attention: "{{count}} items need attention",
-      },
-    },
-    settings: {
-      navLabel: "Settings sections",
-    },
-    decisions: {
-      badge: "{{count}} decisions waiting",
-    },
-    screens: {
-      placeholderTitle: "This screen arrives with 2.0",
-      placeholderBody: "The 2.0 layout for this area is not wired yet; the working screen below keeps the flow.",
-      placeholderLegacyLink: "Back to the current layout",
-    },
-  },
-  ui2: {
     owner: string;
     ownerChannel: string;
     nests: {
