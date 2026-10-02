@@ -132,6 +132,7 @@ import { startLitellmCostSweep, stopLitellmCostSweep } from "./myrmidon/litellm-
 import { startBotCanary, stopBotCanary } from "./myrmidon/bot-containers/canary-index.js"; // myrmidon(R5-B)
 import { interactionContinuationOutboxService } from "./myrmidon/interaction-continuation-outbox.js"; // myrmidon(O1)
 import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
+import { createRunStallSweepFromHeartbeat } from "./myrmidon/run-stall/index.js"; // myrmidon(RUN-STALL)
 import {
   createPendingInteractionWakeSweep,
   readPendingInteractionWakeContextSnapshot,
@@ -1174,6 +1175,18 @@ async function startServerWithDatabaseTeardown(
     }
   };
   const executionControlSweepsInFlight = new Set<string>();
+  // myrmidon(RUN-STALL): progress-based run liveness. A run whose own recorded
+  // progress (output, run events, useful actions) has not moved for the stall
+  // threshold is interrupted as resumable, its task goes back to todo and the
+  // assignee is woken. Like its neighbours it needs the heartbeat service, so a
+  // process that does not schedule runs does not run this pass.
+  const runStallSweep = heartbeat
+    ? createRunStallSweepFromHeartbeat({
+        db: db as any,
+        heartbeat,
+        issues: issueService(db as any),
+      })
+    : null;
   const executionControlSweeps = [
     ["finalization", () => reconcileAbandonedExecutionControl(db)],
     ["replacement", () => heartbeat ? reconcileSafeNativeReplacements(db, new Date(), { verifyStoppedSession: run => verifyStoppedNativeSessionForReplacement(db, run) }) : undefined],
@@ -1181,6 +1194,7 @@ async function startServerWithDatabaseTeardown(
     ["status_delivery", () => deliverExecutionStatuses(db)],
     ["automatic_disposition", () => settleUnrecoverableExecutions(db)],
     ["local_ai_login_cleanup", () => localAiLoginService(db).reapExpired()],
+    ["run_stall", () => runStallSweep?.sweep()],
   ] as const;
   const sweepExecutionControl = () => {
     if (heartbeatSchedulerStopped) return;
@@ -1302,6 +1316,26 @@ async function startServerWithDatabaseTeardown(
     }).catch((err) => {
       logger.error({ err }, "pending interaction wake sweep failed");
     }));
+  };
+  // myrmidon(AUTO-RESUME): resumes an agent left in `error` once its 1/5/15 min
+  // backoff step is due; the per-agent maintenance gate lives in the sweeper.
+  // Runs on the same mutually-exclusive scheduler paths as the other
+  // independent sweeps: the enabled tick owns it, and the disabled path starts
+  // its own runtime for it, so there is never a second instance of the sweep.
+  const scheduleAutoResumeSweep = () => {
+    if (heartbeatSchedulerStopped) return;
+    // Some vendor test doubles for the heartbeat service are partial and omit
+    // this method; skip the pass instead of crashing the startup path.
+    if (typeof environmentLeaseCleanupHeartbeat.sweepAutoResume !== "function") return;
+    trackHeartbeatSchedulerWork(environmentLeaseCleanupHeartbeat.sweepAutoResume(new Date())
+      .then((result) => {
+        if (result.resumed > 0 || result.exhausted > 0) {
+          logger.warn(result, "auto-resume swept errored agents");
+        }
+      })
+      .catch((err) => {
+        logger.error({ err }, "auto-resume sweep failed");
+      }));
   };
   const githubConnectionEvents = githubConnectionEventService(db as any, {
     wakeup: environmentLeaseCleanupHeartbeat.wakeup,
@@ -1745,6 +1779,7 @@ async function startServerWithDatabaseTeardown(
         scheduleSetupTokenReaperSweep();
         scheduleEnvironmentLeaseCleanupSweep();
         schedulePendingInteractionWakeSweep(); // myrmidon(P12)
+        scheduleAutoResumeSweep(); // myrmidon(AUTO-RESUME)
 
         if (heartbeatSchedulerStopped) return;
         trackHeartbeatSchedulerWork(routines
@@ -1921,6 +1956,7 @@ async function startServerWithDatabaseTeardown(
       scheduleExternalObjectRefreshSweep(new Date());
       scheduleEnvironmentLeaseCleanupSweep();
       schedulePendingInteractionWakeSweep(); // myrmidon(P12)
+      scheduleAutoResumeSweep(); // myrmidon(AUTO-RESUME)
       scheduleGitHubConnectionEventPoll();
       scheduleGitHubConnectionContinuitySweep();
     });

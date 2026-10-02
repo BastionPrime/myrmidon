@@ -21,6 +21,7 @@ import {
 const OWN_ROOT: CloudRoot = {
   id: "root-own-work",
   providerId: "onedrive",
+  companyId: "company-a",
   name: "work",
   kind: "own",
   description: "",
@@ -34,6 +35,7 @@ const OWN_ROOT: CloudRoot = {
 const SHARED_ROOT: CloudRoot = {
   id: "root-shared-media",
   providerId: "onedrive",
+  companyId: "company-a",
   name: "shared",
   kind: "shared",
   description: "",

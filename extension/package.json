@@ -1,0 +1,23 @@
+{
+  "name": "@myrmidon/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser extension (Chrome/Edge, MV3): read-only tender-site actions and the pairing client of the Myrmidon browser bridge",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:tsc": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config ./vitest.config.ts"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.11",
+    "@types/node": "^24.19.0",
+    "jsdom": "^30.1.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  }
+}

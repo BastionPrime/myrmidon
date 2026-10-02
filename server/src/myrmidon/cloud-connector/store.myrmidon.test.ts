@@ -19,6 +19,7 @@ import {
 const ACCOUNT = {
   id: "account-1",
   providerId: "onedrive",
+  companyId: "company-a",
   displayName: "Owner OneDrive",
   tokenRef: "secret/onedrive",
   scopes: ["Files.ReadWrite"],
@@ -29,6 +30,7 @@ const ACCOUNT = {
 const ROOT = {
   id: "root-1",
   providerId: "onedrive",
+  companyId: "company-a",
   name: "work",
   kind: "own",
   description: "",

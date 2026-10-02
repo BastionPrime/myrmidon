@@ -29,8 +29,18 @@ case "$1" in
       *org.opencontainers.image.revision*) cat "$SANDBOX/label-revision" ;;
     esac ;;
   buildx)
-    if [ -e "$SANDBOX/registry-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
-    cat "$SANDBOX/imagetools.json" ;;
+    # RELEASE-GATE: the same registry answers the component repositories. A
+    # digest-format inspect gets the component digest file; the board and every
+    # CI check get the image JSON (with labels).
+    case "$4" in
+      *myrmidon-dockergate*|*myrmidon-fleetd*)
+        if [ -e "$SANDBOX/components-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
+        for a in "$@"; do case "$a" in *Manifest.Digest*) cat "$SANDBOX/component-digests.json" | jq -r --arg r "$4" '.[\$r]'; exit 0 ;; esac; done
+        cat "$SANDBOX/component-image.json" ;;
+      *)
+        if [ -e "$SANDBOX/registry-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
+        cat "$SANDBOX/imagetools.json" ;;
+    esac ;;
   compose) exit 0 ;;
 esac
 `;
@@ -95,6 +105,23 @@ function sandbox({
     JSON.stringify({ architecture: "amd64", os: "linux", config: { Env: ["A=1"], Labels: labels } }),
   );
   if (registryMissing) fs.writeFileSync(path.join(dir, "registry-missing"), "");
+  // RELEASE-GATE: component registry answers for the same commit.
+  fs.writeFileSync(
+    path.join(dir, "component-digests.json"),
+    JSON.stringify({
+      "ghcr.io/itkadr-git/myrmidon-dockergate:sha-0123456": `sha256:${"c".repeat(64)}`,
+      "ghcr.io/itkadr-git/myrmidon-fleetd:sha-0123456": `sha256:${"d".repeat(64)}`,
+    }),
+  );
+  fs.writeFileSync(
+    path.join(dir, "component-image.json"),
+    JSON.stringify({
+      architecture: "amd64",
+      os: "linux",
+      config: { Env: ["A=1"], Labels: { "org.opencontainers.image.revision": COMMIT, "org.opencontainers.image.source": SOURCE, "org.opencontainers.image.version": VERSION } },
+      manifest: { digest: `sha256:${"c".repeat(64)}` },
+    }),
+  );
   fs.writeFileSync(path.join(dir, "git-origin"), `${origin}\n`);
   fs.writeFileSync(path.join(dir, "git-ancestor-exit"), onMain ? "0" : "1");
   fs.writeFileSync(path.join(dir, "git-tags"), tags);
@@ -128,6 +155,10 @@ function sandbox({
       `MAINTENANCE_ENTER_COMMAND='echo enter >> ${path.join(dir, "maintenance.log")}'`,
       `MAINTENANCE_EXIT_COMMAND='echo exit >> ${path.join(dir, "maintenance.log")}'`,
       "RUNNING_RUNS_COMMAND='echo 0'",
+      // RELEASE-GATE: the release components answer their health probes here
+      // (the fake curl serves every URL with the health file).
+      "MYR_DOCKERGATE_HEALTH_URL=http://127.0.0.1:3100/dockergate/health",
+      "MYR_FLEETD_HEALTH_URL=http://127.0.0.1:3100/fleetd/health",
       "",
     ].join("\n"),
   );
@@ -555,6 +586,97 @@ describe("deploy.sh: only CI images from the registry", () => {
       const sb = sandbox({ current: NEW, registryMissing: true });
       assertRefused(sb, ["--digest", NEW], /cannot be read from the registry/);
     });
+  });
+});
+
+// myrmidon(DRAIN-INTERRUPT): a planned deploy must not wait for long runs. In
+// `api` mode deploy.sh enters the window with `onTimeout: interrupt_and_retry`
+// and drains for the short grace (MAINTENANCE_DRAIN_GRACE_SEC, 300 s default);
+// after the grace the window interrupts the runs that are still going and they
+// are retried when the window closes. `MAINTENANCE_ON_TIMEOUT=wait` keeps the
+// old "hold admission and wait out the long timeout" behaviour.
+describe("deploy.sh: drain-interrupt enter body", () => {
+  function apiConfig(sb, extra = []) {
+    fs.appendFileSync(
+      sb.config,
+      [
+        "MAINTENANCE_MODE=api",
+        "MAINTENANCE_API_URL=http://127.0.0.1:3100/api/myrmidon/maintenance",
+        ...extra,
+        "",
+      ].join("\n"),
+    );
+  }
+
+  function enterBody(sb) {
+    const line = calls(sb).split("\n").find((l) => l.includes('"action":"enter"'));
+    assert.ok(line, `no enter POST in calls:\n${calls(sb)}`);
+    const match = line.match(/--data (\{.*\}) http/);
+    assert.ok(match, `no JSON body in call: ${line}`);
+    return JSON.parse(match[1]);
+  }
+
+  it("enters with interrupt_and_retry and the default 300 s grace", () => {
+    const sb = sandbox();
+    apiConfig(sb);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.equal(code, 0, out);
+    assert.deepEqual(enterBody(sb), {
+      action: "enter",
+      scope: { type: "instance" },
+      reason: `deploy ghcr.io/itkadr-git/myrmidon@${NEW.slice(0, 19)}`,
+      drainTimeoutSec: 300,
+      onTimeout: "interrupt_and_retry",
+    });
+    // The window is left again after the switch.
+    assert.match(calls(sb), /--data \{"action":"exit"/);
+  });
+
+  it("takes the grace from MAINTENANCE_DRAIN_GRACE_SEC", () => {
+    const sb = sandbox();
+    apiConfig(sb, ["MAINTENANCE_DRAIN_GRACE_SEC=42"]);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.equal(code, 0, out);
+    assert.equal(enterBody(sb).drainTimeoutSec, 42);
+    assert.equal(enterBody(sb).onTimeout, "interrupt_and_retry");
+  });
+
+  it("keeps the old wait behaviour on MAINTENANCE_ON_TIMEOUT=wait", () => {
+    const sb = sandbox();
+    apiConfig(sb, ["MAINTENANCE_ON_TIMEOUT=wait", "MAINTENANCE_DRAIN_GRACE_SEC=42"]);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.equal(code, 0, out);
+    // wait mode ignores the grace and waits out the long drain timeout.
+    assert.equal(enterBody(sb).onTimeout, "wait");
+    assert.equal(enterBody(sb).drainTimeoutSec, 1800);
+  });
+
+  it("uses MAINTENANCE_DRAIN_TIMEOUT_SEC in wait mode", () => {
+    const sb = sandbox();
+    apiConfig(sb, ["MAINTENANCE_ON_TIMEOUT=wait", "MAINTENANCE_DRAIN_TIMEOUT_SEC=900"]);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.equal(code, 0, out);
+    assert.equal(enterBody(sb).drainTimeoutSec, 900);
+  });
+
+  it("refuses an unknown MAINTENANCE_ON_TIMEOUT before touching anything", () => {
+    const sb = sandbox();
+    apiConfig(sb, ["MAINTENANCE_ON_TIMEOUT=interrupt"]);
+    const before = read(sb.override);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW]);
+    assert.notEqual(code, 0);
+    assert.match(out, /MAINTENANCE_ON_TIMEOUT must be wait or interrupt_and_retry/);
+    assert.equal(read(sb.override), before);
+    assert.doesNotMatch(calls(sb), /docker (pull|compose)/);
+  });
+
+  it("dry run shows the onTimeout and the grace in the plan", () => {
+    const sb = sandbox();
+    apiConfig(sb);
+    const { code, out } = run(sb, "deploy.sh", ["--digest", NEW, "--dry-run"]);
+    assert.equal(code, 0, out);
+    assert.match(out, /onTimeout=interrupt_and_retry/);
+    assert.match(out, /grace 300s/);
   });
 });
 

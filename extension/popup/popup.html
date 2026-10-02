@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Myrmidon Bridge</title>
+    <style>
+      body { font-family: system-ui, sans-serif; width: 320px; margin: 0; padding: 12px; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      p { font-size: 12px; margin: 4px 0; }
+      label { display: block; font-size: 12px; margin: 8px 0 2px; }
+      input { width: 100%; box-sizing: border-box; font-size: 14px; padding: 4px; }
+      button { margin: 8px 4px 0 0; padding: 4px 10px; }
+      .status-ok { color: #1a7f37; }
+      .status-bad { color: #b42318; }
+      .muted { color: #57606a; }
+      .error { color: #b42318; font-size: 12px; }
+      ul { font-size: 12px; padding-left: 16px; margin: 4px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Myrmidon Bridge</h1>
+    <p id="status" class="muted">loading…</p>
+    <div id="pairing">
+      <label for="origin">Bridge gateway</label>
+      <input id="origin" placeholder="bridge.example.com" autocomplete="off" />
+      <label for="code">Pairing code</label>
+      <input id="code" placeholder="ABCD-2345" autocomplete="off" spellcheck="false" />
+      <button id="pair">Pair</button>
+      <p id="pair-error" class="error"></p>
+    </div>
+    <div id="paired" hidden>
+      <p id="device" class="muted"></p>
+      <p>Capabilities: <span id="capabilities"></span></p>
+      <p>Allowlist:</p>
+      <ul id="allowlist"></ul>
+      <button id="connect">Connect</button>
+      <button id="disconnect">Disconnect</button>
+      <button id="unpair">Unpair</button>
+    </div>
+    <script type="module" src="../entry-popup.js"></script>
+  </body>
+</html>

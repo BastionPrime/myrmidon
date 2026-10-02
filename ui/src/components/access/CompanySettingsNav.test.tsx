@@ -134,6 +134,7 @@ describe("CompanySettingsNav", () => {
           { value: "instance-plugins", label: "Plugins" },
           { value: "instance-adapters", label: "Adapters" },
           { value: "browsers", label: "Browsers" }, // myrmidon(BROWSER-CONSOLE)
+          { value: "clouds", label: "Clouds" }, // myrmidon(CLOUD-CONNECTOR)
         ],
       }),
     );
@@ -177,6 +178,7 @@ describe("CompanySettingsNav", () => {
       "instance-experimental",
       "instance-adapters",
       "browsers", // myrmidon(BROWSER-CONSOLE)
+      "clouds", // myrmidon(CLOUD-CONNECTOR)
     ]);
 
     await act(async () => {

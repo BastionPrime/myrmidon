@@ -8,7 +8,10 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
-## Unreleased
+## 1.4.0
+
+Everything merged between the 1.3.2 and 1.4.0 tags. Deploy this release's board,
+dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-board-and-the-release-components-together)).
 
 ### Memory and isolation
 
@@ -18,6 +21,51 @@ version file to edit. Base Paperclip version is in the image label
   with a reason); clearing the whole bank sits behind a typed confirmation; every
   action writes an activity log row. The section is enabled by the
   `MYRMIDON_HINDSIGHT_API_URL` + `MYRMIDON_HINDSIGHT_KEY_SECRET` pair.
+  Guide: [guides/agent-memory-card.md](guides/agent-memory-card.md) (#258, #265).
+
+### Cloud storage
+
+- CLOUD-CONNECTOR part B: the owner connects a cloud from the panel — the connector
+  builds the provider's authorization URL with a single-use state and PKCE, exchanges
+  the code, and keeps the resulting token bundle in a company secret of the instance
+  secret store. Only the secret id stays in the connector's own state, so no bot ever
+  holds a cloud token and the token value never travels through the panel API (#252).
+
+### Deploy and reliability
+
+- Automatic rollback by health for the board and the bot fleet (R5-C). A failed
+  health check after a deploy no longer leaves the board or the touched bots on the
+  broken image. Board: the job moves to `rolling_back` and the host executor runs
+  `rollback.sh` to the image the deploy remembered before the switch; the job ends
+  `auto_rolled_back` (maintenance window closed) or `failed_rollback` (window kept
+  for the operator). Bots: a failed canary or wave bot moves the rollout to
+  `rolling_back`; every bot that received the new image gets its own card image
+  re-applied, one at a time, and the rollout ends `rolled_back` with the original
+  failure reason kept. Switches (both on by default): `MYRMIDON_DEPLOY_AUTO_ROLLBACK`
+  for the board, `MYRMIDON_BOT_CANARY_AUTO_ROLLBACK` for the fleet; the host side
+  of the board switch is `AUTO_ROLLBACK` in `deploy.env`, both sides must agree.
+  Unattended auto-update stays off (`MYRMIDON_DEPLOY_AUTO_UPDATE=0`); see
+  [SETTINGS.md](SETTINGS.md) (#261).
+- Heartbeat: a queued-run start that re-enters the agent start lock no longer waits
+  for itself. The lock body now runs in an async-context frame per agent, so a
+  nested start from the same chain skips the wait and no longer stalls for
+  `AGENT_START_LOCK_STALE_MS` (30 s) on every cancellation that promotes a queued
+  run (#174).
+- RELEASE-GATE: the board and the release's component images deploy together,
+  enforced by the deploy script itself. `deploy.sh` resolves the dockergate and
+  fleetd digests of the SAME release (the `myr-vX.Y.Z` tag from the board image
+  version label, else the `sha-<short>` tag of its commit) and refuses a release
+  whose components are missing from the registry before anything changes — the
+  01.10 incident deployed the board alone while production dockergate still
+  rejected the new `maxConcurrentRuns` marker key and every bot apply was denied
+  for ~40 minutes. Each component now rolls out in the same run with its own
+  health probe (`MYR_<COMPONENT>_HEALTH_URL`), and a post-deploy smoke
+  (`bot-apply-smoke.sh`) waits for at least one bot container to re-apply, else
+  the deploy reports DEGRADED with the rollback commands
+  (`rollback-component.sh` per component). CI gained the applied-marker contract:
+  the markers `serializeAppliedMarker()` writes are emitted from the server code
+  of every commit and fed through the dockergate validator, so a marker the
+  validator would deny turns CI red before any image exists (#276).
 
 ## 1.3.2
 

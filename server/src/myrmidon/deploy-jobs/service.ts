@@ -33,7 +33,10 @@
 // - maintenance_on → running only after the window reported state `on`;
 // - running → succeeded only when the host reported the new version/commit
 //   healthy; otherwise failed_health (no auto-rollback) or rolling_back
-//   (auto-rollback);
+//   (auto-rollback); with the auto-rollback on the executor reports the
+//   rollback phases directly (rolling-back/rolled-back/rollback-failed), and
+//   running follows them too — a tick that missed health-failed must not
+//   hang the job until the step timeout;
 // - rolling_back → auto_rolled_back only when the host reported the rollback
 //   done; a rollback failure is failed_rollback with the window left on.
 
@@ -445,6 +448,46 @@ export function deployJobsService(db: Db, deps: DeployJobServiceDeps) {
             return;
           }
           await finish(job.id, "failed_health", detail, report);
+          return;
+        }
+        // R5-C review fix: with AUTO_ROLLBACK on (the executor default) a
+        // failed deploy never reports health-failed — the executor goes
+        // straight to the rollback phases. The board must follow them from
+        // `running` too: its tick can miss the intermediate phases entirely
+        // (the rollback takes seconds, the tick is 5 s), and a job left in
+        // `running` with a finished report hangs until the step timeout
+        // aborts it with a false outcome.
+        if (report.phase === "rolling-back") {
+          const detail = `host executor: rolling back automatically${report.detail ? ` (${report.detail})` : ""}`;
+          await startAutoRollback(job, detail, report);
+          return;
+        }
+        if (report.phase === "rolled-back") {
+          const detail = `rolled back to the previous image${report.detail ? ` (${report.detail})` : ""}`;
+          if (!settings.autoRollback) {
+            // Desync: the host rolled back with the board switch off. The
+            // deploy still failed its health check — record it as such.
+            await finish(job.id, "failed_health", `${detail}: the host executor rolled back with the board switch off`, report);
+            return;
+          }
+          // The executor already closed the window itself (rollback.sh
+          // leaves maintenance); finishRollback mirrors that for the case
+          // the board never saw the intermediate phases.
+          await startAutoRollback(job, detail, report);
+          const fresh = (await store.read()).jobs.find((j) => j.id === job.id);
+          if (fresh && fresh.status === "rolling_back") {
+            await finishRollback(job.id, "auto_rolled_back", detail, report);
+          }
+          return;
+        }
+        if (report.phase === "rollback-failed") {
+          const reason = `the deploy failed and its rollback failed: ${report.detail ?? report.phase}`;
+          const detail = `the automatic rollback failed: ${report.detail ?? report.phase}; maintenance stays on for the operator`;
+          await startAutoRollback(job, reason, report);
+          const fresh = (await store.read()).jobs.find((j) => j.id === job.id);
+          if (fresh && fresh.status === "rolling_back") {
+            await finishRollback(job.id, "failed_rollback", detail, report);
+          }
           return;
         }
         return; // claimed/switching/switched: still in progress

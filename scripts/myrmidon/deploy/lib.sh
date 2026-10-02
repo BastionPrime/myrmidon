@@ -123,11 +123,27 @@ commit_is_reviewed() {
 # The whole check for one image reference (registry, labels, commit). Returns 0 when
 # the image is a CI image; otherwise sets CI_CHECK_REASON and returns 1.
 check_ci_image() {
-  local ref="$1" out err rc=0 labels revision image_source
-  CI_CHECK_REASON="" CI_IMAGE_REVISION="" CI_IMAGE_VERSION=""
-
+  # RELEASE-GATE: the reference-format half is board-specific (image_ref_problem
+  # speaks about the board repository); the registry/labels/commit half is the
+  # same for every component image, so it lives in check_ci_image_for_repo.
+  local ref="$1"
   if [[ "$ref" != *@* || "${ref%@*}" != "$MYR_CI_IMAGE" ]] || ! valid_digest "${ref#*@}"; then
     CI_CHECK_REASON="$(image_ref_problem "$ref")"
+    return 1
+  fi
+  check_ci_image_for_repo "$MYR_CI_IMAGE" "$ref"
+}
+
+# RELEASE-GATE (the 01.10 incident): the same CI-image proof for a component
+# image (dockergate, fleetd) of the release: in the registry, revision and
+# source labels set by the CI workflows, commit on origin/main or a myr-v* tag.
+# Takes the expected repository plus a repo@sha256:<64 hex> reference.
+check_ci_image_for_repo() {
+  local expected_repo="$1" ref="$2" out err rc=0 labels revision image_source
+  CI_CHECK_REASON="" CI_IMAGE_REVISION="" CI_IMAGE_VERSION=""
+
+  if [[ "$ref" != *@* || "${ref%@*}" != "$expected_repo" ]] || ! valid_digest "${ref#*@}"; then
+    CI_CHECK_REASON="$ref is not $expected_repo@sha256:<64 lowercase hex>"
     return 1
   fi
 
@@ -184,6 +200,13 @@ load_config() {
   : "${MAINTENANCE_MODE:=pause}"
   : "${MAINTENANCE_API_URL:=}"
   : "${MAINTENANCE_TOKEN_FILE:=$HEALTH_TOKEN_FILE}"
+  # myrmidon(DRAIN-INTERRUPT): a planned deploy must not wait for long runs. In
+  # `interrupt_and_retry` (the default) the window drains for the short grace
+  # below and then interrupts whatever is still running; the interrupted runs
+  # are retried when the window closes. `wait` keeps the old behaviour: admission
+  # stays closed and the drain waits for the long timeout instead.
+  : "${MAINTENANCE_ON_TIMEOUT:=interrupt_and_retry}"
+  : "${MAINTENANCE_DRAIN_GRACE_SEC:=300}"
   : "${MAINTENANCE_DRAIN_TIMEOUT_SEC:=1800}"
   : "${MAINTENANCE_ENTER_COMMAND:=}"
   : "${MAINTENANCE_EXIT_COMMAND:=}"
@@ -195,6 +218,12 @@ load_config() {
   case "$MAINTENANCE_MODE" in
     api|hook|pause) ;;
     *) die "MAINTENANCE_MODE must be api, hook or pause (got $MAINTENANCE_MODE)" ;;
+  esac
+  # myrmidon(DRAIN-INTERRUPT): reject a typo instead of silently keeping the
+  # default interrupt mode (or silently switching a wait operator to interrupt).
+  case "$MAINTENANCE_ON_TIMEOUT" in
+    wait|interrupt_and_retry) ;;
+    *) die "MAINTENANCE_ON_TIMEOUT must be wait or interrupt_and_retry (got $MAINTENANCE_ON_TIMEOUT)" ;;
   esac
   if [[ "$MAINTENANCE_MODE" == "api" && -z "$MAINTENANCE_API_URL" ]]; then
     die "MAINTENANCE_MODE=api needs MAINTENANCE_API_URL"
@@ -211,6 +240,12 @@ compose() {
   IFS=':' read -r -a _files <<<"$COMPOSE_FILES"
   for f in "${_files[@]}"; do args+=(-f "$COMPOSE_DIR/$f"); done
   args+=(-f "$OVERRIDE_PATH")
+  # RELEASE-GATE: the component override files (dockergate, fleetd) ride along
+  # when they exist, so one `docker compose` call sees the whole release stack.
+  local cf
+  for cf in "$COMPOSE_DIR"/docker-compose.myrmidon-dockergate.yml "$COMPOSE_DIR"/docker-compose.myrmidon-fleetd.yml; do
+    [[ -f "$cf" ]] && args+=(-f "$cf")
+  done
   docker "${args[@]}" "$@"
 }
 
@@ -275,10 +310,18 @@ maintenance_enter() {
   local reason="$1"
   case "$MAINTENANCE_MODE" in
     api)
+      # myrmidon(DRAIN-INTERRUPT): in interrupt mode the drain timeout is the
+      # short grace after which the window interrupts what is still running; in
+      # wait mode it stays the long timeout the window simply waits out.
+      local drain_timeout="$MAINTENANCE_DRAIN_TIMEOUT_SEC"
+      if [[ "$MAINTENANCE_ON_TIMEOUT" == "interrupt_and_retry" ]]; then
+        drain_timeout="$MAINTENANCE_DRAIN_GRACE_SEC"
+      fi
       local body
-      body="$(jq -cn --arg reason "$reason" --argjson t "$MAINTENANCE_DRAIN_TIMEOUT_SEC" \
-        '{action: "enter", scope: {type: "instance"}, reason: $reason, drainTimeoutSec: $t, onTimeout: "wait"}')"
+      body="$(jq -cn --arg reason "$reason" --argjson t "$drain_timeout" --arg o "$MAINTENANCE_ON_TIMEOUT" \
+        '{action: "enter", scope: {type: "instance"}, reason: $reason, drainTimeoutSec: $t, onTimeout: $o}')"
       run http_post_json "$MAINTENANCE_API_URL" "$body" "$MAINTENANCE_TOKEN_FILE" >/dev/null
+      log "maintenance: entered (onTimeout=$MAINTENANCE_ON_TIMEOUT, drainTimeoutSec=$drain_timeout)"
       ;;
     hook)
       [[ -n "$MAINTENANCE_ENTER_COMMAND" ]] || die "MAINTENANCE_MODE=hook needs MAINTENANCE_ENTER_COMMAND"

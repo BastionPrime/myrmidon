@@ -31,8 +31,15 @@ case "$1" in
       *org.opencontainers.image.revision*) cat "$SANDBOX/label-revision" ;;
     esac ;;
   buildx)
-    if [ -e "$SANDBOX/registry-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
-    cat "$SANDBOX/imagetools.json" ;;
+    # RELEASE-GATE: the same registry answers the component repositories.
+    case "$4" in
+      *myrmidon-dockergate*|*myrmidon-fleetd*)
+        for a in "$@"; do case "$a" in *Manifest.Digest*) cat "$SANDBOX/component-digests.json" | jq -r --arg r "$4" '.[$r]'; exit 0 ;; esac; done
+        cat "$SANDBOX/component-image.json" ;;
+      *)
+        if [ -e "$SANDBOX/registry-missing" ]; then echo "ERROR: $4: not found" >&2; exit 1; fi
+        cat "$SANDBOX/imagetools.json" ;;
+    esac ;;
   compose) exit 0 ;;
 esac
 `;
@@ -85,6 +92,21 @@ function sandbox({ job = null, windowState = "on", health } = {}) {
       config: { Env: ["A=1"], Labels: { "org.opencontainers.image.revision": COMMIT, "org.opencontainers.image.source": SOURCE, "org.opencontainers.image.version": VERSION } },
     }),
   );
+  fs.writeFileSync(
+    path.join(dir, "component-digests.json"),
+    JSON.stringify({
+      "ghcr.io/itkadr-git/myrmidon-dockergate:sha-0123456": `sha256:${"c".repeat(64)}`,
+      "ghcr.io/itkadr-git/myrmidon-fleetd:sha-0123456": `sha256:${"d".repeat(64)}`,
+    }),
+  );
+  fs.writeFileSync(
+    path.join(dir, "component-image.json"),
+    JSON.stringify({
+      architecture: "amd64",
+      os: "linux",
+      config: { Env: ["A=1"], Labels: { "org.opencontainers.image.revision": COMMIT, "org.opencontainers.image.source": SOURCE, "org.opencontainers.image.version": VERSION } },
+    }),
+  );
   fs.writeFileSync(path.join(dir, "git-origin"), `${ORIGIN}\n`);
   fs.writeFileSync(path.join(dir, "git-tags"), "");
   fs.writeFileSync(path.join(dir, "label-version"), `${VERSION}\n`);
@@ -109,6 +131,9 @@ function sandbox({ job = null, windowState = "on", health } = {}) {
       `MAINTENANCE_EXIT_COMMAND='echo exit >> ${path.join(dir, "maintenance.log")}'`,
       "RUNNING_RUNS_COMMAND='echo 0'",
       `BOARD_API_URL=http://127.0.0.1:3100/api`,
+      // RELEASE-GATE: component health probes (the fake curl answers).
+      "MYR_DOCKERGATE_HEALTH_URL=http://127.0.0.1:3100/dockergate/health",
+      "MYR_FLEETD_HEALTH_URL=http://127.0.0.1:3100/fleetd/health",
       "",
     ].join("\n"),
   );

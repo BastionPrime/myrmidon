@@ -1,0 +1,52 @@
+diff --git a/tools/file_operations.py b/tools/file_operations.py
+index a3154e8..3aa5b6b 100644
+--- a/tools/file_operations.py
++++ b/tools/file_operations.py
+@@ -23,7 +23,7 @@ from typing import Optional, Dict
+ from pathlib import Path
+ 
+ from tools.binary_extensions import has_binary_extension
+-from agent.file_safety import get_write_denied_error
++from agent.file_safety import get_write_denied_error, get_run_scratch_resurrection_error
+ from tools.file_operations_common import (
+     ExecuteResult, PatchResult, ReadResult, SearchResult, WriteResult,
+     _UTF8_BOM, _detect_line_ending, _has_bom, _normalize_line_endings, _strip_bom,
+@@ -393,6 +393,13 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
+         arithmetic (zsh parses leading-zero constants as decimal), quoted so zsh
+         doesn't =word-expand. ``trap ... EXIT`` removes the temp on every failure.
+         """
++        # myrmidon(G1): The folded mkdir -p must not resurrect a removed
++        # Paperclip run-scratch dir (unmarked 755 residue in the shared /tmp).
++        # Guarding this chokepoint covers write_file, both patch paths and V4A
++        # in one place; existing parents are untouched.
++        resurrected = get_run_scratch_resurrection_error(path)
++        if resurrected is not None:
++            return ExecuteResult(stdout=resurrected, exit_code=1)
+         q_path = self._escape_shell_arg(path)
+         q_parent = self._escape_shell_arg(os.path.dirname(path) or ".")
+         tmpl = self._escape_shell_arg(".hermes-tmp.XXXXXX")
+@@ -1265,6 +1272,12 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
+         denied = get_write_denied_error(path)
+         if denied:
+             return WriteResult(error=denied)
++        # myrmidon(G1): Refuse to re-create a removed run-scratch parent
++        # (the model-facing error carries the live-scratch hint). Placed after
++        # the deny list and before any probe/write so no bytes touch disk.
++        resurrected = get_run_scratch_resurrection_error(path)
++        if resurrected is not None:
++            return WriteResult(error=resurrected)
+         refused = self._reject_unencodable(path, content)
+         if refused is not None:
+             return refused
+@@ -1362,6 +1375,11 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
+         denied = get_write_denied_error(path)
+         if denied:
+             return PatchResult(error=denied)
++        # myrmidon(G1): Patch on a resurrected run-scratch path must fail
++        # exactly like write_file (both write paths refuse, per the write-refusal policy).
++        resurrected = get_run_scratch_resurrection_error(path, verb="Patch")
++        if resurrected is not None:
++            return PatchResult(error=resurrected)
+         read_result = self._cat(path)
+         if read_result.exit_code != 0:
+             return PatchResult(error=read_result.cwd_error or f"Failed to read file: {path}")

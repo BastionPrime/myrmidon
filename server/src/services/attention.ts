@@ -61,6 +61,8 @@ import { isProspectiveBlockedTransition } from "./routable-blocked.js";
 import { evaluateAgentInvokability, type AgentOrgRow } from "./agent-invokability.js";
 import { canonicalizeStoredResolverPolicy } from "./issue-thread-interaction-resolution.js";
 import { decisionQueueService } from "./decision-queues.js";
+// myrmidon(AUTO-RESUME): escalates the agent error card after the board gave up resuming
+import { readAutoResumeAttentionState } from "../myrmidon/auto-resume.js";
 import {
   decisionRetentionService,
   DEFAULT_DECISION_SHELF_DAYS,
@@ -1819,6 +1821,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           errorReason: agents.errorReason,
           createdAt: agents.createdAt,
           updatedAt: agents.updatedAt,
+          metadata: agents.metadata,
         })
         .from(agents)
         .where(and(eq(agents.companyId, companyId), eq(agents.status, "error")))
@@ -1826,6 +1829,14 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
 
       for (const agent of erroredAgents) {
         const dedupKey = `agent_error:${agent.id}`;
+        // myrmidon(AUTO-RESUME): the board tries to resume an errored agent on
+        // its own with a 1/5/15 min backoff. Once it gave up (the attempt cap
+        // is reached and recorded in the agent's metadata), the card escalates
+        // from "the agent is in error" to "the board stopped retrying and an
+        // operator must intervene". It stays the same card per agent (same
+        // dedupKey), so the desk never shows two rows for one agent.
+        const autoResume = readAutoResumeAttentionState(agent.metadata);
+        const autoResumeExhausted = autoResume?.exhausted === true;
         add(createItem({
           companyId,
           sourceKind: "agent_error_alert",
@@ -1837,9 +1848,17 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
             identifier: null,
             status: agent.status,
             href: `/${prefix}/agents/${agent.id}`,
-            metadata: { role: agent.role, errorReason: agent.errorReason },
+            metadata: {
+              role: agent.role,
+              errorReason: agent.errorReason,
+              ...(autoResumeExhausted
+                ? { autoResumeExhausted: true, autoResumeAttempts: autoResume?.failures ?? 0 }
+                : {}),
+            },
           },
-          whyNow: "Agent is in error status and needs operator action or dismissal.",
+          whyNow: autoResumeExhausted
+            ? `Automatic resume gave up after ${autoResume?.failures ?? 0} attempt(s); an operator must intervene.`
+            : "Agent is in error status and needs operator action or dismissal.",
           decisionVerbs: decisionVerbs(
             { id: "inspect", label: "Inspect", description: "Inspect the agent error." },
             { id: "dismiss", label: "Dismiss", description: "Dismiss this alert." },
@@ -1848,7 +1867,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           entryRule: "agents.status = 'error'",
           exitRule: "Agent leaves error status or the row is dismissed.",
           dedupKey,
-          severity: "high",
+          severity: autoResumeExhausted ? "critical" : "high",
           activityAt: toIso(agent.updatedAt),
           createdAt: toIso(agent.createdAt),
           updatedAt: toIso(agent.updatedAt),

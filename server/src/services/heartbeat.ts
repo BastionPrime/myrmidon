@@ -637,6 +637,8 @@ import {
   createIdlePickupSweeper,
   idlePickupForAgent,
 } from "../myrmidon/idle-pickup.js";
+// myrmidon(AUTO-RESUME): the board resumes an agent left in `error` with backoff
+import { createAutoResumeSweeper } from "../myrmidon/auto-resume.js";
 import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
 // myrmidon(S2-hostcred): a run never inherits the host's GitHub credentials
 import {
@@ -657,6 +659,14 @@ import {
   appendCrossChannelDelta,
   buildCrossChannelContext,
 } from "../myrmidon/agent-chat-bridge/cross-channel.js";
+
+// myrmidon(M3): owner signal on a budget hard-stop (see budget-signal.ts)
+import {
+  budgetSignalEnabled,
+  deliverBudgetHardStopSignal,
+  type BudgetHardStopSignalInput as BudgetSignalInput,
+  type BudgetSignalPorts,
+} from "../myrmidon/budget-signal.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -9159,6 +9169,13 @@ export function heartbeatService(
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
   const issuesSvc = issueService(db);
+  // myrmidon(M3): comment-writing port for the budget hard-stop signal.
+  const budgetSignalPorts: BudgetSignalPorts = {
+    addComment: (issueId, body, actor, options) =>
+      issuesSvc.addComment(issueId, body, actor, options),
+    now: () => new Date(),
+    log: logger,
+  };
   const treeControlSvc = issueTreeControlService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const environmentsSvc = environmentService(db);
@@ -9179,6 +9196,14 @@ export function heartbeatService(
   };
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
+    // myrmidon(M3): owner signal on a budget hard-stop — delivered into the
+    // interrupted issue threads, deduped per incident, off via
+    // MYRMIDON_BUDGET_SIGNAL_MODE=off.
+    signalBudgetHardStop:
+      budgetSignalEnabled(runtimeEnv)
+        ? (input: BudgetSignalInput) =>
+            deliverBudgetHardStopSignal(db, budgetSignalPorts, input).then(() => undefined)
+        : undefined,
   };
   const budgets = budgetService(db, budgetHooks);
   const recovery = recoveryService(db, {
@@ -17992,6 +18017,36 @@ export function heartbeatService(
     isAgentInvokable: async (agent) => {
       // The sweeper passes a narrow org row; resolve the full agent row the
       // invokability evaluator reads (status, reportsTo chain) by id.
+      const full = await getAgent(agent.id);
+      if (!full || full.companyId !== agent.companyId) return false;
+      const invokability = await getAgentInvokability(full);
+      return invokability.invokable;
+    },
+    isAgentUnderMaintenance: (agentId) => isAgentUnderMaintenance(db, agentId),
+  });
+
+  // myrmidon(AUTO-RESUME): the periodic pass that brings an agent left in
+  // `error` back, with a 1/5/15 min backoff and a give-up card to the operator
+  // after the attempt cap. It reuses the L3 resume wake chain, so a resumed
+  // agent also wakes the work it was stranded on. Settings and the pure policy
+  // live in myrmidon/auto-resume.ts; state is kept in agents.metadata.
+  const autoResumeSweeper = createAutoResumeSweeper({
+    db,
+    resumeWake: (agentId) => pauseResumeWakeAgent({ db, startNextQueuedRunForAgent, enqueueWakeup }, agentId),
+    logActivity: async (input) => {
+      await logActivity(db, {
+        companyId: input.companyId,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        agentId: input.agentId,
+        runId: input.runId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        details: input.details,
+      });
+    },
+    isAgentInvokable: async (agent) => {
       const full = await getAgent(agent.id);
       if (!full || full.companyId !== agent.companyId) return false;
       const invokability = await getAgentInvokability(full);
@@ -29155,6 +29210,11 @@ export function heartbeatService(
     // myrmidon(IDLE-PICKUP): periodic idle-pickup pass, exposed for the
     // scheduler tick in index.ts and for tests and operators
     sweepIdlePickup: (now?: Date) => idlePickupSweeper.sweep(now),
+
+    // myrmidon(AUTO-RESUME): resumes an agent left in `error` once its backoff
+    // step is due; logic in myrmidon/auto-resume.ts. Called by the scheduler
+    // tick in server/src/index.ts on its own single-flight queue.
+    sweepAutoResume: (now?: Date) => autoResumeSweeper.sweep(now),
     // Override-aware scheduling-suppression check (honors the worktree
     // run-execution experimental setting). Callers outside the service that
     // gate on suppression should prefer this over the env-only resolver.

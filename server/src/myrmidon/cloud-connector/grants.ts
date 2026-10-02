@@ -12,12 +12,13 @@
 // reads the shared folder, never reaches anyone else's") is provable without
 // a network or a cloud account.
 
-import type {
-  CloudAccessMode,
-  CloudGrant,
-  CloudGrantTargetKind,
-  CloudResolvedAccess,
-  CloudRoot,
+import {
+  CLOUD_PERSONAL_ROOT_ALIAS,
+  type CloudAccessMode,
+  type CloudGrant,
+  type CloudGrantTargetKind,
+  type CloudResolvedAccess,
+  type CloudRoot,
 } from "@paperclipai/shared/myrmidon-cloud-connector";
 import type { CloudAgentIdentity } from "./types.js";
 
@@ -100,4 +101,27 @@ export function personalRootName(agentId: string): string {
 
 export function personalRootFolder(agentId: string): string {
   return `Agents/${agentId}`;
+}
+
+// -- the reserved `personal` alias -------------------------------------------
+//
+// An agent never has to be told its own folder name: `personal` always means
+// it. The texts below are what the agent reads when the connector cannot work
+// out which folder that is, so each one says what the agent or the owner has
+// to do next instead of leaking connector internals.
+
+export function personalRootUnknownCompanyMessage(): string {
+  return `"${CLOUD_PERSONAL_ROOT_ALIAS}" needs the company this agent works for, and the connector could not tell; ask the owner for the folder name instead`;
+}
+
+export function personalRootNoAccountMessage(): string {
+  return `"${CLOUD_PERSONAL_ROOT_ALIAS}" is not available yet: no cloud account is connected for this company, and the owner must connect one first`;
+}
+
+export function personalRootAmbiguousMessage(providerIds: readonly string[]): string {
+  return `"${CLOUD_PERSONAL_ROOT_ALIAS}" is ambiguous here: this company has accounts for ${providerIds.join(", ")}, so ask the owner which folder is yours and use its name`;
+}
+
+export function reservedRootNameMessage(name: string): string {
+  return `"${name}" is reserved: it always means the folder an agent gets for itself`;
 }
