@@ -115,6 +115,7 @@ import { myrmidonStackRegistryRoutes } from "./myrmidon/stack-registry/index.js"
 import { agentInstructionsRevisionsRoutes } from "./myrmidon/agent-instructions-revisions/index.js"; // myrmidon(H2)
 import { myrmidonFleetConsoleRoutes } from "./myrmidon/fleet-console/index.js"; // myrmidon(SC1)
 import { myrmidonCloudConnectorRoutes } from "./myrmidon/cloud-connector/index.js"; // myrmidon(CLOUD-CONNECTOR)
+import { myrmidonAutonomyRoutes } from "./myrmidon/autonomy/index.js"; // myrmidon(1.6-AUTONOMY)
 import { accessHubRoutes } from "./myrmidon/access-hub/routes.js"; // myrmidon(SEC1)
 import { ui2LanguageRoutes } from "./myrmidon/ui2-language/routes.js"; // myrmidon(UI2-I18N)
 import { myrmidonAgentMemoryRoutes } from "./myrmidon/agent-memory/index.js"; // myrmidon(MEMORY-UI)
@@ -849,6 +850,7 @@ export async function createApp(
   api.use(agentInstructionsRevisionsRoutes(db)); // myrmidon(H2)
   api.use(myrmidonFleetConsoleRoutes(db)); // myrmidon(SC1)
   api.use(myrmidonCloudConnectorRoutes(db)); // myrmidon(CLOUD-CONNECTOR)
+  api.use(myrmidonAutonomyRoutes(db)); // myrmidon(1.6-AUTONOMY): role × action-class matrix and regulations
   api.use(accessHubRoutes(db)); // myrmidon(SEC1): access-hub routes
   api.use(myrmidonBrowserBridgeRoutes(db)); // myrmidon(EXTCASE-B): bridge panel (codes, devices, allowlist)
   api.use(myrmidonOcrRoutes(db)); // myrmidon(EXT-CASE-OCR): company OCR MCP endpoint (ocr.pdf)
