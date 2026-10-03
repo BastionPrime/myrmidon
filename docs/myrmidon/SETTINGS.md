@@ -703,3 +703,27 @@ them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
+
+## 1.6 — GUARDRAILS A (output leak detectors, flag-only)
+
+Settings of the module `server/src/myrmidon/guardrails/` (the 1.6.1 guardrail base layer:
+pattern-oriented detectors for secrets and personal data in a run's final output, plus a
+company-scoped `guardrail_events` journal and a read-only board route). 1.6.1 is flag-only: a hit
+records an event, nothing is blocked and no text is masked by this layer — the existing value-based
+masking (S5) keeps doing the masking. The snippet stored in the journal is cut from text that
+already passed through that masking. Legal-entity requisites (INN/KPP/BIC-like requisites beyond
+the checksum detectors) are backlog and not part of this layer.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_GUARDRAILS_OUTPUT_ENABLED` | GUARDRAILS-A | unset (off) | Master switch of the output scan. The final run text is scanned once at run finalization, before it becomes the visible issue comment. Only the exact values `1` or `true` enable it — rollout turns it on explicitly | Any other value (or unset) — no scan runs, no events are recorded, the run output is untouched. A typo does not silently turn the layer on |
+| `MYRMIDON_GUARDRAILS_OUTPUT_CATEGORIES` | GUARDRAILS-A | unset (both) | Which detector categories run, as a csv of `secret`, `pii` (e.g. `secret` or `secret,pii`) | Empty/unset — all categories. Unknown or misspelled entries fall back to ALL categories (misconfiguration must not silently disable a detector), the list is lower-cased and trimmed |
+
+The detectors recognize: OpenAI/Anthropic key shapes, GitHub `ghp_`/`gho_` tokens, AWS `AKIA`
+access-key ids, Slack `xoxb-` bot tokens, bearer JWTs, `pcp_`-prefixed tokens (secrets); e-mail,
+phone numbers, payment cards (Luhn), SNILS and INN 10/12 (checksum, pii). Each event row carries
+kind, surface (`run_output`), severity, run id, issue id, a masked snippet and `occurred_at`, plus
+an `activity_log` line. The journal is read at
+`GET /api/myrmidon/companies/:companyId/guardrails/events?limit` (company access, newest first,
+limit capped at 200, default 50). Part B (prompt-injection input flags) writes events through the
+same `recordGuardrailEvent` contract.

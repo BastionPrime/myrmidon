@@ -2052,6 +2052,13 @@
       "when": 1790974688874,
       "tag": "0295_pretty_gravity",
       "breakpoints": true
+    },
+    {
+      "idx": 296,
+      "version": "7",
+      "when": 1791008939180,
+      "tag": "0296_flaky_the_captain",
+      "breakpoints": true
     }
   ]
 }
