@@ -12,12 +12,14 @@ import {
   SWARM_CLAIM_RELEASE_REASON_SUPERVISOR_REBALANCE,
   SWARM_CLAIM_SUPERVISOR_RELEASED_ACTION,
   SWARM_CLAIM_WAKE_REASON,
+  isSwarmClaimEnabledFor,
   isSwarmLeaseExpired,
   isSwarmLeaseLive,
   mergeSwarmClaimSettings,
   normalizeSwarmClaimSettings,
   orderSwarmQueueCandidates,
   parseSwarmClaimEnabled,
+  readSwarmClaimListEnv,
   readSwarmClaimSettingsFromEnv,
   resolveSwarmClaimSettings,
   swarmActiveTaskLimitReached,
@@ -61,19 +63,33 @@ describe("swarm claim settings", () => {
     ).toBeNull();
   });
 
-  it("stored settings win over the environment; an unreadable row is ignored", () => {
+  it("an environment override beats the stored value; without one the stored value is in force", () => {
+    // 1.6.1 (SWARM-SETTINGS-UI): the env variables are forced overrides, not
+    // first-boot defaults — an operator can pin a contour without touching
+    // the database. The stored row is the UI value and wins whenever the
+    // variable is unset.
     const stored = {
       enabled: true,
+      enabledRoles: ["engineer"],
+      enabledCompanyIds: [],
       leaseTtlSec: 300,
       maxActiveTasks: 5,
       sweepIntervalSec: 45,
+      p0Preemption: false,
     };
-    const resolved = resolveSwarmClaimSettings({
+    const forcedOff = resolveSwarmClaimSettings({
       stored,
       env: { [SWARM_CLAIM_ENV_KEYS.enabled]: "0" },
     });
-    expect(resolved.settings).toEqual(stored);
-    expect(resolved.sources.enabled).toBe("settings");
+    expect(forcedOff.settings.enabled).toBe(false);
+    // Only the overridden key changes; the rest keep the stored values.
+    expect(forcedOff.settings.leaseTtlSec).toBe(300);
+    expect(forcedOff.sources.enabled).toBe("env");
+    expect(forcedOff.sources.leaseTtlSec).toBe("settings");
+
+    const uiWins = resolveSwarmClaimSettings({ stored, env: {} });
+    expect(uiWins.settings).toEqual(stored);
+    expect(uiWins.sources.enabled).toBe("settings");
 
     const fromEnv = resolveSwarmClaimSettings({
       stored: { enabled: "maybe" },
@@ -135,6 +151,66 @@ describe("swarm queue order", () => {
     ];
     orderSwarmQueueCandidates(input);
     expect(input[0].issueId).toBe("a");
+  });
+
+  // 1.6.1 (SWARM-SETTINGS-UI): the P0 preemption is a setting, not a constant.
+  it("with p0Preemption off the queue is strictly oldest-first", () => {
+    const ordered = orderSwarmQueueCandidates(
+      [
+        { issueId: "old-low", priority: "low", queuedAt: "2026-10-02T07:00:00Z" },
+        { issueId: "new-critical", priority: "critical", queuedAt: "2026-10-02T11:00:00Z" },
+        { issueId: "mid-high", priority: "high", queuedAt: "2026-10-02T09:00:00Z" },
+      ],
+      { p0Preemption: false },
+    );
+    expect(ordered.map((c) => c.issueId)).toEqual(["old-low", "mid-high", "new-critical"]);
+    // Default keeps the 1.6 order: the critical task is the top.
+    const defaulted = orderSwarmQueueCandidates([
+      { issueId: "a", priority: "low", queuedAt: "2026-10-02T07:00:00Z" },
+      { issueId: "b", priority: "critical", queuedAt: "2026-10-02T11:00:00Z" },
+    ]);
+    expect(defaulted.map((c) => c.issueId)).toEqual(["b", "a"]);
+  });
+});
+
+// 1.6.1 (SWARM-SETTINGS-UI): the pilot set — who is inside the pilot.
+describe("swarm claim pilot set", () => {
+  const on = {
+    enabled: true,
+    enabledRoles: ["engineer"],
+    enabledCompanyIds: ["comp-1"],
+    leaseTtlSec: 900,
+    maxActiveTasks: 3 as number | null,
+    sweepIntervalSec: 30,
+    p0Preemption: true,
+  };
+
+  it("an empty list means no restriction", () => {
+    expect(
+      isSwarmClaimEnabledFor(
+        { ...on, enabledRoles: [], enabledCompanyIds: [] },
+        { companyId: "any", role: "any" },
+      ),
+    ).toBe(true);
+  });
+
+  it("a role not on the list is outside the pilot", () => {
+    expect(isSwarmClaimEnabledFor(on, { companyId: "comp-1", role: "engineer" })).toBe(true);
+    expect(isSwarmClaimEnabledFor(on, { companyId: "comp-1", role: "reviewer" })).toBe(false);
+  });
+
+  it("a company not on the list is outside the pilot", () => {
+    expect(isSwarmClaimEnabledFor(on, { companyId: "comp-2", role: "engineer" })).toBe(false);
+  });
+
+  it("the master switch off overrides everything", () => {
+    expect(isSwarmClaimEnabledFor({ ...on, enabled: false }, { companyId: "comp-1", role: "engineer" })).toBe(false);
+  });
+
+  it("the env list override is comma-separated and trimmed", () => {
+    expect(readSwarmClaimListEnv(" engineer , reviewer ,, ")).toEqual(["engineer", "reviewer"]);
+    expect(readSwarmClaimListEnv("")).toEqual([]);
+    expect(readSwarmClaimListEnv(undefined)).toEqual([]);
   });
 });
 

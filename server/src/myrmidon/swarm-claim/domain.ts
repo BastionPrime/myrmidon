@@ -73,13 +73,15 @@ export function liveClaimIssueIds(
 export function selectQueueForAgent(input: {
   candidates: readonly SwarmQueueCandidate[];
   liveClaims: readonly SwarmClaimLease[];
+  /** 1.6.1 (SWARM-SETTINGS-UI): off demotes the priority rank to a tie-break. */
+  p0Preemption?: boolean;
   now?: Date;
 }): SwarmQueueCandidate[] {
   const now = input.now ?? new Date();
   const covered = liveClaimIssueIds(input.liveClaims, now);
-  return orderSwarmQueueCandidates(input.candidates).filter(
-    (candidate) => !covered.has(candidate.issueId),
-  );
+  return orderSwarmQueueCandidates(input.candidates, {
+    p0Preemption: input.p0Preemption,
+  }).filter((candidate: SwarmQueueCandidate) => !covered.has(candidate.issueId));
 }
 
 /**
@@ -92,7 +94,7 @@ export function nextQueueTaskForAgent(input: {
   candidates: readonly SwarmQueueCandidate[];
   liveClaims: readonly SwarmClaimLease[];
   activeTasks: number;
-  settings: Pick<SwarmClaimSettings, "maxActiveTasks" | "enabled">;
+  settings: Pick<SwarmClaimSettings, "maxActiveTasks" | "enabled" | "p0Preemption">;
   now?: Date;
 }): SwarmQueueCandidate | null {
   if (!input.settings.enabled) return null;
@@ -100,6 +102,7 @@ export function nextQueueTaskForAgent(input: {
   const queue = selectQueueForAgent({
     candidates: input.candidates,
     liveClaims: input.liveClaims,
+    p0Preemption: input.settings.p0Preemption,
     now: input.now,
   });
   return queue[0] ?? null;

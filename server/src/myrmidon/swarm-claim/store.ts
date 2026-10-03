@@ -52,6 +52,23 @@ export async function findLiveClaimForIssue(
   return toLease(rows[rows.length - 1]!);
 }
 
+/**
+ * 1.6.1 (SWARM-SETTINGS-UI): every live claim of the instance, oldest first —
+ * the read the disable path of the sweep uses to free the leases a pilot
+ * switch-off left behind. Bounded by the caller's page size.
+ */
+export async function listAllLiveClaims(
+  db: Db,
+  limit = 200,
+): Promise<Array<typeof issueClaims.$inferSelect>> {
+  return db
+    .select()
+    .from(issueClaims)
+    .where(isNull(issueClaims.releasedAt))
+    .orderBy(asc(issueClaims.claimedAt))
+    .limit(limit);
+}
+
 /** The live claims of one agent within a company — what the per-agent ceiling counts. */
 export async function listAgentLiveClaims(
   db: Db,
