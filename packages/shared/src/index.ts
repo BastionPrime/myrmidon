@@ -2806,3 +2806,5 @@ export * from "./myrmidon-autonomy.js";
 export * from "./myrmidon-cto-chat.js";
 // myrmidon(1.6-TG-PROACTIVITY-E): the telegramNotify proactivity contract (mode, rarely ceiling, per-agent override).
 export * from "./myrmidon-telegram-notify.js";
+// myrmidon(1.6.1 MODEL-PROVIDERS): provider secret names, defaults and API schemas.
+export * from "./myrmidon-model-providers.js";

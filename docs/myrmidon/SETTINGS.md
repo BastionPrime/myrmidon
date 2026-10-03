@@ -785,3 +785,9 @@ query/badge and the `wipLimit` i18n namespace.
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | — | 1.6.1-WIP-LIMIT-B | — (always on) | The settings screen writes the row through part A's PUT; the badge on an agent row reads the status endpoint | Not configurable: no deployment-specific values in the UI half |
+## 1.6.1 — model providers (MODEL-PROVIDERS A)
+
+No `MYRMIDON_*` settings: the module reads the provider registry from the database
+(`model_providers`) and the provider credential from the company secret store by the name
+stored on the row. Default base URLs per provider type are constants in
+`packages/shared/src/myrmidon-model-providers.ts`, not settings.
