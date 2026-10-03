@@ -38,6 +38,8 @@ import { THINKING_PREFIX, TOOL_OUTPUT_PREFIX } from "../../shared/constants.js";
 // myrmidon(G4): reuse the M1 card-model reader (adapterConfig.model/.effort/
 // .models.reasoningEffort) instead of re-parsing the same fields here.
 import { readHermesCardModels } from "../../server/myrmidon-profile-config.js";
+// myrmidon(1.2-CENTRAL-HISTORY): import session storage for central session persistence
+import { SessionStorage, isCentralSessionStorageEnabled } from "./session-storage.js";
 
 type SessionKeyStrategy = "issue" | "agent" | "run" | "none";
 
@@ -1444,6 +1446,28 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const strategy = normalizeSessionKeyStrategy(ctx.config.sessionKeyStrategy);
   // myrmidon(G4): raw debug JSON is opt-in; see handleEvent/logCompactEvent.
   const debugEvents = ctx.config.debugEvents === true;
+
+  // myrmidon(1.2-CENTRAL-HISTORY): Initialize central session storage if enabled
+  let sessionStorage: SessionStorage | undefined;
+  if (isCentralSessionStorageEnabled()) {
+    const hindsightApiUrl = asString(ctx.config.hindsightApiUrl, "");
+    const hindsightApiKey = asString(ctx.config.hindsightApiKey, "");
+    const bankId = asString(ctx.config.hindsightBankId, "");
+    
+    if (hindsightApiUrl && bankId) {
+      sessionStorage = new SessionStorage({
+        hindsightApiUrl,
+        hindsightApiKey,
+        bankId,
+        enabled: true,
+      });
+    } else {
+      await ctx.onLog(
+        "stderr",
+        "[hermes-gateway] Warning: MYRMIDON_BOT_CENTRAL_HISTORY is enabled but required hindsight settings are missing\n"
+      );
+    }
+  }
   // myrmidon(G4): the Idempotency-Key, the "run" session-key strategy, and
   // buildInput()'s "Run ID:" line are all keyed on this attempt's own
   // ctx.runId — never on ctx.context.retryOfRunId, even when it is set.
@@ -1524,6 +1548,28 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   const body = buildRunBody(ctx, sessionKey, agentInstructionsBundle, idempotencyKey);
+
+  // myrmidon(1.2-CENTRAL-HISTORY): Load session data from central storage if enabled and session key exists
+  if (sessionStorage && sessionKey && sessionKey.startsWith("paperclip:")) {
+    try {
+      const sessionData = await sessionStorage.loadSession(sessionKey);
+      if (sessionData) {
+        await ctx.onLog(
+          "stdout",
+          `[hermes-gateway] Loaded session data from central storage for ${sessionKey}\n`
+        );
+        
+        // Enhance the body with session data if needed
+        // For now, we just log that we loaded it; actual integration would depend on Hermes gateway implementation
+      }
+    } catch (error) {
+      await ctx.onLog(
+        "stderr",
+        `[hermes-gateway] Warning: Failed to load session from central storage: ${String(error)}\n`
+      );
+    }
+  }
+
   const createRunUrl = apiUrl(baseUrl, "/v1/runs");
 
   await ctx.onMeta?.({
@@ -1888,5 +1934,33 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       },
     };
   }
+
+  // myrmidon(1.2-CENTRAL-HISTORY): Save session data to central storage if enabled
+  if (sessionStorage && sessionKey && sessionKey.startsWith("paperclip:")) {
+    try {
+      // Prepare session data to store - this would typically include conversation history, state, etc.
+      const sessionData = {
+        runId: finalResult.sessionParams?.hermesRunId || runId,
+        status: outcome.status,
+        output: finalResult.summary || "",
+        timestamp: new Date().toISOString(),
+        lastEvent: outcome.eventName,
+        model: finalResult.model,
+        usage: finalResult.usage,
+      };
+
+      await sessionStorage.saveSession(sessionKey, sessionData);
+      await ctx.onLog(
+        "stdout",
+        `[hermes-gateway] Saved session data to central storage for ${sessionKey}\n`
+      );
+    } catch (error) {
+      await ctx.onLog(
+        "stderr",
+        `[hermes-gateway] Warning: Failed to save session to central storage: ${String(error)}\n`
+      );
+    }
+  }
+
   return finalResult;
 }
