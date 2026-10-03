@@ -121,6 +121,20 @@ one service, one image line, one source of the image. The override the rollout w
 contains only the image line, so a service defined in your own compose file keeps its
 volumes, sockets and networks; the override only pins which image it runs.
 
+### Upgrading from 1.5.0 to 1.6.0
+
+What changes for operators:
+
+- **The alibaba-image connector container is deployment-side.** Free image
+  generation and editing for agents ship in 1.6 as a connector container from
+  the private deployment repository (`connectors/alibaba-image/`), not as part
+  of the board image: it runs on port `8083` with its own compose fragment,
+  mounts the DashScope key read-only and the shared agent workspace root, and
+  is registered as an external MCP server with grants to the design agents,
+  the work designer and the SMM bot. The bring-up and connect runbook —
+  mounts, health check, per-family live smoke:
+  [guides/alibaba-image-connector.md](guides/alibaba-image-connector.md).
+
 ### Upgrading from 1.4.0 to 1.5.0
 
 The 1.5.0 additions are additive on the host side: no new migrations to run by
