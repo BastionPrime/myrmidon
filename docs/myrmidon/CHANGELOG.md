@@ -10,6 +10,39 @@ version file to edit. Base Paperclip version is in the image label
 
 ## 1.6.1
 
+### Stale-block watchdog (STALE-BLOCK part B)
+
+- Periodic module `myrmidon/stale-block`: every
+  `MYRMIDON_STALE_BLOCK_INTERVAL_SEC` (default 300 s) it inspects blocked
+  tasks and lifts a block whose every reason is dead — a blocker task that
+  is done or cancelled (cancelled blockers never fire the
+  blockers-resolved path), a passed `reasonRef.dueAt` date, or a cleared
+  gate/event. Dead blocked-by edges are removed through the ordinary issue
+  update path, the task returns to `in_progress`, and one system comment
+  names the cause. A task with a live reason is untouched. Opt-in via
+  `MYRMIDON_STALE_BLOCK_ENABLED` (default 0).
+- One new attention source kind `stale_block`: a lifted block raises one
+  card for the lead and the operator, computed on the fly from a
+  process-level signal registry (no new store); cards fade after
+  `MYRMIDON_STALE_BLOCK_SIGNAL_TTL_MS` (default 24 h).
+
+### Board administrators from agents (ADMIN-AGENT part C)
+
+- The UI half of making an agent a board administrator. The agent card's
+  **Permissions / Trust** tab gains a fourth flag, **Board administrator**:
+  flipping it goes through the same permissions PATCH as the three sibling
+  flags, the state comes from the agent detail API
+  (`access.boardAdmin`, falling back to `permissions.boardAdmin`), and both
+  readers are fail-closed — anything but an explicit `true` reads as "not an
+  administrator". Operators see the toggle only with permission-management
+  authority (owner or admin membership, instance admin, local implicit
+  board); a 403 from the API becomes a plain-language note under the toggle.
+  The Company Settings **Members** page names every agent administrator: one
+  table row per non-terminated flagged agent, with a **Board administrator**
+  badge and a link to the agent's Permissions tab. The grant semantics (the
+  permission keys, the grant snapshot, the self-toggle prohibition) are the
+  server half of the feature and merge separately. Operator guide:
+  [guides/agent-board-admin.md](guides/agent-board-admin.md).
 ### Role queues as instance settings (SWARM-SETTINGS-UI)
 
 - The pilot of the per-role task queues is set in the interface, without a
@@ -35,24 +68,6 @@ version file to edit. Base Paperclip version is in the image label
   key was dropped on every write, so the pilot could in practice only be
   enabled from the environment) — fixed together with the journal key.
   See [SETTINGS.md](SETTINGS.md).
-
-### Board administrators from agents (ADMIN-AGENT part C)
-
-- The UI half of making an agent a board administrator. The agent card's
-  **Permissions / Trust** tab gains a fourth flag, **Board administrator**:
-  flipping it goes through the same permissions PATCH as the three sibling
-  flags, the state comes from the agent detail API
-  (`access.boardAdmin`, falling back to `permissions.boardAdmin`), and both
-  readers are fail-closed — anything but an explicit `true` reads as "not an
-  administrator". Operators see the toggle only with permission-management
-  authority (owner or admin membership, instance admin, local implicit
-  board); a 403 from the API becomes a plain-language note under the toggle.
-  The Company Settings **Members** page names every agent administrator: one
-  table row per non-terminated flagged agent, with a **Board administrator**
-  badge and a link to the agent's Permissions tab. The grant semantics (the
-  permission keys, the grant snapshot, the self-toggle prohibition) are the
-  server half of the feature and merge separately. Operator guide:
-  [guides/agent-board-admin.md](guides/agent-board-admin.md).
 
 ## 1.6.0
 
