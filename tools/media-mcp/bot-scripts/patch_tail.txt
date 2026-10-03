@@ -1,0 +1,21 @@
+
+# --- OPE-3288: медиасервис вместо локального ffmpeg (контейнер бота) ------
+# Хвост добавлен автоматически; при наличии локального ffmpeg поведение не
+# меняется вовсе (fast-path), в контейнере бота уходит в media-mcp.
+try:
+    import media_shim as _media_shim
+
+    _video_info = _media_shim.video_info  # контракт _video_info OPE-2384 сохранён
+
+    if not _media_shim.ffmpeg_available():
+        _subprocess_run_orig = subprocess.run
+
+        def _subprocess_run(argv, *a, **kw):
+            if isinstance(argv, (list, tuple)) and argv and argv[0] == "ffmpeg":
+                return _media_shim.subprocess_run_shim(list(argv), cwd=kw.get("cwd"),
+                                                       timeout=kw.get("timeout"))
+            return _subprocess_run_orig(argv, *a, **kw)
+
+        subprocess.run = _subprocess_run
+except Exception:
+    pass  # среда без медиасервиса работает как раньше
