@@ -288,6 +288,16 @@ async function sourceIssueId(
       const doc = await readStackDocument(db);
       return { exists: doc.components.some((component) => component.name === sourceId), issueId: null };
     }
+    // myrmidon(STALE-BLOCK): a lifted-block signal lives in the process-level
+    // registry; the source id is the task the sweep unblocked.
+    case "stale_block": {
+      const row = await db
+        .select({ id: issues.id })
+        .from(issues)
+        .where(and(eq(issues.companyId, companyId), eq(issues.id, sourceId), isNull(issues.hiddenAt)))
+        .then((rows) => rows[0] ?? null);
+      return { exists: Boolean(row), issueId: row?.id ?? null };
+    }
     // myrmidon(1.6.1-WIP-LIMIT-A): the signal subject is an agent of the
     // company; existence is the live agent row (the status feed is computed,
     // not stored, so there is nothing else to check).
