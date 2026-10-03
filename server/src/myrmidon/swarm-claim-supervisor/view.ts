@@ -81,6 +81,12 @@ export interface SwarmSupervisorOverview {
     expiredClaims: number;
     agentsWithClaims: number;
     idleAgentsWithQueue: number;
+    /**
+     * myrmidon(1.6.1 SWARM-IDLE-WAKE): free agents (no live run, not
+     * paused/error, under the ceiling) at a non-empty queue. The zero metric
+     * of the ticket: this is what the idle pass drives to 0.
+     */
+    freeAgentsWithQueue: number;
   };
   roles: SwarmRoleOverview[];
   topQueue: {
@@ -208,7 +214,7 @@ export function swarmSupervisorView(
         leaseTtlSec: null,
         maxActiveTasksPerAgent: null,
         settingSources,
-        totals: { queued: 0, activeClaims: 0, expiredClaims: 0, agentsWithClaims: 0, idleAgentsWithQueue: 0 },
+        totals: { queued: 0, activeClaims: 0, expiredClaims: 0, agentsWithClaims: 0, idleAgentsWithQueue: 0, freeAgentsWithQueue: 0 },
         roles: [],
         topQueue: [],
       };
@@ -271,6 +277,27 @@ export function swarmSupervisorView(
           list.push(issue);
         }
         queueByRole.set(role, list);
+      }
+      // myrmidon(1.6.1 SWARM-IDLE-WAKE): an unassigned task belongs to every
+      // role that could take it, the same membership the claim queue uses
+      // (roleQueueRows: unassigned tasks are offered to every role). Without
+      // this fan-out the supervisor's zero metric ("free agents with a
+      // non-empty queue") cannot see the 03.10 shape — ready tasks with no
+      // assignee and idle agents of the role that should claim them.
+      if (!row.assignee_agent_id) {
+        const rolesWithAgents = new Set(
+          agents
+            .map((agent) => agent.role)
+            .filter((role): role is string => Boolean(role)),
+        );
+        for (const role of rolesWithAgents) {
+          if (roles.includes(role)) continue;
+          const list = queueByRole.get(role) ?? [];
+          if (list.length < settings.taskMax) {
+            list.push(issue);
+          }
+          queueByRole.set(role, list);
+        }
       }
     }
 
@@ -336,6 +363,18 @@ export function swarmSupervisorView(
       agentsWithClaims: new Set([...leaseByIssue.values()].map((claim) => claim.agent_id)).size,
       idleAgentsWithQueue: roles.reduce(
         (sum, entry) => sum + (entry.queue.length > 0 ? entry.idleAgents.length : 0),
+        0,
+      ),
+      // myrmidon(1.6.1 SWARM-IDLE-WAKE): free agents at a non-empty queue,
+      // the zero metric of the ticket. "Free" is the idle pass's own verdict
+      // (no live run, not paused/error, under the ceiling), not the looser
+      // idleAgents list: a capped agent is not free work the swarm can wake.
+      freeAgentsWithQueue: roles.reduce(
+        (sum, entry) =>
+          sum +
+          (entry.queue.length > 0
+            ? entry.idleAgents.filter((agent) => !agent.atLimit).length
+            : 0),
         0,
       ),
     };
