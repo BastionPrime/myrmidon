@@ -122,6 +122,84 @@ renders as the existing page inside the 2.0 frame. Routing, data and access
 are unchanged in both cases: a 2.0 screen reads the same endpoints its 1.x
 counterpart reads.
 
+The six screens went from placeholder frames to real data surfaces in the
+re-skin pass: each one loads its data through the same API calls its 1.x
+counterpart uses (no new server endpoints, no backend changes). With the flag
+off, every route serves the unchanged 1.x page — the screens live only under
+the flag. With the flag on, the covered routes render the 2.0 screen; the
+details per screen are below.
+
+## What each 2.0 screen shows
+
+- **Decisions** (route `decisions`) — the queue of open decisions that wait
+  for you: filter chips (All / Policies / Money / External world), per-card
+  options with the effect summary per option ("Effect"), inputs for options
+  that need them, Decide and Dismiss (with an optional reason). The list
+  refreshes every 30 seconds. A Decide sends the option, the input values and
+  a generated idempotency key — the same action the 1.x page sends; a failed
+  action shows the server's error message on the card. After a Decide or
+  Dismiss, the queue, the "Wait for me" rail badge and the sidebar badges
+  refresh. Fact-check rows, the recommendation and the "swarm decided"
+  counters from the design artboards stay hidden until the API carries those
+  fields.
+- **Costs** (route `activity/costs`) — the spend summary, budget policies
+  (window "lifetime" or "calendar_month_utc") with their status, incidents
+  with the two resolution actions (`keep_paused`,
+  `raise_budget_and_resume`), the paused-agents count, and the top agents by
+  spend (twelve rows at most). A failed incident resolution shows the
+  server's error next to the incident. The mock-only hierarchy
+  (nest → caste → line), the forecast and the ticket limit stay hidden.
+- **Agent overview** (route `agents/:agentId/overview`) — the agent's status,
+  its policy (status `hard_stop`, `warning` or ok), recent runs from the last
+  24 hours with cost, tokens and result, and the spend over the last 30 days.
+  The vendor agent page is not rewritten: the existing page mounts this
+  surface at its overview slot under the flag, and the actions (pause /
+  resume, retire) stay on the vendor action bar. A missing agent renders a
+  "no overview" note.
+- **Runs and queue** (settings, route `company/settings/runs-queue`) — the
+  four admission ceilings: `maxConcurrentRuns`, `maxStartsPerMinute`,
+  `minFreeMemoryMb`, `runMemoryEstimateMb` (the last one cannot be turned
+  off). Each row shows where its current value comes from (`settings`, `env`
+  or `default`); a saved value applies without a restart, as in 1.x. The
+  priority-class slots, per-class TTL/timeouts/retries, the pool-growth
+  threshold and the hibernation rules are not in the API yet and stay hidden.
+- **System** (settings, route `company/settings/system`) — members with
+  roles and status, the board API keys (prefix, last use, revoked state) and
+  the change log. The first slice is read-only: the artboard's per-entry
+  "Rollback" buttons are not implemented (the API has no settings rollback),
+  and the response-channel selector stays hidden.
+- **Language** (settings, route `company/settings/language`) — the interface
+  language switch (English / Russian) with a preview card showing a decision
+  card in both languages side by side. The note holds: agent-written text
+  (task bodies, run logs, comments) is never translated and identifiers
+  never change. Number/date formats and the timezone belong to a later
+  formats slice.
+
+## Fail-closed states on the 2.0 screens
+
+Every 2.0 screen ships the full set of state artboards — skeleton loading,
+error with and without cached data, empty, and denied — so a screen never
+shows partial numbers or half-loaded tables.
+
+The denied state is the permission lock: when a screen's data request
+answers `403`, the screen renders the lock alone — "This section needs board
+access. Ask an operator for access; nothing is shown without it." — and no
+data fragments. The screens that read instance-level surfaces (System,
+Agent overview) render this lock on `403`; the other screens render the
+generic error state with the server's message and a retry button on any
+failed load. A screen with cached data keeps rendering it above the error
+note; without cache the error replaces the list entirely.
+
+## What the 2.0 screens do not have
+
+- No client-side undo timer. Acting on a decision is final in the client:
+  there is no countdown, no "Undo" button, no client-side hold after Decide
+  or Dismiss. The server-side hold that the design artboards show is a later
+  wave — until it ships, treat every Decide and Dismiss as executed
+  immediately.
+- No new server surface: every screen reads and writes through the existing
+  endpoints its 1.x counterpart already uses.
+
 The 1.x vendor screens have their own separate Russian-translation track
 (the vendor `ui/src/i18n` locale files); the 2.0 tree carries its own
 `ui2.*` string namespace. The 2.0 strings are translated in English and
