@@ -27,6 +27,12 @@ import {
 } from "./litellm-costs.js";
 import { listGatewayBotKeys } from "./bot-keys.js";
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 export interface LitellmCostsRoutesDeps {
   /** How the gateway key value is resolved; the real wiring reads the company secret. */
   readGatewayKey(companyId: string, secretName: string): Promise<string | null>;
@@ -77,6 +83,13 @@ export function litellmCostsRoutes(db: Db, deps: LitellmCostsRoutesDeps) {
       res.status(503).json({ error: "LLM gateway cost collection is not enabled", enabled: false });
       return;
     }
+    // myrmidon(HERMES-USAGE-COST): { from: "YYYY-MM-DD" | ISO } pins the
+    // sweep's window start so the board can backfill a month the sweep never
+    // collected (e.g. October's unpriced runs). Invalid or future values are
+    // ignored — the sweep then behaves exactly as before.
+    const rawFrom = asRecord(req.body)?.from;
+    const from = typeof rawFrom === "string" ? new Date(rawFrom) : undefined;
+    const opts = from && !Number.isNaN(from.getTime()) ? { from } : {};
     const result = await sweepLitellmCosts(
       {
         db,
@@ -87,6 +100,7 @@ export function litellmCostsRoutes(db: Db, deps: LitellmCostsRoutesDeps) {
       },
       companyId,
       current,
+      opts,
     );
     res.json(result);
   });
