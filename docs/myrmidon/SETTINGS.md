@@ -183,6 +183,7 @@ to enable plan mode (X2). Tracks fill it in, the section is shared.
 | Task: the `workMode` field (`POST/PATCH /api/issues…`, `"planning"`); in the UI — the "Plan mode" toggle in the task input field | Task plan mode: the wake prompt gets a `planning directive` — the agent only composes or updates a plan, does not write code. After the plan is accepted — only child tasks | Works with `hermes_local` without changes: plan directives reach the run prompt (test `server/src/__tests__/hermes-planning-mode.myrmidon.test.ts`). Enabled per task, no separate instance switch needed | X2 |
 | `PATCH /api/instance/settings/experimental`: `enableIssuePlanDecompositions` (in the UI — Instance Settings → Experimental, "Task Plan Decomposition") | Shows on the task page the history of accepted-plan decomposition into child tasks | Optional, off by default. Does not affect plan-mode work in the run | X2 |
 | `PATCH /api/instance/settings/experimental`: `enableFirstTaskPlanProposal` ("First task: propose with a plan document") | For the first single task of a new organization the manager writes a short plan document and a card with options instead of one confirmation card | Optional, off by default. Applies only to organizations created after enabling | X2 |
+| `PATCH /api/instance/settings/experimental`: `enableMyrmidonUi2` (in the UI — Instance Settings → Experimental, "Myrmidon UI 2.0 Shell") | Renders the board route tree in the Myrmidon 2.0 frame (rail, top bar, phone bottom bar); pages, routes, data and access stay shared with the 1.x shell. Fails closed: off while loading, on a read error, and for stored rows written before the flag existed. A per-browser `?ui=1|2` override (localStorage `myr.ui2.personal`) wins over the flag in both directions | Off by default; apply and revert on the next page load, no restart. Guide: [guides/ui2-shell.md](guides/ui2-shell.md) | UI-2.0 |
 | `TELEGRAM_API_BASE_URL` | Bot API address for the Telegram adapter (vendor variable) | Address of your own Bot API if files larger than 20 MB are needed; unset — cloud Bot API | P8 |
 | `PAPERCLIP_ATTACHMENT_MAX_BYTES` | Overall board attachment size limit (vendor, 10 MB by default) | Also limits Telegram files: raise together with `MYRMIDON_TELEGRAM_FILE_LIMIT_BYTES` | P8 |
 | Instance configuration file, `telemetry.enabled` | Telemetry flag. Vendor default is `true`, ours is `false` | Do not enable. Enabling also requires `PAPERCLIP_TELEMETRY_ENDPOINT` (your own ingestion address) | TEL |
@@ -613,3 +614,24 @@ The flow end to end — how the owner asks from the portal or the Telegram DM,
 what the proposal and the approval card look like, and what acceptance
 creates — is the operator guide
 [guides/cto-chat-planner.md](guides/cto-chat-planner.md).
+
+## 1.6 — FORAGING (source registry, snapshot comparison, skill candidates)
+
+Settings of `server/src/myrmidon/foraging/` (the 1.6 track). The feature is off by default:
+without `MYRMIDON_FORAGING_ENABLED=1` no timer is armed, no source is read and the manual
+pass answers `503 {enabled: false}`. The registry and the findings list stay readable while
+it is off.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_FORAGING_ENABLED` | FORAGING | unset (off) | Master switch of the periodic comparison pass. Only the exact value `1` turns it on: the sweep then reads the enabled sources of every company that has a registry row, once per interval | Any other value (or unset) — the sweep never starts, `POST …/foraging/sweep` answers `503 enabled: false`, and the page shows that passes are off. A typo does not silently turn the feature on |
+| `MYRMIDON_FORAGING_INTERVAL_SEC` | FORAGING | `3600` | Period of the pass, in seconds. A pass whose previous run is still going is skipped, not queued | From 60 to 86400; non-integer or out of bounds — `3600` |
+| `MYRMIDON_FORAGING_BUDGET_CENTS` | FORAGING | `50` | Ceiling of the cost estimate of one pass, in cents. The sweep prices every fetched kilobyte and stops once the estimate reaches the ceiling; sources after the stop stay untouched and the next pass continues with them | A configured `0` or a negative number is the explicit "no limit"; empty or unset — `50` |
+| `MYRMIDON_FORAGING_KEY_SECRET` | FORAGING | unset | **Name** of the company secret whose value is sent as a bearer token to the sources of that company. The value is read for the duration of the read, is never logged and never stored | Empty — sources are read without an authorization header |
+| `MYRMIDON_FORAGING_MIN_HOST_INTERVAL_SEC` | FORAGING | `60` | Pause between two reads of one host, in seconds. Shared by every company of the process, so two roles pointing at one host cannot double the rate | From 5 to 86400; non-integer or out of bounds — `60`. A host that fails twice in a row is left alone for 6 h (breaker, not a setting) |
+
+The sweep is off by default because it is the only part of the feature that talks to the
+outside: an operator turns it on together with `MYRMIDON_FORAGING_KEY_SECRET` when the
+sources need a token. Findings are recorded `unverified` until the skill lifecycle accepts
+them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand.
+

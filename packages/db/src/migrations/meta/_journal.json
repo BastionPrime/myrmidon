@@ -2012,6 +2012,13 @@
       "breakpoints": true
     },
     {
+      "idx": 290,
+      "version": "7",
+      "when": 1790953048608,
+      "tag": "0290_nice_champions",
+      "breakpoints": true
+    },
+    {
       "idx": 291,
       "version": "7",
       "when": 1790946850791,

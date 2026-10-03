@@ -218,6 +218,8 @@ export { litellmCostEvents, litellmModels, type LitellmModelRates } from "./lite
 // myrmidon(EGRESS-B): destination allowlists and per-project mode of the bot egress proxy.
 export { myrmidonEgressPolicies } from "./myrmidon_egress_policies.js";
 export { myrmidonFleetServers } from "./myrmidon_fleet_servers.js"; // myrmidon(SC1): fleet-server registry for the browser console
+// myrmidon(1.6-FORAGE): source registry and findings log of FORAGING.
+export { foragingSources, foragingFindings, type ForagingSourceKind, type ForagingFindingStatus } from "./myrmidon_foraging.js";
 // myrmidon(1.6-WIKI): regulations as wiki pages — statuses, revisions and rollback.
 export {
   myrmidonWikiRegulations,

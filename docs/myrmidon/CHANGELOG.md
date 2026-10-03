@@ -129,7 +129,8 @@ version file to edit. Base Paperclip version is in the image label
   1.x shell; turning the flag off restores it. The rail badge and status chips
   read the existing dashboard and sidebar-badges aggregates until the
   STATUS-STRIP endpoint exists. i18n keys `ui2.*` ship in en/ru (translated)
-  and the other locales (English values until the translation pass).
+  and the other locales (English values until the translation pass). Operator
+  guide: [guides/ui2-shell.md](guides/ui2-shell.md).
 
 ### Task PR sync
 
