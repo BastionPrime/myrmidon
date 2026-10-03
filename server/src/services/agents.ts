@@ -31,7 +31,7 @@ import {
 import {
   normalizePaperclipRunnerAdapterConfig,
 } from "@paperclipai/adapter-utils/server-utils";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import { conflict, notFound, unprocessable, badRequest } from "../errors.js";
 import {
   collectSecretRefs,
   collectUserSecretRefs,
@@ -128,6 +128,19 @@ interface CreateAgentOptions {
   aiConnectionInstall?: { connectionId: string; createdByUserId: string | null };
   allowBuiltInAgentMetadata?: boolean;
   claudeLogin?: ClaudeLoginContext;
+}
+
+/**
+ * myrmidon(1.6.1 CUSTOM-CASTES B): the company caste directory read used by
+ * create/update to refuse a role key that is not a caste of the company.
+ * The shared validator checks the key *format*; this port checks
+ * *membership* per company, which the shared layer cannot. Until part A
+ * (the directory store) lands, the port is injected; when it is absent the
+ * check is skipped, which keeps the pre-directory behavior exactly.
+ */
+export interface AgentCasteDirectoryPort {
+  /** The caste keys of one company, seeded on first read (part A). */
+  listCasteKeys: (companyId: string) => Promise<readonly string[]>;
 }
 
 interface AgentShortnameRow {
@@ -335,8 +348,22 @@ export function deduplicateAgentName(
   return `${candidateName} ${Date.now()}`;
 }
 
-export function agentService(db: Db) {
+export function agentService(db: Db, ports?: { castes?: AgentCasteDirectoryPort }) {
   const secretsSvc = secretService(db);
+
+  // myrmidon(1.6.1 CUSTOM-CASTES B): refuse a role key that is not a caste of
+  // this company. 400 with a message that names the key and where it must be
+  // created. Skipped when no directory port is wired (pre-directory behavior).
+  async function assertRoleIsCompanyCaste(companyId: string, role: string | undefined | null) {
+    if (!ports?.castes || typeof role !== "string" || role.length === 0) return;
+    const keys = await ports.castes.listCasteKeys(companyId);
+    if (!keys.includes(role)) {
+      throw badRequest(
+        `Role '${role}' is not a caste of this company. Create the caste first, then use its key.`,
+        { code: "role_not_company_caste", role },
+      );
+    }
+  }
 
   function currentUtcMonthWindow(now = new Date()) {
     const year = now.getUTCFullYear();
@@ -698,6 +725,12 @@ export function agentService(db: Db) {
     const existing = await getById(id);
     if (!existing) return null;
 
+    // myrmidon(1.6.1 CUSTOM-CASTES B): the role may change to another caste
+    // of the same company only.
+    if (typeof data.role === "string" && data.role.length > 0) {
+      await assertRoleIsCompanyCaste(existing.companyId, data.role);
+    }
+
     if (existing.status === "terminated" && data.status && data.status !== "terminated") {
       throw conflict("Terminated agents cannot be resumed");
     }
@@ -871,6 +904,7 @@ export function agentService(db: Db) {
 
     create: async (companyId: string, data: Omit<typeof agents.$inferInsert, "companyId">, options?: CreateAgentOptions) => {
       assertBuiltInAgentMetadataMutationAllowed(null, data.metadata, options);
+      await assertRoleIsCompanyCaste(companyId, data.role);
       if (data.reportsTo) {
         await ensureManager(companyId, data.reportsTo);
       }
