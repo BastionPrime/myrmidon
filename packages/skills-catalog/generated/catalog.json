@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "packageName": "@paperclipai/skills-catalog",
   "packageVersion": "0.3.1",
-  "generatedAt": "2026-08-11T15:05:34.526Z",
+  "generatedAt": "2026-10-02T16:17:16.570Z",
   "skills": [
     {
       "id": "paperclipai:bundled:docs:doc-maintenance",
@@ -414,6 +414,39 @@
         }
       ],
       "contentHash": "sha256:90f278c89aa0711be150c1cd2456ca25620d02f36995b113ca9837d756a37f6c"
+    },
+    {
+      "id": "paperclipai:bundled:software-development:parallel-helpers",
+      "key": "paperclipai/bundled/software-development/parallel-helpers",
+      "kind": "bundled",
+      "category": "software-development",
+      "slug": "parallel-helpers",
+      "name": "parallel-helpers",
+      "description": "When an engineering task should be split across parallel helper subagents (delegate_task) and when it must stay in one context — independent reads, tests vs implementation, self-review, and the anti-collision rules.",
+      "path": "catalog/bundled/software-development/parallel-helpers",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "engineer"
+      ],
+      "requires": [],
+      "tags": [
+        "delegation",
+        "parallelism",
+        "testing",
+        "code-review"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 2950,
+          "sha256": "0f466e4aa91cf9be70c4ea5b59e84cf18c5bfd07bb33e002e1f7f5c32f68b1a5"
+        }
+      ],
+      "contentHash": "sha256:f28075f10d1e3096ca968e5b05049bd59633c179d3201c97f2d87d2ca1a78473"
     },
     {
       "id": "paperclipai:optional:browser:agent-browser",

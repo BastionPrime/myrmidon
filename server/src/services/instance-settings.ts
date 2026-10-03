@@ -47,6 +47,8 @@ import { preserveCloudConnectorGeneralKey } from "../myrmidon/cloud-connector/st
 import { preserveAccessHubHostsGeneralKey } from "../myrmidon/access-hub/host-registry.js";
 // myrmidon(1.6-AUTONOMY): keep the autonomy matrix and regulations across vendor writes of `general`
 import { preserveAutonomyGeneralKey } from "../myrmidon/autonomy/store.js";
+// myrmidon(OPE-3789): keep the telegramNotify settings across vendor writes of `general`
+import { preserveTelegramNotifyGeneralKey } from "../myrmidon/telegram-notify/store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -227,6 +229,9 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       ...(parsed.data.workspaceHygiene ? { workspaceHygiene: parsed.data.workspaceHygiene } : {}),
       // myrmidon(C0): the stored run admission limits survive every general write
       ...(parsed.data.runLimits ? { runLimits: parsed.data.runLimits } : {}),
+      // myrmidon(PARALLEL-HELPERS): the stored helper ceiling/default survive
+      // every general write (they are edited on their own settings page).
+      ...(parsed.data.parallelHelpers ? { parallelHelpers: parsed.data.parallelHelpers } : {}),
       // myrmidon(EXTCASE-B): the stored browser-bridge allowlist survives every general write
       ...(parsed.data.browserBridge ? { browserBridge: parsed.data.browserBridge } : {}),
     };
@@ -574,6 +579,7 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
             ...preserveAccessHubHostsGeneralKey(current.general), // myrmidon(SEC1)
             ...preserveCloudConnectorGeneralKey(current.general), // myrmidon(CLOUD-CONNECTOR)
             ...preserveAutonomyGeneralKey(current.general), // myrmidon(1.6-AUTONOMY)
+            ...preserveTelegramNotifyGeneralKey(current.general), // myrmidon(OPE-3789)
           },
           updatedAt: now,
         })

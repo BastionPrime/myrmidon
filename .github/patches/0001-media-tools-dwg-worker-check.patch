@@ -1,0 +1,12 @@
+diff --git a/.github/workflows/myrmidon-media-tools.yml b/.github/workflows/myrmidon-media-tools.yml
+index c114fadb6..539399e95 100644
+--- a/.github/workflows/myrmidon-media-tools.yml
++++ b/.github/workflows/myrmidon-media-tools.yml
+@@ -148,6 +148,7 @@ jobs:
+             worker)
+               docker run --rm --entrypoint ffmpeg "$img" -version | head -1
+               docker run --rm --entrypoint sh "$img" -c 'ffmpeg -hide_banner -filters | grep -q " subtitles " && ffmpeg -hide_banner -filters | grep -q " loudnorm " && pdftoppm -v'
++              docker run --rm --entrypoint sh "$img" -c 'dwg2dxf --version && dwg2SVG --version && dwg_convert --help >/dev/null && echo dwg-tools-ok'
+               ;;
+             tika)
+               docker run --rm --user root --entrypoint tesseract "$img" --list-langs | grep -x -e rus -e eng

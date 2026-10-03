@@ -22,6 +22,24 @@ FROM base AS test
 COPY tests /app/tests
 RUN python -m unittest discover -s tests -v
 
+# LibreDWG (dwg2dxf / dwg2SVG): same tools the bots used on the host, built from
+# the GNU release so no vendored binaries enter the image. The build stays in
+# this stage; the worker stage copies only the installed files.
+FROM base AS libredwg
+USER root
+ARG LIBREDWG_VERSION=0.13.3
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential libtool tar xz-utils curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "https://ftp.gnu.org/gnu/libredwg/libredwg-${LIBREDWG_VERSION}.tar.xz" -o /tmp/libredwg.tar.xz \
+ && echo "83f1f6e78a744777a481ff4520e4cef3f8ac4b2c1c25671077ca12fe81e8816e  /tmp/libredwg.tar.xz" | sha256sum -c - \
+ && tar -xJf /tmp/libredwg.tar.xz -C /tmp \
+ && cd "/tmp/libredwg-${LIBREDWG_VERSION}" \
+ && ./configure --prefix=/usr/local --disable-bindings \
+ && make -j"$(nproc)" \
+ && make install \
+ && rm -rf /tmp/libredwg*
+
 FROM base AS facade
 LABEL org.opencontainers.image.title="Myrmidon media MCP facade"
 USER 10001:10001
@@ -31,11 +49,21 @@ ENTRYPOINT ["python", "-m", "media_mcp"]
 CMD ["facade"]
 
 FROM base AS worker
-LABEL org.opencontainers.image.title="Myrmidon media worker (ffmpeg, poppler)"
+LABEL org.opencontainers.image.title="Myrmidon media worker (ffmpeg, poppler, LibreDWG)"
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg poppler-utils \
  && rm -rf /var/lib/apt/lists/* \
  && ffmpeg -version | head -1 && pdftoppm -v 2>&1 | head -1
+# ezdxf stays in its own venv so the service environment is untouched; the
+# dwg_convert job script runs under that venv. The worker copies the module
+# tree in before the shim is created (COPY src is already on base).
+RUN python -m venv /opt/cad \
+ && /opt/cad/bin/pip install --no-cache-dir "ezdxf==1.4.4" "pillow" \
+ && ln -s /app/src/media_mcp/dwg_convert.py /usr/local/bin/dwg_convert \
+ && /opt/cad/bin/python -c "import ezdxf; from ezdxf.addons.drawing.svg import SVGBackend; print('ezdxf', ezdxf.__version__)"
+COPY --from=libredwg /usr/local/bin/dwg2dxf /usr/local/bin/dwg2SVG /usr/local/bin/
+COPY --from=libredwg /usr/local/lib/libredwg.so.0* /usr/local/lib/
+RUN ldconfig /usr/local/lib && dwg2dxf --version | head -1 && dwg2SVG --version | head -1
 USER 10001:10001
 EXPOSE 8081
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8081/healthz', timeout=3)"]

@@ -9,7 +9,7 @@
     },
     "example-office": {
       "peer_host": "myrmidon-bot-example-2",
-      "tools": ["file_put", "file_get", "file_list", "file_delete", "office_to_pdf", "html_to_pdf", "pdf_to_images", "extract_text", "image_transform"]
+      "tools": ["file_put", "file_get", "file_list", "file_delete", "office_to_pdf", "html_to_pdf", "pdf_to_images", "extract_text", "image_transform", "dwg_convert"]
     }
   }
 }
