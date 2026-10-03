@@ -55,6 +55,7 @@ import {
 import { createBotCardSync, type BotCardSyncPorts, type BotCardSyncResult } from "./card-sync.js";
 import { createCardEnvResolver } from "./card-env.js";
 import { loadBotInstructionsBundle } from "./instructions-source.js";
+import { readBotProfileSettings } from "./profile-input.js";
 import {
   createActivityWarningSink,
   createBotProfileCompile,
@@ -469,6 +470,26 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
           return (await instructions.readFile(agent, relativePath)).content;
         },
       });
+    },
+
+    // myrmidon(BOT-RUNTIME-TUNING-B): instance defaults for the profile compiler,
+    // from the MYRMIDON_BOT_* settings via the existing reader (readBotProfileSettings
+    // pattern; re-read on every call, so a corrected variable needs no rebuild).
+    // The per-tick compile call in profile-compile.ts merges these with the settings
+    // it read itself; this port supplies the same map for callers that go through
+    // buildHermesProfileInput without their own instanceDefaults source.
+    async instanceDefaults() {
+      const settings = readBotProfileSettings(process.env);
+      return {
+        compression: {
+          ...(settings.compressionThresholdTokens !== null ? { thresholdTokens: settings.compressionThresholdTokens } : {}),
+        },
+        ...(settings.modelContextLengths ? { modelContextLengths: settings.modelContextLengths } : {}),
+        auxiliary: {
+          ...(settings.auxiliaryTitleModel ? { titleGenerationModel: settings.auxiliaryTitleModel } : {}),
+          ...(settings.auxiliaryCompressionModel ? { compressionModel: settings.auxiliaryCompressionModel } : {}),
+        },
+      };
     },
 
     // myrmidon(PARALLEL-HELPERS): the company ceiling/default for helpers. Read
