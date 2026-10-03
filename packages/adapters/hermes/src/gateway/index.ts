@@ -1,6 +1,6 @@
 import type { AdapterSessionManagement, ServerAdapterModule } from "@paperclipai/adapter-utils";
 import { ADAPTER_LABEL, ADAPTER_TYPE } from "./shared/constants.js";
-import { execute, getConfigSchema, sessionCodec, testEnvironment } from "./server/index.js";
+import { execute, getConfigSchema, sessionCodec, stopGatewayRunForBoard, testEnvironment } from "./server/index.js";
 
 export const type = ADAPTER_TYPE;
 export const label = ADAPTER_LABEL;
@@ -68,6 +68,10 @@ export function createServerAdapter(): ServerAdapterModule {
     sessionCodec,
     sessionManagement,
     models,
+    // myrmidon(HERMES-RUN-REATTACH): board-side stop for runs the board is
+    // not actively supervising; the heartbeat cancellation path uses it to
+    // free the gateway slot immediately.
+    stopGatewayRunForBoard,
     supportsLocalAgentJwt: false,
     // myrmidon(G4): the server materializes the managed instructions bundle
     // into adapterConfig.instructionsFilePath (instructionsPathKey default)

@@ -137,6 +137,8 @@ import { startStackCheckSweep } from "./myrmidon/stack-registry/index.js"; // my
 import { interactionContinuationOutboxService } from "./myrmidon/interaction-continuation-outbox.js"; // myrmidon(O1)
 import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
 import { createRunStallSweepFromHeartbeat } from "./myrmidon/run-stall/index.js"; // myrmidon(RUN-STALL)
+// myrmidon(HERMES-RUN-REATTACH): reattach live gateway runs after a board restart
+import { sweepGatewayRunReattach } from "./myrmidon/gateway-run-reattach.js";
 import { createTaskPrSyncScheduler } from "./myrmidon/task-pr-sync/index.js"; // myrmidon(TASK-PR-SYNC)
 import {
   createPendingInteractionWakeSweep,
@@ -1606,6 +1608,30 @@ async function startServerWithDatabaseTeardown(
           logger.error(
             { err },
             "startup hot-restart adoption reconciliation failed - orphan reaper will serve as degraded backstop",
+          );
+        }
+
+        // myrmidon(HERMES-RUN-REATTACH): before the orphan reaper fails every
+        // untracked running run, reattach the hermes_gateway runs whose
+        // gateway run id was persisted on the row: the bot's gateway kept
+        // executing them through the restart, and a reattach execution keeps
+        // supervision (and the result) on the board. Runs without an id or
+        // whose dispatch fails fall through to the reaper unchanged.
+        try {
+          const reattached = await sweepGatewayRunReattach(
+            db as any,
+            heartbeat,
+          );
+          if (reattached.reattached > 0 || reattached.failed > 0) {
+            logger.warn(
+              reattached,
+              "startup gateway run reattach complete",
+            );
+          }
+        } catch (err) {
+          logger.error(
+            { err },
+            "startup gateway run reattach failed - orphan reaper will serve as degraded backstop",
           );
         }
 

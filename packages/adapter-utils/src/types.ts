@@ -232,6 +232,15 @@ export interface AdapterExecutionContext {
    */
   onDispatch?: () => void;
   onSpawn?: (meta: { pid: number; processGroupId: number | null; startedAt: string }) => Promise<void>;
+  /**
+   * myrmidon(HERMES-RUN-REATTACH): remote adapters report the provider-side run
+   * id as soon as the provider admits the run (immediately after the create
+   * response), not only in the final result. The host persists it on the
+   * heartbeat run row, so a server restart can reattach to the provider run
+   * instead of losing it. Optional and additive: adapters that never call it
+   * behave exactly as before.
+   */
+  onExternalRunId?: (externalRunId: string) => Promise<void>;
   authToken?: string;
   /**
    * The injected OpenTelemetry startup trace context (tracer + root
@@ -459,6 +468,18 @@ export interface ServerAdapterModule {
   syncSkills?: (ctx: AdapterSkillContext, desiredSkills: string[]) => Promise<AdapterSkillSnapshot>;
   sessionCodec?: AdapterSessionCodec;
   sessionManagement?: import("./session-compaction.js").AdapterSessionManagement;
+  /**
+   * myrmidon(HERMES-RUN-REATTACH): board-side stop for a remote run the board
+   * is not actively supervising (no live adapter execution). The heartbeat
+   * cancellation path calls it with the run's persisted external run id so a
+   * remote slot (e.g. the hermes gateway's max_concurrent_runs) frees
+   * immediately instead of waiting out the remote side's own timeout sweep.
+   */
+  stopGatewayRunForBoard?: (input: {
+    baseUrl: string;
+    apiKey: string;
+    gatewayRunId: string;
+  }) => Promise<{ stopped: boolean }>;
   supportsLocalAgentJwt?: boolean;
   /** How this adapter receives Paperclip's run-scoped control tools. */
   runtimeToolDelivery?: AdapterRuntimeToolDelivery;
