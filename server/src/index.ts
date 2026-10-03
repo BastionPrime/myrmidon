@@ -129,6 +129,7 @@ import { startDeployJobs } from "./myrmidon/deploy-jobs/index.js"; // myrmidon(R
 import { startRuntimeLimits } from "./myrmidon/runtime-limits/index.js"; // myrmidon(C0)
 import { startBotContainers, stopBotContainers } from "./myrmidon/bot-containers/startup.js"; // myrmidon(W2a)
 import { startLitellmCostSweep, stopLitellmCostSweep } from "./myrmidon/litellm-costs/startup.js"; // myrmidon(M2-A)
+import { startLitellmModelReconciliation } from "./myrmidon/litellm-sync/startup-reconciler.js"; // myrmidon(1.6.1 MODEL-PROVIDERS B)
 import { startBaselineSnapshots, stopBaselineSnapshots } from "./myrmidon/baseline/startup.js"; // myrmidon(1.6-BASELINE)
 import { startForagingSweep, stopForagingSweep } from "./myrmidon/foraging/startup.js"; // myrmidon(1.6-FORAGE)
 import { startTracingAttentionSweep, stopTracingAttentionSweep } from "./myrmidon/tracing-health/attention-sweep.js"; // myrmidon(TRACING-HEALTH)
@@ -1557,6 +1558,7 @@ async function startServerWithDatabaseTeardown(
     startDeployJobs(db as any); // myrmidon(R5-A): resume an interface deploy job; no-op unless MYRMIDON_DEPLOY_ENABLED
     startBotContainers(db as any); // myrmidon(W2a): bot container sweep and the card's "Apply now" runtime; a no-op unless MYRMIDON_BOT_CONTAINERS is on
     startLitellmCostSweep(db as any); // myrmidon(M2-A): gateway spend sweep; a no-op unless MYRMIDON_LITELLM_* is set
+    startLitellmModelReconciliation(db as any); // myrmidon(1.6.1 MODEL-PROVIDERS B): reconcile LiteLLM models with DB state
     startBaselineSnapshots(db as any); // myrmidon(1.6-BASELINE): freeze the 14-day metric window; a no-op unless MYRMIDON_BASELINE_INTERVAL_SEC is set
     startForagingSweep(db as any); // myrmidon(1.6-FORAGE): source comparison sweep; a no-op unless MYRMIDON_FORAGING_ENABLED=1
     startTracingAttentionSweep(db as any); // myrmidon(TRACING-HEALTH): keep the "LLM tracing" operator signal fresh; a no-op unless the tracing settings are on
