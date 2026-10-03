@@ -151,6 +151,9 @@ export function startModelFallbackSignalSweep(
       const rows = await db.select({ id: companies.id }).from(companies).where(isNotNull(companies.id));
       return rows.map((row) => row.id);
     },
+    async readGatewayKey(companyId, secretName) {
+      return defaultReadGatewayKey(db, companyId, secretName);
+    },
     now: () => new Date(),
     log,
     ...opts.deps,
