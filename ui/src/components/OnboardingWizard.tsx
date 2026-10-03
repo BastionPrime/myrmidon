@@ -12,12 +12,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { MotionConfig, motion } from "motion/react";
 import type {
   AdapterEnvironmentTestResult,
-  AgentRole,
   ClaudeOAuthTokenStatusResponse,
   Environment,
   InstanceSettings,
 } from "@paperclipai/shared";
-import { AGENT_ROLES, AGENT_ROLE_LABELS, ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
+import { AGENT_ROLE_LABELS, ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
 import { AdapterLoginPanel } from "./AgentConfigForm";
 import {
   CONNECT_SOURCE_NAMES,
@@ -561,14 +560,14 @@ function OnboardingWizardInner({
   // filing it — but the hire still needs one, and the guard below returns
   // silently when it is missing. An unset role there would mean Connect
   // appearing to work and hiring nobody.
-  const [agentRole, setAgentRole] = useState<AgentRole>(
+  const [agentRole, setAgentRole] = useState<string>(
     // `||`, not `??`: the empty string was this field's default before the arc
     // stopped asking for a role, so every draft saved by an earlier build holds
     // `agentRole: ""`. `??` passes that straight through, and an empty role
     // reaches the silent return in the hire — the exact failure the default
     // exists to prevent, arriving through a restored draft instead of a fresh
     // one.
-    (saved?.agentRole as AgentRole) || DEFAULT_AGENT_ROLE,
+    (saved?.agentRole as string) || DEFAULT_AGENT_ROLE,
   );
   const [adapterType, setAdapterType] = useState<AdapterType>(() =>
     restoreOnboardingAdapterType(saved?.adapterType),
@@ -2138,7 +2137,7 @@ function OnboardingWizardInner({
       // path that clears the role must not reach a hire that silently no-ops.
       if (!agentRole || !isCurrent()) return;
 
-      const hireName = agentName.trim() || AGENT_ROLE_LABELS[agentRole];
+      const hireName = agentName.trim() || (AGENT_ROLE_LABELS[agentRole as keyof typeof AGENT_ROLE_LABELS] ?? agentRole);
 
       // The company may already hold this agent. A wizard that reopens on the
       // agent step after the hire — the dashboard's agentless offer on a stale

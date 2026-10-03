@@ -122,6 +122,8 @@ import { agentInstructionsRevisionsRoutes } from "./myrmidon/agent-instructions-
 import { myrmidonFleetConsoleRoutes } from "./myrmidon/fleet-console/index.js"; // myrmidon(SC1)
 import { myrmidonCloudConnectorRoutes } from "./myrmidon/cloud-connector/index.js"; // myrmidon(CLOUD-CONNECTOR)
 import { myrmidonAutonomyRoutes } from "./myrmidon/autonomy/index.js"; // myrmidon(1.6-AUTONOMY)
+// myrmidon(1.6-TG-PROACTIVITY-E): head-bot proactivity gate/bundling sweep
+import { sweepTelegramNotifyProactivity } from "./myrmidon/telegram-notify/sweep.js";
 import { accessHubRoutes } from "./myrmidon/access-hub/routes.js"; // myrmidon(SEC1)
 import { ui2LanguageRoutes } from "./myrmidon/ui2-language/routes.js"; // myrmidon(UI2-I18N)
 import { myrmidonForagingRoutes } from "./myrmidon/foraging/index.js"; // myrmidon(1.6-FORAGE)
@@ -1249,6 +1251,14 @@ export async function createApp(
   }
   emailChannels.start();
   const flushChatPublications = async () => {
+    // myrmidon(1.6-TG-PROACTIVITY-E): bundle U2 cards past the window and
+    // drain rarely queues into the durable outbox before the lane runs, so
+    // the vendor's own delivery path carries them (no new provider client).
+    try {
+      await sweepTelegramNotifyProactivity(db);
+    } catch (err) {
+      logger.error({ err }, "telegram-notify proactivity sweep failed");
+    }
     await chatChannels.schedulePendingPublications();
   };
   const chatReconciliation = createChatReconciliationCoordinator({
