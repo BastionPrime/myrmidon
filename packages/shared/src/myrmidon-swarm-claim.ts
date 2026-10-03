@@ -372,3 +372,30 @@ export function swarmActiveTaskLimitReached(
   if (settings.maxActiveTasks === null) return false;
   return activeTasks >= settings.maxActiveTasks;
 }
+// --- company caste directory (myrmidon 1.6.1 CUSTOM-CASTES B) ---------------
+
+/**
+ * The claim outcome reason for an agent whose caste is excluded from the
+ * swarm: `swarmEligible=false` in the company caste directory. The claim
+ * service returns this instead of a generic "queue empty", so a supervisor
+ * can tell "this caste never takes tasks" from "nothing to take".
+ */
+export const SWARM_CLAIM_REASON_CASTE_EXCLUDED = "caste_excluded";
+
+/**
+ * One entry of a company caste directory (`agents.role` keys). Part A owns
+ * the storage and the REST surface; this is the read shape every consumer
+ * (the claim gate, the agent-create validation) agrees on, so the swarm can
+ * compile against it before the directory table lands.
+ */
+export interface CompanyCaste {
+  key: string;
+  swarmEligible: boolean;
+  /** int >= 1, or null to keep the global swarm ceiling. */
+  maxActiveTasks: number | null;
+}
+
+/** A castes read port: the directory of one company, seeded on first read. */
+export type CompanyCastesReader = (
+  companyId: string,
+) => Promise<readonly CompanyCaste[]>;
