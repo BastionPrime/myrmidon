@@ -288,6 +288,15 @@ async function sourceIssueId(
       const doc = await readStackDocument(db);
       return { exists: doc.components.some((component) => component.name === sourceId), issueId: null };
     }
+    // myrmidon(BOT-RUNTIME-TUNING D): the fallback alert's source id is the
+    // agent id — the card's subject — so existence is the agent row.
+    case "model_fallback_alert": {
+      const row = await db.select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.companyId, companyId), eq(agents.id, sourceId)))
+        .then((rows) => rows[0] ?? null);
+      return { exists: Boolean(row), issueId: null, agentId: row?.id ?? null };
+    }
     // myrmidon(STALE-BLOCK): a lifted-block signal lives in the process-level
     // registry; the source id is the task the sweep unblocked.
     case "stale_block": {
@@ -318,6 +327,15 @@ export async function canReadDecisionSource(
   }
 
   if (sourceKind === "agent_error_alert" && source.agentId) {
+    return (await authz.decide({
+      actor,
+      action: "agent:read",
+      resource: { type: "agent", companyId, agentId: source.agentId },
+    })).allowed;
+  }
+  // myrmidon(BOT-RUNTIME-TUNING D): the fallback alert names one agent; the
+  // same agent-read authority the error alert uses.
+  if (sourceKind === "model_fallback_alert" && source.agentId) {
     return (await authz.decide({
       actor,
       action: "agent:read",
