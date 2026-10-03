@@ -809,6 +809,27 @@ publication sweep; the bundling window is fixed at 5 minutes. Remove: the
 `packages/shared/src/index.ts`, the two marker lines in `app.ts` and
 `instance-settings.ts`, and this section.
 
+## 1.6.1 — GUARDRAILS (untrusted-input flagging layer)
+
+Settings of `server/src/myrmidon/guardrails/` (the 1.6.1 flag-only layer). The whole layer is off
+by default: without `MYRMIDON_GUARDRAILS_INJECTION_ENABLED` the wake queue stores exactly what it
+stored before — no markers, no flag, no event — and the run starts as usual.
+
+### INJECTION (part B: prompt-injection flag on the wake queue)
+
+When enabled, an externally authored queued comment's text is wrapped in
+`<untrusted-data>…</untrusted-data>` markers inside the wake payload the run reads (the board UI
+view of the comment is unchanged), and a heuristic detector (RU+EN) scores the text for
+instruction-override patterns. Flag-only mode: nothing is blocked, nothing is masked, the run
+starts exactly as before; the flag travels in the payload next to the wrapped text. The event
+journal (`recordGuardrailEvent`) is owned by part A; this part publishes the flag through the
+payload only.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_GUARDRAILS_INJECTION_ENABLED` | GUARDRAILS-B | unset (off) | Master switch of the injection flag on the wake queue. Only the exact values `1`, `true`, `yes`, `on` turn it on | Any other value (or unset/empty) — the layer is off and the wake queue is byte-identical to the vendor path; a typo does not silently enable it |
+| `MYRMIDON_GUARDRAILS_INJECTION_SCORE` | GUARDRAILS-B | `0.6` | Score threshold at which the heuristic scan sets `flagged: true`. `0` flags everything, `1` flags nothing | Unset, empty, non-numeric or outside 0..1 — the default `0.6` |
+
 ## 1.6.1 — WIP-LIMIT: the WIP limit screen and badge (part B, UI)
 
 The UI half of the WIP-LIMIT feature: the "WIP limit" screen in Company
