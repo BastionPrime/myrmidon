@@ -111,6 +111,7 @@ import { myrmidonBaselineRoutes } from "./myrmidon/baseline/routes.js"; // myrmi
 import { myrmidonBotEgressRoutes } from "./myrmidon/bot-containers/egress-wiring.js"; // myrmidon(EGRESS-B)
 import { myrmidonBotCanaryRoutes } from "./myrmidon/bot-containers/canary-index.js"; // myrmidon(R5-B)
 import { myrmidonWorkspaceHygieneRoutes } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
+import { myrmidonMetricsApp } from "./myrmidon/monitoring/metrics/index.js"; // myrmidon(1.7-METRICS)
 import { swarmClaimApp } from "./myrmidon/swarm-claim/index.js"; // myrmidon(1.6-SWARM)
 // myrmidon(EMERGENCY-STOP): immediate stop of the runs a draining pause left running
 import { myrmidonEmergencyStopRoutes } from "./myrmidon/emergency-stop.js";
@@ -653,6 +654,7 @@ export async function createApp(
   // myrmidon(EXTCASE-B): the extension's one board-less endpoint (the pairing code
   // is the credential), mounted outside `/api` with the other provider ingress.
   app.use(myrmidonBrowserBridgePublicRoutes(db));
+  app.use(myrmidonMetricsApp(db)); // myrmidon(1.7-METRICS): Prometheus text exposition at the origin root, bearer-guarded
   const managedAutoInstallKeys = opts.managedPluginAutoInstall ?? null;
   const bundledCatalogRoot =
     opts.bundledPluginCatalogRoot ?? resolveBundledCatalogRoot(process.env);

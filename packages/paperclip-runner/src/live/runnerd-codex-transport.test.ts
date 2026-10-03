@@ -6160,9 +6160,31 @@ it.each(["held-ack", "lost-ack", "rejected-attach"] as const)(
         await within("warm attach after old ACK", attachment, 10_000);
         expect(rotations).toHaveLength(1);
         const retired = rotations[0]!;
-        const attachedEvent = retired.committedEvents.find(
-          (entry) => entry.sourceEventId === heldEvent!.sourceEventId,
-        )!;
+        // The rotation snapshot is cloned before the rotation completes, so
+        // the warm run.attached effect may still be missing from it when the
+        // snapshot was taken on an earlier scheduler tick. Wait for the event
+        // to be observable, then resolve it without a non-null assertion so a
+        // missing event surfaces as a readable error instead of a TypeError.
+        const findAttachedEvent = () =>
+          retired.committedEvents.find(
+            (entry) => entry.sourceEventId === heldEvent!.sourceEventId,
+          ) ??
+          core.store.state.committedEvents.find(
+            (entry) => entry.sourceEventId === heldEvent!.sourceEventId,
+          );
+        let attachedEvent = findAttachedEvent();
+        if (attachedEvent === undefined) {
+          const deadline = Date.now() + 5_000;
+          while (attachedEvent === undefined && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            attachedEvent = findAttachedEvent();
+          }
+        }
+        if (attachedEvent === undefined) {
+          throw new Error(
+            `warm-attach rotation snapshot missing committed run.attached event ${heldEvent!.sourceEventId} after timeout`,
+          );
+        }
         expect(attachedEvent.logicalEffectCount).toBe(1);
         expect(retired.ackedSourceSeq).toBeGreaterThanOrEqual(
           attachedEvent.sourceSeq,

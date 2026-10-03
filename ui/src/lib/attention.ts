@@ -62,6 +62,8 @@ const SOURCE_META: Record<AttentionSourceKind, SourceMeta> = {
   agent_error_alert: { label: "Agent error" },
   // myrmidon(SUB): label for the stack-update source added with the stack registry release check.
   stack_update: { label: "Stack update" },
+  // myrmidon(BOT-RUNTIME-TUNING D): label for the model fallback signal source.
+  model_fallback_alert: { label: "Model fallback" },
   // myrmidon(STALE-BLOCK): label for the lifted-stale-block source.
   stale_block: { label: "Stale block lifted" },
 };
