@@ -43,8 +43,11 @@
 
 import { randomBytes } from "node:crypto";
 import http from "node:http";
+import path from "node:path";
 import type { BotContainerDriver, BotContainerSpec, BotContainerStatus, TemplateDriftField, TemplateDriftReport } from "./driver.js";
 import type { CompiledProfile } from "./types.js";
+import { prepareBotSharedMount } from "./shared-mount.js";
+import type { SharedMountSettings } from "./shared-mount.js";
 import {
   assertBotRuntimeContract,
   BOT_LABEL_KEYS,
@@ -171,6 +174,13 @@ export function buildCreateContainerRequestBody(
   if (spec.memoryMb <= 0 || spec.cpus <= 0 || spec.pidsLimit <= 0) {
     throw new BotContainerTemplateError("memoryMb, cpus and pidsLimit must all be positive");
   }
+  
+  // Determine shared mount path if bot has access
+  let sharedMountPath: string | undefined;
+  if (spec.hasSharedMountAccess) {
+    sharedMountPath = path.join(process.env.MYRMIDON_BOT_VOLUME_ROOT || "/var/lib/myrmidon-bots", "shared");
+  }
+  
   return {
     Image: spec.image,
     Labels: buildLabels(spec),
@@ -188,6 +198,7 @@ export function buildCreateContainerRequestBody(
       Binds: buildBinds(config.volumeRoot, spec.botKey, {
         mounts: spec.extraMounts,
         allowedSources: config.mountSources,
+        sharedMountPath,
       }),
       Privileged: false,
     },
@@ -916,7 +927,22 @@ export function dockerBotContainerDriver(
     const body = buildCreateContainerRequestBody(spec, config);
     await requireBotImage(spec.image);
     await removeByName(replacementContainerNameFor(spec.botKey)); // stale, from an interrupted recreate
+    
+    // Prepare volumes first
     await prepareVolumes(spec.botKey, spec.image);
+    
+    // Handle shared mount if enabled for this bot
+    if (spec.hasSharedMountAccess) {
+      // Prepare the shared mount for this bot
+      const botVolumePath = path.join(config.volumeRoot, spec.botKey);
+      const instanceSettings: SharedMountSettings = {
+        enabled: true,
+        writable: false, // Default to read-only, can be configured separately
+        hostPath: path.join(process.env.MYRMIDON_BOT_VOLUME_ROOT || "/var/lib/myrmidon-bots", "shared"),
+      };
+      await prepareBotSharedMount(spec.botKey, botVolumePath, instanceSettings);
+    }
+    
     await createNamed(containerNameFor(spec.botKey), body);
   }
 
@@ -930,6 +956,19 @@ export function dockerBotContainerDriver(
     await requireBotImage(spec.image);
     await removeByName(replacement);
     await prepareVolumes(spec.botKey, spec.image);
+    
+    // Handle shared mount if enabled for this bot
+    if (spec.hasSharedMountAccess) {
+      // Prepare the shared mount for this bot
+      const botVolumePath = path.join(config.volumeRoot, spec.botKey);
+      const instanceSettings: SharedMountSettings = {
+        enabled: true,
+        writable: false, // Default to read-only, can be configured separately
+        hostPath: path.join(process.env.MYRMIDON_BOT_VOLUME_ROOT || "/var/lib/myrmidon-bots", "shared"),
+      };
+      await prepareBotSharedMount(spec.botKey, botVolumePath, instanceSettings);
+    }
+    
     await createNamed(replacement, body);
     // Only now touch the old one: SIGTERM, SIGKILL after BOT_STOP_TIMEOUT_SEC.
     await stopByName(name);

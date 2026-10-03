@@ -8,6 +8,7 @@
 
 import type { BotContainerSpec, BotExtraMount } from "./driver.js";
 import { BOT_KEY_PATTERN } from "./template.js";
+import type { SharedMountSettings } from "./shared-mount.js";
 
 export const BOT_CONTAINERS_ENV = "MYRMIDON_BOT_CONTAINERS";
 
@@ -27,6 +28,8 @@ export interface BotContainerAgentConfig {
    *  sources directory, templates, common tools). Their sources are checked
    *  against MYRMIDON_BOT_MOUNT_SOURCES when the container template is built. */
   extraMounts: BotExtraMount[];
+  /** Whether this bot should have access to the shared directory */
+  hasSharedMountAccess: boolean;
 }
 
 export type BotContainerAgentConfigResult =
@@ -42,17 +45,10 @@ export type BotContainerAgentConfigResult =
 export const CONTAINER_GROUP_UNSUPPORTED_REASON =
   "container.group (a container shared by several agents) is not supported yet: it needs one spec, one profile and a maintenance window over every member agent, which this reconciler does not provide";
 
-/**
- * Reads `adapterConfig.container` off an agent's card. Only `hermes_gateway`
- * agents are eligible (containers-plan-senior-2026-09-28.md's G3 scope); anything
- * else, or a missing/incomplete/`enabled !== true` block, is reported as
- * not-applicable rather than thrown — a malformed card must not take a sweep of
- * other agents down. A card asking for a shared `group` container is refused the
- * same way (see CONTAINER_GROUP_UNSUPPORTED_REASON).
- */
 export function readBotContainerAgentConfig(
   adapterType: string,
   adapterConfig: Record<string, unknown>,
+  instanceSharedMountSettings?: SharedMountSettings,
 ): BotContainerAgentConfigResult {
   if (adapterType !== HERMES_GATEWAY_ADAPTER_TYPE) {
     return { ok: false, reason: `adapter type "${adapterType}" is not ${HERMES_GATEWAY_ADAPTER_TYPE}` };
@@ -80,7 +76,18 @@ export function readBotContainerAgentConfig(
   }
   const extraMounts = readExtraMounts(c.extraMounts);
   if (!extraMounts.ok) return { ok: false, reason: extraMounts.reason };
-  return { ok: true, config: { image, memoryMb, cpus, pidsLimit, extraMounts: extraMounts.mounts } };
+  
+  // Read shared mount access setting (defaults to false if not specified)
+  // If instance settings are provided, use them to determine access; otherwise default to false
+  const hasSharedMountAccess = instanceSharedMountSettings 
+    ? instanceSharedMountSettings.enabled && (
+        !instanceSharedMountSettings.allowedBots || 
+        instanceSharedMountSettings.allowedBots.length === 0 || 
+        instanceSharedMountSettings.allowedBots.includes(adapterConfig.id as string)
+      )
+    : false;
+  
+  return { ok: true, config: { image, memoryMb, cpus, pidsLimit, extraMounts: extraMounts.mounts, hasSharedMountAccess } };
 }
 
 /**
@@ -139,5 +146,6 @@ export function botContainerSpec(botKey: string, config: BotContainerAgentConfig
     pidsLimit: config.pidsLimit,
     network,
     extraMounts: config.extraMounts,
+    hasSharedMountAccess: config.hasSharedMountAccess,
   };
 }

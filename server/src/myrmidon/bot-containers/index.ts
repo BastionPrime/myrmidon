@@ -33,6 +33,7 @@ import {
   readBotContainerAgentConfig,
 } from "./agent-config.js";
 import type { BotContainerAgentConfig } from "./agent-config.js";
+import type { SharedMountSettings } from "./shared-mount.js";
 import { botKeyLock, type BotKeyLock } from "./bot-key-lock.js";
 import type { BotContainerDriver } from "./driver.js";
 import {
@@ -140,6 +141,8 @@ export interface BotContainerRuntimeDeps {
   maintenance: BotMaintenancePort;
   activity?: BotContainerActivitySink;
   network: string;
+  /** Instance-level shared mount settings */
+  instanceSharedMountSettings?: SharedMountSettings;
   /** Defaults to the process-wide lock; tests pass their own. */
   lock?: BotKeyLock;
 }
@@ -176,7 +179,7 @@ export async function applyBotContainerNow(
   if (!isBotContainersEnabled(opts.env)) {
     return { kind: "not_applicable", reason: `${BOT_CONTAINERS_ENV} is not enabled` };
   }
-  const parsed = readBotContainerAgentConfig(agent.adapterType, agent.adapterConfig);
+  const parsed = readBotContainerAgentConfig(agent.adapterType, agent.adapterConfig, deps.instanceSharedMountSettings);
   if (!parsed.ok) return { kind: "not_applicable", reason: parsed.reason };
   const botKey = botKeyForAgent(agent.agentId);
   if (!botKey) return { kind: "not_applicable", reason: `agent id "${agent.agentId}" cannot be used as a bot key` };
@@ -206,40 +209,40 @@ type FreshAgentResult =
   | { ok: false; outcome: ApplyBotContainerOutcome };
 
 /**
- * The card the pass must reconcile: `deps.readAgent`'s fresh read when the
- * runtime has it, the caller's snapshot otherwise. A card that has since stopped
- * qualifying (container turned off, another adapter, bad numbers) is
- * not-applicable, exactly as if the caller had passed it; a card that can no
- * longer be read at all fails the pass instead of silently falling back to the
- * older snapshot (the next tick retries). */
-async function readAgentForPass(
-  agent: BotContainerAgent,
-  botKey: string,
-  deps: BotContainerRuntimeDeps,
-): Promise<FreshAgentResult> {
-  let current = agent;
-  if (deps.readAgent) {
-    let fresh: BotContainerAgent | null;
-    try {
-      fresh = await deps.readAgent(agent.agentId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await deps.activity?.record({
-        level: "error",
-        agentId: agent.agentId,
-        botKey,
-        message: "failed to read the agent card for a bot container pass",
-        details: { error: message },
-      });
-      return { ok: false, outcome: { kind: "error", message: `agent ${agent.agentId} could not be read: ${message}` } };
-    }
-    if (!fresh) return { ok: false, outcome: { kind: "not_applicable", reason: `agent ${agent.agentId} no longer exists` } };
-    current = fresh;
-  }
-  const parsed = readBotContainerAgentConfig(current.adapterType, current.adapterConfig);
-  if (!parsed.ok) return { ok: false, outcome: { kind: "not_applicable", reason: parsed.reason } };
-  return { ok: true, config: parsed.config };
-}
+ /** The card the pass must reconcile: `deps.readAgent`'s fresh read when the
+  * runtime has it, the caller's snapshot otherwise. A card that has since stopped
+  * qualifying (container turned off, another adapter, bad numbers) is
+  * not-applicable, exactly as if the caller had passed it; a card that can no
+  * longer be read at all fails the pass instead of silently falling back to the
+  * older snapshot (the next tick retries). */
+ async function readAgentForPass(
+   agent: BotContainerAgent,
+   botKey: string,
+   deps: BotContainerRuntimeDeps,
+ ): Promise<FreshAgentResult> {
+   let current = agent;
+   if (deps.readAgent) {
+     let fresh: BotContainerAgent | null;
+     try {
+       fresh = await deps.readAgent(agent.agentId);
+     } catch (err) {
+       const message = err instanceof Error ? err.message : String(err);
+       await deps.activity?.record({
+         level: "error",
+         agentId: agent.agentId,
+         botKey,
+         message: "failed to read the agent card for a bot container pass",
+         details: { error: message },
+       });
+       return { ok: false, outcome: { kind: "error", message: `agent ${agent.agentId} could not be read: ${message}` } };
+     }
+     if (!fresh) return { ok: false, outcome: { kind: "not_applicable", reason: `agent ${agent.agentId} no longer exists` } };
+     current = fresh;
+   }
+   const parsed = readBotContainerAgentConfig(current.adapterType, current.adapterConfig, deps.instanceSharedMountSettings);
+   if (!parsed.ok) return { ok: false, outcome: { kind: "not_applicable", reason: parsed.reason } };
+   return { ok: true, config: parsed.config };
+ }
 
 /** `deferred` (a change waiting for a maintenance window) and `error` say nothing
  *  about the container being ready for the card to point at, so they skip the sync. */
@@ -293,7 +296,7 @@ async function releaseStrayGatewaysOfSweep(
   if (!deps.releaseStrayGateways) return;
   const keep = new Set<string>();
   for (const agent of agents) {
-    if (readBotContainerAgentConfig(agent.adapterType, agent.adapterConfig).ok && botKeyForAgent(agent.agentId)) {
+    if (readBotContainerAgentConfig(agent.adapterType, agent.adapterConfig, deps.instanceSharedMountSettings).ok && botKeyForAgent(agent.agentId)) {
       keep.add(agent.agentId);
     }
   }

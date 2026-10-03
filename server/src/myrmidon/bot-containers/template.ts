@@ -108,15 +108,23 @@ export const BOT_VOLUME_MOUNTS: readonly BotVolumeMount[] = [
 export function buildBinds(
   volumeRoot: string,
   botKey: string,
-  extra: { mounts?: readonly BotExtraMount[]; allowedSources?: readonly string[] } = {},
+  extra: { mounts?: readonly BotExtraMount[]; allowedSources?: readonly string[]; sharedMountPath?: string } = {},
 ): string[] {
   validateBotKey(botKey);
   const mounts = extra.mounts ?? [];
   validateExtraMounts(mounts, extra.allowedSources ?? []);
-  return [
+  
+  const binds = [
     ...BOT_VOLUME_MOUNTS.map((mount) => `${volumeRoot}/${botKey}/${mount.hostSuffix}:${mount.containerPath}`),
     ...mounts.map((mount) => `${mount.source}:${mount.containerPath}:ro`),
   ];
+  
+  // Add shared mount if specified
+  if (extra.sharedMountPath) {
+    binds.push(`${extra.sharedMountPath}:/shared:rw`); // Allow read-write access to shared directory
+  }
+  
+  return binds;
 }
 
 /** Mount points and paths the driver itself owns inside every bot container: an

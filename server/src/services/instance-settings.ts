@@ -234,6 +234,8 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       ...(parsed.data.parallelHelpers ? { parallelHelpers: parsed.data.parallelHelpers } : {}),
       // myrmidon(EXTCASE-B): the stored browser-bridge allowlist survives every general write
       ...(parsed.data.browserBridge ? { browserBridge: parsed.data.browserBridge } : {}),
+      // myrmidon(1.6.1-BOT-DISK-D): the stored shared mount settings survive every general write
+      ...(parsed.data.sharedMount ? { sharedMount: parsed.data.sharedMount } : {}),
     };
   }
   return {

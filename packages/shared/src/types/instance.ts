@@ -8,6 +8,8 @@ import type { ParallelHelpersSettings } from "../myrmidon-parallel-helpers.js";
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in instance settings
 import type { BrowserBridgeSettings } from "../myrmidon-browser-bridge.js";
 import type { SwarmClaimSettings } from "../myrmidon-swarm-claim.js";
+// myrmidon(1.6.1-BOT-DISK-D): shared mount settings stored in instance settings
+import type { SharedMountSettings } from "../myrmidon-shared-mount.js";
 
 export const DAILY_RETENTION_PRESETS = [3, 7, 14] as const;
 export const WEEKLY_RETENTION_PRESETS = [1, 2, 4] as const;
@@ -43,7 +45,7 @@ export interface InstanceGeneralSettings {
   feedbackDataSharingPreference: FeedbackDataSharingPreference;
   backupRetention: BackupRetentionPolicy;
   /**
-   * Execution policy. Absent/`"any"` = unrestricted; `"kubernetes"` forces the
+   * Execution policy. Absent/"any" = unrestricted; "kubernetes" forces the
    * Kubernetes sandbox provider and denies local/ssh execution.
    */
   executionMode?: InstanceExecutionMode;
@@ -85,6 +87,12 @@ export interface InstanceGeneralSettings {
    * validator of the same field (packages/shared/src/validators/instance.ts).
    */
   swarmClaim?: SwarmClaimSettings;
+  /**
+   * myrmidon(1.6.1-BOT-DISK-D): shared mount settings for bots, changed from
+   * the instance settings page. Controls whether bots can access a shared directory
+   * and what permissions they have. Absent means "shared mount is disabled".
+   */
+  sharedMount?: SharedMountSettings;
 }
 
 export interface InstanceExperimentalSettings {

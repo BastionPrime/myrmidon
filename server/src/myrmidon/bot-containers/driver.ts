@@ -44,6 +44,8 @@ export interface BotContainerSpec {
    *  are checked against MYRMIDON_BOT_MOUNT_SOURCES when the create body is
    *  built; a mount outside that list is refused, not silently dropped. */
   extraMounts?: readonly BotExtraMount[];
+  /** Whether this bot should have access to the shared directory */
+  hasSharedMountAccess?: boolean;
   /** Extra, non-authoritative labels (e.g. a project grouping). The driver's own
    *  identification labels (see template.ts BOT_LABEL_KEYS) always win on
    *  conflict and cannot be overridden through this field. */
