@@ -121,11 +121,22 @@ export function Ui2TopBar() {
             />
             <StatusChip
               icon={Wallet}
-              label={t("ui2.chip.forecast", {
-                defaultValue: "{{spend}} of {{budget}}",
-                spend: formatMoney(strip.monthSpendCents),
-                budget: formatMoney(strip.monthBudgetCents),
-              })}
+              // myrmidon(HERMES-USAGE-COST): no budget set — show spend only.
+              // "{{spend}} of {{budget}}" with budget $0 reads as the lying
+              // "$0 of $0" plaque; the spend-only variant keeps the chip
+              // truthful when no cap is configured.
+              label={
+                strip.monthBudgetCents > 0
+                  ? t("ui2.chip.forecast", {
+                      defaultValue: "{{spend}} of {{budget}}",
+                      spend: formatMoney(strip.monthSpendCents),
+                      budget: formatMoney(strip.monthBudgetCents),
+                    })
+                  : t("ui2.chip.forecastSpendOnly", {
+                      defaultValue: "{{spend}} spent",
+                      spend: formatMoney(strip.monthSpendCents),
+                    })
+              }
               tone="default"
               mono
             />
