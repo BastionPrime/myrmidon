@@ -84,7 +84,7 @@ has no configuration.
 
 ## Data and migration
 
-One row per regulation in `myrmidon_wiki_regulations` (migration 0290,
+One row per regulation in `myrmidon_wiki_regulations` (migration 0293,
 additive: a new table with a unique `(company_id, slug)` index and a status
 index). The revision history rides in the `revisions` jsonb column — one entry
 per revision, oldest first, each with its own status — and the newest revision
