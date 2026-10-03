@@ -77,6 +77,22 @@ version file to edit. Base Paperclip version is in the image label
   the registry API are documented in the same guide. Guide:
   [guides/stack-registry.md](guides/stack-registry.md).
 
+### Stack update cycle documentation (STACK-UPDATES part D)
+
+- The stack-updates overview document (EN + RU) for the whole release-watch
+  cycle: where «ours» comes from per probe (health-commit, docker-image,
+  container-labels, env, manual, none) and where «latest» comes from (the
+  anonymous GitHub releases/tags read), how the lag is counted and why an
+  unmatched local version reads `unknown`, the notable-lines excerpt rules,
+  the patch-closed verdict (closed/open/unknown per carried delta through the
+  compare API, with the aggregate), the daily sweep behind
+  `MYRMIDON_STACK_CHECK_INTERVAL_SEC` and the manual check, the
+  `stack_update` attention card with its dedup key, the unassigned backlog
+  draft the planner creates, both settings and the network-down behavior
+  (transport failure → 503 with the previous cache intact; a per-source HTTP
+  error → a per-component unknown). The screen-by-column screen guide is
+  referenced, not duplicated. Document: [stack-updates.md](stack-updates.md).
+
 ## 1.5.0
 
 ### Tracing health (TRACING-HEALTH)
