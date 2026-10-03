@@ -54,7 +54,7 @@ import {
   type ReadyPluginWorkerRecovery,
 } from "../services/plugin-environment-driver.js";
 import { getConfiguredSecretProvider } from "../secrets/configured-provider.js";
-import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
+import { assertBoardOrgAccess, assertActorCompanyPermission, getActorInfo } from "./authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { environmentRuntimeService } from "../services/environment-runtime.js";
@@ -350,7 +350,14 @@ export function environmentRoutes(
       : {};
   }
 
-  function assertCanAccessInstanceEnvironments(req: Request) {
+  async function assertCanAccessInstanceEnvironments(req: Request, companyId?: string) {
+    if (req.actor.type === "agent") {
+      if (!companyId || req.actor.companyId !== companyId) {
+        throw forbidden("Instance environment management is restricted to board operators");
+      }
+      await assertActorCompanyPermission(req, db, companyId, "environments:manage");
+      return;
+    }
     if (req.actor.type !== "board") {
       throw forbidden("Instance environment management is restricted to board operators");
     }
@@ -358,11 +365,23 @@ export function environmentRoutes(
     throw forbidden("Instance admin access required");
   }
 
-  function assertCanReadInstanceEnvironments(req: Request) {
+  async function assertCanReadInstanceEnvironments(req: Request, companyId?: string) {
+    if (req.actor.type === "agent") {
+      if (!companyId || req.actor.companyId !== companyId) {
+        assertBoardOrgAccess(req);
+        return;
+      }
+      await assertActorCompanyPermission(req, db, companyId, "environments:manage");
+      return;
+    }
     assertBoardOrgAccess(req);
   }
 
-  function assertCustomImageCompanyAccess(req: Request, companyId: string) {
+  async function assertCustomImageCompanyAccess(req: Request, companyId: string) {
+    if (req.actor.type === "agent") {
+      await assertActorCompanyPermission(req, db, companyId, "environments:manage");
+      return;
+    }
     if (req.actor.type !== "board") {
       throw forbidden("Board access required");
     }
@@ -420,7 +439,7 @@ export function environmentRoutes(
   }
 
   async function assertCanReadSecretsForDraftProbe(req: Request, companyId: string) {
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req);
     return companyId;
   }
 
@@ -474,8 +493,11 @@ export function environmentRoutes(
         ? req.query.companyId.trim()
         : null;
     if (queryCompanyId) {
-      assertCustomImageCompanyAccess(req, queryCompanyId);
+      await assertCustomImageCompanyAccess(req, queryCompanyId);
       return queryCompanyId;
+    }
+    if (req.actor.type === "agent" && req.actor.companyId) {
+      return req.actor.companyId;
     }
     if (req.actor.type === "board" && req.actor.companyIds?.length === 1) {
       return req.actor.companyIds[0]!;
@@ -483,7 +505,7 @@ export function environmentRoutes(
     const companyIds = await instanceSettings.listCompanyIds();
     if (companyIds.length === 1 && companyIds[0]) {
       const companyId = companyIds[0];
-      assertCustomImageCompanyAccess(req, companyId);
+      await assertCustomImageCompanyAccess(req, companyId);
       return companyId;
     }
     throw unprocessable("companyId query parameter is required for environment customImage setup.");
@@ -495,7 +517,7 @@ export function environmentRoutes(
   ): Promise<string> {
     const metadataCompanyId = readCustomImageSetupSessionCompanyId(session);
     if (metadataCompanyId) {
-      assertCustomImageCompanyAccess(req, metadataCompanyId);
+      await assertCustomImageCompanyAccess(req, metadataCompanyId);
       return metadataCompanyId;
     }
     return await resolveCustomImageCompanyId(req);
@@ -700,7 +722,7 @@ export function environmentRoutes(
   }
 
   router.get("/companies/:companyId/environments", async (req, res) => {
-    assertCanReadInstanceEnvironments(req);
+    await assertCanReadInstanceEnvironments(req, req.params.companyId as string);
     const rows = await svc.list({
       status: req.query.status as string | undefined,
       driver: req.query.driver as string | undefined,
@@ -712,7 +734,7 @@ export function environmentRoutes(
   });
 
   router.get("/environments/:id/delete-blast-radius", async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req);
     const impact = await svc.getDeleteBlastRadius(req.params.id as string);
     if (!impact) {
       res.status(404).json({ error: "Environment not found" });
@@ -722,7 +744,7 @@ export function environmentRoutes(
   });
 
   router.get("/companies/:companyId/environments/capabilities", async (req, res) => {
-    assertCanReadInstanceEnvironments(req);
+    await assertCanReadInstanceEnvironments(req, req.params.companyId as string);
     const pluginDrivers = await listReadyPluginEnvironmentDrivers({
       db,
       workerManager: options.pluginWorkerManager,
@@ -771,7 +793,7 @@ export function environmentRoutes(
   });
 
   router.get("/environments/:environmentId/custom-image-template", async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req);
     await resolveCustomImageCompanyId(req);
     const overview = await customImages.getOverview({
       environmentId: req.params.environmentId as string,
@@ -783,7 +805,7 @@ export function environmentRoutes(
     "/environments/:environmentId/custom-image-setup-sessions",
     validate(startEnvironmentCustomImageSetupSessionSchema),
     async (req, res) => {
-      assertCanAccessInstanceEnvironments(req);
+      await assertCanAccessInstanceEnvironments(req);
       const companyId = await resolveCustomImageCompanyId(req);
       const actor = getActorInfo(req);
       const result = await customImages.startSetupSession({
@@ -808,7 +830,7 @@ export function environmentRoutes(
   );
 
   router.get("/environment-custom-image-setup-sessions/:sessionId", async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req);
     const session = await customImages.getSessionById(req.params.sessionId as string);
     if (!session) {
       res.status(404).json({ error: "Environment customImage setup session not found" });
@@ -826,7 +848,7 @@ export function environmentRoutes(
     "/environment-custom-image-setup-sessions/:sessionId/terminal-session-token",
     validate(createEnvironmentCustomImageTerminalSessionTokenSchema),
     async (req, res) => {
-      assertCanAccessInstanceEnvironments(req);
+      await assertCanAccessInstanceEnvironments(req);
       const session = await customImages.getSessionById(req.params.sessionId as string);
       if (!session) {
         res.status(404).json({ error: "Environment customImage setup session not found" });
@@ -891,7 +913,7 @@ export function environmentRoutes(
     "/environment-custom-image-setup-sessions/:sessionId/finish",
     validate(finishEnvironmentCustomImageSetupSessionSchema),
     async (req, res) => {
-      assertCanAccessInstanceEnvironments(req);
+      await assertCanAccessInstanceEnvironments(req);
       const session = await customImages.getSessionById(req.params.sessionId as string);
       if (!session) {
         res.status(404).json({ error: "Environment customImage setup session not found" });
@@ -923,7 +945,7 @@ export function environmentRoutes(
     "/environment-custom-image-setup-sessions/:sessionId/cancel",
     validate(cancelEnvironmentCustomImageSetupSessionSchema),
     async (req, res) => {
-      assertCanAccessInstanceEnvironments(req);
+      await assertCanAccessInstanceEnvironments(req);
       const session = await customImages.getSessionById(req.params.sessionId as string);
       if (!session) {
         res.status(404).json({ error: "Environment customImage setup session not found" });
@@ -949,7 +971,7 @@ export function environmentRoutes(
   );
 
   router.post("/environments/:environmentId/custom-image-template/rollback", async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req);
     const companyId = await resolveCustomImageCompanyId(req);
     const actor = getActorInfo(req);
     const result = await customImages.rollbackTemplate({
@@ -972,7 +994,7 @@ export function environmentRoutes(
     "/environments/:environmentId/custom-image-template/relink",
     validate(relinkEnvironmentCustomImageTemplateSchema),
     async (req, res) => {
-      assertCanAccessInstanceEnvironments(req);
+      await assertCanAccessInstanceEnvironments(req);
       const companyId = await resolveCustomImageCompanyId(req);
       const actor = getActorInfo(req);
       // The service classifies drift, re-stamps the fingerprint, and writes the
@@ -994,7 +1016,7 @@ export function environmentRoutes(
   );
 
   router.delete("/environments/:environmentId/custom-image-template", async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req);
     const companyId = await resolveCustomImageCompanyId(req);
     const actor = getActorInfo(req);
     const template = await customImages.disableTemplate({
@@ -1013,7 +1035,7 @@ export function environmentRoutes(
 
   router.post("/companies/:companyId/environments", validate(createEnvironmentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req, companyId);
     assertNoClientPlatformProvisionedMarkers(req.body.metadata);
     if (req.body.driver === "local") {
       const existingLocal = await svc.list({ driver: "local" });
@@ -1074,7 +1096,7 @@ export function environmentRoutes(
   });
 
   router.get("/environments/:id", async (req, res) => {
-    assertCanReadInstanceEnvironments(req);
+    await assertCanReadInstanceEnvironments(req);
     const environment = await svc.getById(req.params.id as string);
     if (!environment || (environment.driver === "local" && (await isManagedSandboxOnlyInstance()))) {
       res.status(404).json({ error: "Environment not found" });
@@ -1084,7 +1106,7 @@ export function environmentRoutes(
   });
 
   router.get("/environments/:id/secret-refs", async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req);
     const environment = await svc.getById(req.params.id as string);
     if (!environment) {
       res.status(404).json({ error: "Environment not found" });
@@ -1100,7 +1122,7 @@ export function environmentRoutes(
   });
 
   router.get("/environments/:id/leases", async (req, res) => {
-    assertCanReadInstanceEnvironments(req);
+    await assertCanReadInstanceEnvironments(req);
     const environment = await svc.getById(req.params.id as string);
     if (!environment) {
       res.status(404).json({ error: "Environment not found" });
@@ -1113,7 +1135,7 @@ export function environmentRoutes(
   });
 
   router.get("/environment-leases/:leaseId", async (req, res) => {
-    assertCanReadInstanceEnvironments(req);
+    await assertCanReadInstanceEnvironments(req);
     const lease = await svc.getLeaseById(req.params.leaseId as string);
     if (!lease) {
       res.status(404).json({ error: "Environment lease not found" });
@@ -1123,7 +1145,7 @@ export function environmentRoutes(
   });
 
   router.patch("/environments/:id", validate(updateEnvironmentSchema), async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req);
     const existing = await svc.getById(req.params.id as string);
     if (!existing) {
       res.status(404).json({ error: "Environment not found" });
@@ -1259,7 +1281,7 @@ export function environmentRoutes(
   });
 
   router.delete("/environments/:id", async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req);
     const existing = await svc.getById(req.params.id as string);
     if (!existing) {
       res.status(404).json({ error: "Environment not found" });
@@ -1380,7 +1402,7 @@ export function environmentRoutes(
   });
 
   router.post("/environments/:id/probe", async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    await assertCanAccessInstanceEnvironments(req);
     const environment = await svc.getById(req.params.id as string);
     if (!environment) {
       res.status(404).json({ error: "Environment not found" });
@@ -1422,7 +1444,7 @@ export function environmentRoutes(
     validate(probeEnvironmentConfigSchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
-      assertCanAccessInstanceEnvironments(req);
+      await assertCanAccessInstanceEnvironments(req);
       if (req.body.driver === "sandbox") {
         await assertCanReadSecretsForDraftProbe(req, companyId);
       }
