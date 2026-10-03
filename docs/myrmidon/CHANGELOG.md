@@ -10,6 +10,24 @@ version file to edit. Base Paperclip version is in the image label
 
 ## 1.6.0
 
+### Telegram notifications (TG-NOTIFY-SETTINGS, part A: the settings core)
+
+- The company-level settings that say what the board sends to the owner in
+  Telegram: the daily digest, error notifications, inbound rules, escalations
+  and head-bot proactivity, as ONE runtime-changeable contract
+  (`packages/shared/src/myrmidon-telegram-notify.ts` — types and zod
+  validators shared by the server and the UI). Storage without migration:
+  the `myrmidonTelegramNotify` key of `instance_settings.general`,
+  company-keyed. API: `GET /api/myrmidon/telegram-notify` answers the full
+  document (every field of every section always present), `PATCH
+  /api/myrmidon/telegram-notify` applies a partial update; each changed
+  field is recorded in a bounded changelog (200 entries) with the actor, the
+  field path and the from/to values. Reads need company access; PATCH is
+  board only. Every section defaults to OFF — with the defaults the owner
+  keeps receiving only the replies to their own messages and the U2 decision
+  cards; the parts that actually send (digest, errors, inbound, escalations,
+  proactivity) consume this contract. No environment variables are added.
+
 ### CTO chat planner (CTO-CHAT B)
 
 - The board chat planner: one owner message in free text

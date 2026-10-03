@@ -2788,3 +2788,5 @@ export * from "./myrmidon-litellm-sync.js";
 export * from "./myrmidon-autonomy.js";
 // myrmidon(1.6-CTO-CHAT-B): the owner-message-to-epic proposal contract of the CTO chat.
 export * from "./myrmidon-cto-chat.js";
+// myrmidon(OPE-3789): the telegramNotify settings contract (digest, errors, inbound, escalations, proactivity).
+export * from "./myrmidon-telegram-notify.js";
