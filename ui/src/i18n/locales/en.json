@@ -384,7 +384,6 @@
     "refreshing": "Refreshing…",
     "loadError": "Could not load the model list."
   },
-<<<<<<< HEAD
     "wipLimit": {
       "title": "WIP limit",
       "breadcrumb": "WIP limit",
@@ -408,32 +407,14 @@
       "thinkingEffort": "Thinking effort",
       "thinkingEffortHint": "Reasoning depth. Only values the selected model accepts are offered; empty uses the model's default.",
       "effortDefault": "default",
-      "effortEmptyHint": "Empty compiles to the model default: {value}",
-      "effortSelected": "Selected: {value}",
+      "effortEmptyHint": "Empty compiles to the model default: {{value}}",
+      "effortSelected": "Selected: {{value}}",
       "contextLength": "Context length (tokens)",
       "contextLengthHint": "Explicit context window for the model. Empty keeps the profile setting.",
       "contextLengthInvalid": "Context length must be a whole number of tokens.",
-      "contextLengthRange": "Context length must be between {min} and {max}.",
+      "contextLengthRange": "Context length must be between {{min}} and {{max}}.",
       "titleGenerationModel": "Title generation model",
       "titleGenerationModelHint": "Model for auxiliary title generation. Empty keeps the instance default.",
       "compressionModel": "Compression model",
       "compressionModelHint": "Model for auxiliary compression summaries. Empty keeps the instance default."
-    }
-=======
-  "cardEffort": {
-    "thinkingEffort": "Thinking effort",
-    "thinkingEffortHint": "Reasoning depth. Only values the selected model accepts are offered; empty uses the model's default.",
-    "effortDefault": "default",
-    "effortEmptyHint": "Empty compiles to the model default: {{value}}",
-    "effortSelected": "Selected: {{value}}",
-    "contextLength": "Context length (tokens)",
-    "contextLengthHint": "Explicit context window for the model. Empty keeps the profile setting.",
-    "contextLengthInvalid": "Context length must be a whole number of tokens.",
-    "contextLengthRange": "Context length must be between {{min}} and {{max}}.",
-    "titleGenerationModel": "Title generation model",
-    "titleGenerationModelHint": "Model for auxiliary title generation. Empty keeps the instance default.",
-    "compressionModel": "Compression model",
-    "compressionModelHint": "Model for auxiliary compression summaries. Empty keeps the instance default."
-  }
->>>>>>> 63ec50635 (myrmidon(BOT-TUNING-C): locale parity for the cardEffort keys)
-}
+    }}
