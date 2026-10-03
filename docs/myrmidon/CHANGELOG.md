@@ -10,6 +10,39 @@ version file to edit. Base Paperclip version is in the image label
 
 ## 1.6.1
 
+### Custom castes, consumers (CUSTOM-CASTES B)
+
+- The server-side consumers of the company caste directory (part A ships the
+  directory itself): the agent role validator accepts any well-formed caste
+  key (latin letters, digits, hyphens, 1–60) and the agent create/update
+  service refuses a key that is not a caste of the company with a 400 that
+  names the key; the swarm claim gate reads the claiming agent's caste —
+  `swarmEligible=false` returns the new `caste_excluded` claim reason (a
+  supervision caste never enters the claim pool), and a caste-set
+  `maxActiveTasks` overrides the global swarm ceiling for that caste's
+  agents. A role with no directory entry, and a build with no directory wired,
+  behave exactly as before. The autonomy matrix and the authorization logic
+  are unchanged — the caste key is the role string, the CEO checks stay
+  byte-identical, and custom roles keep working through explicit grants.
+  Regression tests pin all of the above, including "moving an agent to a
+  caste changes no autonomy verdict".
+
+### Stale-block watchdog (STALE-BLOCK part B)
+
+- Periodic module `myrmidon/stale-block`: every
+  `MYRMIDON_STALE_BLOCK_INTERVAL_SEC` (default 300 s) it inspects blocked
+  tasks and lifts a block whose every reason is dead — a blocker task that
+  is done or cancelled (cancelled blockers never fire the
+  blockers-resolved path), a passed `reasonRef.dueAt` date, or a cleared
+  gate/event. Dead blocked-by edges are removed through the ordinary issue
+  update path, the task returns to `in_progress`, and one system comment
+  names the cause. A task with a live reason is untouched. Opt-in via
+  `MYRMIDON_STALE_BLOCK_ENABLED` (default 0).
+- One new attention source kind `stale_block`: a lifted block raises one
+  card for the lead and the operator, computed on the fly from a
+  process-level signal registry (no new store); cards fade after
+  `MYRMIDON_STALE_BLOCK_SIGNAL_TTL_MS` (default 24 h).
+
 ### Board administrators from agents (ADMIN-AGENT part C)
 
 - The UI half of making an agent a board administrator. The agent card's
@@ -220,6 +253,17 @@ version file to edit. Base Paperclip version is in the image label
   gateway adapter; the token reaches only the agents listed in
   `MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST`. Bot-side media scripts ship
   under `tools/media-mcp/bot-scripts`, with a hygiene pass over them.
+- The `dwg_convert` media tool for container bots: DWG/DXF input converted to
+  DXF, SVG or PDF through the media service, restoring the dwg2dxf/dwg2SVG
+  capability the bots had on the host (the bot image stays free of CAD
+  utilities; a separate bot image is forbidden by CONVENTIONS §8). The worker
+  image builds LibreDWG from the pinned GNU release and adds an ezdxf venv for
+  DXF round-trips (version bump R12…R2018 on DXF input) and SVG rendering;
+  PDF output needs LibreOffice in the worker image and the base image refuses
+  it honestly (render SVG instead). The tool is synchronous (300 s timeout)
+  with the same per-bot gating, quotas and output accounting as the other
+  media jobs; the config sample lists it in `tools`. Docs:
+  [media-tools.md](media-tools.md) (#381).
 
 ### Deploy and release
 
@@ -442,6 +486,7 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   is snapshotted into the append-only `agent_instructions_revisions` history, and any
   earlier revision can be restored through the API — the restore itself becomes a new
   revision. Guide: [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) (#273, #299).
+
 ### Deploy and reliability
 
 - Automatic rollback by health for the board and the bot fleet (R5-C). A failed

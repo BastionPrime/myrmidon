@@ -384,19 +384,38 @@
     "refreshing": "Refreshing…",
     "loadError": "Could not load the model list."
   },
-  "cardEffort": {
-    "thinkingEffort": "Thinking effort",
-    "thinkingEffortHint": "Reasoning depth. Only values the selected model accepts are offered; empty uses the model's default.",
-    "effortDefault": "default",
-    "effortEmptyHint": "Empty compiles to the model default: {{value}}",
-    "effortSelected": "Selected: {{value}}",
-    "contextLength": "Context length (tokens)",
-    "contextLengthHint": "Explicit context window for the model. Empty keeps the profile setting.",
-    "contextLengthInvalid": "Context length must be a whole number of tokens.",
-    "contextLengthRange": "Context length must be between {{min}} and {{max}}.",
-    "titleGenerationModel": "Title generation model",
-    "titleGenerationModelHint": "Model for auxiliary title generation. Empty keeps the instance default.",
-    "compressionModel": "Compression model",
-    "compressionModelHint": "Model for auxiliary compression summaries. Empty keeps the instance default."
-  }
+    "wipLimit": {
+      "title": "WIP limit",
+      "breadcrumb": "WIP limit",
+      "intro": "How many tasks one agent may hold in work at once (in progress + in review). A capped agent is handed no new task until one of its active tasks settles; no run in flight is interrupted.",
+      "loading": "Loading the WIP limit settings...",
+      "noCompany": "Select a company to edit its WIP limit.",
+      "defaultLabel": "Default limit per agent",
+      "defaultHint": "Applies to every agent without its own value. Empty — no limit.",
+      "noLimit": "No limit",
+      "usesDefault": "uses default",
+      "agentsTitle": "Per-agent limits",
+      "colAgent": "Agent",
+      "colWip": "In work now",
+      "colLimit": "Limit",
+      "overLimit": "Over limit",
+      "noAgents": "No agents in this company yet.",
+      "save": "Save WIP limit",
+      "saving": "Saving..."
+    },
+    "cardEffort": {
+      "thinkingEffort": "Thinking effort",
+      "thinkingEffortHint": "Reasoning depth. Only values the selected model accepts are offered; empty uses the model's default.",
+      "effortDefault": "default",
+      "effortEmptyHint": "Empty compiles to the model default: {{value}}",
+      "effortSelected": "Selected: {{value}}",
+      "contextLength": "Context length (tokens)",
+      "contextLengthHint": "Explicit context window for the model. Empty keeps the profile setting.",
+      "contextLengthInvalid": "Context length must be a whole number of tokens.",
+      "contextLengthRange": "Context length must be between {{min}} and {{max}}.",
+      "titleGenerationModel": "Title generation model",
+      "titleGenerationModelHint": "Model for auxiliary title generation. Empty keeps the instance default.",
+      "compressionModel": "Compression model",
+      "compressionModelHint": "Model for auxiliary compression summaries. Empty keeps the instance default."
+    }
 }
