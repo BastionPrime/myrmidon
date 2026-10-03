@@ -460,7 +460,9 @@ async function readClaimSettingNumber(
     const first = Array.isArray(rows) ? rows[0] : null;
     if (first && typeof first === "object") {
       const swarm = (first as Record<string, unknown>).swarm;
-      const ttl = swarm && typeof swarm === "object" ? (swarm as Record<string, unknown>)[envName] : null;
+      // Part A stores the pilot settings under camelCase keys, not env names.
+      const storedKey = envName === "MYRMIDON_SWARM_LEASE_TTL_SEC" ? "leaseTtlSec" : "maxActiveTasks";
+      const ttl = swarm && typeof swarm === "object" ? (swarm as Record<string, unknown>)[storedKey] : null;
       if (typeof ttl === "number" && Number.isSafeInteger(ttl) && ttl > 0) return ttl;
     }
   } catch {

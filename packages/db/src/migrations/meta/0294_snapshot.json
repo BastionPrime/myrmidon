@@ -1,5 +1,5 @@
 {
-  "id": "a1e5c2f7-3b94-4d61-9c8f-2e7a64b0d521",
+  "id": "e9a2b75f-6aaf-41a2-bd09-4d8501a63c9a",
   "prevId": "48c5cdd0-a091-4b48-adcd-5a402096e2d3",
   "version": "7",
   "dialect": "postgresql",
@@ -49754,8 +49754,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.model_providers": {
-      "name": "model_providers",
+    "public.baseline_metric_snapshots": {
+      "name": "baseline_metric_snapshots",
       "schema": "",
       "columns": {
         "id": {
@@ -49771,61 +49771,34 @@
           "primaryKey": false,
           "notNull": true
         },
-        "type": {
-          "name": "type",
-          "type": "text",
+        "window_from": {
+          "name": "window_from",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
         },
-        "name": {
-          "name": "name",
-          "type": "text",
+        "window_to": {
+          "name": "window_to",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
         },
-        "base_url": {
-          "name": "base_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "credential_secret_name": {
-          "name": "credential_secret_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "free": {
-          "name": "free",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "key_validated_at": {
-          "name": "key_validated_at",
+        "generated_at": {
+          "name": "generated_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
           "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
+          "notNull": true
         }
       },
       "indexes": {
-        "model_providers_company_name_uq": {
-          "name": "model_providers_company_name_uq",
+        "baseline_metric_snapshots_company_generated_idx": {
+          "name": "baseline_metric_snapshots_company_generated_idx",
           "columns": [
             {
               "expression": "company_id",
@@ -49834,22 +49807,7 @@
               "nulls": "last"
             },
             {
-              "expression": "name",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "model_providers_company_idx": {
-          "name": "model_providers_company_idx",
-          "columns": [
-            {
-              "expression": "company_id",
+              "expression": "generated_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -49862,9 +49820,9 @@
         }
       },
       "foreignKeys": {
-        "model_providers_company_id_companies_id_fk": {
-          "name": "model_providers_company_id_companies_id_fk",
-          "tableFrom": "model_providers",
+        "baseline_metric_snapshots_company_id_companies_id_fk": {
+          "name": "baseline_metric_snapshots_company_id_companies_id_fk",
+          "tableFrom": "baseline_metric_snapshots",
           "tableTo": "companies",
           "columnsFrom": [
             "company_id"
@@ -49872,124 +49830,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.model_provider_models": {
-      "name": "model_provider_models",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "provider_id": {
-          "name": "provider_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "model_name": {
-          "name": "model_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "litellm_model_name": {
-          "name": "litellm_model_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "free": {
-          "name": "free",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "model_provider_models_provider_model_uq": {
-          "name": "model_provider_models_provider_model_uq",
-          "columns": [
-            {
-              "expression": "provider_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "model_name",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "model_provider_models_provider_idx": {
-          "name": "model_provider_models_provider_idx",
-          "columns": [
-            {
-              "expression": "provider_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "model_provider_models_provider_id_model_providers_id_fk": {
-          "name": "model_provider_models_provider_id_model_providers_id_fk",
-          "tableFrom": "model_provider_models",
-          "tableTo": "model_providers",
-          "columnsFrom": [
-            "provider_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },

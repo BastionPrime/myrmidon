@@ -510,9 +510,43 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   const access = accessService(db);
 
+  /**
+   * Activity-log actor for tool mutations: the real acting principal (board
+   * user or agent), never a hardcoded "user"/"board" placeholder, so an
+   * agent-actor mutation is attributable in the audit trail.
+   */
+  function toolActivityActor(req: Request): {
+    actorType: "agent" | "user";
+    actorId: string;
+    agentId: string | null;
+    runId: string | null;
+  } {
+    const actor = getActorInfo(req);
+    if (actor.actorType === "agent") {
+      return {
+        actorType: "agent",
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+      };
+    }
+    return {
+      actorType: "user",
+      actorId: actor.actorId,
+      agentId: null,
+      runId: actor.runId,
+    };
+  }
+
   async function assertBoardToolPermission(req: Request, companyId: string, permissionKey: PermissionKey) {
-    assertBoard(req);
     assertCompanyAccess(req, companyId);
+    if (req.actor.type === "agent") {
+      if (!req.actor.agentId) throw forbidden("Agent authentication required");
+      const allowed = await access.hasPermission(companyId, "agent", req.actor.agentId, permissionKey);
+      if (!allowed) throw forbidden(`Missing permission: ${permissionKey}`);
+      return;
+    }
+    assertBoard(req);
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
     const userId = req.actor.userId;
     if (userId && await access.hasPermission(companyId, "user", userId, permissionKey)) return;
@@ -700,8 +734,16 @@ function connectorEnrollmentPrincipal(req: Request): string {
   }
 
   async function assertBoardAnyToolPermission(req: Request, companyId: string, permissionKeys: PermissionKey[]) {
-    assertBoard(req);
     assertCompanyAccess(req, companyId);
+    if (req.actor.type === "agent") {
+      if (!req.actor.agentId) throw forbidden("Agent authentication required");
+      for (const permissionKey of permissionKeys) {
+        const allowed = await access.hasPermission(companyId, "agent", req.actor.agentId, permissionKey);
+        if (allowed) return;
+      }
+      throw forbidden(`Missing one of permissions: ${permissionKeys.join(", ")}`);
+    }
+    assertBoard(req);
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
     const userId = req.actor.userId;
     if (userId) {
@@ -926,8 +968,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       }
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_app.connected",
         entityType: "tool_connection",
         entityId: result.connectionId,
@@ -1027,8 +1071,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     }
     await logActivity(db, {
       companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "paperclip_cloud_connector.enrollment_started",
       entityType: "connector_instance",
       entityId: status.instanceId ?? "pending",
@@ -1068,8 +1114,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     if (pending?.companyId) {
       await logActivity(db, {
         companyId: pending.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "paperclip_cloud_connector.enrollment_completed",
         entityType: "connector_instance",
         entityId: status.instanceId ?? enrollmentId,
@@ -1139,8 +1187,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
         : null;
       await logActivity(db, {
         companyId: result.connection.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_app.oauth_connected",
         entityType: "tool_connection",
         entityId: result.connection.id,
@@ -1235,8 +1285,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       });
       await logActivity(db, {
         companyId: result.connection.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_app.oauth_connected",
         entityType: "tool_connection",
         entityId: result.connection.id,
@@ -1277,8 +1329,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const callbackCode = typeof details?.code === "string" ? details.code : "vercel_connect_callback_failed";
       await logActivity(db, {
         companyId: pendingState.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_app.oauth_failed",
         entityType: "tool_connection",
         entityId: pendingState.connectionId,
@@ -1356,8 +1410,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
         ?? (callbackError instanceof HttpError ? `oauth_callback_http_${callbackError.status}` : "oauth_callback_failed");
       await logActivity(db, {
         companyId: pendingState.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_app.oauth_failed",
         entityType: "tool_connection",
         entityId: pendingState.connectionId,
@@ -1398,8 +1454,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     }
     await logActivity(db, {
       companyId: result.connection.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_app.oauth_connected",
       entityType: "tool_connection",
       entityId: result.connection.id,
@@ -1443,8 +1501,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const result = await svc.finalizeOAuthAccess(companyId, existing.id, req.body, getActorInfo(req));
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_app.oauth_access_finalized",
         entityType: "tool_connection",
         entityId: result.connection.id,
@@ -1465,8 +1525,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const result = await svc.finishGalleryAppConnection(companyId, existing.id, req.body, getActorInfo(req));
     await logActivity(db, {
       companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_app.finished",
       entityType: "tool_connection",
       entityId: result.connection.id,
@@ -1513,8 +1575,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const result = await svc.installExample(companyId, req.params.id as string, getActorInfo(req));
     await logActivity(db, {
       companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_example.installed",
       entityType: "tool_example",
       entityId: result.example.id,
@@ -1536,8 +1600,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const result = await svc.smokeExample(companyId, req.params.id as string, getActorInfo(req));
     await logActivity(db, {
       companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_example.smoke_run",
       entityType: "tool_example",
       entityId: result.exampleId,
@@ -1572,8 +1638,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const application = await svc.createApplication(companyId, req.body);
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_application.created",
         entityType: "tool_application",
         entityId: application.id,
@@ -1593,8 +1661,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const application = await svc.updateApplication(existing.id, req.body);
       await logActivity(db, {
         companyId: application.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_application.updated",
         entityType: "tool_application",
         entityId: application.id,
@@ -1613,8 +1683,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const application = await svc.deleteApplication(existing.id);
     await logActivity(db, {
       companyId: application.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_application.deleted",
       entityType: "tool_application",
       entityId: application.id,
@@ -1644,8 +1716,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const connection = await svc.createConnection(companyId, req.body, getActorInfo(req));
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_connection.created",
         entityType: "tool_connection",
         entityId: connection.id,
@@ -1692,8 +1766,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     });
     await logActivity(db, {
       companyId: connection.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "composio.service_connect_started",
       entityType: "tool_connection",
       entityId: connection.id,
@@ -1716,8 +1792,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const result = await svc.disconnectComposioService(connection.id, req.params.toolkitSlug as string, getActorInfo(req));
     await logActivity(db, {
       companyId: connection.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "composio.service_disconnected",
       entityType: "tool_connection",
       entityId: connection.id,
@@ -1783,8 +1861,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       );
       await logActivity(db, {
         companyId: connection.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_connection.grant_audience_replaced",
         entityType: "connection_grant",
         entityId: grant.id,
@@ -1811,8 +1891,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     }, getActorInfo(req));
     await logActivity(db, {
       companyId: connection.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_connection.grant_added",
       entityType: "connection_grant",
       entityId: grant.id,
@@ -1836,8 +1918,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const grant = await svc.revokeConnectionGrant(connection.id, req.params.grantId as string, getActorInfo(req));
     await logActivity(db, {
       companyId: connection.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_connection.grant_revoked",
       entityType: "connection_grant",
       entityId: grant.id,
@@ -1890,8 +1974,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     );
     await logActivity(db, {
       companyId: connection.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_connection.grant_delegation_revoked",
       entityType: "connection_grant",
       entityId: grant.id,
@@ -1967,8 +2053,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const snapshot = await svc.putConnectionInstalls(connection.id, req.body, getActorInfo(req));
       await logActivity(db, {
         companyId: connection.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_connection.installs_synced",
         entityType: "tool_connection",
         entityId: connection.id,
@@ -1981,7 +2069,6 @@ function connectorEnrollmentPrincipal(req: Request): string {
   );
 
   router.get("/tool-connections/:connectionId/test-agents", async (req, res) => {
-    assertBoard(req);
     if (!options.toolGateway) {
       res.status(501).json({ error: "Tool gateway service is not configured" });
       return;
@@ -2022,7 +2109,6 @@ function connectorEnrollmentPrincipal(req: Request): string {
   });
 
   router.get("/tool-connections/:connectionId/test-agents/:agentId/access", async (req, res) => {
-    assertBoard(req);
     if (!options.toolGateway) {
       res.status(501).json({ error: "Tool gateway service is not configured" });
       return;
@@ -2041,7 +2127,6 @@ function connectorEnrollmentPrincipal(req: Request): string {
   });
 
   router.post("/tool-connections/:connectionId/test-calls", validate(toolConnectionTestCallSchema), async (req, res) => {
-    assertBoard(req);
     if (!options.toolGateway) {
       res.status(501).json({ error: "Tool gateway service is not configured" });
       return;
@@ -2055,7 +2140,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
         companyId: connection.companyId,
         connectionId: connection.id,
         agentId: req.body.agentId,
-        userId: req.actor.userId ?? "board",
+        userId: getActorInfo(req).actorId,
         toolName: req.body.toolName,
         parameters: req.body.parameters ?? {},
       });
@@ -2066,7 +2151,6 @@ function connectorEnrollmentPrincipal(req: Request): string {
   });
 
   router.get("/tool-connections/:connectionId/test-calls/:actionRequestId", async (req, res) => {
-    assertBoard(req);
     if (!options.toolGateway) {
       res.status(501).json({ error: "Tool gateway service is not configured" });
       return;
@@ -2097,8 +2181,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     );
     const baseLog = {
       companyId: connection.companyId,
-      actorType: "user" as const,
-      actorId: req.actor.userId ?? "board",
+      ...toolActivityActor(req),
       action: "tool_connection.updated",
       entityType: "tool_connection",
       entityId: connection.id,
@@ -2147,8 +2230,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     // company-readable activity, so it never carries a secret name or value.
     await logActivity(db, {
       companyId: connection.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_connection.archived",
       entityType: "tool_connection",
       entityId: connection.id,
@@ -2157,8 +2242,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     if (applicationBefore.status !== "archived" && applicationAfter.status === "archived") {
       await logActivity(db, {
         companyId: applicationAfter.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_application.archived",
         entityType: "tool_application",
         entityId: applicationAfter.id,
@@ -2191,8 +2278,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       );
       await logActivity(db, {
         companyId: existing.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_app.reconnected",
         entityType: "tool_connection",
         entityId: existing.id,
@@ -2209,8 +2298,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const result = await svc.refreshCatalog(existing.id, getActorInfo(req));
     await logActivity(db, {
       companyId: existing.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_connection.catalog_refresh",
       entityType: "tool_connection",
       entityId: existing.id,
@@ -2259,8 +2350,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const profile = await svc.createProfile(companyId, req.body);
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_profile.created",
         entityType: "tool_profile",
         entityId: profile.id,
@@ -2287,8 +2380,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const profile = await svc.updateProfile(existing.id, req.body);
       await logActivity(db, {
         companyId: profile.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_profile.updated",
         entityType: "tool_profile",
         entityId: profile.id,
@@ -2308,8 +2403,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const profile = await svc.duplicateProfile(existing.id, req.body);
       await logActivity(db, {
         companyId: profile.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_profile.duplicated",
         entityType: "tool_profile",
         entityId: profile.id,
@@ -2333,8 +2430,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const result = await svc.deleteProfile(existing.id, req.body);
     await logActivity(db, {
       companyId: existing.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_profile.deleted",
       entityType: "tool_profile",
       entityId: existing.id,
@@ -2355,8 +2454,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const result = await svc.reviewProfileNewTools(existing.id, req.body, getActorInfo(req));
     await logActivity(db, {
       companyId: existing.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_profile.new_tools_reviewed",
       entityType: "tool_profile",
       entityId: existing.id,
@@ -2376,8 +2477,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const entry = await svc.addProfileEntry(existing.id, req.body);
     await logActivity(db, {
       companyId: entry.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_profile_entry.created",
       entityType: "tool_profile_entry",
       entityId: entry.id,
@@ -2393,8 +2496,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const entry = await svc.updateProfileEntry(existing.id, req.body);
     await logActivity(db, {
       companyId: entry.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_profile_entry.updated",
       entityType: "tool_profile_entry",
       entityId: entry.id,
@@ -2410,8 +2515,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const entry = await svc.deleteProfileEntry(existing.id);
     await logActivity(db, {
       companyId: entry.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_profile_entry.deleted",
       entityType: "tool_profile_entry",
       entityId: entry.id,
@@ -2431,8 +2538,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
         const binding = await svc.bindProfile(existing.id, req.body, getActorInfo(req));
         await logActivity(db, {
           companyId,
-          actorType: "user",
-          actorId: req.actor.userId ?? "board",
+          ...toolActivityActor(req),
           action: "tool_profile_binding.created",
           entityType: "tool_profile_binding",
           entityId: binding.id,
@@ -2455,8 +2561,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const result = await svc.unbindProfile(existing.id, req.body);
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_profile_binding.deleted",
         entityType: "tool_profile",
         entityId: existing.id,
@@ -2520,8 +2628,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const policies = await policySvc.reorderPolicies(companyId, req.body);
     await logActivity(db, {
       companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_policy.reordered",
       entityType: "tool_policy",
       entityId: companyId,
@@ -2540,8 +2650,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const policy = await policySvc.createPolicy(companyId, req.body, { userId: req.actor.userId ?? null });
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_policy.created",
         entityType: "tool_policy",
         entityId: policy.id,
@@ -2565,8 +2677,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       });
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_policy.duplicated",
         entityType: "tool_policy",
         entityId: policy.id,
@@ -2594,8 +2708,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       });
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_policy.updated",
         entityType: "tool_policy",
         entityId: policy.id,
@@ -2616,8 +2732,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     });
     await logActivity(db, {
       companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_policy.deleted",
       entityType: "tool_policy",
       entityId: policy.id,
@@ -2640,8 +2758,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       });
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_trust_rule.created",
         entityType: "tool_policy",
         entityId: policy.id,
@@ -2666,8 +2786,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     });
     await logActivity(db, {
       companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_trust_rule.revoked",
       entityType: "tool_policy",
       entityId: policy.id,
@@ -2688,8 +2810,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const template = await svc.createStdioCommandTemplate(companyId, req.body, getActorInfo(req));
     await logActivity(db, {
       companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_stdio_command_template.created",
       entityType: "tool_stdio_command_template",
       entityId: template.id ?? template.templateId,
@@ -2713,8 +2837,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const template = await svc.disableStdioCommandTemplate(companyId, req.params.templateId as string);
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: toolActivityActor(req).actorType,
+        actorId: toolActivityActor(req).actorId,
+        agentId: toolActivityActor(req).agentId,
+        runId: toolActivityActor(req).runId,
         action: "tool_stdio_command_template.disabled",
         entityType: "tool_stdio_command_template",
         entityId: template.id ?? template.templateId,
@@ -2731,8 +2857,10 @@ function connectorEnrollmentPrincipal(req: Request): string {
     const preview = await svc.previewMcpJsonImport(req.body);
     await logActivity(db, {
       companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: toolActivityActor(req).actorType,
+      actorId: toolActivityActor(req).actorId,
+      agentId: toolActivityActor(req).agentId,
+      runId: toolActivityActor(req).runId,
       action: "tool_connection.import_mcp_json_previewed",
       entityType: "tool_connection_import",
       entityId: companyId,
