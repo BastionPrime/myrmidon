@@ -129,6 +129,21 @@ function createFakeIssueLock(locked: LockedQueuedCommentState, transaction: Queu
 // UI reads stays clean, and the whole layer is a no-op when it is off.
 describe("myrmidon(1.6-GRD-B) editQueuedComment guardrails integration", () => {
   const savedEnabled = process.env[GUARDRAILS_INJECTION_ENABLED_ENV];
+  // myrmidon(1.6-GRD-B): typed view of the payload guard entry so the suite
+  // typechecks under strict tsc (TS2571: unknown has no props otherwise).
+  interface GuardrailsInjectionFlag {
+    kind?: unknown;
+    surface?: unknown;
+    commentId?: unknown;
+    flagged?: unknown;
+    score?: unknown;
+    matched?: unknown;
+  }
+  interface GuardrailsPayloadEntry {
+    injection?: GuardrailsInjectionFlag;
+  }
+  const readGuardrailsEntry = (payload: Record<string, unknown>): GuardrailsPayloadEntry | undefined =>
+    payload["_paperclipGuardrails"] as GuardrailsPayloadEntry | undefined;
 
   afterEach(() => {
     if (savedEnabled === undefined) delete process.env[GUARDRAILS_INJECTION_ENABLED_ENV];
@@ -168,11 +183,11 @@ describe("myrmidon(1.6-GRD-B) editQueuedComment guardrails integration", () => {
     // The wake payload the run reads carries the markers and the flag.
     const wakeWrite = vi.mocked(transaction.updateWakeQueuedCommentIds).mock.calls[0]?.[0];
     expect(wakeWrite).toBeDefined();
-    const guard = wakeWrite!.payload["_paperclipGuardrails"] as Record<string, unknown> | undefined;
+    const guard = readGuardrailsEntry(wakeWrite!.payload);
     expect(guard).toBeDefined();
     expect(wakeWrite!.payload["commentBody"]).toBe(`${UNTRUSTED_DATA_OPEN}${injectionBody}${UNTRUSTED_DATA_CLOSE}`);
     expect(guard!.injection).toMatchObject({ flagged: true, surface: "wake_queue" });
-    expect(Array.isArray(guard!.injection.matched)).toBe(true);
+    expect(Array.isArray(guard!.injection?.matched)).toBe(true);
   });
 
   it("keeps the stored body, the payload and the flag untouched for benign text (enabled)", async () => {
@@ -196,7 +211,7 @@ describe("myrmidon(1.6-GRD-B) editQueuedComment guardrails integration", () => {
     });
 
     const wakeWrite = vi.mocked(transaction.updateWakeQueuedCommentIds).mock.calls[0]?.[0];
-    const guard = wakeWrite!.payload["_paperclipGuardrails"] as Record<string, unknown> | undefined;
+    const guard = readGuardrailsEntry(wakeWrite!.payload);
     expect(wakeWrite!.payload["commentBody"]).toBe(`${UNTRUSTED_DATA_OPEN}${benignBody}${UNTRUSTED_DATA_CLOSE}`);
     expect(guard!.injection).toMatchObject({ flagged: false, surface: "wake_queue" });
   });
