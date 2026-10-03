@@ -79,6 +79,9 @@ import { ChoosePathButton } from "./PathInstructionsModal";
 import { AgentCardModelsFields } from "./myrmidon/AgentCardModelsFields";
 // myrmidon(W2b): bot container settings on the agent card
 import { AgentCardContainerFields } from "./myrmidon/AgentCardContainerFields";
+// myrmidon(PARALLEL-HELPERS): parallel helper subagents on the agent card
+import { AgentCardParallelHelpersFields } from "./myrmidon/AgentCardParallelHelpersFields";
+import { parallelHelpersApi, parallelHelpersQueryKey } from "./myrmidon/parallelHelpersApi";
 import { AgentCardEgressFields } from "./myrmidon/AgentCardEgressFields"; // myrmidon(EGRESS-B)
 import { OpenCodeLogoIcon } from "./OpenCodeLogoIcon";
 import { ReportsToPicker } from "./ReportsToPicker";
@@ -604,6 +607,16 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     ? props.values.adapterType
     : overlay.adapterType ?? props.agent.adapterType;
   const getCapabilities = useAdapterCapabilities();
+
+  // myrmidon(PARALLEL-HELPERS): the company ceiling/default for the card's
+  // helpers section. Board-only route; a viewer without access sees the module
+  // defaults (the server resolves the same way), so the card stays usable.
+  const { data: parallelHelpersSettings } = useQuery({
+    queryKey: parallelHelpersQueryKey,
+    queryFn: () => parallelHelpersApi.get(),
+    enabled: !isCreate && adapterType === "hermes_gateway",
+    retry: false,
+  });
   const adapterCaps = getCapabilities(adapterType);
   const isLocal = adapterCaps.supportsInstructionsBundle || adapterCaps.supportsSkills || adapterCaps.supportsLocalAgentJwt;
   
@@ -1726,6 +1739,30 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           {/* myrmidon(EGRESS-B): the bot's project and its own egress list */}
           {!isCreate && adapterType === "hermes_gateway" && (
             <AgentCardEgressFields agentId={props.agent.id} />
+          )}
+          {/* myrmidon(PARALLEL-HELPERS): parallel helper subagents on the agent card.
+              The ceiling/default come from the instance settings; read-only here,
+              changed on the settings page. */}
+          {!isCreate && adapterType === "hermes_gateway" && (
+            <AgentCardParallelHelpersFields
+              value={eff("adapterConfig", "parallelHelpers", config.parallelHelpers)}
+              onChange={(next) => mark("adapterConfig", "parallelHelpers", next)}
+              ceiling={parallelHelpersSettings?.effective.ceiling ?? null}
+              defaultLimit={parallelHelpersSettings?.effective.defaultPerAgent ?? null}
+              renderModelPicker={(picker) => (
+                <ModelDropdown
+                  models={models}
+                  value={picker.value}
+                  onChange={picker.onChange}
+                  open={picker.open}
+                  onOpenChange={picker.onOpenChange}
+                  allowDefault
+                  required={false}
+                  groupByProvider={false}
+                  creatable
+                />
+              )}
+            />
           )}
           {isLocal && (<>
               <ModelDropdown

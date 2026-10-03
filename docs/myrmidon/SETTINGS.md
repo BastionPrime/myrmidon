@@ -567,6 +567,26 @@ database hit per wake.
 |---|---|---|---|---|
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_ENABLED` | WAKE-GUARD | `1` (on) | Master switch of the wake guard: on — an event-free wake to a settle-pending task is skipped instead of dispatching a run | `0`/`false`/`off`/`no` — disable (wakes dispatch runs as before). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_TTL_SEC` | WAKE-GUARD | `60` | How long a suppress decision stays cached for one task (matches the sweep's default poll); the cache holds at most 1000 issues, least-recently-used eviction | From 1 to 3600; non-numeric, non-positive or above the cap — the default (60) |
+| `MYRMIDON_SWARM_CLAIM_ENABLED` | 1.6-SWARM | `0` (off) | Master switch of the per-role task queues: on — an agent claims the top task of its own role's queue behind a lease (TTL + heartbeat), an expired lease returns the task to the queue and the sweep wakes the next agent of the role; the checkout writes the run's claim, the finishing run releases it. Off — no claim is written and the sweep is a no-op (vendor behavior) | `1`/`true`/`on`/`yes` — enable (the pilot). Unset or unrecognized — off: the pilot must be turned on deliberately |
+| `MYRMIDON_SWARM_LEASE_TTL_SEC` | 1.6-SWARM | `900` | How long (sec) a claim's lease stays valid without a heartbeat; the run refreshes it on every checkout pass. The acceptance window (idle agent with a non-empty queue of its role) is one TTL plus one sweep interval | From 60 to 86400; below 60 — 60, above 86400 — 86400. Non-numeric, `0`, negative or fractional — the default |
+| `MYRMIDON_SWARM_MAX_ACTIVE_TASKS` | 1.6-SWARM | `3` | The per-agent ceiling of live claims; a capped agent is not handed new work until a lease finishes, expires or is released. `none` — no ceiling (all queue work claimable) | From 1 to 100; `none`/`0` — no ceiling. Non-numeric or fractional — the default |
+| `MYRMIDON_SWARM_CLAIM_SWEEP_INTERVAL_SEC` | 1.6-SWARM | `30` | How often (sec) the expired-claim sweep runs on the scheduler tick: it releases expired leases, releases claims whose task left the queue, and wakes the next agent of the released task's role | From 5 to 3600; below 5 — 5. Non-numeric, `0`, negative or fractional — the default |
+
+
+## 1.6 — BASELINE: frozen metric snapshots
+
+The server part of BASELINE computes, for an arbitrary window and per project
+and per agent role, the cycle time, the time in review, the return rate, the
+blocked time with its top causes, the runs per task and the LLM cost per task
+from the board's own history
+(`GET /api/myrmidon/companies/:companyId/baseline/metrics?from&to`). The
+periodic job below freezes the last 14 days into `baseline_metric_snapshots`,
+so a pilot after the autonomy changes can be compared against the number the
+board produced before them.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_BASELINE_INTERVAL_SEC` | 1.6-BASELINE | unset (off) | Period (sec) of the snapshot job: every tick recomputes the last 14 days per company and appends one frozen row to `baseline_metric_snapshots` | Unset or empty — no timer, no query. Set to an integer from 60 to 604800; an unreadable or out-of-range value keeps the job on with the daily default (86400) |
 
 ## 1.6 — SKILL-LIFECYCLE: company skill lifecycle
 
@@ -653,6 +673,9 @@ A is unmerged the supervisor answers `{ enabled: false }`.
 |---|---|---|---|---|
 | `MYRMIDON_SWARM_SUPERVISOR_TASK_MAX` | 1.6-SWARM-CLAIM-B | `500` | Row cap of queue candidates reported per role in the supervisor overview; a ceiling, not a page size | Positive integer from 1 to 5000; anything else — the default (500). Values above the 5000 ceiling are clamped to it, so a typo cannot ask for an unbounded scan |
 | `MYRMIDON_SWARM_PILOT_BASELINE_DOC` | 1.6-SWARM-CLAIM-B | `baseline-snapshot-14d` | Issue document key the pilot report reads the frozen BASELINE snapshot from before comparing a window against it | Empty, blank or unset — the default key. Until a document under the key exists the pilot report answers `baseline: null` (there is nothing to compare the window against yet) |
+| `MYRMIDON_SWARM_CLAIM_ENABLED` | 1.6-SWARM-CLAIM-B | unset (on when part A's claim table exists) | Master switch of the swarm claim supervisor view and pilot report: the overview reports the claim/lease state, and the pilot report only compares a window when claims are live. Read as enabled unless the value is exactly `0`, `false`, `off` or `no`; with any other value the module still checks that part A's `issue_claims` table exists before answering enabled | Exact `0`/`false`/`off`/`no` — the supervisor answers `{ enabled: false }` and the pilot report is skipped; any typo or other value is treated as enabled, so an error cannot silently kill the pilot |
+| `MYRMIDON_SWARM_LEASE_TTL_SEC` | 1.6-SWARM-CLAIM-B | unset (module default) | Lease time-to-live, in seconds, reported for each active claim in the supervisor overview and used by the pilot report's lease metrics. A positive integer env value wins over everything else | Unset, empty or not a positive integer — falls back to `instance_settings.general.swarmClaim.MYRMIDON_SWARM_LEASE_TTL_SEC` when present, else the module's own default |
+| `MYRMIDON_SWARM_MAX_ACTIVE_TASKS` | 1.6-SWARM-CLAIM-B | unset (module default) | Per-agent cap of active claimed tasks reported by the supervisor overview and used by the pilot report's workload metrics. A positive integer env value wins over everything else | Unset, empty or not a positive integer — falls back to `instance_settings.general.swarmClaim.MYRMIDON_SWARM_MAX_ACTIVE_TASKS` when present, else the module's own default |
 
 ## 1.6 — FORAGING (source registry, snapshot comparison, skill candidates)
 
@@ -674,3 +697,30 @@ outside: an operator turns it on together with `MYRMIDON_FORAGING_KEY_SECRET` wh
 sources need a token. Findings are recorded `unverified` until the skill lifecycle accepts
 them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand.
 
+
+## 1.6 — PARALLEL-HELPERS (delegated helper agents)
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
+
+## 1.6.1 — GUARDRAILS (untrusted-input flagging layer)
+
+Settings of `server/src/myrmidon/guardrails/` (the 1.6.1 flag-only layer). The whole layer is off
+by default: without `MYRMIDON_GUARDRAILS_INJECTION_ENABLED` the wake queue stores exactly what it
+stored before — no markers, no flag, no event — and the run starts as usual.
+
+### INJECTION (part B: prompt-injection flag on the wake queue)
+
+When enabled, an externally authored queued comment's text is wrapped in
+`<untrusted-data>…</untrusted-data>` markers inside the wake payload the run reads (the board UI
+view of the comment is unchanged), and a heuristic detector (RU+EN) scores the text for
+instruction-override patterns. Flag-only mode: nothing is blocked, nothing is masked, the run
+starts exactly as before; the flag travels in the payload next to the wrapped text. The event
+journal (`recordGuardrailEvent`) is owned by part A; this part publishes the flag through the
+payload only.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_GUARDRAILS_INJECTION_ENABLED` | GUARDRAILS-B | unset (off) | Master switch of the injection flag on the wake queue. Only the exact values `1`, `true`, `yes`, `on` turn it on | Any other value (or unset/empty) — the layer is off and the wake queue is byte-identical to the vendor path; a typo does not silently enable it |
+| `MYRMIDON_GUARDRAILS_INJECTION_SCORE` | GUARDRAILS-B | `0.6` | Score threshold at which the heuristic scan sets `flagged: true`. `0` flags everything, `1` flags nothing | Unset, empty, non-numeric or outside 0..1 — the default `0.6` |
