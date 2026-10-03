@@ -84,6 +84,9 @@ export interface AgentPermissionUpdate {
   authorizationPolicy?: AgentPermissions["authorizationPolicy"];
   // myrmidon(S6)
   toolAccess?: { mode: "all" | "listed"; tools?: string[]; connections?: string[] };
+  // myrmidon(ADMIN-AGENT): board administrator state, patched through the same
+  // permissions endpoint.
+  boardAdmin?: boolean;
 }
 
 export interface AgentWakeRequest {

@@ -296,6 +296,7 @@ export const updateAgentPermissionsSchema = z.object({
   trustPreset: trustPresetSchema.optional(),
   authorizationPolicy: trustAuthorizationPolicySchema.optional(),
   toolAccess: agentToolAccessSchema.optional(), // myrmidon(S6)
+  boardAdmin: z.boolean().optional(), // myrmidon(ADMIN-AGENT)
 });
 
 export type UpdateAgentPermissions = z.infer<typeof updateAgentPermissionsSchema>;
