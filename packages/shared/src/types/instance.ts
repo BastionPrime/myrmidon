@@ -3,8 +3,11 @@ import type { FeedbackDataSharingPreference } from "./feedback.js";
 import type { WorkspaceHygieneLimits } from "../myrmidon-workspace-hygiene.js";
 // myrmidon(C0): the run admission limits stored in instance settings
 import type { RunLimits } from "../myrmidon-runtime-limits.js";
+// myrmidon(PARALLEL-HELPERS): the helper ceiling/default stored in instance settings
+import type { ParallelHelpersSettings } from "../myrmidon-parallel-helpers.js";
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in instance settings
 import type { BrowserBridgeSettings } from "../myrmidon-browser-bridge.js";
+import type { SwarmClaimSettings } from "../myrmidon-swarm-claim.js";
 
 export const DAILY_RETENTION_PRESETS = [3, 7, 14] as const;
 export const WEEKLY_RETENTION_PRESETS = [1, 2, 4] as const;
@@ -59,6 +62,15 @@ export interface InstanceGeneralSettings {
    */
   runLimits?: RunLimits;
   /**
+   * myrmidon(PARALLEL-HELPERS): company ceiling/default for parallel helper
+   * subagents, changed from the instance settings page and
+   * `GET`/`PATCH /api/myrmidon/parallel-helpers`. Absent means "use the module
+   * defaults" (ceiling 10, default 2 — see
+   * packages/shared/src/myrmidon-parallel-helpers.ts); kept in sync with the
+   * validator of the same field.
+   */
+  parallelHelpers?: ParallelHelpersSettings;
+  /**
    * myrmidon(EXTCASE-B): browser-bridge allowlist (the tender-platform domains
    * the gateway and the extension both accept), changed from the bridge panel.
    * Absent means "no domain is allowed" — the bridge denies by default.
@@ -66,6 +78,13 @@ export interface InstanceGeneralSettings {
    * (packages/shared/src/validators/instance.ts).
    */
   browserBridge?: BrowserBridgeSettings;
+  /**
+   * myrmidon(1.6-SWARM): per-role queues with leased claims, changed from
+   * `GET`/`PATCH /api/myrmidon/swarm-claim`. Absent means "use the environment
+   * variable, then the default (the pilot is off)". Kept in sync with the
+   * validator of the same field (packages/shared/src/validators/instance.ts).
+   */
+  swarmClaim?: SwarmClaimSettings;
 }
 
 export interface InstanceExperimentalSettings {

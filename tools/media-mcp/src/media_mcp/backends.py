@@ -1,8 +1,9 @@
-"""Clients for the ready-made backends (Gotenberg, Tika) and for our worker."""
+"""Clients for the ready-made backends (Gotenberg, Tika, the STT gateway) and for our worker."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -92,6 +93,41 @@ class Backends:
                 raise BackendError(f"text extractor unavailable ({type(e).__name__})") from None
         text = "".join(parts)
         return text[:max_chars], len(text) > max_chars
+
+    # -- stt gateway
+    async def stt_transcribe(self, name: str, fh, size: int, model: str, language: str | None) -> dict:
+        """POST the file as multipart to the STT gateway; -> normalized {text, segments}.
+
+        The gateway API key goes only in the Authorization header; it never enters
+        an error message or the log. The response is read up to stt_max_response_bytes."""
+        if size > self.cfg.stt_max_multipart_bytes:
+            raise BackendError(f"audio larger than {self.cfg.stt_max_multipart_bytes // 2**20} MiB for transcription; split it first (audio_split)")
+        headers = {"Authorization": f"Bearer {self.cfg.stt_api_key}"} if self.cfg.stt_api_key else {}
+        try:
+            async with self.http.stream("POST", f"{self.cfg.stt_base_url}/v1/audio/transcriptions",
+                                        files={"file": (name, fh, "application/octet-stream")},
+                                        data={"model": model} | ({"language": language} if language else {}),
+                                        headers=headers) as r:
+                if r.status_code == 404:
+                    raise BackendError(f"model {model} is not registered on the transcription gateway")
+                if r.status_code != 200:
+                    body = (await r.aread())[:300].decode("utf-8", "replace")
+                    log.warning("stt gateway -> HTTP %s (model %s)", r.status_code, model)  # never the key or body
+                    raise BackendError(f"transcription gateway refused the request (HTTP {r.status_code})")
+                parts: list[bytes] = []
+                n = 0
+                async for chunk in r.aiter_bytes(1 << 20):
+                    parts.append(chunk)
+                    n += len(chunk)
+                    if n > self.cfg.stt_max_response_bytes:
+                        raise BackendError(f"transcription response larger than {self.cfg.stt_max_response_bytes // 2**20} MiB")
+        except httpx.HTTPError as e:
+            raise BackendError(f"transcription gateway unavailable ({type(e).__name__})") from None
+        raw = b"".join(parts)
+        try:
+            return json.loads(raw)
+        except ValueError:
+            raise BackendError("transcription gateway returned a non-JSON answer (is the model name correct?)") from None
 
     # -- worker
     def _wh(self) -> dict[str, str]:

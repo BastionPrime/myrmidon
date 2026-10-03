@@ -1,8 +1,10 @@
 import type { Request, Response } from "express";
-import type { SecretBindingTargetType } from "@paperclipai/shared";
+import type { Db } from "@paperclipai/db";
+import type { PermissionKey, SecretBindingTargetType } from "@paperclipai/shared";
 import { forbidden, HttpError, unauthorized } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { responsibleUserAuthzShadowMode } from "../services/authorization.js";
+import { accessService } from "../services/index.js";
 
 function throwOrShadowResponsibleUserCompanyAccessDeny(
   req: Request,
@@ -118,6 +120,46 @@ export function assertCompanyAccess(req: Request, companyId: string) {
       }
     }
   }
+}
+
+/**
+ * Company permission check for BOTH actor types, following the
+ * `assertCompanyPermission` precedent in `routes/access.ts`:
+ *
+ *   - board actors pass through `access.canUser(companyId, userId, key)`
+ *     (company access is still asserted first via `assertCompanyAccess`)
+ *   - agent actors pass when the agent holds the company grant
+ *     (`access.hasPermission(companyId, "agent", agentId, key)`)
+ *
+ * Callers keep responsibility for any extra semantics they enforce for board
+ * actors (instance admin floors, viewer/membership bars, trusted-origin
+ * guards); this helper only replaces the "board-only" actor-type check with
+ * the grant check so an agent with the grant can act on its own company.
+ * Board actors whose previous behavior was "any board actor with company
+ * access passes" should NOT call this — use `assertCompanyAccess` alone.
+ */
+export async function assertActorCompanyPermission(
+  req: Request,
+  db: Db,
+  companyId: string,
+  permissionKey: PermissionKey,
+) {
+  assertCompanyAccess(req, companyId);
+  if (req.actor.type === "agent") {
+    if (!req.actor.agentId) throw forbidden("Agent authentication required");
+    const access = accessService(db);
+    const allowed = await access.hasPermission(companyId, "agent", req.actor.agentId, permissionKey);
+    if (!allowed) throw forbidden(`Missing permission: ${permissionKey}`);
+    return;
+  }
+  if (req.actor.type === "board") {
+    if (req.actor.source === "local_implicit") return;
+    const access = accessService(db);
+    const allowed = await access.canUser(companyId, req.actor.userId, permissionKey);
+    if (!allowed) throw forbidden(`Missing permission: ${permissionKey}`);
+    return;
+  }
+  throw unauthorized();
 }
 
 /**

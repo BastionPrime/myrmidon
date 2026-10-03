@@ -55,10 +55,16 @@ services:
       MEDIA_GOTENBERG_URL: http://gotenberg:3000
       MEDIA_TIKA_URL: http://tika:9998
       MEDIA_WORKER_URL: http://media-worker:8081
+      # STT gateway (speech -> text) for the stt_transcribe tool. The API key
+      # comes from ./secrets/stt_api_key (docker secret), never from the repo.
+      MEDIA_STT_BASE_URL: http://stt-gateway:8000
+      MEDIA_STT_API_KEY_FILE: /run/secrets/stt_api_key
+      MEDIA_STT_DEFAULT_MODEL: whisper-large-v3
+      MEDIA_STT_MAX_MULTIPART_BYTES: "33554432"  # per stt_transcribe call; split bigger audio with audio_split
       MEDIA_ALLOWED_HOSTS: media-mcp,media-mcp:8080  # Host header values the MCP endpoint accepts
       MEDIA_SPOOL_MAX_BYTES: "68719476736"  # 64 GiB for all bots together; keep below the spool filesystem size
       MEDIA_SPOOL_MIN_FREE_BYTES: "2147483648"  # refuse writes when the spool filesystem has less free
-    secrets: [worker_token]
+    secrets: [worker_token, stt_api_key]
     volumes:
       - ./config:/config:ro
       - spool:/spool
@@ -112,3 +118,5 @@ services:
 secrets:
   worker_token:
     file: ./secrets/worker_token
+  stt_api_key:
+    file: ./secrets/stt_api_key  # the STT gateway key; random, >= 32 chars, same file the gateway checks

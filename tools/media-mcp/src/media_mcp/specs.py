@@ -392,3 +392,146 @@ def build_pdf_images_argv(spec: dict[str, Any], aliases: set[str], out_dir: str 
     if fmt not in ("png", "jpeg"):
         raise SpecError("format is png or jpeg")
     return ["pdftoppm", f"-{fmt}", "-r", str(dpi), "-f", str(first), "-l", str(last), src, f"{out_dir}/page"]
+
+
+# --- audio splitting (ffmpeg segment muxer) -----------------------------------
+
+MIN_CHUNK_S = 5.0
+MAX_CHUNK_S = 1800.0
+MAX_SPLIT_PARTS = 600
+
+
+def build_audio_split_argv(spec: dict[str, Any], aliases: set[str], out_dir: str = "../out") -> list[str]:
+    """argv for the audio_split job: ffmpeg segment muxer over a file input.
+
+    cwd is the job's `in` directory, chunks go to ../out/chunk_%06d.wav with the
+    segment time taken from chunk_sec. A mandatory `-t` cap keeps the run bounded
+    even when the container is longer than the duration metadata claims."""
+    src = check_alias(spec.get("input"), aliases)
+    chunk = _check_num(spec.get("chunk_sec"), "chunk_sec", MIN_CHUNK_S, MAX_CHUNK_S)
+    parts = int(_check_num(spec.get("max_parts", MAX_SPLIT_PARTS), "max_parts", 1, MAX_SPLIT_PARTS))
+    return ["ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-loglevel", "error", "-y", "-threads", "1",
+            "-protocol_whitelist", "file", "-i", src,
+            "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+            "-f", "segment", "-segment_time", f"{chunk:.3f}",
+            "-reset_timestamps", "1",
+            "-t", f"{(chunk * parts):.3f}",
+            f"{out_dir}/chunk_%06d.wav"]
+
+
+SPLIT_PART_RE = re.compile(r"^chunk_\d{6}\.wav$")
+
+
+def split_offsets(chunks: list[str], chunk_sec: float) -> list[int]:
+    """startMs offsets for sorted chunk names, in file order."""
+    if not chunks:
+        raise SpecError("no chunks produced")
+    return [round(i * chunk_sec * 1000) for i in range(len(chunks))]
+
+
+# --- stt (gateway HTTP) --------------------------------------------------------
+
+STT_MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+STT_LANG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$")
+
+
+def check_stt_model(model: Any) -> str:
+    if not isinstance(model, str) or not STT_MODEL_RE.match(model):
+        raise SpecError("model must be a short lowercase identifier (letters, digits, . _ -)")
+    return model
+
+
+def check_stt_language(language: Any) -> str:
+    if not isinstance(language, str) or not STT_LANG_RE.match(language):
+        raise SpecError("language looks like 'ru' or 'en-US'")
+    return language
+
+
+def normalize_stt_response(payload: Any, max_segments: int = 4000) -> dict:
+    """Map a gateway transcription response to {text, segments:[{speaker,startMs,endMs}]}.
+
+    Accepts the common shapes: verbose JSON with start/end/duration (seconds or
+    milliseconds), optional speaker/channel labels. Never raises on odd data:
+    unknown fields are dropped, segments without timing are kept with zero timing."""
+    if not isinstance(payload, dict):
+        raise SpecError("transcription response is not a JSON object")
+    text = payload.get("text")
+    if not isinstance(text, str):
+        text = ""
+    out_segments: list[dict] = []
+    raw = payload.get("segments")
+    if isinstance(raw, list):
+        for seg in raw[:max_segments]:
+            if not isinstance(seg, dict):
+                continue
+            def ms(*keys: str) -> int | None:
+                for k in keys:
+                    v = seg.get(k)
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        v = float(v)
+                        if k in ("startMs", "endMs"):  # already milliseconds
+                            return round(v)
+                        # Heuristic: OpenAI-style verbose JSON uses seconds; some
+                        # gateways use ms. Values <= 1 h are seconds of a meeting
+                        # chunk; larger raw numbers are already milliseconds.
+                        return round(v * 1000) if v <= 3.6e6 else round(v)
+                return None
+            start, end = ms("startMs", "start"), ms("endMs", "end")
+            dur = seg.get("duration")
+            if end is None and isinstance(dur, (int, float)) and not isinstance(dur, bool) and start is not None:
+                dv = float(dur)
+                end = start + round((dv * 1000) if dv <= 3.6e6 else dv)
+            speaker = seg.get("speaker") or seg.get("speaker_label")
+            if not isinstance(speaker, str) or not speaker:
+                speaker = None
+            out_segments.append({"speaker": speaker, "startMs": start if start is not None else 0, "endMs": end if end is not None else 0})
+    return {"text": text, "segments": out_segments}
+
+
+# --- cad: dwg / dxf conversion ------------------------------------------------
+
+DXF_VERSIONS = ("R12", "R2000", "R2004", "R2007", "R2010", "R2013", "R2018")
+
+
+def build_dwg_argv(spec: dict[str, Any], aliases: set[str], out_dir: str = "../out") -> list[str]:
+    """argv for the cad conversion job. The worker runs `dwg_convert.py`
+    (LibreDWG binaries + ezdxf); every path here is a job-local alias, never a
+    bot-supplied path, exactly like the ffmpeg argv above."""
+    src = check_alias(spec.get("input"), aliases)
+    kind = spec.get("kind")
+    if kind not in ("dxf", "svg", "pdf"):
+        raise SpecError("kind must be one of dxf, svg, pdf")
+    out = spec.get("output") or {}
+    if not isinstance(out, dict):
+        raise SpecError("output must be an object")
+    name = out.get("name") or ("drawing." + kind)
+    if not OUT_NAME_RE.match(name) or "%" in name or ".." in name:
+        raise SpecError("output.name: letters, digits, . _ - only")
+    argv = ["dwg_convert", src, "--kind", kind, "--output", f"{out_dir}/{name}"]
+    if kind == "dxf":
+        version = spec.get("dxf_version", "R2010")
+        if version not in DXF_VERSIONS:
+            raise SpecError(f"dxf_version must be one of {DXF_VERSIONS}")
+        argv += ["--dxf-version", version]
+    if kind in ("svg", "pdf"):
+        for side in ("width", "height"):
+            v = out.get(side)
+            if v is not None:
+                if not isinstance(v, int) or isinstance(v, bool) or not 16 <= v <= 16384:
+                    raise SpecError(f"output.{side} must be an integer in [16, 16384]")
+                argv += [f"--{side.replace('width', 'width').replace('height', 'height')}", str(v)]
+    if kind == "pdf":
+        paper = out.get("paper")
+        if paper is not None:
+            if not isinstance(paper, str) or not re.fullmatch(r"[0-9]{2,5}x[0-9]{2,5}", paper):
+                raise SpecError("output.paper looks like 420x297 (mm)")
+            argv += ["--paper", paper]
+    return argv
+
+
+def is_cad_input(name: str) -> bool:
+    return name.lower().endswith((".dwg", ".dxf"))
+
+
+def is_dwg_input(name: str) -> bool:
+    return name.lower().endswith(".dwg")

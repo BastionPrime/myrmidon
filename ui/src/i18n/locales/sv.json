@@ -326,5 +326,15 @@
       "nightMode": "Night mode — read-only placeholder; scheduled for a 1.6+ follow-up.",
       "answerChannel": "Answer channel — read-only placeholder; channel routing is chosen after 1.6."
     }
+  },
+  "cardModels": {
+    "free": "Free",
+    "paid": "Paid",
+    "freeFirstHint": "Free models are listed first.",
+    "fromBoard": "From board settings",
+    "fromEnvDefault": "Default list",
+    "refresh": "Refresh models",
+    "refreshing": "Refreshing…",
+    "loadError": "Could not load the model list."
   }
 }
