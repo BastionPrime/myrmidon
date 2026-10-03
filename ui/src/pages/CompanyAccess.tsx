@@ -376,7 +376,7 @@ export function CompanyAccess() {
                   <td className="px-3 py-3 text-muted-foreground">—</td>
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-2">
-                      <span>{AGENT_ROLE_LABELS[agent.role] ?? agent.role}</span>
+                      <span>{AGENT_ROLE_LABELS[agent.role as keyof typeof AGENT_ROLE_LABELS] ?? agent.role}</span>
                       <Badge variant="outline" data-testid="board-admin-agent-badge">Board administrator</Badge>
                     </div>
                   </td>
