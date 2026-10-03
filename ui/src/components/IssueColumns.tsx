@@ -20,51 +20,66 @@ import { timeAgo } from "../lib/timeAgo";
 import { Identity } from "./Identity";
 import { StatusIcon } from "./StatusIcon";
 import { Badge } from "@/components/ui/badge";
+// myrmidon(UI-RU): column labels run through the fork i18n catalog.
+import { useTranslation } from "@/i18n";
 
 export const issueTrailingColumns: InboxIssueColumn[] = ["assignee", "kickedOffBy", "project", "workspace", "parent", "labels", "updated"];
 
-const issueColumnLabels: Record<InboxIssueColumn, string> = {
-  status: "Status",
-  id: "ID",
-  assignee: "Responsible",
-  kickedOffBy: "Kicked off by",
-  project: "Project",
-  workspace: "Workspace",
-  parent: "Parent task",
-  labels: "Tags",
-  updated: "Last updated",
+// myrmidon(UI-RU): i18n keys per column; labels/descriptions resolve through t().
+const issueColumnLabelKeys: Record<InboxIssueColumn, string> = {
+  status: "columns.status",
+  id: "columns.id",
+  assignee: "columns.assignee",
+  kickedOffBy: "columns.kickedOffBy",
+  project: "columns.project",
+  workspace: "columns.workspace",
+  parent: "columns.parent",
+  labels: "columns.labels",
+  updated: "columns.updated",
 };
 
-const issueColumnDescriptions: Record<InboxIssueColumn, string> = {
-  status: "Task state chip on the left edge.",
-  id: "Ticket identifier like PAP-1009.",
-  assignee: "Responsible agent or board user.",
-  kickedOffBy: "Board user or agent who created the task.",
-  project: "Linked project pill with its color.",
-  workspace: "Execution or project workspace used for the task.",
-  parent: "Parent task identifier and title.",
-  labels: "Task labels and tags.",
-  updated: "Latest visible activity time.",
+const issueColumnDescriptionKeys: Record<InboxIssueColumn, string> = {
+  status: "columns.statusDesc",
+  id: "columns.idDesc",
+  assignee: "columns.assigneeDesc",
+  kickedOffBy: "columns.kickedOffByDesc",
+  project: "columns.projectDesc",
+  workspace: "columns.workspaceDesc",
+  parent: "columns.parentDesc",
+  labels: "columns.labelsDesc",
+  updated: "columns.updatedDesc",
 };
+
+const issueColumnTaskPresentationDescriptionKeys: Partial<Record<InboxIssueColumn, string>> = {
+  id: "columns.idTaskDesc",
+  status: "columns.statusTaskDesc",
+};
+
+// myrmidon(UI-RU): default translator resolves keys against the shared i18next
+// instance (English unless a fork language is active), so callers without a
+// hook-bound t still get real copy instead of raw keys.
+import { t as translateDefault } from "@/i18n";
+
+export function issueColumnLabel(column: InboxIssueColumn, t: (key: string) => string = translateDefault): string {
+  return t(issueColumnLabelKeys[column]);
+}
 
 export function issueColumnDescription(
   column: InboxIssueColumn,
   presentation: "legacy" | "task" = "legacy",
+  t: (key: string) => string = translateDefault,
 ): string {
-  if (column === "id" && presentation === "task") {
-    return "Task identifier like PAP-1009 on the trailing edge.";
-  }
-  if (column === "status" && presentation === "task") {
-    return "Task state icon on the leading edge.";
-  }
-  return issueColumnDescriptions[column];
+  const taskKey = presentation === "task" ? issueColumnTaskPresentationDescriptionKeys[column] : undefined;
+  if (taskKey !== undefined) return t(taskKey);
+  return t(issueColumnDescriptionKeys[column]);
 }
 
-export function issueActivityTimestamp(issue: Issue): string {
-  return timeAgo(issue.lastActivityAt ?? issue.lastExternalCommentAt ?? issue.updatedAt);
+export function issueActivityTimestamp(issue: Issue, t?: (key: string, options?: Record<string, unknown>) => string): string {
+  return timeAgo(issue.lastActivityAt ?? issue.lastExternalCommentAt ?? issue.updatedAt, t);
 }
 
-export function issueActivityText(issue: Issue): string {
+export function issueActivityText(issue: Issue, t?: (key: string, options?: Record<string, unknown>) => string): string {
+  if (t) return t("time.updated", { time: issueActivityTimestamp(issue, t) });
   return `Updated ${issueActivityTimestamp(issue)}`;
 }
 
@@ -103,6 +118,7 @@ export function IssueColumnPicker({
   iconOnly?: boolean;
   rowPresentation?: "legacy" | "task";
 }) {
+  const { t } = useTranslation();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -111,17 +127,17 @@ export function IssueColumnPicker({
           variant={iconOnly ? "outline" : "ghost"}
           size={iconOnly ? "icon" : "sm"}
           className={iconOnly ? "h-8 w-8 shrink-0" : "hidden h-8 shrink-0 px-2 text-xs sm:inline-flex"}
-          title="Columns"
+          title={t("columns.columns")}
         >
           <Columns3 className={iconOnly ? "h-3.5 w-3.5" : "mr-1 h-3.5 w-3.5"} />
-          {!iconOnly && "Columns"}
+          {!iconOnly && t("columns.columns")}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-(--sz-300px) rounded-xl border-border/70 p-1.5 shadow-xl shadow-black/10">
         <DropdownMenuLabel className="px-2 pb-1 pt-1.5">
           <div className="space-y-1">
             <div className="text-(length:--text-nano) font-semibold uppercase tracking-(--tracking-caps) text-muted-foreground">
-              Desktop task rows
+              {t("columns.desktopTaskRows")}
             </div>
             <div className="text-sm font-medium text-foreground">
               {title}
@@ -139,10 +155,10 @@ export function IssueColumnPicker({
           >
             <span className="flex flex-col gap-0.5">
               <span className="text-sm font-medium text-foreground">
-                {issueColumnLabels[column]}
+                {issueColumnLabel(column, t)}
               </span>
               <span className="text-xs leading-relaxed text-muted-foreground">
-                {issueColumnDescription(column, rowPresentation)}
+                {issueColumnDescription(column, rowPresentation, t)}
               </span>
             </span>
           </DropdownMenuCheckboxItem>
@@ -156,10 +172,10 @@ export function IssueColumnPicker({
           >
             <span className="flex flex-col gap-0.5">
               <span className="text-sm font-medium text-foreground">
-                Date group separators
+                {t("columns.dateGroupSeparators")}
               </span>
               <span className="text-xs leading-relaxed text-muted-foreground">
-                Show Today, Yesterday, and Earlier rules on newest-first task lists.
+                {t("columns.dateGroupSeparatorsHint")}
               </span>
             </span>
           </DropdownMenuCheckboxItem>
@@ -169,8 +185,8 @@ export function IssueColumnPicker({
           onSelect={onResetColumns}
           className="rounded-lg px-3 py-2 text-sm"
         >
-          Reset defaults
-          <span className="ml-auto text-xs text-muted-foreground">status, id, updated</span>
+          {t("columns.resetDefaults")}
+          <span className="ml-auto text-xs text-muted-foreground">{t("columns.resetDefaultsList")}</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -24,6 +24,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn, SIDEBAR_RAIL_HIDDEN_LABEL } from "../lib/utils";
 import { ThemeToggle } from "./ThemeToggle";
 import { SidebarServerInfo } from "./SidebarServerInfo";
+// myrmidon(UI-RU): fork language switcher in the account menu.
+import { LanguageToggle } from "./myrmidon/LanguageToggle";
 
 const PROFILE_SETTINGS_PATH = "/company/settings/instance/profile";
 const DOCS_URL = "https://docs.paperclip.ing/";
@@ -224,6 +226,8 @@ export function SidebarAccountMenu({
                 onClick={() => setOpen(false)}
               />
               <ThemeToggle variant="compact-menu-action" onAfterToggle={() => setOpen(false)} />
+              {/* myrmidon(UI-RU): language selection lives beside the theme toggle. */}
+              <LanguageToggle onAfterChange={() => setOpen(false)} />
               {deploymentMode === "authenticated" ? (
                 <button
                   type="button"
