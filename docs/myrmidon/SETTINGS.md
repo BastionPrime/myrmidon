@@ -827,6 +827,27 @@ query/badge and the `wipLimit` i18n namespace.
 |---|---|---|---|---|
 | — | 1.6.1-WIP-LIMIT-B | — (always on) | The settings screen writes the row through part A's PUT; the badge on an agent row reads the status endpoint | Not configurable: no deployment-specific values in the UI half |
 
+## 1.6.1 — WIP-LIMIT: per-agent work-in-progress limit
+
+Settings of `server/src/myrmidon/wip-limit/` (the 1.6.1 track, part A). The feature has no
+environment variables: the limits are a policy choice stored in
+`instance_settings.general.wipLimit` and changed from
+`GET`/`PUT /api/myrmidon/companies/:companyId/wip-limit/settings` (any company member reads,
+instance admins write). Absent settings mean "count only" — the status endpoint
+(`GET …/wip-limit/status`) keeps answering, but no attention item and no comment is ever
+raised.
+
+The limit resolution is `perAgent[agentId]` over `defaultLimit`; an explicit `null` in either
+place means count-only. The lead rule is not a setting: an agent someone reports to is a lead,
+and a lead holding a task in `in_progress` or `in_review` is over the limit by definition (the
+implementation limit of a lead is 0 — a lead supervises and accepts, it does not deliver).
+
+The periodic check runs on the heartbeat scheduler (the same path the swarm-claim sweep uses)
+with an in-module interval of 300 s; a pass whose previous run is still going is skipped. One
+signal per agent per UTC day: a system-notice comment on the agent's most recent in_progress
+task, deduplicated by the `wip-limit:<agentId>:<utc-day>` metadata key. The attention feed
+(source kind `wip_limit`) needs no sweep — it recomputes on every list.
+
 ## 1.7 — METRICS: the board's own /metrics endpoint (Prometheus text)
 
 Settings of `server/src/myrmidon/monitoring/metrics/`. The endpoint answers

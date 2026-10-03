@@ -18,6 +18,9 @@ import { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema } fro
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in the same general settings row
 import { browserBridgeSettingsSchema } from "../myrmidon-browser-bridge.js";
 import { swarmClaimSettingsSchema } from "../myrmidon-swarm-claim.js";
+// myrmidon(1.6.1-WIP-LIMIT-A): the per-agent WIP limit settings stored in the
+// same general settings row.
+import { wipLimitSettingsSchema } from "../myrmidon-wip-limit.js";
 
 // myrmidon(PARALLEL-HELPERS): re-exported for the barrel so the settings page and the
 // /api/myrmidon/parallel-helpers route validate with the exact schema stored here.
@@ -62,11 +65,15 @@ export const instanceGeneralSettingsSchema = z.object({
   // myrmidon(EXTCASE-B): browser-bridge allowlist changed from the bridge panel;
   // absent means "no domain is allowed" (deny by default).
   browserBridge: browserBridgeSettingsSchema.optional(),
-  // myrmidon(1.6-SWARM): per-role queues with leased claims — the pilot flag,
+  // myrmidon(1.6-SWARM): per-role task queues with leased claims — the pilot flag,
   // the lease TTL, the per-agent ceiling and the sweep interval, changed from
   // /api/myrmidon/swarm-claim; absent means "use the environment variable, then
   // the default (the pilot is off)".
   swarmClaim: swarmClaimSettingsSchema.optional(),
+  // myrmidon(1.6.1-WIP-LIMIT-A): per-agent WIP limits — the company default and
+  // per-agent overrides, changed from /api/myrmidon/companies/:id/wip-limit/settings;
+  // absent means the feature counts but never signals (all limits null).
+  wipLimit: wipLimitSettingsSchema.optional(),
 }).strict();
 
 export const patchInstanceGeneralSettingsSchema = z

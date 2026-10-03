@@ -210,7 +210,12 @@ vi.mock("detect-port", () => ({
   default: detectPortMock,
 }));
 
-vi.mock("@paperclipai/db", () => ({
+vi.mock("@paperclipai/db", async (importOriginal) => ({
+  // Spread the real module: the startup module graph (via wip-limit ->
+  // services/issues.js -> documents.ts / execution-projection.ts) reads dozens
+  // of table exports at module scope, and a partial mock breaks as soon as the
+  // graph gains a new edge. Only the startup-path functions are overridden.
+  ...(await importOriginal<typeof import("@paperclipai/db")>()),
   createDb: createDbMock,
   ensurePostgresDatabase: vi.fn(),
   getPostgresDataDirectory: vi.fn(),
@@ -219,10 +224,6 @@ vi.mock("@paperclipai/db", () => ({
   reconcilePendingMigrationHistory: vi.fn(async () => ({ repairedMigrations: [] })),
   formatDatabaseBackupResult: vi.fn(() => "ok"),
   runDatabaseBackup: vi.fn(),
-  authUsers: {},
-  companies: {},
-  companyMemberships: {},
-  instanceUserRoles: {},
 }));
 
 vi.mock("../app.js", () => ({

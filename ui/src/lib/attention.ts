@@ -66,6 +66,8 @@ const SOURCE_META: Record<AttentionSourceKind, SourceMeta> = {
   model_fallback_alert: { label: "Model fallback" },
   // myrmidon(STALE-BLOCK): label for the lifted-stale-block source.
   stale_block: { label: "Stale block lifted" },
+  // myrmidon(1.6.1-WIP-LIMIT-A): label for the WIP-limit source added with the per-agent WIP limit.
+  wip_limit: { label: "WIP limit" },
 };
 
 export function sourceMeta(kind: AttentionSourceKind): SourceMeta {
