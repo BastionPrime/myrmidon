@@ -707,3 +707,25 @@ them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
+
+## 1.6.1 — TG-NOTIFY-SETTINGS part F: the board UI for the Telegram notification settings
+
+The board-facing half of the Telegram notification settings: the "Telegram
+notifications" panel on the System screen of the 2.0 UI (Settings → System,
+under the UI-2.0 shell). It edits the company-level `telegramNotify` document
+the settings core (part A) stores and serves; no environment variables —
+everything is runtime-changeable per company through the same API.
+
+- The panel shows all five sections with their options: the daily digest
+  (send time, chat id, topic id, sections), error notifications (chat id,
+  topic id, minimum severity, rate limit per hour), owner messages
+  (require mention), escalations (stuck hours, channel, chat id, topic id) and
+  head-bot proactivity (mode, cap per day in "rarely" mode). With the contract
+  defaults every section reads OFF.
+- Saving sends one `PATCH /api/myrmidon/telegram-notify` with only the fields
+  that differ from the stored values; the answer is applied back, so a change
+  is reflected immediately. Editing is board-only on the server; a read
+  without board access renders the denied state.
+- The settings change log from the GET answer (actor, field path, previous and
+  next value) is rendered under the sections — the same changelog the core
+  records for every changed field.
