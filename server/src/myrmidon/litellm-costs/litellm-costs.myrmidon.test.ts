@@ -61,6 +61,28 @@ describe("myrmidon(M2-A) readLitellmCostSettings", () => {
     ).toMatchObject({ enabled: true, baseUrl: "http://example.com:4000", keySecret: "gw-key", intervalMs: 300_000 });
   });
 
+  it("myrmidon(HERMES-USAGE-COST): defaults the first-sweep lookback to 1 day and accepts 1..90", () => {
+    expect(
+      readLitellmCostSettings({ MYRMIDON_LITELLM_BASE_URL: "http://example.com:4000", MYRMIDON_LITELLM_KEY_SECRET: "gw-key" }),
+    ).toMatchObject({ firstLookbackDays: 1 });
+    expect(
+      readLitellmCostSettings({
+        MYRMIDON_LITELLM_BASE_URL: "http://example.com:4000",
+        MYRMIDON_LITELLM_KEY_SECRET: "gw-key",
+        MYRMIDON_LITELLM_FIRST_LOOKBACK_DAYS: "31",
+      }),
+    ).toMatchObject({ firstLookbackDays: 31 });
+    for (const value of ["0", "-3", "91", "not-a-number", "2.5"]) {
+      expect(
+        readLitellmCostSettings({
+          MYRMIDON_LITELLM_BASE_URL: "http://example.com:4000",
+          MYRMIDON_LITELLM_KEY_SECRET: "gw-key",
+          MYRMIDON_LITELLM_FIRST_LOOKBACK_DAYS: value,
+        }),
+      ).toMatchObject({ firstLookbackDays: 1 });
+    }
+  });
+
   it("clamps an out-of-range interval back to the default", () => {
     for (const value of ["1", "not-a-number", "99999999"]) {
       expect(
