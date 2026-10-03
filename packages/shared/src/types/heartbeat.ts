@@ -1,5 +1,4 @@
 import type {
-  AgentRole,
   AgentStatus,
   HeartbeatInvocationSource,
   HeartbeatRunStatus,
@@ -366,7 +365,7 @@ export interface InstanceSchedulerHeartbeatAgent {
   companyIssuePrefix: string;
   agentName: string;
   agentUrlKey: string;
-  role: AgentRole;
+  role: string;
   title: string | null;
   status: AgentStatus;
   adapterType: string;
