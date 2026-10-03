@@ -9,7 +9,6 @@ import {
   useAppLanguage,
   type ForkLanguage,
 } from "@/i18n/myrmidon-i18n";
-import { i18n } from "@/i18n";
 
 interface LanguageToggleProps {
   className?: string;
@@ -21,8 +20,8 @@ export function LanguageToggle({ className, onAfterChange }: LanguageToggleProps
   const { language, setLanguage } = useAppLanguage();
 
   function select(next: ForkLanguage) {
+    // setAppLanguage (inside setLanguage) switches the live i18n instance.
     setLanguage(next);
-    void i18n.changeLanguage(next);
     onAfterChange?.();
   }
 

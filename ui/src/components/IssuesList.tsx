@@ -660,7 +660,7 @@ function SubIssueProgressSummaryStrip({
           {target && targetIssue ? (
             <>
               <div className="text-xs font-medium text-muted-foreground">
-                {target.kind === "next" ? "Next up" : "Waiting on blockers"}
+                {target.kind === "next" ? t("tasks.nextUp") : t("tasks.waitingOnBlockers")}
               </div>
               <Link
                 to={createIssueDetailPath(targetPathId)}
@@ -1291,7 +1291,7 @@ function StreamlinedIssuesList({
         })
         .map((key) => ({
           key,
-          label: key === "__no_workspace" ? "No Workspace" : (workspaceNameMap.get(key) ?? key.slice(0, 8)),
+          label: key === "__no_workspace" ? t("tasks.noWorkspaceGroup") : (workspaceNameMap.get(key) ?? key.slice(0, 8)),
           items: groups[key]!,
         }));
     }
@@ -1307,7 +1307,7 @@ function StreamlinedIssuesList({
         })
         .map((key) => ({
           key,
-          label: key === "__no_project" ? "No Project" : (projectById.get(key)?.name ?? key.slice(0, 8)),
+          label: key === "__no_project" ? t("tasks.noProjectGroup") : (projectById.get(key)?.name ?? key.slice(0, 8)),
           items: groups[key]!,
         }));
     }
@@ -1322,7 +1322,7 @@ function StreamlinedIssuesList({
         })
         .map((key) => ({
           key,
-          label: key === "__no_parent" ? "No Parent" : (issueTitleMap.get(key) ?? key.slice(0, 8)),
+          label: key === "__no_parent" ? t("tasks.noParentGroup") : (issueTitleMap.get(key) ?? key.slice(0, 8)),
           items: groups[key]!,
         }));
     }
@@ -1335,13 +1335,14 @@ function StreamlinedIssuesList({
       key,
       label:
         key === "__unassigned"
-          ? "Unassigned"
+          ? t("tasks.unassigned")
           : key.startsWith("__user:")
             ? (formatAssigneeUserLabel(key.slice("__user:".length), currentUserId, companyUserLabelMap) ?? "User")
             : (agentName(key) ?? key.slice(0, 8)),
       items: groups[key]!,
     }));
   }, [
+    t,
     filtered,
     issueFilterWorkspaceContext,
     viewState.groupBy,
@@ -1671,7 +1672,7 @@ function StreamlinedIssuesList({
   ]);
 
   const createActionLabel = createIssueLabel ? `Create ${createIssueLabel}` : t("tasks.createAction");
-  const createButtonLabel = createIssueLabel ? `New ${createIssueLabel}` : "New Task";
+  const createButtonLabel = createIssueLabel ? `New ${createIssueLabel}` : t("nav.newTask"); // myrmidon(UI-RU)
   const openCreateIssueDialog = useCallback((group?: { key: string; items: Issue[] }) => {
     openNewIssue(newIssueDefaults(group));
   }, [newIssueDefaults, openNewIssue]);
@@ -2457,7 +2458,11 @@ function StreamlinedIssuesList({
                       nodes.push(
                         <IssueDateSeparator
                           key={`date-sep-${issue.id}-${crossedBucket}`}
-                          label={issueAgeSeparatorLabel(crossedBucket)}
+                          label={
+                            crossedBucket === 1
+                              ? t("tasks.olderThanDay") // myrmidon(UI-RU)
+                              : t("tasks.olderThanWeek")
+                          }
                         />,
                       );
                     }
@@ -2483,7 +2488,7 @@ function StreamlinedIssuesList({
             <div className="py-2" data-testid="issues-load-more-sentinel">
               <p className="text-xs text-muted-foreground">
                 {isLoadingMoreIssues
-                  ? "Loading more tasks..."
+                  ? t("tasks.loadingMore")
                   : remainingIssueRowCount > 0
                     ? `Rendering ${Math.min(renderedIssueRowLimit, filtered.length)} of ${filtered.length} tasks`
                     : "Scroll to load more tasks"}

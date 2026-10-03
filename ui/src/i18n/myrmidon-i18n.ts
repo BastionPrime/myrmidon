@@ -115,10 +115,20 @@ export function initialForkLanguage(): ForkLanguage {
   return readStoredLanguage();
 }
 
-/** Switch the app language and persist the choice. */
-export function setAppLanguage(language: ForkLanguage): void {
+/**
+ * Switch the app language everywhere and persist the choice: the live i18n
+ * instance, the document language attribute and localStorage. One path for
+ * the toggle click and the cross-tab storage event, so an(other) open tab
+ * actually re-renders in the new language instead of only updating its
+ * toggle state.
+ */
+export async function setAppLanguage(language: ForkLanguage): Promise<void> {
   storeLanguage(language);
   document.documentElement.lang = language;
+  const { i18n } = await import("./index");
+  if (i18n.language !== language) {
+    await i18n.changeLanguage(language);
+  }
 }
 
 /**
@@ -134,7 +144,10 @@ export function useAppLanguage(): {
   useEffect(() => {
     function handleStorage(event: StorageEvent) {
       if (event.key === LANGUAGE_STORAGE_KEY && isForkLanguage(event.newValue)) {
-        setLanguageState(event.newValue);
+        // myrmidon(UI-RU): the cross-tab path reuses the same one function as
+        // the click path — storage is already written by the other tab, so
+        // only the live instance and the document attribute need updating.
+        void setAppLanguage(event.newValue).then(() => setLanguageState(event.newValue));
       }
     }
     window.addEventListener("storage", handleStorage);
@@ -144,7 +157,7 @@ export function useAppLanguage(): {
   return {
     language,
     setLanguage: (next: ForkLanguage) => {
-      setAppLanguage(next);
+      void setAppLanguage(next);
       setLanguageState(next);
     },
   };
