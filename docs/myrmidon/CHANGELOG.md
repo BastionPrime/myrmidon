@@ -21,7 +21,20 @@ version file to edit. Base Paperclip version is in the image label
   merged the UI is covered by tests against the mocked JSON contract.
 ## 1.6.1
 
+### Multi-agent addressing in the bridged Telegram chat (TG-MULTI-AGENT)
 
+- A message in a bridged Telegram chat (bot DM or a group topic that
+  addressed the bot) whose `@<token>` matches an alias, name or title of a
+  same-company agent routes into that agent's own standing Agent Chat
+  conversation, and the reply returns into the same Telegram thread
+  prefixed with the agent's display name. Aliases are the
+  `telegramAliases` string array of the agent card JSON; the leading token
+  is dropped from the turn body, and the first turn of the addressed
+  agent quotes the chat's recent messages. Linked-identity,
+  same-company and mention gates apply. The management commands
+  `/agents`, `/to <alias>`, `/who` follow the part B contract. No new
+  setting: the addressing rides the X8b bridge
+  ([telegram-alias-addressing](guides/telegram-alias-addressing.md)).
 
 ### Custom castes, consumers (CUSTOM-CASTES B)
 

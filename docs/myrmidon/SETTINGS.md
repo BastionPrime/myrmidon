@@ -89,6 +89,7 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MYRMIDON_CHAT_CROSS_CHANNEL_LOOKBACK_HOURS` | X8d | `168` (a week) | How old adjacent-conversation messages are still quoted | Non-numeric or negative — the default |
 | `MYRMIDON_CHAT_RECONCILE_INTERVAL_MS` | D1 | unset | Minimum interval between run-milestone sweep runs (`enqueueChatRunMilestones`); replaces the standard coalescing-trigger interval (100 ms) rather than adding to it. The publication sweep (delivering messages to the provider) is untouched — it keeps its usual pace | Unset, `0`, negative or non-numeric — today's pace (the fix of the D1 queries themselves is always on, this is not a defect switch). Set (e.g. `15000`) if after D1 the milestone sweep is still noticeable in load when chats are idle |
 | `MYRMIDON_TELEGRAM_VOICE_STT` | 1.6.1 VOICE-STT B | off | Transcribe an inbound Telegram voice/audio message at intake: the bytes are prefetched (bounded, 20 MB, 45 s), recognized through the shared STT core (part A1) and the transcript is written into the task comment next to the kept attachment — the bot reads it as user input on the same wakeup. Speaker segments render as «Говорящий N [mm:ss]: …». An STT failure is a skip: the comment keeps the vendor body, the redacted `stt_skipped` code lands in the comment metadata, and the delivery is unaffected | Any value other than `1`/`true`/`yes`/`on` — the vendor path byte for byte: no byte prefetch, zero calls to the transcription core. Read per delivery, no restart. Until the STT core is wired (part A1 merged and connected), an enabled setting records `stt_unconfigured` skips |
+| — | X9a/X9b (X9d row) | — (no variable) | `@<alias>` addressing in a bridged Telegram chat: a message from a linked board user whose leading `@`-token (or any `@`-token in the text) matches an alias, name or title of a **same-company** agent routes into that agent's own standing Agent Chat conversation (same `conversation_user_id`), the reply returns into the same Telegram thread prefixed `[<display name>]`, the first turn quotes the chat's recent messages (X8d settings), and the leading token is dropped from the turn body. Aliases live in the agent card (`telegramAliases` array in `agents.metadata`/`adapter_config`). Commands `/agents`, `/to <alias>`, `/who` (part B contract) manage the default addressee from the chat. No new variable: riding the X8b bridge, the addressing is on exactly when the bridge is; see the guide `guides/telegram-alias-addressing.md` | Off with the bridge: unset `MYRMIDON_TELEGRAM_DM_CONVERSATIONS` — the vendor path is byte for byte, no resolution, no prefix, no commands. An unresolvable token goes to the endpoint's assigned agent; an unlinked sender is refused before resolution; in group topics only bot-addressed messages resolve. X9a/X9b in DIVERGENCE.md, PRs #407/#424 |
 
 ## Track 5 — operations
 
@@ -706,29 +707,6 @@ outside: an operator turns it on together with `MYRMIDON_FORAGING_KEY_SECRET` wh
 sources need a token. Findings are recorded `unverified` until the skill lifecycle accepts
 them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand.
 
-The flow end to end — the registry, how a pass works, the screen and the API — is
-the operator guide [guides/foraging.md](guides/foraging.md).
-
-
-## 1.6.1 — BOT-RUNTIME-TUNING D: model fallback attention signal
-
-Settings of `server/src/myrmidon/litellm-fallback-signal/`. The signal is off
-by default: without `MYRMIDON_MODEL_FALLBACK_ENABLED=1` no timer is armed and
-the attention feed never sees a fallback card. When on, the sweep reads the
-gateway spend log (the same client and master-key secret as M2-A
-litellm-costs), attributes rows to agents by the sha256 of each bot's virtual
-key, and raises ONE medium-severity attention card per agent whose fallback
-share — calls served by a model outside the agent's card model set — is at or
-above the threshold over the window. The card disappears when the share drops
-below half the threshold (hysteresis) or the window empties below min calls.
-
-| Variable | Function | Default | What it does | How to disable / special |
-|---|---|---|---|---|
-| `MYRMIDON_MODEL_FALLBACK_ENABLED` | BOT-RUNTIME-TUNING D | unset (off) | Master switch of the fallback signal sweep: computes each agent's share of gateway calls served outside its card model set and records the attention signals the feed turns into cards | Only the exact values `1` or `true` enable it; unset, `0`, `false` or a typo — off, no timer, no card. Needs `MYRMIDON_LITELLM_*` (M2-A) to read the spend log; without them the sweep logs one warn per tick and stays idle |
-| `MYRMIDON_MODEL_FALLBACK_THRESHOLD_PCT` | BOT-RUNTIME-TUNING D | `20` | Fallback share (percent of attributed calls in the window) at which an agent gets the card. Exit is half of this (hysteresis: a share hovering at the threshold must not blink) | Integer from 1 to 100; non-integer or out of bounds — `20` |
-| `MYRMIDON_MODEL_FALLBACK_MIN_CALLS` | BOT-RUNTIME-TUNING D | `20` | Minimum attributed calls in the window before the agent is evaluated at all — two calls must not raise a signal | Integer from 1; non-integer or below — `20` |
-| `MYRMIDON_MODEL_FALLBACK_WINDOW_SEC` | BOT-RUNTIME-TUNING D | `3600` (1 h) | Length of the rolling window the share is computed over | Integer from 300 to 86400; non-integer or out of bounds — `3600` |
-| `MYRMIDON_MODEL_FALLBACK_INTERVAL_SEC` | BOT-RUNTIME-TUNING D | `300` | Sweep period, in seconds. A tick whose previous sweep is still running is skipped, not queued | Integer from 60 to 86400; non-integer or out of bounds — `300` |
 
 ## 1.6.1 — TG-NOTIFY jobs (daily digest and escalations, part B)
 
@@ -829,42 +807,3 @@ query/badge and the `wipLimit` i18n namespace.
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | — | 1.6.1-WIP-LIMIT-B | — (always on) | The settings screen writes the row through part A's PUT; the badge on an agent row reads the status endpoint | Not configurable: no deployment-specific values in the UI half |
-
-## 1.6.1 — WIP-LIMIT: per-agent work-in-progress limit
-
-Settings of `server/src/myrmidon/wip-limit/` (the 1.6.1 track, part A). The feature has no
-environment variables: the limits are a policy choice stored in
-`instance_settings.general.wipLimit` and changed from
-`GET`/`PUT /api/myrmidon/companies/:companyId/wip-limit/settings` (any company member reads,
-instance admins write). Absent settings mean "count only" — the status endpoint
-(`GET …/wip-limit/status`) keeps answering, but no attention item and no comment is ever
-raised.
-
-The limit resolution is `perAgent[agentId]` over `defaultLimit`; an explicit `null` in either
-place means count-only. The lead rule is not a setting: an agent someone reports to is a lead,
-and a lead holding a task in `in_progress` or `in_review` is over the limit by definition (the
-implementation limit of a lead is 0 — a lead supervises and accepts, it does not deliver).
-
-The periodic check runs on the heartbeat scheduler (the same path the swarm-claim sweep uses)
-with an in-module interval of 300 s; a pass whose previous run is still going is skipped. One
-signal per agent per UTC day: a system-notice comment on the agent's most recent in_progress
-task, deduplicated by the `wip-limit:<agentId>:<utc-day>` metadata key. The attention feed
-(source kind `wip_limit`) needs no sweep — it recomputes on every list.
-
-## 1.7 — METRICS: the board's own /metrics endpoint (Prometheus text)
-
-Settings of `server/src/myrmidon/monitoring/metrics/`. The endpoint answers
-`GET /metrics` at the origin root (outside `/api`, the same mounting shape the
-swarm-claim ingress uses) with the Prometheus text exposition format 0.0.4, so
-the existing scraper stack can collect it. Access is one bearer token: the
-value comes from the company secret named by `MYRMIDON_METRICS_TOKEN_SECRET`
-(resolved by name, the value is never returned and never logged) or, when no
-secret name is set, from the `MYRMIDON_METRICS_TOKEN` variable. Without a
-configured token the endpoint answers 401 for everyone — it never falls open.
-
-| Variable | Function | Default | What it does | How to disable / special |
-|---|---|---|---|---|
-| `MYRMIDON_METRICS_TOKEN_SECRET` | 1.7-METRICS | unset | Name of the company secret that holds the scraper bearer token. The first resolvable secret of that name across companies wins (the same lookup order the litellm sweep uses); the value never appears in a log, an error or a response | Unset — the env token is used; both unset — the endpoint answers 401 |
-| `MYRMIDON_METRICS_TOKEN` | 1.7-METRICS | unset | The scraper bearer token read from the environment, used when no secret name is configured | Unset together with the secret name — 401 for every request |
-| `MYRMIDON_METRICS_ERROR_WINDOW_SEC` | 1.7-METRICS | `3600` | Window (seconds) of the error families (failed runs, gateway spend). A request may override it per scrape with `?window=<sec>` | From 60 to 86400; below 60 — 60, above 86400 — 86400, non-numeric — the default |
-| `MYRMIDON_METRICS_LATENCY_WINDOW_SEC` | 1.7-METRICS | `21600` | Window (seconds) of the latency family: p50/p95 of finished run durations (finishedAt − startedAt). A request may override it with `?latency_window=<sec>` | From 300 to 86400; below 300 — 300, above 86400 — 86400, non-numeric — the default |
