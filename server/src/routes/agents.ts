@@ -40,6 +40,14 @@ import {
   updateAgentInstructionsBundleSchema,
   updateAgentPermissionsSchema,
   updateAgentInstructionsPathSchema,
+  AGENT_BOARD_ADMIN_PERMISSION_KEY,
+  AGENT_BOARD_ADMIN_SAVED_GRANT_KEYS,
+  BOARD_ADMIN_PERMISSION_KEYS,
+  boardAdminRevocableGrantKeys,
+  deriveBoardAdminFromGrants,
+  missingBoardAdminGrantKeys,
+  readAgentBoardAdminPermission,
+  readAgentBoardAdminSavedGrantKeys,
   wakeAgentSchema,
   updateAgentSchema,
   supportedEnvironmentDriversForAdapter,
@@ -1589,10 +1597,23 @@ export function agentRoutes(
       : [];
     const hasExplicitTaskAssignGrant = grants.some((grant) => grant.permissionKey === "tasks:assign");
 
+    // myrmidon(1.6.1 ADMIN-AGENT): the authoritative board-admin flag for the
+    // GET /agents/:id access block. Read-time migration: an agent that already
+    // holds the full operator set reads as an administrator without any write,
+    // so existing full sets are covered the moment the code ships; the first
+    // toggle persists the explicit flag plus snapshot. Derived value only —
+    // this never mutates stored state.
+    const grantKeys = grants.map((grant) => grant.permissionKey);
+    const boardAdmin =
+      agent.role === "ceo" ||
+      readAgentBoardAdminPermission(agent.permissions) ||
+      deriveBoardAdminFromGrants(grantKeys);
+
     if (agent.role === "ceo") {
       return {
         canAssignTasks: true,
         taskAssignSource: "ceo_role" as const,
+        boardAdmin,
         membership,
         grants,
       };
@@ -1602,6 +1623,7 @@ export function agentRoutes(
       return {
         canAssignTasks: true,
         taskAssignSource: "agent_creator" as const,
+        boardAdmin,
         membership,
         grants,
       };
@@ -1611,6 +1633,7 @@ export function agentRoutes(
       return {
         canAssignTasks: true,
         taskAssignSource: "explicit_grant" as const,
+        boardAdmin,
         membership,
         grants,
       };
@@ -1620,6 +1643,7 @@ export function agentRoutes(
       return {
         canAssignTasks: true,
         taskAssignSource: "simple_default" as const,
+        boardAdmin,
         membership,
         grants,
       };
@@ -1628,6 +1652,7 @@ export function agentRoutes(
     return {
       canAssignTasks: false,
       taskAssignSource: "none" as const,
+      boardAdmin,
       membership,
       grants,
     };
@@ -4938,13 +4963,73 @@ export function agentRoutes(
     const existing = await getAccessibleResource(req, res, svc.getById(id), "Agent not found");
     if (!existing) return;
 
+    // myrmidon(1.6.1 ADMIN-AGENT): flipping the board-admin switch requires the
+    // company `users:manage_permissions` right on top of the base permission
+    // check below. The gate applies only when the request carries `boardAdmin`,
+    // so ordinary permission updates keep their existing behavior.
+    const requestedBoardAdmin = req.body.boardAdmin as boolean | undefined;
+    if (requestedBoardAdmin !== undefined) {
+      if (req.actor.type === "agent") {
+        if (!req.actor.agentId) {
+          res.status(403).json({ error: "Agent authentication required" });
+          return;
+        }
+        if (req.actor.agentId === existing.id && requestedBoardAdmin === true) {
+          // An agent must not appoint itself as a board administrator.
+          res.status(403).json({ error: "An agent cannot grant board admin to itself" });
+          return;
+        }
+        if (
+          !(await access.hasPermission(
+            existing.companyId,
+            "agent",
+            req.actor.agentId,
+            "users:manage_permissions",
+          ))
+        ) {
+          res.status(403).json({ error: "Missing users:manage_permissions grant" });
+          return;
+        }
+      } else {
+        // Board actors: same company + the users:manage_permissions company
+        // right (the local implicit operator context passes by definition).
+        // Same shape as the assertCompanyPermission precedent in routes/access.ts.
+        // Existence-oracle guard: gate on company access first so a cross-tenant
+        // request fails as 404, not 403 (canonical hasCompanyAccess pattern).
+        if (!hasCompanyAccess(req, existing.companyId)) throw notFound("Agent not found");
+        assertCompanyAccess(req, existing.companyId);
+        const isLocalImplicitActor =
+          req.actor.source === "local_implicit" || req.actor.isInstanceAdmin === true;
+        if (!isLocalImplicitActor) {
+          const allowed = await access.canUser(
+            existing.companyId,
+            req.actor.userId,
+            "users:manage_permissions",
+          );
+          if (!allowed) {
+            throw forbidden("Missing users:manage_permissions permission for the company");
+          }
+        }
+      }
+    }
+
     if (req.actor.type === "agent") {
       const actorAgent = req.actor.agentId ? await svc.getById(req.actor.agentId) : null;
       if (!actorAgent || actorAgent.companyId !== existing.companyId) {
         res.status(403).json({ error: "Forbidden" });
         return;
       }
-      if (actorAgent.role !== "ceo") {
+      // myrmidon(1.6.1 ADMIN-AGENT): an agent holding users:manage_permissions
+      // may manage other agents' permissions; the CEO rule stays.
+      if (
+        actorAgent.role !== "ceo" &&
+        !(await access.hasPermission(
+          actorAgent.companyId,
+          "agent",
+          actorAgent.id,
+          "users:manage_permissions",
+        ))
+      ) {
         res.status(403).json({ error: "Only CEO can manage permissions" });
         return;
       }
@@ -4952,10 +5037,82 @@ export function agentRoutes(
       await assertBoardCanManageAgentsForCompany(req, existing.companyId);
     }
 
-    const agent = await svc.updatePermissions(id, req.body);
+    // myrmidon(1.6.1 ADMIN-AGENT): board-admin toggle bookkeeping. The switch
+    // must know which grant keys the agent already held BEFORE it adds the
+    // operator set, so disable can revoke exactly the keys the switch added.
+    // Capture the snapshot into locals before any write: `existing` may alias
+    // the stored row that updatePermissions mutates in place.
+    const grantsBeforeToggle = existing.role === "ceo"
+      ? []
+      : await access.listPrincipalGrants(existing.companyId, "agent", existing.id);
+    const heldGrantKeysBeforeToggle = grantsBeforeToggle.map((grant) => grant.permissionKey);
+    const wasBoardAdmin =
+      existing.role === "ceo" ||
+      readAgentBoardAdminPermission(existing.permissions) ||
+      deriveBoardAdminFromGrants(heldGrantKeysBeforeToggle);
+    // The snapshot the disable pass compares against. For a fresh enable it is
+    // the agent's pre-toggle set keys; re-enabling keeps the original snapshot
+    // so keys issued between disable and re-enable stay personal.
+    const savedSnapshotKeys = wasBoardAdmin && !readAgentBoardAdminPermission(existing.permissions)
+      ? [] // already an admin through derivation or CEO: enable below still works
+      : readAgentBoardAdminSavedGrantKeys(existing.permissions);
+    const enableSnapshot =
+      requestedBoardAdmin === true && !wasBoardAdmin
+        ? heldGrantKeysBeforeToggle.filter((key) =>
+            (BOARD_ADMIN_PERMISSION_KEYS as readonly string[]).includes(key),
+          )
+        : savedSnapshotKeys;
+
+    const agent = await svc.updatePermissions(id, {
+      ...req.body,
+      ...(requestedBoardAdmin === undefined
+        ? {}
+        : {
+            [AGENT_BOARD_ADMIN_PERMISSION_KEY]: requestedBoardAdmin,
+            [AGENT_BOARD_ADMIN_SAVED_GRANT_KEYS]: requestedBoardAdmin
+              ? enableSnapshot
+              : [],
+          }),
+    });
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
+    }
+
+    if (requestedBoardAdmin === true) {
+      // Enable: grant every missing operator-set key through the grant table.
+      const grantsNow = await access.listPrincipalGrants(agent.companyId, "agent", agent.id);
+      const heldKeys = grantsNow.map((grant) => grant.permissionKey);
+      const grantedByUserId = req.actor.type === "board" ? (req.actor.userId ?? null) : null;
+      for (const key of missingBoardAdminGrantKeys(heldKeys)) {
+        await access.ensureMembership(agent.companyId, "agent", agent.id, "member", "active");
+        await access.setPrincipalPermission(
+          agent.companyId,
+          "agent",
+          agent.id,
+          key,
+          true,
+          grantedByUserId,
+        );
+      }
+    } else if (requestedBoardAdmin === false) {
+      // Disable: revoke only the set keys the switch added (set keys that are
+      // not in the saved snapshot). Personal grants such as a separately
+      // issued tasks:assign survive. The snapshot was captured before the
+      // updatePermissions write — do not re-read it from the stored row.
+      const grantsNow = await access.listPrincipalGrants(agent.companyId, "agent", agent.id);
+      const heldKeys = grantsNow.map((grant) => grant.permissionKey);
+      const grantedByUserId = req.actor.type === "board" ? (req.actor.userId ?? null) : null;
+      for (const key of boardAdminRevocableGrantKeys(heldKeys, enableSnapshot)) {
+        await access.setPrincipalPermission(
+          agent.companyId,
+          "agent",
+          agent.id,
+          key,
+          false,
+          grantedByUserId,
+        );
+      }
     }
 
     const effectiveCanAssignTasks =
@@ -4988,6 +5145,11 @@ export function agentRoutes(
         trustPreset: agent.permissions?.trustPreset ?? "standard",
         // myrmidon(S6): the tool/connection permission is part of what the change record shows.
         toolAccess: agent.permissions?.toolAccess ?? null,
+        // myrmidon(1.6.1 ADMIN-AGENT): the board-admin switch is part of the
+        // change record when the request carried it.
+        ...(requestedBoardAdmin === undefined
+          ? {}
+          : { [AGENT_BOARD_ADMIN_PERMISSION_KEY]: requestedBoardAdmin }),
       },
     });
 

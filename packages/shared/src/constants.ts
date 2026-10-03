@@ -1025,6 +1025,31 @@ export const PERMISSION_KEYS = [
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
+// myrmidon(1.6.1 ADMIN-AGENT): the operator permission set granted by the
+// board-administrator switch on an agent. Kept as an explicit list (not derived
+// from PERMISSION_KEYS at runtime) so adding a key to PERMISSION_KEYS never
+// silently widens what an existing board administrator holds.
+export const BOARD_ADMIN_PERMISSION_KEYS = [
+  "agents:create",
+  "agents:configure",
+  "agents:suggest-changes",
+  "skills:create",
+  "environments:manage",
+  "tools:admin",
+  "tools:manage_connections",
+  "tools:manage_profiles",
+  "tools:view_audit",
+  "tools:manage_runtime",
+  "tools:use",
+  "inbox:manage",
+  "users:invite",
+  "users:manage_permissions",
+  "tasks:assign",
+  "tasks:assign_scope",
+  "joins:approve",
+] as const;
+export type BoardAdminPermissionKey = (typeof BOARD_ADMIN_PERMISSION_KEYS)[number];
+
 export const TOOL_APPLICATION_TYPES = ["mcp_http", "mcp_stdio", "paperclip_plugin", "a2a", "chat"] as const;
 export type ToolApplicationType = (typeof TOOL_APPLICATION_TYPES)[number];
 
