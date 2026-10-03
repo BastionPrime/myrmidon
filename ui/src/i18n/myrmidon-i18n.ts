@@ -147,7 +147,8 @@ export function useAppLanguage(): {
         // myrmidon(UI-RU): the cross-tab path reuses the same one function as
         // the click path — storage is already written by the other tab, so
         // only the live instance and the document attribute need updating.
-        void setAppLanguage(event.newValue).then(() => setLanguageState(event.newValue));
+        const next = event.newValue;
+        void setAppLanguage(next).then(() => setLanguageState(next));
       }
     }
     window.addEventListener("storage", handleStorage);

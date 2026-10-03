@@ -9,6 +9,7 @@
 //      ({{count}}) and punctuation.
 // @vitest-environment jsdom
 
+import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import en from "./myrmidon-locales/en.json";
 import ru from "./myrmidon-locales/ru.json";
@@ -163,27 +164,36 @@ describe("myrmidon fork i18n engine", () => {
     expect(document.documentElement.lang).toBe("ru");
     expect(window.localStorage.getItem("myrmidon:ui-language")).toBe("ru");
 
-    // cross-tab path: another tab wrote "en"; the storage handler must move
-    // the live instance back, not just the toggle state
-    window.localStorage.setItem("myrmidon:ui-language", "en");
-    const handler = (event: StorageEvent) => {
-      window.dispatchEvent(new StorageEvent("storage", event));
-    };
-    const storageEvent = new StorageEvent("storage", {
-      key: "myrmidon:ui-language",
-      newValue: "en",
-    });
-    // useAppLanguage registers the listener; render it through the hook
-    const { renderHook, act } = await import("@testing-library/react");
-    const rendered = renderHook(() => useAppLanguage());
-    expect(rendered.result.current.language).toBe("ru");
+    // cross-tab path: another tab wrote "en"; the storage handler that
+    // useAppLanguage registers must move the live instance back, not just
+    // the toggle state
+    let captured: { language: string } | null = null;
+    function Harness() {
+      captured = useAppLanguage();
+      return null;
+    }
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const { act } = await import("react-dom/test-utils");
     await act(async () => {
-      handler(storageEvent);
+      root.render(<Harness />);
     });
-    expect(rendered.result.current.language).toBe("en");
+    expect(captured!.language).toBe("ru");
+
+    await act(async () => {
+      window.localStorage.setItem("myrmidon:ui-language", "en");
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "myrmidon:ui-language", newValue: "en" }),
+      );
+    });
+    expect(captured!.language).toBe("en");
     expect(i18n.language).toBe("en");
     expect(document.documentElement.lang).toBe("en");
-    rendered.unmount();
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
 
     await setAppLanguage("en");
   });
