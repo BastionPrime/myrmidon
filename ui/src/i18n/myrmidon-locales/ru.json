@@ -323,7 +323,8 @@
     "browsers": "Браузеры",
     "clouds": "Облака",
     "autonomy": "Автономия",
-    "castes": "Касты и модели"
+    "castes": "Касты и модели",
+    "wipLimit": "Лимит WIP"
   },
   "quality": {
     "title": "Качество",

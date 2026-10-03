@@ -323,7 +323,8 @@
     "browsers": "Browsers",
     "clouds": "Clouds",
     "autonomy": "Autonomy",
-    "castes": "Castes & models"
+    "castes": "Castes & models",
+    "wipLimit": "WIP limit"
   },
   "quality": {
     "title": "Quality",

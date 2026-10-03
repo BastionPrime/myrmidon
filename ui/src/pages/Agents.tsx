@@ -27,7 +27,7 @@ import { PageTabBar } from "../components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, Bot, Plus, List, Network } from "lucide-react";
-import { type Agent, type Environment, type EnvironmentCapabilities } from "@paperclipai/shared";
+import { AGENT_ROLE_LABELS, type Agent, type Environment, type EnvironmentCapabilities } from "@paperclipai/shared";
 import {
   isStarred,
   resourceMembershipState,
@@ -37,6 +37,9 @@ import {
 import { usePublishSharedQueryData, useSharedPollingQuery } from "../hooks/useSharedPolling";
 
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
+
+const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
+
 // myrmidon(UI-RU): agents page copy runs through the fork i18n catalog.
 import { useTranslation } from "@/i18n";
 import { localizedAgentRoleLabel } from "../lib/agent-role-labels";

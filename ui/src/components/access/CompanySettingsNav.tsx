@@ -128,7 +128,10 @@ export function getCompanySettingsTab(pathname: string): CompanySettingsTab {
 }
 
 // myrmidon(UI-RU): settings tab labels run through the fork i18n catalog.
-const SETTINGS_TAB_LABEL_KEYS: Record<CompanySettingsTab, string> = {
+// myrmidon(UI-RU): Partial so a tab added upstream (e.g. wip-limit in 1.6.1
+// WIP-LIMIT B) merges without a type error here; untranslated tabs fall back
+// to their English item label until a key is added.
+const SETTINGS_TAB_LABEL_KEYS: Partial<Record<string, string>> = {
   general: "settingsNav.general",
   export: "settingsNav.export",
   import: "settingsNav.import",
@@ -145,6 +148,7 @@ const SETTINGS_TAB_LABEL_KEYS: Record<CompanySettingsTab, string> = {
   clouds: "settingsNav.clouds",
   autonomy: "settingsNav.autonomy",
   castes: "settingsNav.castes",
+  "wip-limit": "settingsNav.wipLimit",
 };
 
 export function CompanySettingsNav() {
@@ -173,7 +177,9 @@ export function CompanySettingsNav() {
       <PageTabBar
         items={visibleItems.map(({ value, label }) => ({
           value,
-          label: t(SETTINGS_TAB_LABEL_KEYS[value], { defaultValue: label }),
+          label: SETTINGS_TAB_LABEL_KEYS[value]
+            ? t(SETTINGS_TAB_LABEL_KEYS[value]!, { defaultValue: label })
+            : label,
         }))}
         value={activeTab}
         onValueChange={handleTabChange}
