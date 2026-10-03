@@ -2875,6 +2875,29 @@ export function agentRoutes(
     );
   }
 
+  // Agent actors pause agents through the same direct-grant ladder as
+  // assertCanResumeAgent: `agent_config:update` with requiresChangeGrant, so
+  // an agents:configure grant authorizes the pause while agents:suggest-changes
+  // and ungranted peers stay denied. Board actors keep the previous
+  // assertBoard semantics untouched.
+  async function assertCanPauseAgent(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ) {
+    if (req.actor.type !== "agent") {
+      assertBoard(req);
+      return;
+    }
+    const decision = await access.decide({
+      actor: req.actor,
+      action: "agent_config:update",
+      resource: { type: "agent", companyId: targetAgent.companyId, agentId: targetAgent.id },
+      scope: { requiresChangeGrant: true },
+    });
+    if (decision.allowed) return;
+    throw forbidden(decision.explanation, authorizationDeniedDetails(decision));
+  }
+
   async function assertCanResumeAgent(
     req: Request,
     targetAgent: { id: string; companyId: string },
@@ -5439,11 +5462,12 @@ export function agentRoutes(
   });
 
   router.post("/agents/:id/pause", async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
-    if (!(await getAccessibleAgent(req, res, id))) {
+    const existing = await getAccessibleAgent(req, res, id);
+    if (!existing) {
       return;
     }
+    await assertCanPauseAgent(req, existing);
     const agent = await svc.pause(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
@@ -5464,10 +5488,14 @@ export function agentRoutes(
       await heartbeat.cancelActiveForAgent(id);
     }
 
+    const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: agent.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      agentApiKeyId: actor.agentApiKeyId,
       action: "agent.paused",
       entityType: "agent",
       entityId: agent.id,
