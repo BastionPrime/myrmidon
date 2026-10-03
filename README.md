@@ -93,9 +93,12 @@ what exists as of 1.5:
   ([SETTINGS](docs/myrmidon/SETTINGS.md)).
 - **Client connectors (the browser bridge).** A browser extension on a client
   PC dials out to the board, letting a company bot drive that browser — read,
-  click, fill, download — under an operator-set capability and domain policy,
-  with signing steps that keep the key and the PIN on the client PC
+  click, fill, download — and run any action the board marks for human
+  confirmation only after a person on that PC presses Confirm, under an
+  operator-set capability and domain policy, with signing steps that keep the
+  key and the PIN on the client PC
   ([browser-bridge-gateway](docs/myrmidon/guides/browser-bridge-gateway.md),
+  [bridge-extension](docs/myrmidon/guides/bridge-extension.md),
   [connector-panel](docs/myrmidon/guides/connector-panel.md),
   [signing-host-contract](docs/myrmidon/guides/signing-host-contract.md)).
 - **OCR path.** PDF attachments recognized into text and a structural

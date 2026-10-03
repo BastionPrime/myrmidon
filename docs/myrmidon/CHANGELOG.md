@@ -87,6 +87,23 @@ version file to edit. Base Paperclip version is in the image label
   journal with filters (device, method, outcome, signatures only) and the
   document hash per signature. Guide:
   [guides/connector-panel.md](guides/connector-panel.md).
+- The browser action primitives in the shipped extension (EXTCASE-D):
+  `browser.fill` types a value into one field (input, textarea, select or a
+  contenteditable node) and dispatches `input`/`change` so the page sees the
+  change; `browser.download` fetches the file in the page's own session —
+  the content script runs in the page's origin, so the request carries the
+  browser's cookies — and returns its name, type, size and base64 bytes under
+  a 25 MiB ceiling (`BROWSER_DOWNLOAD_MAX_BYTES`; a larger file is refused
+  with `downloadTooLarge` before it crosses the bridge). An action the board
+  marks `confirmation: "human"` runs only after a person on the client PC
+  presses Confirm in the extension's confirm page: a refusal, the 180-second
+  budget expiring — the gateway then sends the `browser.cancel` notification
+  and the extension drops the pending step — or a build without the
+  confirmation port is a `confirmationNotGranted` refusal, never a silent
+  execution. The extension declares the `fill` and `download` capabilities and
+  never `sign`. Site-specific selectors and recorded scenarios are built on
+  top of these primitives and live outside the fork. Guide:
+  [guides/bridge-extension.md](guides/bridge-extension.md).
 - The signing host contract: a generic, client-free native-messaging contract
   for local signing helpers (`extension/src/native-host-contract.ts`) — a
   closed `actionType` enum (`sign` / `sign_and_submit` / `sign_attachment`), a
