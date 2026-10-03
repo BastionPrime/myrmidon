@@ -8,6 +8,8 @@ import type { ParallelHelpersSettings } from "../myrmidon-parallel-helpers.js";
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in instance settings
 import type { BrowserBridgeSettings } from "../myrmidon-browser-bridge.js";
 import type { SwarmClaimSettings } from "../myrmidon-swarm-claim.js";
+// myrmidon(1.6.1-WIP-LIMIT-A): per-agent WIP limits of the same general settings row.
+import type { WipLimitSettings } from "../myrmidon-wip-limit.js";
 
 export const DAILY_RETENTION_PRESETS = [3, 7, 14] as const;
 export const WEEKLY_RETENTION_PRESETS = [1, 2, 4] as const;
@@ -85,6 +87,13 @@ export interface InstanceGeneralSettings {
    * validator of the same field (packages/shared/src/validators/instance.ts).
    */
   swarmClaim?: SwarmClaimSettings;
+  /**
+   * myrmidon(1.6.1-WIP-LIMIT-A): per-agent WIP limits, changed from
+   * `GET`/`PUT /api/myrmidon/companies/:companyId/wip-limit/settings`. Absent
+   * means "count only, never signal". Kept in sync with the validator of the
+   * same field (packages/shared/src/validators/instance.ts).
+   */
+  wipLimit?: WipLimitSettings;
 }
 
 export interface InstanceExperimentalSettings {

@@ -62,6 +62,8 @@ const SOURCE_META: Record<AttentionSourceKind, SourceMeta> = {
   agent_error_alert: { label: "Agent error" },
   // myrmidon(SUB): label for the stack-update source added with the stack registry release check.
   stack_update: { label: "Stack update" },
+  // myrmidon(1.6.1-WIP-LIMIT-A): label for the WIP-limit source added with the per-agent WIP limit.
+  wip_limit: { label: "WIP limit" },
 };
 
 export function sourceMeta(kind: AttentionSourceKind): SourceMeta {

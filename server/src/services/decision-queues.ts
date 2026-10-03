@@ -288,6 +288,16 @@ async function sourceIssueId(
       const doc = await readStackDocument(db);
       return { exists: doc.components.some((component) => component.name === sourceId), issueId: null };
     }
+    // myrmidon(1.6.1-WIP-LIMIT-A): the signal subject is an agent of the
+    // company; existence is the live agent row (the status feed is computed,
+    // not stored, so there is nothing else to check).
+    case "wip_limit": {
+      const row = await db.select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.companyId, companyId), eq(agents.id, sourceId)))
+        .then((rows) => rows[0] ?? null);
+      return { exists: Boolean(row), issueId: null, agentId: row?.id ?? null };
+    }
   }
 }
 
@@ -308,6 +318,15 @@ export async function canReadDecisionSource(
   }
 
   if (sourceKind === "agent_error_alert" && source.agentId) {
+    return (await authz.decide({
+      actor,
+      action: "agent:read",
+      resource: { type: "agent", companyId, agentId: source.agentId },
+    })).allowed;
+  }
+  // myrmidon(1.6.1-WIP-LIMIT-A): the signal subject is an agent, so an agent
+  // read follows the same agent:read decision the error alert uses.
+  if (sourceKind === "wip_limit" && source.agentId) {
     return (await authz.decide({
       actor,
       action: "agent:read",
