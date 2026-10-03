@@ -244,6 +244,13 @@ import {
   refuseUnlinkedTelegramDm,
   type TelegramDmBridgeDeps,
 } from "../myrmidon/agent-chat-bridge/bridge.js";
+// myrmidon(X9b): @<alias> addressing — addressee resolution for the bridge
+// call site and the leading-token strip for an addressed turn's body (reply
+// prefixing and the mention quote live in issues.ts / cross-channel.ts; the
+// addressed reply rides the normal publication lane).
+import { stripLeadingMentionToken as x9StripAddressToken } from "../myrmidon/agent-chat-bridge/addressing.js";
+import { resolveBridgedAddressee } from "../myrmidon/agent-chat-bridge/bridge.js";
+import type { TelegramAddressee } from "../myrmidon/agent-chat-bridge/addressing.js";
 // myrmidon(U2): company-wide interaction lookup for callbacks on cards
 // delivered to the owner's Telegram conversation from other tasks.
 import { listInteractionForCallback } from "../myrmidon/owner-delivery/callback-interaction-lookup.js";
@@ -11675,6 +11682,8 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       commentId: string;
       principalId: string;
       actorUserId: string | null;
+      /** myrmidon(X9b): the conversation's own agent when it differs from the endpoint's assigned one. */
+      wakeupAgentId?: string;
     },
   ) {
     await tx
@@ -11691,7 +11700,14 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         payload: {
           version: 1,
           issueId: input.conversation.issueId,
-          agentId: input.endpoint.assignedAgentId,
+          // myrmidon(X9b): the wakeup follows the conversation's own agent.
+          // For an @<alias>-addressed turn that agent differs from the
+          // endpoint's assigned agent; the action payload must carry the
+          // conversation's agent so the wakeup wakes the addressed agent and
+          // authorizeInboundWakeup's assignee check passes. Reading it from the
+          // issue keeps plain (non-addressed) turns byte-for-byte: there the
+          // assignee IS the endpoint's assigned agent.
+          agentId: input.wakeupAgentId ?? input.endpoint.assignedAgentId,
           commentId: input.commentId,
           sessionGeneration: input.conversation.sessionGeneration,
           requestedByActorType: input.actorUserId ? "user" : "system",
@@ -11771,7 +11787,21 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     const fence = delivery ? lifecycleRuntimeFence(delivery) : null;
     if (
       !endpoint ||
-      endpoint.assignedAgentId !== payload.agentId ||
+      // myrmidon(X9b): an X9b-addressed turn's wakeup agent is the issue's
+      // own agent — the conversation agent of an @<alias>-addressed standing
+      // conversation, or the assignee of a group/topic task routed to the
+      // addressee — and may differ from the endpoint's assigned agent. The
+      // conversation row fetched below re-verifies the binding (issue id +
+      // generation + endpoint), so the endpoint-agent equality check is
+      // relaxed only for a turn whose own issue agent matches the payload
+      // agent. Plain turns keep the strict equality.
+      !(
+        endpoint.assignedAgentId === payload.agentId ||
+        ((issue.conversationAgentId ?? issue.assigneeAgentId) != null &&
+          (issue.conversationAgentId ?? issue.assigneeAgentId) === payload.agentId &&
+          (issue.conversationAgentId ?? issue.assigneeAgentId) !==
+            endpoint.assignedAgentId)
+      ) ||
       !delivery ||
       telegramDeliveryHasZeroMessageId(delivery, endpoint.provider) ||
       delivery.endpointId !== endpoint.id ||
@@ -15678,6 +15708,29 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             }
           : null,
       });
+      // myrmidon(X9b): an @<alias>-addressed turn routes to that same-company
+      // agent's own standing Telegram conversation instead of the endpoint's
+      // assigned one. Resolved only for Telegram threads whose sender is a
+      // linked workspace member: unlinked senders never reach the addressing
+      // (the refusal path below answers them first), and non-Telegram threads
+      // keep the vendor path. A DM resolves whenever the X8b bridge applies; a
+      // group/topic message resolves only when it addressed the bot (the
+      // vendor's requireMention gate drops the rest), and the addressee then
+      // takes the thread's own task assignment. A message with no resolvable
+      // @-token leaves addressee null — the assigned-agent path below is then
+      // byte-for-byte the pre-X9b behavior.
+      let x9Addressee: TelegramAddressee | null = null;
+      if (
+        endpoint.provider === "telegram" &&
+        (x8Dm.applies || addressed) &&
+        principalResolution.userId !== null
+      ) {
+        x9Addressee = await resolveBridgedAddressee(db, {
+          companyId: endpoint.companyId,
+          endpointAgentId: endpoint.assignedAgentId,
+          text: message.text,
+        });
+      }
       if (x8Dm.detachExisting) {
         existingConversation = null;
         existingIssue = null;
@@ -16247,6 +16300,12 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                 boardUserId: taskUserId,
                 current: conversation,
                 latestConversation,
+                // myrmidon(X9b): route an @<alias>-addressed turn to the
+                // addressed agent's own standing conversation. `x9Addressee`
+                // was resolved from the pre-transaction snapshot; the identity
+                // is re-verified here via `taskUserId`, and the addressee only
+                // names a company agent, so it stays valid across the lock.
+                ...(x9Addressee ? { conversationAgentId: x9Addressee.agentId } : {}),
               },
               inboundActivityPublications,
             )
@@ -16266,7 +16325,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               description: `Started from ${PROVIDER_LABELS[endpoint.provider]}: ${resource.label}`,
               status: "todo",
               priority: "medium",
-              assigneeAgentId: endpoint.assignedAgentId,
+              // myrmidon(X9b): an @<alias>-addressed group/topic message takes
+              // the addressed agent as the task's assignee — the group twin of
+              // the DM's per-agent conversation routing. A plain (or unresolvable)
+              // turn keeps the endpoint's assigned agent, byte-for-byte.
+              assigneeAgentId: x9Addressee?.agentId ?? endpoint.assignedAgentId,
               createdByUserId: taskUserId ?? endpoint.sponsorUserId,
               responsibleUserId: taskUserId ?? endpoint.sponsorUserId,
               originKind: "chat_channel",
@@ -16376,9 +16439,15 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         }
         // myrmidon(X8b): a `message`-kind bridged command (e.g. /new) overrides
         // the comment body instead of the raw provider text.
+        // myrmidon(X9b): an @<alias>-addressed turn's body drops the leading
+        // @-token (the addressee already routes the turn; the alias would only
+        // pollute the standing conversation) but keeps everything after it.
+        const x9Body = x9Addressee
+          ? x9StripAddressToken(message.text)
+          : message.text;
         const body =
           x8MessageBody ??
-          (message.text.trim() ||
+          (x9Body.trim() ||
           (message.attachments.length > 0
             ? taskEndpoint.provider === "microsoft-teams" &&
               !thread.isDM &&
@@ -16520,6 +16589,19 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           commentId: comment.id,
           principalId: principalResolution.principal.id,
           actorUserId: taskUserId,
+          // myrmidon(X9b): the conversation's own agent (the X9b addressee)
+          // when it differs from the endpoint's assigned agent; a group/topic
+          // task has no conversation agent, so the wakeup follows the task's
+          // assignee the addressee routed. Plain turns leave this unset and
+          // keep the assigned agent.
+          ...(x9Addressee
+            ? {
+                wakeupAgentId:
+                  issue.conversationAgentId ??
+                  issue.assigneeAgentId ??
+                  x9Addressee.agentId,
+              }
+            : {}),
         });
         if (taskEndpoint.provider === "imessage-photon") {
           await logActivity(
