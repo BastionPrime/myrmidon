@@ -12,8 +12,15 @@ import { shapeWithoutDefaults } from "./partial.js";
 import { workspaceHygieneLimitsSchema } from "../myrmidon-workspace-hygiene.js";
 // myrmidon(C0): run admission limits that can be changed while the server runs
 import { runLimitsSchema } from "../myrmidon-runtime-limits.js";
+// myrmidon(PARALLEL-HELPERS): company ceiling/default for parallel helper
+// subagents, changed from the instance settings page and /api/myrmidon/parallel-helpers.
+import { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema } from "../myrmidon-parallel-helpers.js";
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in the same general settings row
 import { browserBridgeSettingsSchema } from "../myrmidon-browser-bridge.js";
+
+// myrmidon(PARALLEL-HELPERS): re-exported for the barrel so the settings page and the
+// /api/myrmidon/parallel-helpers route validate with the exact schema stored here.
+export { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema };
 
 function presetSchema<T extends readonly number[]>(presets: T, label: string) {
   return z.number().refine(
@@ -46,6 +53,11 @@ export const instanceGeneralSettingsSchema = z.object({
   // page and /api/myrmidon/runtime-limits; absent means "use the environment
   // variable, then the default" (see packages/shared/src/myrmidon-runtime-limits.ts).
   runLimits: runLimitsSchema.optional(),
+  // myrmidon(PARALLEL-HELPERS): company ceiling and default for the "Parallel
+  // helpers" block on an agent card, changed from the instance settings page
+  // and /api/myrmidon/parallel-helpers; absent means the module defaults apply
+  // (see packages/shared/src/myrmidon-parallel-helpers.ts).
+  parallelHelpers: parallelHelpersSettingsSchema.optional(),
   // myrmidon(EXTCASE-B): browser-bridge allowlist changed from the bridge panel;
   // absent means "no domain is allowed" (deny by default).
   browserBridge: browserBridgeSettingsSchema.optional(),

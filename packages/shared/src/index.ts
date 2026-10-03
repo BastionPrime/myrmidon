@@ -2776,6 +2776,12 @@ export * from "./announcements.js";
 export * from "./myrmidon-workspace-hygiene.js";
 // myrmidon(C0): live run-admission limits shared by the server, the UI and the settings validator.
 export * from "./myrmidon-runtime-limits.js";
+// myrmidon(PARALLEL-HELPERS): the card -> Hermes `delegation` contract shared by the profile
+// compiler, the agent card and the settings page.
+export * from "./myrmidon-parallel-helpers.js";
+// myrmidon(PARALLEL-HELPERS): the settings-side validator for the same module, exported next
+// to the contract so `instanceGeneralSettingsSchema`'s dependency is reachable from the barrel.
+export { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema } from "./validators/instance.js";
 // myrmidon(EXTCASE-B): browser-bridge wire contract shared by the gateway, the extension and the panel.
 export * from "./myrmidon-browser-bridge.js";
 // myrmidon(UI2-I18N): per-user board UI language preference contract (2.0 UI tree).

@@ -276,6 +276,40 @@ describe("myrmidon(W2a) buildHermesProfileInput — card mapping", () => {
     expect(input.maxConcurrentRuns).toBe(2);
   });
 
+  it("myrmidon(PARALLEL-HELPERS): resolves the card block against the company ceiling", () => {
+    const { input } = buildHermesProfileInput(
+      source({
+        adapterConfig: { parallelHelpers: { enabled: true, maxConcurrent: 20, model: "dashscope/qwen3-flash" } },
+        parallelHelpersSettings: { maxPerAgent: 6, defaultMaxPerAgent: 2 },
+      }),
+      settings(),
+    );
+    expect(input.parallelHelpers).toEqual({
+      enabled: true,
+      maxConcurrent: 6,
+      model: "dashscope/qwen3-flash",
+      childTurnBudget: undefined,
+    });
+  });
+
+  it("myrmidon(PARALLEL-HELPERS): a card that never mentioned helpers stays off with the default limit", () => {
+    const { input } = buildHermesProfileInput(source(), settings());
+    expect(input.parallelHelpers).toEqual({
+      enabled: false,
+      maxConcurrent: 2,
+      model: "",
+      childTurnBudget: undefined,
+    });
+  });
+
+  it("myrmidon(PARALLEL-HELPERS): the instance default model flows through the card's resolved env", () => {
+    const { input } = buildHermesProfileInput(
+      source({ env: { MYRMIDON_BOT_HELPER_MODEL: { value: "dashscope/qwen3-flash", secret: false } } }),
+      settings(),
+    );
+    expect(input.parallelHelpers?.model).toBe("dashscope/qwen3-flash");
+  });
+
   it("keeps the card's own env entries, secret flags included", () => {
     const { input } = buildHermesProfileInput(
       source({ env: { TZ: { value: "UTC", secret: false }, SERVICE_TOKEN: { value: "fake-token", secret: true } } }),
