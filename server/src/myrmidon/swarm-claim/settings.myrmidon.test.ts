@@ -23,15 +23,18 @@ interface FakeGeneralStore {
 function fakePorts(start: Record<string, unknown> = {}, env: Record<string, string> = {}) {
   const store: FakeGeneralStore = { general: { ...start }, updates: [] };
   const logActivity = vi.fn();
-  const service = swarmClaimSettingsService(null as never, {
-    settings: {
-      getGeneral: async () => store.general,
-      updateGeneral: async (patch: Record<string, unknown>) => {
-        store.updates.push(patch);
-        store.general = { ...store.general, ...patch };
-        return store.general;
-      },
+  // Typed to the instance-settings contract the ports expect (the loosely
+  // typed Record-shaped mock broke the build lanes; see the review remark).
+  const settingsPort = {
+    getGeneral: async () => store.general,
+    updateGeneral: async (patch: Record<string, unknown>) => {
+      store.updates.push(patch);
+      store.general = { ...store.general, ...patch };
+      return store.general;
     },
+  } as unknown as Parameters<typeof swarmClaimSettingsService>[1]["settings"];
+  const service = swarmClaimSettingsService(null as never, {
+    settings: settingsPort,
     logActivity,
     env,
   });
