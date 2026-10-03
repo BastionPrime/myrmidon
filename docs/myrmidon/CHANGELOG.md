@@ -10,6 +10,23 @@ version file to edit. Base Paperclip version is in the image label
 
 ## 1.6.1
 
+### Custom castes, consumers (CUSTOM-CASTES B)
+
+- The server-side consumers of the company caste directory (part A ships the
+  directory itself): the agent role validator accepts any well-formed caste
+  key (latin letters, digits, hyphens, 1–60) and the agent create/update
+  service refuses a key that is not a caste of the company with a 400 that
+  names the key; the swarm claim gate reads the claiming agent's caste —
+  `swarmEligible=false` returns the new `caste_excluded` claim reason (a
+  supervision caste never enters the claim pool), and a caste-set
+  `maxActiveTasks` overrides the global swarm ceiling for that caste's
+  agents. A role with no directory entry, and a build with no directory wired,
+  behave exactly as before. The autonomy matrix and the authorization logic
+  are unchanged — the caste key is the role string, the CEO checks stay
+  byte-identical, and custom roles keep working through explicit grants.
+  Regression tests pin all of the above, including "moving an agent to a
+  caste changes no autonomy verdict".
+
 ### Stale-block watchdog (STALE-BLOCK part B)
 
 - Periodic module `myrmidon/stale-block`: every
