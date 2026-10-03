@@ -1,5 +1,5 @@
 // myrmidon(1.6.1 MODEL-PROVIDERS C): API client for the "Model providers"
-// settings screen. Speaks the Part A contract (OPE-3834, branch
+// settings screen. Speaks the Part A contract (branch
 // myr/1.6.1-model-providers-store) against
 // /api/myrmidon/companies/:id/model-providers:
 //   POST   /providers            (add; key write-only, never returned)

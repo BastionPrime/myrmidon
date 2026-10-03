@@ -4,7 +4,7 @@
 // provider with the key on the wire only; rotate PATCHes; remove DELETEs;
 // a model toggle POSTs the full desired model list; mutation errors surface
 // as text; and after every mutation the raw key is absent from the DOM (the
-// write-only rule, acceptance criterion of OPE-3836).
+// write-only rule, Part A acceptance criterion).
 import { act } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
