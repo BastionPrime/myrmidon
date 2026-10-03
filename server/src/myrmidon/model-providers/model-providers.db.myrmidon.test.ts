@@ -115,6 +115,7 @@ describeEmbeddedPostgres("myrmidon(1.6.1 MODEL-PROVIDERS) service over the datab
     const view = await service.createProvider({
       companyId,
       body: { type: "dashscope", name: "DashScope prod", key: KEY_VALUE, baseUrl: null },
+      activity: (entry) => void activity.push(entry),
     });
 
     expect(catalog.calls).toEqual([
@@ -168,7 +169,7 @@ describeEmbeddedPostgres("myrmidon(1.6.1 MODEL-PROVIDERS) service over the datab
       body: { type: "openai", name: "p", key: KEY_VALUE, baseUrl: null },
     });
 
-    const rotated = await service.rotateProviderKey({ companyId, providerId: created.id, key: ROTATED_VALUE });
+    const rotated = await service.rotateProviderKey({ companyId, providerId: created.id, key: ROTATED_VALUE, activity: (entry) => void activity.push(entry) });
     expect(rotated.hasKey).toBe(true);
     expect(secrets.get(created.credentialSecretName!)).toBe(ROTATED_VALUE);
     expect(catalog.calls.at(-1)?.apiKey).toBe(ROTATED_VALUE);
@@ -192,7 +193,7 @@ describeEmbeddedPostgres("myrmidon(1.6.1 MODEL-PROVIDERS) service over the datab
       companyId,
       body: { type: "openai", name: "p", key: KEY_VALUE, baseUrl: null },
     });
-    await service.removeProvider({ companyId, providerId: created.id });
+    await service.removeProvider({ companyId, providerId: created.id, activity: (entry) => void activity.push(entry) });
 
     expect((await db.select().from(modelProviders))).toHaveLength(0);
     expect((await db.select().from(modelProviderModels))).toHaveLength(0);
