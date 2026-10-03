@@ -651,6 +651,13 @@ import {
 } from "../myrmidon/idle-pickup.js";
 // myrmidon(AUTO-RESUME): the board resumes an agent left in `error` with backoff
 import { createAutoResumeSweeper } from "../myrmidon/auto-resume.js";
+// myrmidon(1.6-SWARM): the expired-claim sweep of the per-role task queues
+import { buildSwarmClaimSweeper } from "../myrmidon/swarm-claim/index.js";
+// myrmidon(1.6-SWARM): the checkout/release claim hooks of the run lifecycle
+import {
+  recordSwarmClaimOnCheckoutImpl,
+  releaseSwarmClaimsForRunImpl,
+} from "../myrmidon/swarm-claim/hooks.js";
 import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
 // myrmidon(S2-hostcred): a run never inherits the host's GitHub credentials
 import {
@@ -667,9 +674,11 @@ import {
 // immediate operator escalation
 import { shouldRetryOriginalExecutorForInfraInterrupt } from "../myrmidon/infra-interrupts.js";
 // myrmidon(X8d): quote the same person's other conversation (web <-> Telegram)
+// myrmidon(X9b): quoted context of the Telegram chat an @<alias> mention arrived in
 import {
   appendCrossChannelDelta,
   buildCrossChannelContext,
+  buildMentionedChatContext,
 } from "../myrmidon/agent-chat-bridge/cross-channel.js";
 
 // myrmidon(M3): owner signal on a budget hard-stop (see budget-signal.ts)
@@ -7146,7 +7155,15 @@ export async function resolveExternalChatWakeProvider(input: {
         eq(chatConversations.issueId, input.issueId),
         inArray(chatConversations.state, ["active", "waiting"]),
         eq(chatEndpoints.provider, provider),
-        eq(chatEndpoints.assignedAgentId, input.agentId),
+        // myrmidon(X9b): an @<alias>-addressed turn's conversation agent is
+        // not the endpoint's assigned agent; the conversation is already
+        // pinned to this issue (whose conversationAgentId is the run's
+        // agent), so accept either the assigned agent matching or the
+        // conversation issue's own agent matching.
+        or(
+          eq(chatEndpoints.assignedAgentId, input.agentId),
+          sql`exists (select 1 from issues conv where conv.company_id = ${chatConversations.companyId} and conv.id = ${chatConversations.issueId} and conv.conversation_agent_id = ${input.agentId})`,
+        ),
         inArray(chatEndpoints.status, ["active", "verifying"]),
       ),
     );
@@ -18069,6 +18086,24 @@ export function heartbeatService(
     isAgentUnderMaintenance: (agentId) => isAgentUnderMaintenance(db, agentId),
   });
 
+  // myrmidon(1.6-SWARM): the expired-claim sweep of the per-role task queues.
+  // The release path wakes the next agent of the role directly; this pass is
+  // the safety net that makes "an idle agent with a non-empty queue of its
+  // role" impossible past one lease period (TTL + one sweep interval). All
+  // admission gates still apply inside enqueueWakeup; with the pilot flag off
+  // the pass reads once and releases nothing.
+  const swarmClaimSweeper = buildSwarmClaimSweeper({
+    db,
+    settings: {
+      getGeneral: () => instanceSettings.getGeneral(),
+      updateGeneral: () => {
+        throw new Error("not used by the sweep");
+      },
+    },
+    enqueueWakeup: (agentId, opts) => enqueueWakeup(agentId, opts),
+    env: process.env,
+  });
+
   async function sweepPendingCleanupLeases(opts?: {
     backoffMs?: number;
     /** One cleanup attempt per explicit user Retry, for this failed run only.
@@ -18892,6 +18927,19 @@ export function heartbeatService(
       }
     } catch {
       logger.warn({ errorKind: "stale_active_lease_sweep_failed" }, "stale active environment lease sweep failed");
+    }
+
+    // myrmidon(1.6-SWARM): the expired-claim sweep on the same tick. Cheap
+    // when the pilot flag is off; with the pilot on it returns expired tasks
+    // to their role's queue and wakes the next agent, keeping an idle agent
+    // with a non-empty queue impossible past one lease period.
+    try {
+      const swarmSwept = await swarmClaimSweeper.sweep();
+      if (swarmSwept.expiredReleased > 0 || swarmSwept.closedReleased > 0 || swarmSwept.failed > 0) {
+        logger.warn(swarmSwept, "swept expired swarm claims on this tick");
+      }
+    } catch {
+      logger.warn({ errorKind: "swarm_claim_sweep_failed" }, "swarm claim sweep failed");
     }
 
     // Retry stranded pending_cleanup leases on the same tick. Isolate the sweep
@@ -19981,6 +20029,13 @@ export function heartbeatService(
             run.id,
           );
           context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = true;
+          // myrmidon(1.6-SWARM): the checkout is the claim event — the run now
+          // holds the issue's lease. Failure is non-fatal: the checkout itself
+          // already guards the atomic handover; without a claim row the issue
+          // simply stays claimable by the queue rules (no lease to expire).
+          await recordSwarmClaimOnCheckout(run, agent, issueId).catch((err) =>
+            logger.warn({ err, issueId, runId: run.id }, "swarm claim on checkout failed"),
+          );
         } catch (error) {
           if (!isCheckoutConflictError(error)) throw error;
           const staleness = await runDispatch.cancelStaleQueuedRun({
@@ -20018,6 +20073,11 @@ export function heartbeatService(
             run.id,
           );
           context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = true;
+          // myrmidon(1.6-SWARM): the auto-checkout path claims the lease too —
+          // same event, same non-fatal treatment.
+          await recordSwarmClaimOnCheckout(run, agent, issueId).catch((err) =>
+            logger.warn({ err, issueId, runId: run.id }, "swarm claim on checkout failed"),
+          );
         } catch (error) {
           if (!isCheckoutConflictError(error)) throw error;
           context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = false;
@@ -20546,6 +20606,21 @@ export function heartbeatService(
             })
           : null;
       if (x8CrossChannel?.full) taskMarkdown += `\n\n${x8CrossChannel.full}`;
+      // myrmidon(X9b): quote the Telegram chat an @<alias> mention arrived in
+      // into the addressed agent's turn (the mention chat is another agent's
+      // conversation on the same native thread, which X8d's sibling lookup
+      // cannot express). Applied for every turn of a conversation whose agent
+      // can differ from the endpoint's assigned one; for the endpoint agent's
+      // own conversation the wake comment's link is its own conversation, so
+      // the helper finds no other chat and returns "".
+      if (isConversation(issueContext) && issueId) {
+        const x9MentionChat = await buildMentionedChatContext(db, {
+          companyId: agent.companyId,
+          issueId,
+          wakeCommentId,
+        });
+        if (x9MentionChat) taskMarkdown += `\n\n${x9MentionChat}`;
+      }
       const taskMarkdownCompact = appendCrossChannelDelta(
         buildPaperclipTaskMarkdown({
           ...taskMarkdownInput,
@@ -25739,10 +25814,36 @@ export function heartbeatService(
     }
   }
 
+  // myrmidon(1.6-SWARM): the two claim-lifecycle hooks of the run. The claim
+  // row itself and the release/wake logic live in
+  // server/src/myrmidon/swarm-claim/; these hooks only call them and turn any
+  // failure into a warning so the vendor paths stay untouched in behavior.
+  async function recordSwarmClaimOnCheckout(
+    run: Pick<typeof heartbeatRuns.$inferSelect, "id" | "companyId" | "agentId">,
+    agent: Pick<typeof agents.$inferSelect, "id" | "role">,
+    issueId: string,
+  ) {
+    await recordSwarmClaimOnCheckoutImpl({ db, settings: instanceSettings }, { run, agent, issueId });
+  }
+
+  async function releaseSwarmClaimsForRun(
+    run: Pick<typeof heartbeatRuns.$inferSelect, "id" | "companyId">,
+  ) {
+    await releaseSwarmClaimsForRunImpl({ db, settings: instanceSettings }, run, enqueueWakeup);
+  }
+
   async function releaseIssueExecutionAndPromote(
     run: Pick<typeof heartbeatRuns.$inferSelect, "id" | "companyId">,
     options: { suppressImmediateRecovery?: boolean } = {},
   ) {
+    // myrmidon(1.6-SWARM): the run is done holding its issue — release the
+    // claim so the task returns to its role queue and the next agent wakes.
+    // Before the wake-queue release below: the claim drop must not delay (nor
+    // be delayed by) the vendor recovery path, and its failure never blocks
+    // the vendor release.
+    await releaseSwarmClaimsForRun(run).catch((err) =>
+      logger.warn({ err, runId: run.id }, "swarm claim release on run finish failed"),
+    );
     try {
       const { postCommitEffects } = await wakeQueue.releaseIssueExecution({
         companyId: run.companyId,
