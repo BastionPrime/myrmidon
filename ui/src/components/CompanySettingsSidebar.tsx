@@ -4,6 +4,7 @@ import {
   Cpu,
   Download,
   FlaskConical,
+  Gauge,
   KeyRound,
   MonitorCog,
   Puzzle,
@@ -139,6 +140,8 @@ export function CompanySettingsSidebar() {
           {showPage("company.secrets") && (
             <SidebarNavItem to="/company/settings/secrets" label="Secrets" icon={KeyRound} end />
           )}
+          {/* myrmidon(1.6.1 WIP-LIMIT-B): per-agent work-in-progress limit */}
+          <SidebarNavItem to="/company/settings/wip-limit" label="WIP Limit" icon={Gauge} end /> {/* myrmidon(1.6.1 WIP-LIMIT-B) */}
           {showPage("company.secrets") && (
             <SidebarNavItem
               to="/company/settings/access-hub"

@@ -23,6 +23,8 @@ const items = [
   { value: "clouds", label: "Clouds", href: "/company/settings/clouds" }, // myrmidon(CLOUD-CONNECTOR)
   // myrmidon(1.6 AUTONOMY-MATRIX B): role×action matrix screen
   { value: "autonomy", label: "Autonomy", href: "/company/settings/autonomy" },
+  // myrmidon(1.6.1 WIP-LIMIT-B): per-agent work-in-progress limit settings
+  { value: "wip-limit", label: "WIP Limit", href: "/company/settings/wip-limit" },
 ] as const;
 
 type CompanySettingsTab = (typeof items)[number]["value"];
@@ -114,6 +116,11 @@ export function getCompanySettingsTab(pathname: string): CompanySettingsTab {
   // myrmidon(1.6 AUTONOMY-MATRIX B): the Autonomy matrix settings section
   if (pathname.includes("/company/settings/autonomy")) {
     return "autonomy";
+  }
+
+  // myrmidon(1.6.1 WIP-LIMIT-B): the WIP Limit settings section
+  if (pathname.includes("/company/settings/wip-limit")) {
+    return "wip-limit";
   }
 
   return "general";
