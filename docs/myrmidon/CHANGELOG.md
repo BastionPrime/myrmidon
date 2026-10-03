@@ -10,6 +10,22 @@ version file to edit. Base Paperclip version is in the image label
 
 ## 1.6.1
 
+### Stale-block watchdog (STALE-BLOCK part B)
+
+- Periodic module `myrmidon/stale-block`: every
+  `MYRMIDON_STALE_BLOCK_INTERVAL_SEC` (default 300 s) it inspects blocked
+  tasks and lifts a block whose every reason is dead — a blocker task that
+  is done or cancelled (cancelled blockers never fire the
+  blockers-resolved path), a passed `reasonRef.dueAt` date, or a cleared
+  gate/event. Dead blocked-by edges are removed through the ordinary issue
+  update path, the task returns to `in_progress`, and one system comment
+  names the cause. A task with a live reason is untouched. Opt-in via
+  `MYRMIDON_STALE_BLOCK_ENABLED` (default 0).
+- One new attention source kind `stale_block`: a lifted block raises one
+  card for the lead and the operator, computed on the fly from a
+  process-level signal registry (no new store); cards fade after
+  `MYRMIDON_STALE_BLOCK_SIGNAL_TTL_MS` (default 24 h).
+
 ### Board administrators from agents (ADMIN-AGENT part C)
 
 - The UI half of making an agent a board administrator. The agent card's
@@ -442,6 +458,7 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   is snapshotted into the append-only `agent_instructions_revisions` history, and any
   earlier revision can be restored through the API — the restore itself becomes a new
   revision. Guide: [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) (#273, #299).
+
 ### Deploy and reliability
 
 - Automatic rollback by health for the board and the bot fleet (R5-C). A failed
