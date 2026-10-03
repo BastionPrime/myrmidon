@@ -112,6 +112,8 @@ import { myrmidonBotEgressRoutes } from "./myrmidon/bot-containers/egress-wiring
 import { myrmidonBotCanaryRoutes } from "./myrmidon/bot-containers/canary-index.js"; // myrmidon(R5-B)
 import { myrmidonWorkspaceHygieneRoutes } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
 import { swarmClaimApp } from "./myrmidon/swarm-claim/index.js"; // myrmidon(1.6-SWARM)
+// myrmidon(CUSTOM-CASTES): company caste directory — table, seed, CRUD API
+import { myrmidonCasteRoutes } from "./myrmidon/castes/wiring.js";
 // myrmidon(EMERGENCY-STOP): immediate stop of the runs a draining pause left running
 import { myrmidonEmergencyStopRoutes } from "./myrmidon/emergency-stop.js";
 import { myrmidonStackRegistryRoutes } from "./myrmidon/stack-registry/index.js"; // myrmidon(SUA)
@@ -862,6 +864,7 @@ export async function createApp(
     enqueueWakeup: undefined, // agent claim wake goes through the board queue admission; heartbeat injects it at runtime
     env: process.env,
   })); // myrmidon(1.6-SWARM): per-role queues with leased claims
+  api.use(myrmidonCasteRoutes(db)); // myrmidon(CUSTOM-CASTES): caste directory CRUD
   api.use(myrmidonEmergencyStopRoutes(db)); // myrmidon(EMERGENCY-STOP)
   api.use(myrmidonAgentMemoryRoutes(db)); // myrmidon(MEMORY-UI): agent card Memory tab
   api.use(myrmidonSkillLifecycleRoutes(db)); // myrmidon(1.6-SKILL-LIFE): skill lifecycle API

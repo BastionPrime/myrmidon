@@ -707,3 +707,14 @@ them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
+
+
+## CUSTOM-CASTES — the company caste (agent role) directory
+
+Settings of `server/src/myrmidon/castes/` — the company caste directory and its
+REST API (`GET/POST /api/myrmidon/companies/:companyId/castes`,
+`PATCH/DELETE .../castes/:key`). No variables: the directory lives in the
+`agent_castes` table, is read from the database on every request (no process
+cache, no env), and seeds the 12 built-in castes idempotently on a company's
+first read — so create/assign/delete are visible to the swarm without a
+restart. Mutations are board-only; reads need company access.
