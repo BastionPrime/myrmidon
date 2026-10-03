@@ -1,6 +1,6 @@
 // server/src/myrmidon/telegram-notify/jobs.ts
 //
-// myrmidon(OPE-3789-B): the periodic digest and escalation jobs of the
+// myrmidon(1.6.1-TG-NOTIFY-B): the periodic digest and escalation jobs of the
 // Telegram notify track. Both jobs read the owner settings through the
 // contract of part A (the `telegramNotify` area of instance settings); part A
 // is not merged yet, so this module never reads the vendor instance-settings

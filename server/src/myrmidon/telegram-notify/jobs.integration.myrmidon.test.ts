@@ -1,4 +1,4 @@
-// myrmidon(OPE-3789-B): DB-backed tests of the digest and escalation jobs.
+// myrmidon(1.6.1-TG-NOTIFY-B): DB-backed tests of the digest and escalation jobs.
 // The company, chat endpoint and conversation fixtures follow the pattern of
 // server/src/__tests__/chat-telegram-dm-conversation.myrmidon.test.ts (that
 // file is not edited). The settings arrive through the injected port (part A

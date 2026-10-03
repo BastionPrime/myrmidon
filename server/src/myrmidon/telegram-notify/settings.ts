@@ -1,6 +1,6 @@
 // server/src/myrmidon/telegram-notify/settings.ts
 //
-// myrmidon(OPE-3789-B): the settings contract of the parent track (part A
+// myrmidon(1.6.1-TG-NOTIFY-B): the settings contract of the parent track (part A
 // owns the routes; this module holds the shape both the routes and the jobs
 // share, so the server and later the UI use one contract). Fixed names — the
 // parent's contract note: after the agreed version, changes are additive

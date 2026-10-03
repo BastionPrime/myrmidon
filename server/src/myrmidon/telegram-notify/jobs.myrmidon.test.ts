@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-// myrmidon(OPE-3789-B): pure-logic tests of the digest/escalation jobs.
+// myrmidon(1.6.1-TG-NOTIFY-B): pure-logic tests of the digest/escalation jobs.
 // The DB-backed end-to-end path (real outbox rows, fake Telegram transport)
 // lives in jobs.integration.myrmidon.test.ts.
 import {

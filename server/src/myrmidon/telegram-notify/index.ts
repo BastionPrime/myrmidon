@@ -1,6 +1,6 @@
 // server/src/myrmidon/telegram-notify/index.ts
 //
-// myrmidon(OPE-3789-B): entry point of the jobs half of the Telegram notify
+// myrmidon(1.6.1-TG-NOTIFY-B): entry point of the jobs half of the Telegram notify
 // track. The settings routes belong to part A; this module exports only what
 // server/src/index.ts and the tests need.
 

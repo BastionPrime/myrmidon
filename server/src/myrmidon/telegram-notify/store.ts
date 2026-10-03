@@ -1,6 +1,6 @@
 // server/src/myrmidon/telegram-notify/store.ts
 //
-// myrmidon(OPE-3789-B): the per-company job state of the Telegram notify
+// myrmidon(1.6.1-TG-NOTIFY-B): the per-company job state of the Telegram notify
 // track (last digest day, escalation send timestamps). Stored under our own
 // key of instance_settings.general — the same rule every myrmidon track uses
 // (autonomy, maintenance, stack registry): the vendor settings service strips
