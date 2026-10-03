@@ -57,6 +57,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [DIVERGENCE.md](DIVERGENCE.md) | Реестр наших отличий от вендора |
 | [SETTINGS.md](SETTINGS.md) | Наши настройки (переменные `MYRMIDON_*`) и их значения по умолчанию |
 | [board-key-rotation.md](board-key-rotation.md) | Runbook оператора: ротация и отзыв ключей доски / PAT по ролям (ROLE-SCOPED-TOKENS) |
+| [stack-updates.md](stack-updates.md) | Цикл обновлений стека: откуда «наше» и «у автора», отставание, вердикт «патч закрыт», плановая сверка и карточка `stack_update` (STACK-UPDATES часть D) |
 | [tracks/](tracks/) | Задания шести треков V1.0 |
 | [SESSION-PROMPTS.md](SESSION-PROMPTS.md) | Промпты для запуска сессий по трекам |
 
