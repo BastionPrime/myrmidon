@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOT_AUX_COMPRESSION_MODEL_ENV,
+  BOT_AUX_TITLE_MODEL_ENV,
   BOT_BOARD_URL_ENV,
+  BOT_COMPRESSION_THRESHOLD_TOKENS_ENV,
   BOT_HINDSIGHT_ALLOWED_BANKS_ENV,
   BOT_HINDSIGHT_API_URL_ENV,
   BOT_HINDSIGHT_BANK_ENV,
@@ -9,6 +12,7 @@ import {
   BOT_LLM_API_KEY_SECRET_ENV,
   BOT_LLM_BASE_URL_ENV,
   BOT_MCP_SERVERS_ENV,
+  BOT_MODEL_CONTEXT_LENGTH_ENV,
   BOT_RUNTIME_MCP_URL_BASE_ENV,
   BotProfileInputError,
 } from "./profile-input.js";
@@ -842,6 +846,104 @@ describe("myrmidon(W2a) createBotProfileCompile", () => {
         },
       })("agent-a", "agent-a");
       expect(profile.botKey).toBe("agent-a");
+    });
+  });
+
+  // myrmidon(BOT-RUNTIME-TUNING-B): the MYRMIDON_BOT_* instance settings that
+  // tune a bot's compression token cap, model context window and auxiliary
+  // models, read on every compile call and written into config.yaml.
+  describe("myrmidon(BOT-RUNTIME-TUNING-B) instance tuning settings", () => {
+    it("writes compression.threshold_tokens from MYRMIDON_BOT_COMPRESSION_THRESHOLD_TOKENS", async () => {
+      const board = fakeBoard();
+      const profile = await createBotProfileCompile(board.ports, {
+        env: { ...INSTANCE_ENV, [BOT_COMPRESSION_THRESHOLD_TOKENS_ENV]: "100000" },
+      })("agent-a", "agent-a");
+      expect(fileContent(profile, "hermes/config.yaml")).toContain("threshold_tokens: 100000");
+    });
+
+    it("leaves threshold_tokens out when the setting is unset (Hermes applies its own default)", async () => {
+      const board = fakeBoard();
+      const profile = await createBotProfileCompile(board.ports, { env: INSTANCE_ENV })("agent-a", "agent-a");
+      expect(fileContent(profile, "hermes/config.yaml")).not.toContain("threshold_tokens");
+    });
+
+    it("writes model.context_length from MYRMIDON_BOT_MODEL_CONTEXT_LENGTH for the card's model", async () => {
+      const board = fakeBoard({
+        async loadAgent() {
+          return agentRecord({ adapterConfig: { model: "model-a", provider: "custom" } });
+        },
+      });
+      const profile = await createBotProfileCompile(board.ports, {
+        env: { ...INSTANCE_ENV, [BOT_MODEL_CONTEXT_LENGTH_ENV]: "model-a=131072" },
+      })("agent-a", "agent-a");
+      expect(fileContent(profile, "hermes/config.yaml")).toContain("context_length: 131072");
+    });
+
+    it("writes the auxiliary models from MYRMIDON_BOT_AUX_* when the card sets none", async () => {
+      const board = fakeBoard();
+      const profile = await createBotProfileCompile(board.ports, {
+        env: {
+          ...INSTANCE_ENV,
+          [BOT_AUX_TITLE_MODEL_ENV]: "model-title",
+          [BOT_AUX_COMPRESSION_MODEL_ENV]: "model-summary",
+        },
+      })("agent-a", "agent-a");
+      const yaml = fileContent(profile, "hermes/config.yaml");
+      expect(yaml).toContain('auxiliary:\n  compression:\n    model: "model-summary"\n  title_generation:\n    model: "model-title"');
+    });
+
+    it("the card's models block wins over the instance settings", async () => {
+      const board = fakeBoard({
+        async loadAgent() {
+          return agentRecord({
+            adapterConfig: {
+              model: "model-a",
+              provider: "custom",
+              models: { titleGeneration: "model-card-title", contextLength: 262_144 },
+            },
+          });
+        },
+      });
+      const profile = await createBotProfileCompile(board.ports, {
+        env: {
+          ...INSTANCE_ENV,
+          [BOT_MODEL_CONTEXT_LENGTH_ENV]: "model-a=131072",
+          [BOT_AUX_TITLE_MODEL_ENV]: "model-instance-title",
+        },
+      })("agent-a", "agent-a");
+      const yaml = fileContent(profile, "hermes/config.yaml");
+      expect(yaml).toContain("context_length: 262144");
+      expect(yaml).toContain('model: "model-card-title"');
+      expect(yaml).not.toContain('model: "model-instance-title"');
+    });
+
+    it("a settings parse error is reported as a profile warning, not a compile failure", async () => {
+      const reported: string[][] = [];
+      const board = fakeBoard();
+      await createBotProfileCompile(board.ports, {
+        env: {
+          ...INSTANCE_ENV,
+          [BOT_COMPRESSION_THRESHOLD_TOKENS_ENV]: "100k",
+          [BOT_MODEL_CONTEXT_LENGTH_ENV]: "model-a=131072,broken",
+        },
+        onWarnings: (_botKey, list) => {
+          reported.push([...list]);
+        },
+      })("agent-a", "agent-a");
+      const flat = reported.flat();
+      expect(flat.some((warning) => warning.includes(BOT_COMPRESSION_THRESHOLD_TOKENS_ENV))).toBe(true);
+      expect(flat.some((warning) => warning.includes(BOT_MODEL_CONTEXT_LENGTH_ENV))).toBe(true);
+    });
+
+    it("a changed setting takes effect on the next compile tick and restarts the bot", async () => {
+      const board = fakeBoard();
+      const env: NodeJS.ProcessEnv = { ...INSTANCE_ENV };
+      const compile = createBotProfileCompile(board.ports, { env });
+      const before = await compile("agent-a", "agent-a");
+      env[BOT_COMPRESSION_THRESHOLD_TOKENS_ENV] = "150000";
+      const after = await compile("agent-a", "agent-a");
+      expect(fileContent(after, "hermes/config.yaml")).toContain("threshold_tokens: 150000");
+      expect(after.restartHash).not.toBe(before.restartHash);
     });
   });
 });
