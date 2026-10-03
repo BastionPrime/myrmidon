@@ -1,6 +1,7 @@
 import { listAdapterModels } from "../adapters/registry.js";
 import { unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+import { effortForModel } from "./effort-policy/effort-policy.js";
 
 /**
  * myrmidon(S4/M1): a model that is not in the adapter's model list is
@@ -38,6 +39,39 @@ export const AGENT_CARD_MODEL_FIELDS: readonly string[] = [
 
 /** Model fields of the card (M1): ordered lists. */
 export const AGENT_CARD_MODEL_LIST_FIELDS: readonly string[] = ["models.fallbacks"];
+
+/**
+ * myrmidon(BOT-TUNING-C): adapters whose card carries the Hermes
+ * "Thinking effort" field (`adapterConfig.effort`) that this validation
+ * applies to. Other adapters use their own level sets and are untouched.
+ */
+const EFFORT_VALIDATED_ADAPTER_TYPES: readonly string[] = ["hermes_local"];
+
+/**
+ * myrmidon(BOT-TUNING-C): a saved card is rejected (422) when the selected
+ * model does not accept the declared effort — a silently dropped value makes
+ * the runtime send a default the model refuses (e.g. GLM vs "medium") and the
+ * LLM gateway then falls back to a different model on every call. An empty
+ * effort is fine: it resolves to the model's safe default at compile time.
+ */
+export function assertAgentEffortAccepted(
+  adapterType: string,
+  nextAdapterConfig: Record<string, unknown> | null | undefined,
+): void {
+  if (!EFFORT_VALIDATED_ADAPTER_TYPES.includes(adapterType)) return;
+  const effort = nextAdapterConfig?.effort;
+  if (typeof effort !== "string" || effort.trim().length === 0) return;
+  const model =
+    typeof nextAdapterConfig?.model === "string" ? nextAdapterConfig.model : undefined;
+  const resolved = effortForModel(model, effort);
+  if (resolved.source === "invalid") {
+    throw unprocessable(
+      `Model "${model ?? ""}" does not accept effort "${effort.trim()}" (accepted: ${resolved.efforts.join(", ")}).`,
+      { code: "invalid_effort", adapterType, model: model ?? null, effort: effort.trim(), accepted: resolved.efforts },
+    );
+  }
+}
+
 
 function readPath(config: Record<string, unknown> | null | undefined, path: string): unknown {
   let current: unknown = config;
@@ -77,6 +111,7 @@ export async function assertAgentModelsKnown(input: {
   nextAdapterConfig: Record<string, unknown> | null | undefined;
   listModels?: (adapterType: string) => Promise<Array<{ id: string }>>;
 }): Promise<void> {
+  assertAgentEffortAccepted(input.adapterType, input.nextAdapterConfig);
   if (ADAPTERS_WITHOUT_STATIC_MODEL_LIST.includes(input.adapterType)) return;
   // Switching adapters starts from an empty card: every model is new.
   const changed = collectChangedModelNames(input.previousAdapterConfig, input.nextAdapterConfig);
