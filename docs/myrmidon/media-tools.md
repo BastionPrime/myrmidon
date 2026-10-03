@@ -103,7 +103,7 @@
 Готовые клиентские модули для скриптов, которые раньше звали локальный ffmpeg/ffprobe,
 лежат в `tools/media-mcp/bot-scripts/`: stdlib-only клиент MCP (`media_client.py`),
 drop-in слой `media_shim.py` (контракты `video_info`/`CompletedProcess`, fast-path на
-локальном ffmpeg) и инструкция применения в живом дереве ботов (`APPLY-OPE3288.md`).
+локальном ffmpeg) и инструкция применения в живом дереве ботов (`APPLY.md`).
 Скрипт бота получает адрес и токен из `MEDIA_TOOLS_URL`/`MEDIA_TOOLS_TOKEN`; токен —
 персональная запись бота в `config/bots.json` (см. «Аутентификация бота»).
 

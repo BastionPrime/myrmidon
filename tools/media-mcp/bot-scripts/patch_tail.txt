@@ -1,11 +1,11 @@
 
-# --- OPE-3288: медиасервис вместо локального ffmpeg (контейнер бота) ------
-# Хвост добавлен автоматически; при наличии локального ffmpeg поведение не
-# меняется вовсе (fast-path), в контейнере бота уходит в media-mcp.
+# --- myrmidon(MEDIA-SCRIPTS): media service instead of local ffmpeg --------
+# The tail is appended automatically; with a local ffmpeg present nothing
+# changes at all (fast path); in the bot container calls go to media-mcp.
 try:
     import media_shim as _media_shim
 
-    _video_info = _media_shim.video_info  # контракт _video_info OPE-2384 сохранён
+    _video_info = _media_shim.video_info  # the _video_info contract is preserved
 
     if not _media_shim.ffmpeg_available():
         _subprocess_run_orig = subprocess.run
@@ -18,4 +18,4 @@ try:
 
         subprocess.run = _subprocess_run
 except Exception:
-    pass  # среда без медиасервиса работает как раньше
+    pass  # an environment without the media service keeps working as before
