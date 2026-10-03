@@ -75,6 +75,35 @@ describe("myrmidon(PARALLEL-HELPERS) settings panel", () => {
     );
   });
 
+  it("warns about host load for a ceiling above 50 instead of clamping (HELPERS-NO-CAP)", () => {
+    renderView({
+      view: { ...VIEW, settings: { maxPerAgent: 500 }, effective: { ceiling: 500, defaultPerAgent: 2 } },
+    });
+    const warning = container.querySelector("[data-testid=parallel-helpers-host-load-warning]");
+    expect(warning?.textContent).toContain("500");
+    expect(warning?.textContent).toContain("load on the host");
+    // The value itself is shown as in force, not shrunk.
+    expect(container.querySelector("[data-testid=parallel-helpers-effective]")?.textContent).toContain(
+      "ceiling 500",
+    );
+  });
+
+  it("shows the host-load warning for a high draft ceiling, and still saves it", () => {
+    const { onSave } = renderView({ view: { ...VIEW, settings: { maxPerAgent: 5 } } });
+    setText("maxPerAgent", "120");
+    expect(
+      container.querySelector("[data-testid=parallel-helpers-host-load-warning]")?.textContent,
+    ).toContain("120");
+    save();
+    // A high value is the owner's decision: the warning never blocks the save.
+    expect(onSave).toHaveBeenCalledWith({ maxPerAgent: 120 });
+  });
+
+  it("stays quiet for ceilings at or below the warn threshold", () => {
+    renderView({ view: { ...VIEW, settings: { maxPerAgent: 50 }, effective: { ceiling: 50, defaultPerAgent: 2 } } });
+    expect(container.querySelector("[data-testid=parallel-helpers-host-load-warning]")).toBeNull();
+  });
+
   it("shows the capacity usage when there is no warning", () => {
     renderView();
     expect(container.querySelector("[data-testid=parallel-helpers-capacity-ok]")?.textContent).toContain(

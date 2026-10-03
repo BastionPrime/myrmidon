@@ -39,4 +39,4 @@ Split work across helper subagents (`delegate_task`) when the parts are independ
 
 ## Where the limits come from
 
-The per-agent limit and the helper model are set on your agent card ("Parallel helpers"); the allowed range is a company-level setting your operator edits. If `delegate_task` is not available, the card has helpers switched off — ask in the task thread, do not work around it.
+The per-agent limit and the helper model are set on your agent card ("Parallel helpers"); the allowed range is a company-level setting your operator edits, with no built-in upper limit — the number the operator saves is the limit. If `delegate_task` is not available, the card has helpers switched off — ask in the task thread, do not work around it.

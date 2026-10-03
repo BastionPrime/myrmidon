@@ -2,7 +2,10 @@
 // for the "Parallel helpers" block on agent cards, editable while the server
 // runs. Saving writes the instance settings row; the profile compiler re-reads
 // it on every reconcile tick, so every bot's config.yaml picks it up within a
-// tick, no restart. The capacity hint is a warning, never a block.
+// tick, no restart. The capacity hint is a warning, never a block. The ceiling
+// has no built-in upper limit (HELPERS-NO-CAP): the owner's number is the
+// limit, and a suspiciously high value shows a host-load warning here instead
+// of being clamped.
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Users } from "lucide-react";
@@ -19,11 +22,18 @@ interface DraftParse {
 
 type NumberKey = "maxPerAgent" | "defaultMaxPerAgent" | "buildSlots" | "hostMemoryMb";
 
+/**
+ * HELPERS-NO-CAP: above this draft value the settings form shows a host-load
+ * warning instead of clamping. The threshold is a "you may have mistyped
+ * something" signal, not a limit — the owner's number always wins.
+ */
+const HELPERS_HOST_LOAD_WARN_ABOVE = 50;
+
 const NUMBER_FIELDS: Array<{ key: NumberKey; label: string; hint: string; optional: boolean }> = [
   {
     key: "maxPerAgent",
     label: "Helpers per agent (ceiling)",
-    hint: "The highest value any agent card in this company may set. Cards above it are clamped server-side.",
+    hint: "The highest value any agent card in this company may set. Cards above it are clamped server-side. There is no built-in upper limit (HELPERS-NO-CAP): the number you set here is the limit; high values increase host load.",
     optional: true,
   },
   {
@@ -93,6 +103,16 @@ export function ParallelHelpersSettingsPanelView({
   const { patch, errors } = current
     ? parseParallelHelpersDraft(current)
     : { patch: null, errors: {} as Partial<Record<keyof ParallelHelpersSettings, string>> };
+  // HELPERS-NO-CAP: a ceiling above the warn threshold shows a host-load note,
+  // it is never clamped or blocked — the limit is the owner's number alone.
+  const draftCeiling = patch && patch.maxPerAgent !== undefined ? patch.maxPerAgent : null;
+  const effectiveCeiling = view?.effective.ceiling ?? null;
+  const ceilingToWarn =
+    draftCeiling !== null ? draftCeiling : (effectiveCeiling ?? null);
+  const hostLoadWarning =
+    ceilingToWarn !== null && ceilingToWarn > HELPERS_HOST_LOAD_WARN_ABOVE
+      ? `A ceiling of ${ceilingToWarn} means each agent card may ask for up to ${ceilingToWarn} helpers at once. Values this high put a real load on the host — make sure this is intended, not a typo. It is not limited by the product.`
+      : null;
 
   return (
     <section className="space-y-4" data-testid="myrmidon-parallel-helpers">
@@ -141,6 +161,14 @@ export function ParallelHelpersSettingsPanelView({
               In force: ceiling {view.effective.ceiling}, default {view.effective.defaultPerAgent} per agent.
               Cards are clamped to the ceiling when they compile.
             </div>
+            {hostLoadWarning ? (
+              <div
+                className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+                data-testid="parallel-helpers-host-load-warning"
+              >
+                {hostLoadWarning}
+              </div>
+            ) : null}
             {view.capacity.warning ? (
               <div
                 className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"

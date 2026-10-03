@@ -18,7 +18,10 @@
 // Values are bounded by a company-level ceiling the owner edits in settings,
 // never by a literal in this module: the whole point is that the allowed range
 // is itself configurable. `maxPerAgent` is the ceiling, `defaultMaxPerAgent`
-// is what an agent inherits when its card says nothing.
+// is what an agent inherits when its card says nothing. There is no hard cap
+// above the owner's number (the owner's decision, repeated 03.10: the limit
+// comes only from the interface); a suspiciously high value is surfaced as a
+// host-load warning, never silently clamped.
 
 import { z } from "zod";
 
@@ -56,15 +59,11 @@ export const DEFAULT_HELPER_LIMIT = 2;
  */
 export const DEFAULT_HELPERS_CEILING = 10;
 
-/** Bounds of a single helper budget, so a card cannot ask for an absurd child turn cap. */
+/**
+ * Bounds of a single helper budget, so a card cannot ask for an absurd child turn cap.
+ */
 export const HELPER_TURN_BUDGET_MIN = 1;
 export const HELPER_TURN_BUDGET_MAX = 500;
-
-/**
- * Cap on the company ceiling itself. A ceiling above this is clamped, so a
- * mistyped settings row cannot authorize an unbounded fan-out on a small host.
- */
-export const HELPERS_CEILING_MAX = 50;
 
 /** The card block, exactly as stored in adapterConfig. */
 export interface ParallelHelpersCard {
@@ -84,7 +83,11 @@ export interface ParallelHelpersCard {
  * describe the host, they never clamp a card value.
  */
 export interface ParallelHelpersSettings {
-  /** Highest `maxConcurrent` any agent in this company may be given. */
+  /**
+   * Highest `maxConcurrent` any agent in this company may be given. The value
+   * as written is the limit — nothing clamps it from above; a very high value
+   * only produces a host-load warning in the interface.
+   */
   maxPerAgent?: number;
   /** What an agent gets when its card is silent. */
   defaultMaxPerAgent?: number;
@@ -98,8 +101,8 @@ const positiveInt = z.number().int().positive();
 
 export const parallelHelpersSettingsSchema = z
   .object({
-    maxPerAgent: positiveInt.max(HELPERS_CEILING_MAX).optional(),
-    defaultMaxPerAgent: positiveInt.max(HELPERS_CEILING_MAX).optional(),
+    maxPerAgent: positiveInt.optional(),
+    defaultMaxPerAgent: positiveInt.optional(),
     buildSlots: positiveInt.nullable().optional(),
     hostMemoryMb: positiveInt.nullable().optional(),
   })
@@ -162,11 +165,16 @@ export function readParallelHelpersCard(card: Record<string, unknown>): ReadPara
   };
 }
 
-/** The company ceiling, clamped so a mistyped row still yields a usable bound. */
+/**
+ * The company ceiling, exactly as the owner set it. The value from the
+ * settings is the limit: there is no hard cap above it, so an operator who
+ * needs more than the module default simply writes a bigger number. A typo is
+ * the interface's problem (a warning about host load), not a silent clamp.
+ */
 export function helpersCeiling(settings: ParallelHelpersSettings | undefined): number {
   const raw = settings?.maxPerAgent;
   if (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0) return DEFAULT_HELPERS_CEILING;
-  return Math.min(HELPERS_CEILING_MAX, raw);
+  return raw;
 }
 
 /** The per-agent default, clamped into the ceiling (never above it). */

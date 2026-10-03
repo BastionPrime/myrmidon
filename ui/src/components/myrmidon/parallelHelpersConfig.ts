@@ -3,9 +3,11 @@
 //
 // The card stores `adapterConfig.parallelHelpers = { enabled, maxConcurrent,
 // model, childTurnBudget }`. The server resolves it against a company-level
-// ceiling (packages/shared/src/myrmidon-parallel-helpers.ts); the bounds below
-// are the UI's own sanity bounds, mirroring the shared module's — they keep a
-// typo from asking for an absurd fan-out, they do not invent policy.
+// ceiling (packages/shared/src/myrmidon-parallel-helpers.ts). There is no
+// upper bound here either (HELPERS-NO-CAP): the company ceiling set by the
+// owner is the only limit. This module rejects only nonsense (non-numbers,
+// non-positive values); a large number is the owner's decision and is warned
+// about, never blocked or silently shrunk.
 
 import {
   HELPER_TURN_BUDGET_MAX,
@@ -23,14 +25,18 @@ export function readParallelHelpersCard(value: unknown): BotParallelHelpersCard 
 export type HelpersNumberParse = { ok: true; value: number } | { ok: false; message: string };
 
 const LIMIT_MIN = 1;
-/** The server clamps to the company ceiling anyway; this only rejects nonsense. */
-const LIMIT_MAX = 50;
+/**
+ * HELPERS-NO-CAP: no upper bound. The company ceiling (an owner-edited
+ * setting) is the only limit; the server clamps to it, and anything else
+ * would silently override the owner's decision.
+ */
+const LIMIT_MAX = Number.MAX_SAFE_INTEGER;
 
 export function parseHelpersLimit(text: string): HelpersNumberParse {
   const trimmed = text.trim();
   const value = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(value) || value < LIMIT_MIN || value > LIMIT_MAX) {
-    return { ok: false, message: `Enter a whole number from ${LIMIT_MIN} to ${LIMIT_MAX}.` };
+    return { ok: false, message: `Enter a whole number ${LIMIT_MIN} or greater.` };
   }
   return { ok: true, value };
 }

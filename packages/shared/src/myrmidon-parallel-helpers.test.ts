@@ -17,7 +17,6 @@ import {
   DEFAULT_HELPERS_CEILING,
   HELPER_TURN_BUDGET_MAX,
   HELPER_TURN_BUDGET_MIN,
-  HELPERS_CEILING_MAX,
   PARALLEL_HELPERS_CARD_KEY,
   helperCapacityHint,
   helpersCeiling,
@@ -154,8 +153,19 @@ describe("resolveParallelHelpers", () => {
 });
 
 describe("ceiling helpers", () => {
-  it("clamps a mistyped ceiling to the hard cap", () => {
-    expect(helpersCeiling({ maxPerAgent: 500 })).toBe(HELPERS_CEILING_MAX);
+  it("takes the owner's ceiling as written — no hard cap above it", () => {
+    // HELPERS-NO-CAP: the limit comes only from the interface. A value above
+    // the old hard cap of 50 is the owner's decision, not a typo to clamp.
+    expect(helpersCeiling({ maxPerAgent: 500 })).toBe(500);
+    expect(helpersCeiling({ maxPerAgent: 1000 })).toBe(1000);
+  });
+
+  it("resolves a card against a ceiling above the old hard cap without clamping", () => {
+    const resolved = resolveParallelHelpers(
+      { [PARALLEL_HELPERS_CARD_KEY]: { enabled: true, maxConcurrent: 200 } },
+      { maxPerAgent: 500 },
+    );
+    expect(resolved.maxConcurrent).toBe(200);
   });
 
   it("falls back to the module ceiling when unset", () => {
@@ -208,6 +218,11 @@ describe("parallelHelpersSettingsSchema", () => {
         hostMemoryMb: null,
       }).success,
     ).toBe(true);
+  });
+
+  it("accepts a ceiling above any hard cap — the owner sets the limit", () => {
+    expect(parallelHelpersSettingsSchema.safeParse({ maxPerAgent: 500 }).success).toBe(true);
+    expect(parallelHelpersSettingsSchema.safeParse({ defaultMaxPerAgent: 120 }).success).toBe(true);
   });
 
   it("rejects a fractional or non-positive ceiling", () => {

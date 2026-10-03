@@ -117,7 +117,12 @@ describe("myrmidon(PARALLEL-HELPERS) agent card fields", () => {
       input.dispatchEvent(new Event("blur", { bubbles: true }));
     });
     expect(onChange).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Enter a whole number from 1 to 50");
+    expect(container.textContent).toContain("Enter a whole number 1 or greater");
+  });
+
+  it("accepts a limit above the old hard cap of 50 — no upper bound (HELPERS-NO-CAP)", () => {
+    expect(parseHelpersLimit("120")).toEqual({ ok: true, value: 120 });
+    expect(parseHelpersLimit("999")).toEqual({ ok: true, value: 999 });
   });
 
   it("shows the company ceiling in the limit field's hint (tooltip)", () => {
@@ -137,7 +142,8 @@ describe("myrmidon(PARALLEL-HELPERS) pure helpers", () => {
     expect(parseHelpersLimit("4")).toEqual({ ok: true, value: 4 });
     expect(parseHelpersLimit("").ok).toBe(false);
     expect(parseHelpersLimit("banana").ok).toBe(false);
-    expect(parseHelpersLimit("999").ok).toBe(false);
+    // HELPERS-NO-CAP: no upper bound on the limit — the company ceiling is the only cap.
+    expect(parseHelpersLimit("999")).toEqual({ ok: true, value: 999 });
     expect(parseHelpersTurnBudget("40")).toEqual({ ok: true, value: 40 });
     expect(parseHelpersTurnBudget("").ok).toBe(false);
   });

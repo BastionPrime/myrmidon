@@ -86,6 +86,21 @@ describe("myrmidon(PARALLEL-HELPERS) routes: reading the settings and hint", () 
     expect(res.body.capacity).toMatchObject({ requestedTotal: 0, enabledAgents: 0, warning: null });
   });
 
+  it("reports the owner's ceiling as written — no hard cap above 50 (HELPERS-NO-CAP)", async () => {
+    const { app } = harness({ stored: { maxPerAgent: 500 } });
+    const res = await request(app).get(URL).expect(200);
+    expect(res.body.effective.ceiling).toBe(500);
+  });
+
+  it("counts a card limit above the old hard cap at its resolved value", async () => {
+    const { app } = harness({
+      stored: { maxPerAgent: 200 },
+      cards: [{ id: "a", name: "A", adapterConfig: { parallelHelpers: { enabled: true, maxConcurrent: 150 } } }],
+    });
+    const res = await request(app).get(URL).expect(200);
+    expect(res.body.capacity).toMatchObject({ requestedTotal: 150, enabledAgents: 1 });
+  });
+
   it("sums the enabled agents' limits into the hint, resolved like the compiler", async () => {
     const { app } = harness({
       stored: { maxPerAgent: 6 },

@@ -20,6 +20,8 @@
 import type { Db } from "@paperclipai/db";
 import {
   helperCapacityHint,
+  helpersCeiling,
+  helpersDefault,
   resolveParallelHelpers,
   type HelperCapacityHint,
   type ParallelHelpersSettings,
@@ -108,12 +110,11 @@ export function parallelHelpersService(
     });
     return {
       settings,
+      // HELPERS-NO-CAP: the effective values come from the shared resolver,
+      // which takes the owner's ceiling as written — no hard cap above it.
       effective: {
-        ceiling: Math.min(
-          settings.maxPerAgent && settings.maxPerAgent > 0 ? settings.maxPerAgent : 10,
-          50,
-        ),
-        defaultPerAgent: settings.defaultMaxPerAgent && settings.defaultMaxPerAgent > 0 ? settings.defaultMaxPerAgent : 2,
+        ceiling: helpersCeiling(settings),
+        defaultPerAgent: helpersDefault(settings),
       },
       capacity: helperCapacityHint(agents, settings),
     };

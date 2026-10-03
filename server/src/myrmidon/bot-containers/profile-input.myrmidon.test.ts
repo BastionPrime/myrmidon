@@ -420,6 +420,17 @@ describe("myrmidon(W2a) buildHermesProfileInput — card mapping", () => {
     });
   });
 
+  it("myrmidon(PARALLEL-HELPERS): a ceiling above the old hard cap of 50 is taken as written (HELPERS-NO-CAP)", () => {
+    const { input } = buildHermesProfileInput(
+      source({
+        adapterConfig: { parallelHelpers: { enabled: true, maxConcurrent: 120 } },
+        parallelHelpersSettings: { maxPerAgent: 500 },
+      }),
+      settings(),
+    );
+    expect(input.parallelHelpers).toMatchObject({ enabled: true, maxConcurrent: 120 });
+  });
+
   it("myrmidon(PARALLEL-HELPERS): a card that never mentioned helpers stays off with the default limit", () => {
     const { input } = buildHermesProfileInput(source(), settings());
     expect(input.parallelHelpers).toEqual({

@@ -86,7 +86,7 @@ export function AgentCardParallelHelpersFields({
           <>
             <Field
               label="Max concurrent helpers"
-              hint={`How many helpers may run at once. The company ceiling is ${ceiling ?? "not set (default 10)"}; values above it are clamped server-side.`}
+              hint={`How many helpers may run at once. The company ceiling is ${ceiling ?? "not set (default 10)"}; values above it are clamped server-side. There is no built-in upper limit on the ceiling itself (the operator sets it in settings).`}
             >
               <input
                 type="text"

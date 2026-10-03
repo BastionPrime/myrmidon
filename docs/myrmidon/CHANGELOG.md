@@ -28,6 +28,21 @@ version file to edit. Base Paperclip version is in the image label
   server half of the feature and merge separately. Operator guide:
   [guides/agent-board-admin.md](guides/agent-board-admin.md).
 
+### Parallel helpers without a hard cap (HELPERS-NO-CAP)
+
+- The number of parallel helpers is a setting with **no built-in upper
+  limit**; the default stays 2 (owner's decision, repeated 03.10). The hard
+  cap of 50 that clamped even the owner's own settings value is gone: the
+  company ceiling (`maxPerAgent`) and the per-agent limit are taken exactly
+  as saved, from the interface, and the profile compiler resolves a card
+  against the owner's number as written. Protection against a typo is a
+  warning, not a clamp: the settings page shows a host-load note for a saved
+  ceiling above 50 ("values this high put a real load on the host — make
+  sure this is intended, not a typo"), and saving is never blocked. The
+  agent card's limit field likewise accepts any whole number ≥ 1 and only
+  rejects non-numbers. Settings documentation:
+  [SETTINGS.md](SETTINGS.md) § PARALLEL-HELPERS.
+
 ## 1.6.0
 
 ### CTO chat planner (CTO-CHAT B)
