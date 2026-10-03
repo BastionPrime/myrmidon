@@ -90,7 +90,8 @@
       "colony": "{{active}} из {{total}}",
       "fleet": "Флот",
       "fleetAttention": "Флот: требует внимания",
-      "forecast": "{{spend}} из {{budget}}"
+      "forecast": "{{spend}} из {{budget}}",
+      "forecastSpendOnly": "Потрачено {{spend}}"
     },
     "decisions": {
       "badge": "Решений ждёт: {{count}}"

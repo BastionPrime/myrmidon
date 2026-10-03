@@ -90,7 +90,8 @@
       "colony": "{{active}} of {{total}}",
       "fleet": "Fleet",
       "fleetAttention": "Fleet: 1 attention",
-      "forecast": "{{spend}} of {{budget}}"
+      "forecast": "{{spend}} of {{budget}}",
+      "forecastSpendOnly": "{{spend}} spent"
     },
     "decisions": {
       "badge": "{{count}} decisions waiting"
