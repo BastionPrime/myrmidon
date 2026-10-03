@@ -821,6 +821,45 @@ const DATE_BUCKET_LABELS: Record<DateBucket, string> = {
   earlier: "Earlier",
 };
 
+// myrmidon(UI-RU): i18n keys for group labels produced by this module. Render
+// sites (desk + queue pages) resolve labels through localizeAttentionLabel so
+// RU users see translated shelf/group headers without changing grouping logic.
+export const ATTENTION_LABEL_I18N: Record<string, string> = {
+  "Decide now": "decisions.decideNow",
+  "New today": "decisions.newToday",
+  "Earlier": "decisions.earlier",
+  "Today": "decisions.today",
+  "Yesterday": "decisions.yesterday",
+  "This week": "decisions.thisWeek",
+  "Critical": "decisions.severityCritical",
+  "High": "decisions.severityHigh",
+  "Medium": "decisions.severityMedium",
+  "Low": "decisions.severityLow",
+  "No project": "decisions.noProject",
+  "Approval": "decisions.sourceApproval",
+  "Decision": "decisions.sourceDecision",
+  "Decision requested": "decisions.sourceDecisionRequested",
+  "Join request": "decisions.sourceJoinRequest",
+  "Recovery": "decisions.sourceRecovery",
+  "Task": "decisions.sourceTask",
+  "Blocked dependency": "decisions.sourceBlockedDependency",
+  "Review": "decisions.sourceReview",
+  "Failed run": "decisions.sourceFailedRun",
+  "Budget": "decisions.sourceBudget",
+  "Agent error": "decisions.sourceAgentError",
+  "Stack update": "decisions.sourceStackUpdate",
+};
+
+/** myrmidon(UI-RU): resolve a group label through the fork catalog when a key exists. */
+export function localizeAttentionLabel(
+  label: string | null,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string | null {
+  if (label === null) return null;
+  const key = ATTENTION_LABEL_I18N[label];
+  return key ? t(key) : label;
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /** Bucket a timestamp relative to `now` using a rolling calendar-day window. */

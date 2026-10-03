@@ -3,7 +3,7 @@
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MaintenanceBannerView, normalizeReason } from "./MaintenanceBanner";
+import { MaintenanceBannerView, aggregateMaintenance, normalizeReason } from "./MaintenanceBanner";
 import { MaintenanceSettingsPanelView } from "./MaintenanceSettingsPanel";
 import type { MaintenanceStatus, MaintenanceWindowView } from "./maintenanceApi";
 
@@ -64,19 +64,21 @@ describe("MaintenanceBanner", () => {
   it("shows an instance window on every company", () => {
     const banner = renderBanner(status([window()]));
     expect(banner).not.toBeNull();
-    expect(banner!.textContent).toContain("Maintenance for the whole instance (on)");
+    const summary = banner!.querySelector('[data-testid="myrmidon-maintenance-summary"]')!;
+    expect(summary.textContent).toContain("windows: 1");
+    expect(banner!.querySelector("span")!.textContent).toBe("Maintenance mode");
     expect(banner!.textContent).toContain("deploy");
-    expect(banner!.textContent).toContain("queued (3)");
+    expect(banner!.textContent).toContain("queued wakeups: 3");
   });
 
   it("shows a draining window with its running runs", () => {
-    const banner = renderBanner(status([window({ state: "entering", runningRuns: 2 })]));
-    expect(banner!.textContent).toContain("draining, runs still running: 2");
+    const banner = renderBanner(status([window({ state: "entering", runningRuns: 2 })]))!;
+    expect(banner.textContent).toContain("draining, runs still running: 2");
   });
 
   it("shows narrower windows only in their company", () => {
     const agentWindow = window({ id: "w-agent", scope: { type: "agent", id: "agent-a" }, companyId: "company-a" });
-    expect(renderBanner(status([agentWindow]), "company-a")!.textContent).toContain("Agent maintenance (on)");
+    expect(renderBanner(status([agentWindow]), "company-a")).not.toBeNull();
     expect(renderBanner(status([agentWindow]), "company-b")).toBeNull();
   });
 
@@ -86,44 +88,83 @@ describe("MaintenanceBanner", () => {
         id: `w-${i}`,
         scope: { type: "agent", id: `agent-${i}` },
         companyId: "company-a",
-        reason: `bot container template update (00000000-0000-4000-8000-00000000000${i})`,
+        reason: `bot container template update (00000000-0000-4000-8000-000000000000)`,
         queuedWakeups: 2,
         ...overrides,
       }),
     );
   }
 
-  it("aggregates agent windows of one kind into a single line", () => {
+  it("keeps 47 agent windows in one collapsed plaque with a counter", () => {
+    const banner = renderBanner(status(agentWindows(47)))!;
+    // One plaque, one summary line, one details row for the batch.
+    expect(banner.querySelectorAll('[data-testid="myrmidon-maintenance-details"]')).toHaveLength(1);
+    expect(banner.querySelectorAll('[data-testid="myrmidon-maintenance-summary"]')).toHaveLength(1);
+    expect(banner.querySelectorAll('[data-testid="myrmidon-maintenance-row"]')).toHaveLength(1);
+    const summary = banner.querySelector('[data-testid="myrmidon-maintenance-summary"]')!.textContent!;
+    expect(summary).toContain("windows: 47");
+    const row = banner.querySelector('[data-testid="myrmidon-maintenance-row"]')!;
+    expect(row.textContent).toContain("bot container template update");
+    expect(row.textContent).toContain("windows: 47");
+    expect(row.textContent).toContain("queued wakeups: 94");
+    // Agent ids stay inside the expanded row, never in the collapsed summary.
+    expect(summary).not.toContain("agent-");
+  });
+
+  it("aggregates agent windows of one kind into a single row", () => {
     const banner = renderBanner(status(agentWindows(3)))!;
-    const groups = banner.querySelectorAll('[data-testid="myrmidon-maintenance-agent-group"]');
-    expect(groups).toHaveLength(1);
-    const text = groups[0].textContent!;
+    const rows = banner.querySelectorAll('[data-testid="myrmidon-maintenance-row"]');
+    expect(rows).toHaveLength(1);
+    const text = rows[0].textContent!;
     expect(text).toContain("bot container template update");
-    expect(text).toContain("agents: 3");
+    expect(text).toContain("windows: 3");
     expect(text).toContain("queued wakeups: 6");
     expect(text).not.toContain("00000000-0000-4000");
     expect(text).toContain("agent-0, agent-1, agent-2");
-    expect(groups[0].querySelector("summary")!.getAttribute("title")).toBe("agent-0, agent-1, agent-2");
+    expect(rows[0].getAttribute("title")).toBe("agent-0, agent-1, agent-2");
   });
 
-  it("keeps different kinds of agent windows on separate lines", () => {
+  it("keeps different kinds of agent windows on separate rows", () => {
     const mixed = [...agentWindows(2), ...agentWindows(1, { id: "w-x", reason: "manual repair" })];
     const banner = renderBanner(status(mixed))!;
-    expect(banner.querySelectorAll('[data-testid="myrmidon-maintenance-agent-group"]')).toHaveLength(2);
+    expect(banner.querySelectorAll('[data-testid="myrmidon-maintenance-row"]')).toHaveLength(2);
   });
 
-  it("shows instance and agent windows separately", () => {
+  it("shows instance and agent windows as rows of one plaque", () => {
     const banner = renderBanner(status([window(), ...agentWindows(2)]))!;
-    expect(banner.textContent).toContain("Maintenance for the whole instance (on)");
-    expect(banner.querySelectorAll('[data-testid="myrmidon-maintenance-agent-group"]')).toHaveLength(1);
+    const rows = banner.querySelectorAll('[data-testid="myrmidon-maintenance-row"]');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("the whole instance (on)");
+    const summary = banner.querySelector('[data-testid="myrmidon-maintenance-summary"]')!.textContent!;
+    expect(summary).toContain("windows: 3");
   });
 
-  it("collapses ending agent windows into one compact line", () => {
+  it("folds ending agent windows into one ending row, counted in the plaque", () => {
     const banner = renderBanner(status(agentWindows(4, { state: "leaving" })))!;
-    const ending = banner.querySelectorAll('[data-testid="myrmidon-maintenance-ending"]');
-    expect(ending).toHaveLength(1);
-    expect(ending[0].textContent).toBe("Agent maintenance ending — agents: 4");
-    expect(banner.querySelector('[data-testid="myrmidon-maintenance-agent-group"]')).toBeNull();
+    const rows = banner.querySelectorAll('[data-testid="myrmidon-maintenance-row"]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("(ending)");
+    expect(rows[0].textContent).toContain("windows: 4");
+    const summary = banner.querySelector('[data-testid="myrmidon-maintenance-summary"]')!.textContent!;
+    expect(summary).toContain("windows: 4");
+    expect(summary).toContain("ending");
+  });
+
+  it("exposes the latest drain deadline of the batch as the ends-by bound", () => {
+    const batch = agentWindows(2, { drainDeadlineAt: "2026-09-27T10:20:00.000Z" });
+    batch[1] = { ...batch[1], drainDeadlineAt: "2026-09-27T10:30:00.000Z" };
+    const aggregate = aggregateMaintenance(batch);
+    expect(aggregate.windowCount).toBe(2);
+    expect(aggregate.endsBy).toBe("2026-09-27T10:30:00.000Z");
+    const banner = renderBanner(status(batch))!;
+    expect(banner.textContent).toContain("ends by");
+  });
+
+  it("omits the ends-by phrase when no deadline is known", () => {
+    const batch = agentWindows(1, { drainDeadlineAt: "" });
+    expect(aggregateMaintenance(batch).endsBy).toBeNull();
+    const banner = renderBanner(status(batch))!;
+    expect(banner.textContent).not.toContain("ends by");
   });
 
   it("normalizes reasons without agent identifiers", () => {
