@@ -32,6 +32,11 @@ import { getAdapterDisplay } from "../adapters/adapter-display-registry";
 import { adapterLabels, roleLabels, help } from "../components/agent-config-primitives";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { AgentToolAccessSection } from "../components/myrmidon/AgentToolAccessSection"; // myrmidon(S6)
+import {
+  AgentBoardAdminSection,
+  boardAdminDeniedExplanation,
+  canManageBoardAdmins,
+} from "../components/myrmidon/AgentBoardAdminSection"; // myrmidon(ADMIN-AGENT)
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
 import { redactCommandText as redactCommandSecretText } from "@paperclipai/adapter-utils";
 import { MarkdownEditor } from "../components/MarkdownEditor";
@@ -104,6 +109,7 @@ import {
 } from "../lib/live-log-buffer";
 import {
   isUuidLike,
+  readAgentBoardAdmin,
   type Agent,
   type AgentDetail as AgentDetailRecord,
   type HeartbeatRun,
@@ -1476,6 +1482,15 @@ export function AgentDetail() {
             onCancelActionChange={setCancelConfigAction}
             onSavingChange={setConfigSaving}
             updatePermissions={updatePermissions}
+            operatorAccess={{
+              source: boardAccess?.source ?? null,
+              isInstanceAdmin: boardAccess?.isInstanceAdmin ?? null,
+              membershipRole:
+                boardAccess?.memberships?.find(
+                  (membership) =>
+                    membership.companyId === resolvedCompanyId && membership.status === "active",
+                )?.membershipRole ?? null,
+            }}
             content="permissions"
           />
         </div>
@@ -1952,6 +1967,7 @@ export function ConfigurationTab({
   onCancelActionChange,
   onSavingChange,
   updatePermissions,
+  operatorAccess,
   hidePromptTemplate,
   hideInstructionsFile,
   content = "runtime",
@@ -1963,7 +1979,16 @@ export function ConfigurationTab({
   onSaveActionChange: (save: (() => void) | null) => void;
   onCancelActionChange: (cancel: (() => void) | null) => void;
   onSavingChange: (saving: boolean) => void;
-  updatePermissions: { mutate: (permissions: AgentPermissionUpdate) => void; isPending: boolean };
+  updatePermissions: {
+    mutate: (permissions: AgentPermissionUpdate, options?: { onError?: (error: unknown) => void }) => void;
+    isPending: boolean;
+  };
+  /** Current operator's board access summary, for the board admin toggle gate. */
+  operatorAccess?: {
+    source: string | null;
+    isInstanceAdmin: boolean | null;
+    membershipRole: string | null;
+  };
   hidePromptTemplate?: boolean;
   hideInstructionsFile?: boolean;
   content?: "runtime" | "permissions" | "secrets";
@@ -2050,8 +2075,12 @@ export function ConfigurationTab({
   const canCreateAgents = Boolean(agent.permissions?.canCreateAgents);
   const canCreateSkills = agent.permissions?.canCreateSkills !== false;
   const canAssignTasks = Boolean(agent.access?.canAssignTasks);
+  const boardAdmin = readAgentBoardAdmin({ permissions: agent.permissions, access: agent.access });
   const taskAssignSource = agent.access?.taskAssignSource ?? "none";
   const taskAssignLocked = agent.role === "ceo" || canCreateAgents;
+  const [boardAdminError, setBoardAdminError] = useState<string | null>(null);
+  useEffect(() => { setBoardAdminError(null); }, [agent.id, boardAdmin]);
+  const operatorCanManageBoardAdmins = canManageBoardAdmins(operatorAccess ?? {});
   const taskAssignHint =
     taskAssignSource === "ceo_role"
       ? "Enabled automatically for CEO agents."
@@ -2170,6 +2199,20 @@ export function ConfigurationTab({
               disabled={updatePermissions.isPending || taskAssignLocked}
             />
           </div>
+          {/* myrmidon(ADMIN-AGENT): board administrator toggle, gated by the operator's permission to manage permissions */}
+          <AgentBoardAdminSection
+            boardAdmin={boardAdmin}
+            pending={updatePermissions.isPending}
+            error={boardAdminError}
+            canManage={operatorCanManageBoardAdmins}
+            base={{ canCreateAgents, canCreateSkills, canAssignTasks }}
+            onSave={(update) => {
+              setBoardAdminError(null);
+              updatePermissions.mutate(update, {
+                onError: (error: unknown) => setBoardAdminError(boardAdminDeniedExplanation(error)),
+              });
+            }}
+          />
           {/* myrmidon(S6): per-agent tool and connection permission */}
           <AgentToolAccessSection
             permissions={agent.permissions}

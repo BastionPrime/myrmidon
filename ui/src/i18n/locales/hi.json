@@ -373,5 +373,15 @@
       "title": "Change log",
       "empty": "No provider changes recorded yet."
     }
+  },
+  "cardModels": {
+    "free": "Free",
+    "paid": "Paid",
+    "freeFirstHint": "Free models are listed first.",
+    "fromBoard": "From board settings",
+    "fromEnvDefault": "Default list",
+    "refresh": "Refresh models",
+    "refreshing": "Refreshing…",
+    "loadError": "Could not load the model list."
   }
 }

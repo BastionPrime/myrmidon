@@ -244,7 +244,7 @@ export function createSwarmSupervisorReleasePort(
       const releasedReason = reason || SUPERVISOR_RELEASE_REASON;
       const rows = await db.execute(sql`
         UPDATE issue_claims
-        SET released_at = ${releasedAt}, released_reason = ${releasedReason}
+        SET released_at = ${releasedAt}, release_reason = ${releasedReason}
         WHERE company_id = ${companyId}
           AND id = ${claimId}
           AND released_at IS NULL
