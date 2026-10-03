@@ -14992,15 +14992,15 @@ export function heartbeatService(
               attempt: nextAttempt,
               baseDelayMs: Math.max(
                 0,
-                Math.floor(opts.delayMs ?? hintDelayMs ?? 0),
+                Math.floor(opts?.delayMs ?? hintDelayMs ?? 0),
               ),
               delayMs: Math.max(
                 0,
-                Math.floor(opts.delayMs ?? hintDelayMs ?? 0),
+                Math.floor(opts?.delayMs ?? hintDelayMs ?? 0),
               ),
               dueAt: new Date(
                 now.getTime() +
-                  Math.max(0, Math.floor(opts.delayMs ?? hintDelayMs ?? 0)),
+                  Math.max(0, Math.floor(opts?.delayMs ?? hintDelayMs ?? 0)),
               ),
               maxAttempts,
             }

@@ -69,7 +69,8 @@ async function createRun(
     .values({
       agentId: agent.id,
       companyId: agent.companyId,
-      mode: "heartbeat",
+      invocationSource: "assignment",
+      triggerDetail: "system",
       runtimeMode: "legacy",
       status: values.status ?? "running",
       contextSnapshot: values.contextSnapshot ?? {},
