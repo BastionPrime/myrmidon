@@ -29,7 +29,9 @@
     "home": "Главная",
     "unread": "непрочитано",
     "decisionsBadge": "решений",
-    "quality": "Качество"
+    "quality": "Качество",
+    "swarmSupervisor": "Swarm-надзор",
+    "foraging": "Фораж"
   },
   "common": {
     "cancel": "Отмена",

@@ -29,7 +29,9 @@
     "home": "Home",
     "unread": "unread",
     "decisionsBadge": "decisions",
-    "quality": "Quality"
+    "quality": "Quality",
+    "swarmSupervisor": "Swarm supervisor",
+    "foraging": "Foraging"
   },
   "common": {
     "cancel": "Cancel",

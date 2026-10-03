@@ -117,6 +117,25 @@
       }
     },
     {
+      "id": "09-run-scoped-github-broker",
+      "kind": "patch",
+      "patch": "docker/bot-runtime/patches/09-run-scoped-github-broker.patch",
+      "files": [
+        "gateway/platforms/api_server_runs.py",
+        "tools/environments/local.py",
+        "tools/github_broker_context.py"
+      ],
+      "reason": "The board mints a run-bound github_credentials capability for container agents, but a hermes gateway has no per-run process to inherit env from, so the capability had no delivery path and container agents could not push. /v1/runs now accepts a github_broker body field and binds it per-run through contextvars; the terminal child-env bridge exports it to that run's subprocesses only.",
+      "dropCondition": "Upstream ships a per-run credential-delivery field on /v1/runs with equivalent concurrency isolation.",
+      "offer": null,
+      "offerNote": "Not offered yet: see the note on delta 02 (publisher-scan wrapper pending).",
+      "probe": {
+        "source": "hermes",
+        "path": "gateway/platforms/api_server_runs.py",
+        "upstreamMarker": "github_broker|run-scoped.*credential"
+      }
+    },
+    {
       "id": "hindsight-reflect-timeout-and-fact-types",
       "kind": "upstream-plugin-gap",
       "files": [

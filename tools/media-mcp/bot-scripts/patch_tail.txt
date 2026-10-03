@@ -1,0 +1,21 @@
+
+# --- myrmidon(MEDIA-SCRIPTS): media service instead of local ffmpeg --------
+# The tail is appended automatically; with a local ffmpeg present nothing
+# changes at all (fast path); in the bot container calls go to media-mcp.
+try:
+    import media_shim as _media_shim
+
+    _video_info = _media_shim.video_info  # the _video_info contract is preserved
+
+    if not _media_shim.ffmpeg_available():
+        _subprocess_run_orig = subprocess.run
+
+        def _subprocess_run(argv, *a, **kw):
+            if isinstance(argv, (list, tuple)) and argv and argv[0] == "ffmpeg":
+                return _media_shim.subprocess_run_shim(list(argv), cwd=kw.get("cwd"),
+                                                       timeout=kw.get("timeout"))
+            return _subprocess_run_orig(argv, *a, **kw)
+
+        subprocess.run = _subprocess_run
+except Exception:
+    pass  # an environment without the media service keeps working as before

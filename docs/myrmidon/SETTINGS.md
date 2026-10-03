@@ -95,6 +95,7 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MAINTENANCE_DRAIN_GRACE_SEC` | DRAIN-INTERRUPT | `300` | Deploy-script setting (`deploy.env`): how long the window drains before it interrupts the remaining runs (the `drainTimeoutSec` of the enter request in interrupt mode) | Ignored with `MAINTENANCE_ON_TIMEOUT=wait`, which uses `MAINTENANCE_DRAIN_TIMEOUT_SEC` |
 | `MYRMIDON_MAINTENANCE_TICK_SEC` | R3 | `5` | How often the mode service recomputes windows: `entering → on`, timeouts, exit completion | From 1 to 3600 |
 | `MYRMIDON_MAINTENANCE_CACHE_TTL_SEC` | R3 | `5` | How many seconds the admission gateway caches maintenance windows and the org structure (department membership) | `0` — no cache, DB read on every check. Transitions made by this process are visible at once |
+| `MYRMIDON_MAINTENANCE_HOOK_TIMEOUT_MS` | R3 | `15000` | Upper bound for one maintenance integration hook call (`onEntered`/`onExited`, the Zabbix client). A hook that exceeds it is abandoned (it keeps running detached) and the window lifecycle continues; the timeout is logged and audited. OPE-3638: a hung `onExited` pinned `leaving` windows until every card change on the agent was blocked | From 1000 to 300000; a value outside the range falls back to the default |
 | `MYRMIDON_ZABBIX_URL` | R3 | unset | Address of the Zabbix API (`…/api_jsonrpc.php`) for the instance maintenance window | Unset — the integration is off, no calls |
 | `MYRMIDON_ZABBIX_TOKEN_REF` | R3 | unset | Reference to the Zabbix API token: `env:<NAME>` (variable) or `file:<path>` (a file, e.g. a Docker secret). The value is not logged | Unset — the integration is off |
 | `MYRMIDON_ZABBIX_HOST_GROUPS` | R3 | unset | Comma-separated names of Zabbix host groups that are put into maintenance when the instance window is entered | Unset — the integration is off |
@@ -153,7 +154,6 @@ A track writes only into its own section. A row is added in the same PR as the s
 |---|---|---|---|---|
 | `MYRMIDON_WORKSPACE_PNPM_STORE_DIR` | WORKSPACE-HYGIENE | unset — `<repository root>/.paperclip/pnpm-store` | Absolute path of the shared pnpm store into which `provision-worktree.sh` installs packages and from which they are imported into the workspace `node_modules` with hard links (`--config.package-import-method=hardlink`): one store for all workspaces of one repository instead of a full copy of packages per branch. The repository root is taken from `PAPERCLIP_WORKSPACE_REPO_ROOT` (then `PAPERCLIP_WORKSPACE_BASE_CWD`) — the default path lies on the same volume as the workspaces, so hardlink import works | A relative path in this variable is resolved from the same anchor. Store and workspace on different filesystems — installation falls back to vendor behavior (pnpm's own default store) with a warning to stderr |
 | `MYRMIDON_WORKSPACE_PNPM_STORE` | WORKSPACE-HYGIENE | `1` (enabled) | Master switch of the shared store: `0`/`false`/`no`/`off` — `provision-worktree.sh` runs `pnpm install` with vendor argv without store flags | Disabling returns the previous disk usage (a full copy of `node_modules` per workspace) |
-
 ## P12 — the deferred addressee-wake sweeper
 
 | Variable | Function | Default | What it does | How to disable / special |
@@ -183,6 +183,7 @@ to enable plan mode (X2). Tracks fill it in, the section is shared.
 | Task: the `workMode` field (`POST/PATCH /api/issues…`, `"planning"`); in the UI — the "Plan mode" toggle in the task input field | Task plan mode: the wake prompt gets a `planning directive` — the agent only composes or updates a plan, does not write code. After the plan is accepted — only child tasks | Works with `hermes_local` without changes: plan directives reach the run prompt (test `server/src/__tests__/hermes-planning-mode.myrmidon.test.ts`). Enabled per task, no separate instance switch needed | X2 |
 | `PATCH /api/instance/settings/experimental`: `enableIssuePlanDecompositions` (in the UI — Instance Settings → Experimental, "Task Plan Decomposition") | Shows on the task page the history of accepted-plan decomposition into child tasks | Optional, off by default. Does not affect plan-mode work in the run | X2 |
 | `PATCH /api/instance/settings/experimental`: `enableFirstTaskPlanProposal` ("First task: propose with a plan document") | For the first single task of a new organization the manager writes a short plan document and a card with options instead of one confirmation card | Optional, off by default. Applies only to organizations created after enabling | X2 |
+| `PATCH /api/instance/settings/experimental`: `enableMyrmidonUi2` (in the UI — Instance Settings → Experimental, "Myrmidon UI 2.0 Shell") | Renders the board route tree in the Myrmidon 2.0 frame (rail, top bar, phone bottom bar); pages, routes, data and access stay shared with the 1.x shell. Fails closed: off while loading, on a read error, and for stored rows written before the flag existed. A per-browser `?ui=1|2` override (localStorage `myr.ui2.personal`) wins over the flag in both directions | Off by default; apply and revert on the next page load, no restart. Guide: [guides/ui2-shell.md](guides/ui2-shell.md) | UI-2.0 |
 | `TELEGRAM_API_BASE_URL` | Bot API address for the Telegram adapter (vendor variable) | Address of your own Bot API if files larger than 20 MB are needed; unset — cloud Bot API | P8 |
 | `PAPERCLIP_ATTACHMENT_MAX_BYTES` | Overall board attachment size limit (vendor, 10 MB by default) | Also limits Telegram files: raise together with `MYRMIDON_TELEGRAM_FILE_LIMIT_BYTES` | P8 |
 | Instance configuration file, `telemetry.enabled` | Telemetry flag. Vendor default is `true`, ours is `false` | Do not enable. Enabling also requires `PAPERCLIP_TELEMETRY_ENDPOINT` (your own ingestion address) | TEL |
@@ -217,7 +218,11 @@ Decision register — `containers-plan-senior-2026-09-28.md`.
 | `MYRMIDON_BOT_EGRESS_TOKEN` | EGRESS-B | unset | Shared token of the board and the proxy: the proxy presents it when fetching the allowlists (`GET /api/myrmidon/bot-egress/policy`), and the board — when reading the proxy refusal feed | Unset — the board gives the lists to no one (503), the proxy remains only a log: this is the "EGRESS-B not enabled" state. Comparison is constant-time value-to-value; the token is a secret, not stored in the repository or settings |
 | `MYRMIDON_BOT_EGRESS_REFUSALS_URL` | EGRESS-B | unset | Address of the proxy as the board sees it (`http://<proxy>:3128`); the board reads `/refusals` through it and shows the latest refusals in the "Egress" section of the project | Unset — the refusal feed answers 503, lists and blocking work. Long-term refusal storage is the proxy log (`docker logs`), the feed is only a tail for the UI. Read on every request |
 | `MYRMIDON_BOT_RECONCILE_INTERVAL_SEC` | W2a | `60` | How often (in seconds) the pass reconciles containers of all bots with their cards: `hermes_gateway` agents with `adapterConfig.container.enabled`, except terminated ones | From 5 to 3600; empty, non-integer or out of bounds — `60` is taken. Read at server startup, a change requires a restart. The pass runs one at a time: a slow pass does not accumulate a queue. Applies only while `MYRMIDON_BOT_CONTAINERS` is enabled |
-| `MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST` | FLEETD-VMEXEC | unset (empty) | Names of agents (comma-separated) whose cards may hold board-managed GitHub tokens (`env.GITHUB_TOKEN`, `GH_TOKEN` and relatives) as `secret_ref` for the container profile: the value is resolved with a check of the secret's binding to the agent and lands only in the container's `hermes/.env` (0600, secret), never in the container `Env` | Empty/unset — GitHub tokens from container cards are dropped with a warning, as before. The list is read at every resolution (once a minute per bot): emptying the setting restores default behavior on the next pass, without a restart. For development bots on a second machine where the board's GitHub broker is unreachable |
+| `MYRMIDON_BOT_COMPRESSION_THRESHOLD_TOKENS` | BOT-RUNTIME-TUNING-B | unset (Hermes's own 256 000) | Absolute token cap for context compression, written to `compression.threshold_tokens` in every bot's `hermes/config.yaml`: Hermes compresses at the lower of the ratio threshold and this count, so on a large-window model a session no longer grows to half the window before compacting. The ticket's fleet default is `100000` — set it here, the compiler adds no default of its own | Read on every profile build; a change restarts bot containers (part of `config.yaml`). The supported range at compile time is 10 000–2 000 000; outside it the value is dropped with a profile warning, not an error. A non-integer value is likewise reported and dropped |
+| `MYRMIDON_BOT_MODEL_CONTEXT_LENGTH` | BOT-RUNTIME-TUNING-B | unset (no map) | Explicit context window per model alias: `alias=tokens,alias=tokens`, e.g. `model-a=131072`. When a card's model matches an alias, the value is written to `model.context_length` in that bot's `config.yaml`, overriding Hermes's per-model detected window. A card's own `models.contextLength` in its "Additional models" block wins over this map. Until the model registry exists, only this explicit map is consulted | Read on every profile build; a change restarts the affected bot containers. Entries without `=` or with a non-integer token count are skipped with a profile warning; the valid entries still apply. Compile-time range 8 000–10 000 000, out-of-range values are dropped with a warning |
+| `MYRMIDON_BOT_AUX_TITLE_MODEL` | BOT-RUNTIME-TUNING-B | unset | Gateway model alias written to `auxiliary.title_generation.model` for bots whose card sets no title model: the title generator then stops using the main (expensive) model and its LiteLLM fallback chain. The value must be a model alias the gateway actually knows — the operator names it; the setting has no default precisely because a hard-coded "free" model the gateway does not know would silently break title generation | Read on every profile build; a change restarts bot containers. The card's `models.titleGeneration` entry wins over this setting |
+| `MYRMIDON_BOT_AUX_COMPRESSION_MODEL` | BOT-RUNTIME-TUNING-B | unset | Same for `auxiliary.compression.model`: the model that summarizes a session during context compression. The operator names a gateway alias; no default for the same reason | Read on every profile build; a change restarts bot containers. The card's `models.compressionSummary` entry wins over this setting |
+| `MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST` | FLEETD-VMEXEC | unset (empty) | Names of agents (comma-separated) whose cards may hold board-managed GitHub tokens (`env.GITHUB_TOKEN`, `GH_TOKEN` and relatives) as `secret_ref` for the container profile: the value is resolved with a check of the secret's binding to the agent and lands only in the container's `hermes/.env` (0600, secret), never in the container `Env` | Empty/unset — GitHub tokens from container cards are dropped with a warning, as before. The list is read at every resolution (once a minute per bot): emptying the setting restores default behavior on the next pass, without a restart. A fallback for development bots on a machine where the board's GitHub broker address is genuinely unreachable: since the run-bound broker capability reaches bot containers (CONTAINER-GITHUB-WRITE), most dev bots no longer need it — see the "Bot containers" section note below the table |
 | `MYRMIDON_FLEET_HOST_URL` / `MYRMIDON_FLEET_HOST_TOKEN` | FLEETD-VMEXEC | unset | Address of the fleetd service (`http://host:port`, http only — internal network) and its token for the client driver `fleetd-driver.ts`; these are named wrappers over a host entry from the per-host map `MYRMIDON_FLEET_HOSTS` (see the next step of the branch), until the map is introduced the pair is read directly | Without both values the fleetd driver is not instantiated (configuration error), the local docker driver and default behavior are unchanged. The token is a value only in myrmidon-deploy, it is not in the repository or logs |
 | `MYRMIDON_FLEET_HOSTS` | FLEETD-VMEXEC | unset (empty) | Map of named fleetd hosts for placing container bots: JSON array of entries `[{"name":"…","url":"http://…","tokenSecret":"…"}]` — host name (the bot card references it in `adapterConfig.container.host`), fleetd service address (only `http://`), name of the company secret with the fleetd token | Empty/unset — only the local driver, named hosts are impossible, a card with `container.host` gets an error. Invalid JSON, unknown key, duplicate name, non-http url or empty `tokenSecret` — an error, settings are not applied partially. Read at server startup |
 | `MYRMIDON_BOT_HINDSIGHT_API_URL` | W2a | unset (required when containers are enabled) | Address of the shared hindsight service as the bot container sees it; goes into `hermes/hindsight/config.json` (`api_url`). The memory mode is always `local_external`, a card cannot switch a bot to a cloud address | Without a value the profile is not assembled: the pass over a bot ends with an error in the activity log, the container is neither created nor changed. Address `http(s)://…`; the host's `localhost` from inside the container is not the same |
@@ -239,6 +244,31 @@ Decision register — `containers-plan-senior-2026-09-28.md`.
 | `MYRMIDON_BOT_CANARY_VERIFY_TIMEOUT_SEC` | R5-B | `30` | Timeout of network digest checks (registry, GitHub) at job creation and preview | From 1 to 300 |
 | `MYRMIDON_BOT_CANARY_AUTO_ROLLBACK` | R5-C | `1` (on) | Health-based automatic rollback of the bot fleet: a canary failure (health or smoke) or a wave-bot failure moves the rollout to `rolling_back` — every bot that received the new image (the canary once its switch started, plus the applied wave bots) gets its own card image re-applied through the same `applyBotContainerNow`, one bot at a time; the rollout then ends `rolled_back` with the original failure reason kept. An apply error during the rollback ends the rollout loudly (`aborted` with the reason): the sweep re-applies the card image on its next pass anyway | `0`/`false`/`no`/`off` — the older R5-B behavior: the failure ends the rollout with a terminal status (`canary_failed`/`canary_smoke_failed`/`failed_health`), the canary stays on the new image for inspection, the rollback is manual |
 With `MYRMIDON_BOT_CONTAINERS` enabled, W2a assembles the profile from the `hermes_gateway` card, and after a successful pass over a bot writes into the card `adapterConfig.apiBaseUrl` (`http://myrmidon-bot-<botKey>:8642`), `adapterConfig.apiKey` (a reference to the company secret `myrmidon-bot-<agentId>-api-server-key`, the bot's gateway key, created at the first build) and `adapterConfig.dangerouslyAllowInsecureRemoteHttp: true`. The third field is needed because the Hermes gateway adapter refuses to send the key over plain http to a remote address, and the container address is exactly that (`http://myrmidon-bot-<botKey>:8642`, not loopback). Traffic does not leave the bots' docker network (`MYRMIDON_BOT_NETWORK`): this is the board's path to its own container, so encryption on it is not needed; the field applies only to this card. A narrower variant (the adapter itself trusts `myrmidon-bot-*` hostnames) requires an adapter change and is not part of this PR, see DIVERGENCE. These three fields in container mode belong to the system: whatever is entered into them by hand will be replaced. The MCP gateway address for the profile is rewritten by the same `MYRMIDON_HERMES_RUNTIME_MCP_URL_BASE` and the same card fields (`runtimeMcpUrlBase`, `runtimeMcpUrlRewrite`) as for `hermes_local` (P4). The `adapterConfig.hindsight` block (`bankId`, `tags`, `mission`, `recallBudget`, `memoryMode`, `autoRetain`) is optional. The bot's instructions reach the model once, and only in the `/v1/runs` request: the adapter (G4) sends the agent instruction-pack entry file, then `adapterConfig.instructions` (or `payloadTemplate.instructions`, or the adapter's standard string) after a `---` separator, exactly as for a card outside a container. The profile does not write `workspace/AGENTS.md`: Hermes checks `AGENTS.md`, `CLAUDE.md`, `.cursorrules` and `.hermes.md` with the injection scanner and on a match (e.g. the text has a `curl` command with `$PAPERCLIP_API_KEY`) replaces the whole file with a stub, while the request `instructions` field it does not scan. The remaining text files of the pack (`HEARTBEAT.md`, `SOUL.md`, the `docs/` folder) are placed into `workspace/` under the same relative paths, because the entry file references them; a file under a name that Hermes loads as project context (`AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.cursor/rules/*.mdc`, `.hermes.md`, in any directory and any case) is skipped with a log entry. Pack limits: at most 50 files, a file at most 256 KiB, a path no longer than 200 characters; a binary, oversized or extra file is skipped with a log entry, not truncated. Editing any pack file rewrites the files in the container without a restart. The card's `env` variables are read the same way as when running the card on the board: names reserved by the board (`PAPERCLIP_API_KEY`, the GitHub bridge and runner network-access variables) and GitHub tokens (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `PAPERCLIP_GIT_TOKEN`: the run drops them under board-managed GitHub credentials, and the bot container has no "host credentials" mode) are dropped with a warning; a secret must be bound to this agent at `env.<NAME>` (otherwise the profile is not assembled); the value is read once and held in memory, re-read only when bindings or the secret's version/status change, so that the once-a-minute pass does not write to the secret-access log. The board tool gateway enters the bot's profile as MCP server `paperclip-assigned`: each bot has its own gateway and its own token (see `MYRMIDON_BOT_BOARD_GATEWAY`); agent connections that need the run's identity (a user's personal OAuth) do not enter the container, and a warning about this is written to the container activity log (once per change). Shared servers from `MYRMIDON_BOT_MCP_SERVERS` work independently of the gateway. The bot's key on the board (`myrmidon-bot-container`) is created and stored atomically: the token in the secret must belong to the active key; if the secret write failed, the just-created key is revoked; surplus active keys with the same name are revoked after success. The key is issued to the responsible user: the board rejects an agent key without one (403 `RESPONSIBLE_USER_UNAVAILABLE` on every call). The user is taken by the same rule as a board job without an active person (routines): the company's default user (`defaultResponsibleUserId`), otherwise its oldest active owner; neither — the key is not issued and the profile build fails with an error, the container is not created. A key without a user issued by a previous driver version is fixed in place on the nearest pass: the empty field is filled by the same rule with one conditional UPDATE (only the active `myrmidon-bot-container` key and only while the field is empty), token and secret are unchanged, the container is not restarted; an already filled field (e.g. by hand) is not touched. If there is no user to take or the update failed, a warning is written to the container activity log and the pass repeats on the next tick.
+
+**Managed GitHub credentials reach the container per run (CONTAINER-GITHUB-WRITE).**
+When a run's GitHub identity is board-managed (the default; see
+`MYRMIDON_HOST_GITHUB_CREDENTIALS` above), the heartbeat mints a run-bound
+`github_credentials` capability and the gateway adapter carries it inside the
+`/v1/runs` request body (`github_broker`). The gateway binds it to that run
+alone — contextvars, never the process env shared by concurrent runs — and
+bridges the pair into every terminal and `execute_code` subprocess of the run
+as `PAPERCLIP_GITHUB_BROKER_URL`/`PAPERCLIP_GITHUB_BROKER_TOKEN`. While a
+capability is bound, the bridge also blanks inherited `GH_TOKEN`/
+`GITHUB_TOKEN` (and the related token names) in those subprocesses, so a
+static token from the image profile cannot shadow the broker credential. The
+dev image's `git` credential helper (URL-scoped to `github.com` over https;
+`ssh://git@github.com/…` remotes are rewritten to https) and its `gh` wrapper
+resolve the credential per invocation through the board's broker
+(`POST /runtime-tools/github/credentials`) and exec the real `git`/`gh`,
+walking up to 6 broker address candidates
+(`PAPERCLIP_GITHUB_BROKER_URL` → `PAPERCLIP_API_URL` →
+`PAPERCLIP_RUNTIME_API_URL` → `PAPERCLIP_RUNTIME_API_CANDIDATES_JSON` items)
+and never printing the token. A run without a capability gets both env names
+stripped; the wrappers then fail open (the real `git`/`gh` runs with the
+environment unchanged). The broker URL the board sends is its own
+`PAPERCLIP_API_URL`, so the container must be able to reach that address —
+that reachability, not a delivery gap, is what `MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST`
+above remains for.
 
 The "Container" section of the agent card (W2b) introduces no new variables. It reads
 `MYRMIDON_BOT_CONTAINERS` and `MYRMIDON_BOT_IMAGE_ALLOWLIST` through
@@ -319,6 +349,34 @@ The bot's tool is `ocr.pdf` (input: `name`, `base64`, optional `origin`, `source
 (JSON-RPC: `initialize`, `tools/list`, `tools/call`); only metadata goes to the activity journal
 (`name`, `sizeBytes`, `pages`, `origin`, `sourceId`, `backend`, `chars`, `truncated`) — the text and bytes
 never enter the journal.
+
+## 1.6 — EVALS-A (reference tasks and the LLM judge)
+
+Settings of the module `server/src/myrmidon/evals/` (the 1.6 evals path: a seeded corpus of neutral
+reference tasks for the pilot role, an LLM judge behind the company's LLM gateway, scores stored in
+`myrmidon_eval_runs`, a threshold+repeat regression verdict). Reads are company-scoped; run mutations
+need a board actor. While the contour below is not configured, reads still work and mutations answer
+`503` with the names of the missing settings instead of guessing.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_EVALS_BASE_URL` | EVALS-A | unset (judge disabled) | Address of the company's LLM gateway contour (OpenAI-compatible, e.g. LiteLLM). Together with `MYRMIDON_EVALS_KEY_SECRET` it opens the judge path; without either the evals mutations answer `503` with the reason | Empty/unset — the judge is disabled (reads still work). The address may end with `/v1` (then it is not duplicated) |
+| `MYRMIDON_EVALS_KEY_SECRET` | EVALS-A | unset | **Name** of the company secret holding the gateway key (not the value). The value is read per company on every run; it never appears in the setting, logs or journal | Empty/unset — the judge is disabled |
+| `MYRMIDON_EVALS_MODEL` | EVALS-A | `qwen-plus-free` | The judge model behind the gateway. The 1.6 wave rule applies: a free DashScope model by default; paid models stay a deploy-repo concern | Any value the gateway serves |
+| `MYRMIDON_EVALS_TIMEOUT_SEC` | EVALS-A | `120` | Timeout of one judge chat-completions call (valid range 5 to 600) | Non-numeric, `0`, negative — the default is taken |
+| `MYRMIDON_EVALS_LANGFUSE` | EVALS-A | unset | Master flag for the Langfuse score export: `true` enables exporting run scores to Langfuse when the contour below is configured. Scoring is written locally (eval_runs) regardless of this flag | Empty/unset/anything but `true` — no Langfuse export, local scoring only |
+| `MYRMIDON_EVALS_LANGFUSE_BASE_URL` | EVALS-A | unset | Langfuse ingestion base URL (the `/api/public/ingestion` suffix is appended). Used only when `MYRMIDON_EVALS_LANGFUSE=true` | Empty — the export is a no-op |
+| `MYRMIDON_EVALS_LANGFUSE_KEY` | EVALS-A | unset | Langfuse public ingestion key. Used only when `MYRMIDON_EVALS_LANGFUSE=true` | Empty — the export is a no-op |
+| `MYRMIDON_EVALS_LANGFUSE_TIMEOUT_SEC` | EVALS-A | `30` | Timeout of the Langfuse ingestion request (from 1 to 600) | Non-numeric, `0`, negative — the default is taken |
+
+The board API is `GET/POST /api/myrmidon/companies/:companyId/evals/{tasks,seed,runs,runs/:runId,runs/:runId/confirm,verdict}`.
+The judge never executes code: for `code`-kind reference tasks the CI pass rate arrives as a request
+parameter and is folded into the aggregate as a separate score line.
+
+The operator guide for the whole path — seeding the corpus, running a subject,
+the promote/confirm/regress verdict with its threshold+repeat rule, the
+journal rows and the Langfuse export — is
+[guides/reference-task-evals.md](guides/reference-task-evals.md).
 
 ## EXTCASE-B — browser bridge to the client's extension
 
@@ -459,18 +517,37 @@ or above 0.02; `unknown` on probe failure. The evidence fields `deliveryRatio`
 and `legacyRejections` are additive parts of the JSON contract for the part D
 dedup key; fields without a source stay null and never block the computation.
 
+The check has two board surfaces, both reading the same report — see
+[guides/tracing-health.md](guides/tracing-health.md): the "LLM tracing" status
+card in Company settings and the operator attention signal that runs even when
+nobody has the card open.
+
+
+## 1.6 — WIKI-CORTEX: company regulations in the wiki
+
+Regulation pages of `server/src/myrmidon/wiki-cortex/` — draft → approved
+lifecycle, revisions, rollback, the role resolver, and the delivery of
+`REGULATIONS.md` into the compiled bot profile. See
+`docs/myrmidon/guides/wiki-regulations.md` for the API and the wiki-maintainer
+runbook. No new variables: the feature is always on and needs no configuration.
+Recorded here per the registry rule.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| — | WIKI-CORTEX | — (always on) | `PUT /api/myrmidon/companies/:id/wiki-regulations/:slug` saves a draft revision; `POST …/approve` (board only) makes the newest revision the delivered text; `POST …/rollback` (board only) restores an earlier revision as a new one; `GET …/approved/:role` is the resolver the bot profile compile reads and renders into the agent's workspace `REGULATIONS.md` | Not configurable: no deployment-specific values. The delivered file never shadows a `REGULATIONS.md` the agent's own bundle ships (a warning is recorded instead) |
 
 ## TASK-PR-SYNC — a task settles once its pull requests merge
 
-A task whose `work_product` of type `pull_request` merged used to stay busy until
-someone noticed. The scheduler tick now runs a pass that refreshes each PR's
-state through the existing GitHub resolver and closes the task (`done`, one
-comment with the PR refs / merge sha / time, an activity row) when every PR has
-reached a terminal state and at least one merged and no post-deploy gate is still
-open. When none of them merged, the task goes back to its assignee (`in_progress`
-plus a comment) unless a newer comment already answered the closure. The sweep
-reads the same work-products surface the board uses; it adds no token or
-credential.
+A task whose `work_product` of type `pull_request` merged used to stay busy
+until someone noticed. The scheduler tick now runs a pass that refreshes each
+PR's state through the existing GitHub resolver and closes the task (`done`,
+one comment with the PR refs / merge sha / time, an activity row) when every
+PR has reached a terminal state and at least one merged and no post-deploy
+gate is still open. When none of them merged, the task goes back to its
+assignee (`in_progress` plus a comment) unless a newer comment already
+answered the closure. The sweep reads the same work-products surface the
+board uses; it adds no token or credential. Operator guide:
+[guides/task-pr-sync.md](guides/task-pr-sync.md).
 
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
@@ -478,7 +555,6 @@ credential.
 | `MYRMIDON_TASK_PR_SYNC_POLL_SEC` | TASK-PR-SYNC | `60` | Minimum spacing between two passes; the scheduler queue itself ticks more often | Values below 15 or non-numeric or fractional — the default (60) |
 | `MYRMIDON_TASK_PR_SYNC_BATCH_MAX` | TASK-PR-SYNC | `50` | How many candidate tasks one pass inspects at most (each task costs one GitHub resolve per PR) | From 1 to 500; values outside the range or non-numeric — the default |
 | `MYRMIDON_TASK_PR_SYNC_SETTLE_DISABLED` | TASK-PR-SYNC | unset (settling on) | Instance-wide lever to make the sweep read and log but never flip a task to `done` — for a deliberate post-deploy hold on every task at once. A task with its own post-deploy gate is already deferred per task (a pending card, a pending approval, or a monitor scheduled for the future) | `1`/`true`/`on`/`yes` — settling off; anything else — settling on. The per-task gate check cannot be disabled by this switch |
-
 
 ## TASK-PR-SYNC WAKE-GUARD — no run for a task whose pull requests all merged
 
@@ -495,3 +571,139 @@ database hit per wake.
 |---|---|---|---|---|
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_ENABLED` | WAKE-GUARD | `1` (on) | Master switch of the wake guard: on — an event-free wake to a settle-pending task is skipped instead of dispatching a run | `0`/`false`/`off`/`no` — disable (wakes dispatch runs as before). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_TTL_SEC` | WAKE-GUARD | `60` | How long a suppress decision stays cached for one task (matches the sweep's default poll); the cache holds at most 1000 issues, least-recently-used eviction | From 1 to 3600; non-numeric, non-positive or above the cap — the default (60) |
+| `MYRMIDON_SWARM_CLAIM_ENABLED` | 1.6-SWARM | `0` (off) | Master switch of the per-role task queues: on — an agent claims the top task of its own role's queue behind a lease (TTL + heartbeat), an expired lease returns the task to the queue and the sweep wakes the next agent of the role; the checkout writes the run's claim, the finishing run releases it. Off — no claim is written and the sweep is a no-op (vendor behavior) | `1`/`true`/`on`/`yes` — enable (the pilot). Unset or unrecognized — off: the pilot must be turned on deliberately |
+| `MYRMIDON_SWARM_LEASE_TTL_SEC` | 1.6-SWARM | `900` | How long (sec) a claim's lease stays valid without a heartbeat; the run refreshes it on every checkout pass. The acceptance window (idle agent with a non-empty queue of its role) is one TTL plus one sweep interval | From 60 to 86400; below 60 — 60, above 86400 — 86400. Non-numeric, `0`, negative or fractional — the default |
+| `MYRMIDON_SWARM_MAX_ACTIVE_TASKS` | 1.6-SWARM | `3` | The per-agent ceiling of live claims; a capped agent is not handed new work until a lease finishes, expires or is released. `none` — no ceiling (all queue work claimable) | From 1 to 100; `none`/`0` — no ceiling. Non-numeric or fractional — the default |
+| `MYRMIDON_SWARM_CLAIM_SWEEP_INTERVAL_SEC` | 1.6-SWARM | `30` | How often (sec) the expired-claim sweep runs on the scheduler tick: it releases expired leases, releases claims whose task left the queue, and wakes the next agent of the released task's role | From 5 to 3600; below 5 — 5. Non-numeric, `0`, negative or fractional — the default |
+
+
+## 1.6 — BASELINE: frozen metric snapshots
+
+The server part of BASELINE computes, for an arbitrary window and per project
+and per agent role, the cycle time, the time in review, the return rate, the
+blocked time with its top causes, the runs per task and the LLM cost per task
+from the board's own history
+(`GET /api/myrmidon/companies/:companyId/baseline/metrics?from&to`). The
+periodic job below freezes the last 14 days into `baseline_metric_snapshots`,
+so a pilot after the autonomy changes can be compared against the number the
+board produced before them.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_BASELINE_INTERVAL_SEC` | 1.6-BASELINE | unset (off) | Period (sec) of the snapshot job: every tick recomputes the last 14 days per company and appends one frozen row to `baseline_metric_snapshots` | Unset or empty — no timer, no query. Set to an integer from 60 to 604800; an unreadable or out-of-range value keeps the job on with the daily default (86400) |
+
+## 1.6 — SKILL-LIFECYCLE: company skill lifecycle
+
+Settings of `server/src/myrmidon/skill-lifecycle/`. A company skill is
+`candidate`, `verified` or `deprecated`; only a verified revision is delivered
+to agents by default, a candidate goes to the pilot agent set, a deprecated
+skill reaches nobody. A skill with no lifecycle row keeps the pre-feature
+behaviour and reaches everyone. Promotion needs an approved approval of type
+`skill_promotion`; a rollback restores the previous verified revision on the
+next compile of every agent that uses the skill. The lifecycle API lives under
+`GET/POST /api/myrmidon/companies/:companyId/skill-lifecycle`.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_SKILL_PILOT_AGENTS` | SKILL-LIFECYCLE | unset (empty set) | Comma-separated agent ids that receive `candidate` skills. Any other agent gets a candidate withheld, with a profile warning; `verified` skills reach everyone regardless | Unset or blank — the pilot set is empty, so a candidate reaches nobody (the safe reading of "no pilot configured"). Only agent ids are matched; whitespace around an entry is trimmed |
+
+## 1.6 — AUTONOMY-MATRIX (Part A: matrix, enforcement, regulations API)
+
+The "Autonomy matrix" module (`server/src/myrmidon/autonomy/`, contract —
+`packages/shared/src/myrmidon-autonomy.ts`). The matrix maps role x action class to
+allowed / approval_required / forbidden; per-role regulations live in the same
+JSON store with draft -> approved revisions. Storage: no new DB table — the whole
+state sits under `instance_settings.general.myrmidonAutonomy` (the instance-settings
+JSON pattern), so vendor writes of `general` must preserve our key
+(`preserveAutonomyGeneralKey`, mounted in `server/src/services/instance-settings.ts`).
+
+API surface (company resolved by the access-hub rule: query `companyId`, else the
+caller's single active membership, 422 on ambiguity; reads company access,
+mutations board):
+
+- `GET /api/myrmidon/autonomy` -> `{ matrix, regulations, changeLog }`
+- `PATCH /api/myrmidon/autonomy/matrix` body `{ expectedVersion?, rules, defaults }` -> `{ matrix }` (409 on version mismatch)
+- `POST /api/myrmidon/autonomy/regulations` `{ role, title, bodyMarkdown }` -> regulation (draft, revision 1)
+- `PATCH /api/myrmidon/autonomy/regulations/:id` `{ title?, bodyMarkdown? }` -> new revision
+- `POST /api/myrmidon/autonomy/regulations/:id/approve` -> draft -> approved
+- `POST /api/myrmidon/autonomy/regulations/:id/revisions/:rev/restore` -> re-promote a past revision
+
+Change log: `activity_log` rows with actions `myrmidon.autonomy.*`, served as a ready
+array in the GET response. Factory default: every cell `allowed` (zero behavior change
+until an operator edits; a conservative preset is a follow-up). Enforcement seam:
+`server/src/myrmidon/autonomy/gate.ts` (`autonomyGate`) consults `resolveAutonomy` at the
+action point — forbidden refuses with a clear error, approval_required maps to the
+existing toolActionRequests + approval-card conveyor, allowed passes. Regulations UI
+(Part B) edits the matrix through this API.
+
+No environment variables, no new secrets. Remove: the autonomy tree, the export line in
+`packages/shared/src/index.ts`, the two marker lines in `app.ts`/`instance-settings.ts`
+and this section.
+## 1.6 — CTO-CHAT B (the board chat planner: owner text -> proposed epic)
+
+The planner behind the CTO chat (the 1.6 CTO-CHAT epic, part B): the owner's free text
+(`POST /api/myrmidon/cto-chat/plan`, body `{ "text": "..." }`, or the same call
+from the Telegram DM bridge) becomes a proposed epic with child tasks and
+per-task acceptance criteria. The proposal is a plan only: it validates against
+the shared zod contract before any card, and nothing is created until the
+owner accepts the `suggest_tasks` card on the standing Agent Chat conversation
+task. Off unless both the address and the key secret are set: with either
+missing the route answers a stable 503 `planner_disabled` with the names of the
+missing settings (names only, never values), and not a single request goes out.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_CTO_CHAT_BASE_URL` | 1.6-CTO-CHAT-B | unset (planner closed) | Address of the OpenAI-compatible LLM gateway (e.g. LiteLLM) the planner calls for one completion. Together with `MYRMIDON_CTO_CHAT_KEY_SECRET` it opens the path; without either the route answers 503 `planner_disabled` naming the missing settings | Empty/unset — the path is closed |
+| `MYRMIDON_CTO_CHAT_KEY_SECRET` | 1.6-CTO-CHAT-B | unset | **Name** of the company secret holding the gateway API key (not the value). The value is read on every call for the calling company; it never appears in the setting, logs, errors or the journal | Empty/unset — the path is closed. The secret is created by the company's operator in the "Secrets" section |
+| `MYRMIDON_CTO_CHAT_MODEL` | 1.6-CTO-CHAT-B | `dashscope-qwen-flash` | The model name sent to the gateway for the planning completion | Empty/unset — the default; an unknown name fails at the gateway and the route answers 400 `backend_failed` |
+| `MYRMIDON_CTO_CHAT_TIMEOUT_SEC` | 1.6-CTO-CHAT-B | `90` | Timeout of the planning request (raised to at least 5, capped at 600) | Non-numeric, `0`, negative or above the cap — the default (90) |
+| `MYRMIDON_CTO_CHAT_MAX_TASKS` | 1.6-CTO-CHAT-B | `8` | Ceiling on child tasks in one proposal (a proposal can never be unbounded work); the hard absolute cap is 20 | Non-numeric, `0`, negative or above 20 — the default (8) |
+
+The flow end to end — how the owner asks from the portal or the Telegram DM,
+what the proposal and the approval card look like, and what acceptance
+creates — is the operator guide
+[guides/cto-chat-planner.md](guides/cto-chat-planner.md).
+## 1.6 — SWARM-CLAIM supervisor and pilot report (part B)
+
+Settings of `server/src/myrmidon/swarm-claim-supervisor/` — the lead's supervisor
+view over the per-role claim queues, the rebalance action and the pilot report
+of the SWARM-CLAIM epic, part B (`GET /api/myrmidon/companies/:companyId/swarm-claim/supervisor/overview`,
+`POST .../supervisor/release-lease`, `GET .../pilot-report`). The claim table
+`issue_claims` and its write path belong to part A
+(`server/src/myrmidon/swarm-claim/`); this module only reads them, so while part
+A is unmerged the supervisor answers `{ enabled: false }`.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_SWARM_SUPERVISOR_TASK_MAX` | 1.6-SWARM-CLAIM-B | `500` | Row cap of queue candidates reported per role in the supervisor overview; a ceiling, not a page size | Positive integer from 1 to 5000; anything else — the default (500). Values above the 5000 ceiling are clamped to it, so a typo cannot ask for an unbounded scan |
+| `MYRMIDON_SWARM_PILOT_BASELINE_DOC` | 1.6-SWARM-CLAIM-B | `baseline-snapshot-14d` | Issue document key the pilot report reads the frozen BASELINE snapshot from before comparing a window against it | Empty, blank or unset — the default key. Until a document under the key exists the pilot report answers `baseline: null` (there is nothing to compare the window against yet) |
+| `MYRMIDON_SWARM_CLAIM_ENABLED` | 1.6-SWARM-CLAIM-B | unset (on when part A's claim table exists) | Master switch of the swarm claim supervisor view and pilot report: the overview reports the claim/lease state, and the pilot report only compares a window when claims are live. Read as enabled unless the value is exactly `0`, `false`, `off` or `no`; with any other value the module still checks that part A's `issue_claims` table exists before answering enabled | Exact `0`/`false`/`off`/`no` — the supervisor answers `{ enabled: false }` and the pilot report is skipped; any typo or other value is treated as enabled, so an error cannot silently kill the pilot |
+| `MYRMIDON_SWARM_LEASE_TTL_SEC` | 1.6-SWARM-CLAIM-B | unset (module default) | Lease time-to-live, in seconds, reported for each active claim in the supervisor overview and used by the pilot report's lease metrics. A positive integer env value wins over everything else | Unset, empty or not a positive integer — falls back to `instance_settings.general.swarmClaim.MYRMIDON_SWARM_LEASE_TTL_SEC` when present, else the module's own default |
+| `MYRMIDON_SWARM_MAX_ACTIVE_TASKS` | 1.6-SWARM-CLAIM-B | unset (module default) | Per-agent cap of active claimed tasks reported by the supervisor overview and used by the pilot report's workload metrics. A positive integer env value wins over everything else | Unset, empty or not a positive integer — falls back to `instance_settings.general.swarmClaim.MYRMIDON_SWARM_MAX_ACTIVE_TASKS` when present, else the module's own default |
+
+## 1.6 — FORAGING (source registry, snapshot comparison, skill candidates)
+
+Settings of `server/src/myrmidon/foraging/` (the 1.6 track). The feature is off by default:
+without `MYRMIDON_FORAGING_ENABLED=1` no timer is armed, no source is read and the manual
+pass answers `503 {enabled: false}`. The registry and the findings list stay readable while
+it is off.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_FORAGING_ENABLED` | FORAGING | unset (off) | Master switch of the periodic comparison pass. Only the exact value `1` turns it on: the sweep then reads the enabled sources of every company that has a registry row, once per interval | Any other value (or unset) — the sweep never starts, `POST …/foraging/sweep` answers `503 enabled: false`, and the page shows that passes are off. A typo does not silently turn the feature on |
+| `MYRMIDON_FORAGING_INTERVAL_SEC` | FORAGING | `3600` | Period of the pass, in seconds. A pass whose previous run is still going is skipped, not queued | From 60 to 86400; non-integer or out of bounds — `3600` |
+| `MYRMIDON_FORAGING_BUDGET_CENTS` | FORAGING | `50` | Ceiling of the cost estimate of one pass, in cents. The sweep prices every fetched kilobyte and stops once the estimate reaches the ceiling; sources after the stop stay untouched and the next pass continues with them | A configured `0` or a negative number is the explicit "no limit"; empty or unset — `50` |
+| `MYRMIDON_FORAGING_KEY_SECRET` | FORAGING | unset | **Name** of the company secret whose value is sent as a bearer token to the sources of that company. The value is read for the duration of the read, is never logged and never stored | Empty — sources are read without an authorization header |
+| `MYRMIDON_FORAGING_MIN_HOST_INTERVAL_SEC` | FORAGING | `60` | Pause between two reads of one host, in seconds. Shared by every company of the process, so two roles pointing at one host cannot double the rate | From 5 to 86400; non-integer or out of bounds — `60`. A host that fails twice in a row is left alone for 6 h (breaker, not a setting) |
+
+The sweep is off by default because it is the only part of the feature that talks to the
+outside: an operator turns it on together with `MYRMIDON_FORAGING_KEY_SECRET` when the
+sources need a token. Findings are recorded `unverified` until the skill lifecycle accepts
+them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand.
+
+
+## 1.6 — PARALLEL-HELPERS (delegated helper agents)
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |

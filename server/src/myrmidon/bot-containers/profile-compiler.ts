@@ -43,6 +43,7 @@
 //     in input.env under that name.
 import { createHash } from "node:crypto";
 
+import type { ParallelHelpersCard, ResolvedParallelHelpers } from "@paperclipai/shared";
 import type { CompiledProfile, CompiledProfileFile } from "./types.js";
 import { writeYamlDocument, type YamlMapping } from "./deterministic-yaml.js";
 
@@ -65,7 +66,29 @@ export interface HermesProfileAdapterConfig {
     stt?: string;
     tts?: string;
     fallbacks?: string[];
+    /**
+     * myrmidon(BOT-RUNTIME-TUNING-B): explicit context window (tokens) for the
+     * card's model, written to `model.context_length`. Wins over the
+     * instance-wide alias map (HermesProfileInstanceDefaults.modelContextLengths).
+     */
+    contextLength?: number;
+    /**
+     * myrmidon(BOT-RUNTIME-TUNING-B): model for `auxiliary.title_generation.model`
+     * (a gateway model alias); the instance default
+     * (HermesProfileInstanceDefaults.auxiliary.titleGenerationModel) applies when
+     * this is empty.
+     */
+    titleGeneration?: string;
+    /**
+     * myrmidon(BOT-RUNTIME-TUNING-B): model for `auxiliary.compression.model`
+     * (a gateway model alias); the instance default
+     * (HermesProfileInstanceDefaults.auxiliary.compressionModel) applies when
+     * this is empty.
+     */
+    compressionSummary?: string;
   };
+  /** myrmidon(PARALLEL-HELPERS): the card's "Parallel helpers" block, as stored. */
+  parallelHelpers?: ParallelHelpersCard;
   /** adapterConfig.toolsets — comma-separated Hermes toolset names. */
   toolsets?: string;
 }
@@ -201,11 +224,39 @@ export interface HermesProfileCompressionDefaults {
   threshold?: number;
   /** Fraction of the context window (0-1) compression aims to leave behind. */
   targetRatio?: number;
+  /**
+   * myrmidon(BOT-RUNTIME-TUNING-B): absolute token cap — Hermes compresses at
+   * the LOWER of the ratio threshold and this count (hermes_cli
+   * config_defaults.py `compression.threshold_tokens`, vendor default 256_000;
+   * for a large-window model the 0.5 ratio fires far above 256K). Written to
+   * `compression.threshold_tokens` whenever set and in 10_000..2_000_000;
+   * outside the range it is dropped with a warning, never thrown. Unset —
+   * nothing is written and Hermes applies its own 256K default: the default
+   * value is the instance's decision (an env default), not this compiler's.
+   */
+  thresholdTokens?: number;
+}
+
+/** myrmidon(BOT-RUNTIME-TUNING-B): per-model auxiliary models, instance-wide defaults. */
+export interface HermesProfileAuxiliaryDefaults {
+  /** Gateway model alias for `auxiliary.title_generation.model`. Empty = not written. */
+  titleGenerationModel?: string;
+  /** Gateway model alias for `auxiliary.compression.model`. Empty = not written. */
+  compressionModel?: string;
 }
 
 export interface HermesProfileInstanceDefaults {
   compression?: HermesProfileCompressionDefaults;
   sessionsRetentionDays?: number;
+  /**
+   * myrmidon(BOT-RUNTIME-TUNING-B): explicit context window per model alias
+   * (gateway model name -> tokens). The card's own
+   * `adapterConfig.models.contextLength` wins for the card's model; this map
+   * is the instance-wide fallback while the model registry does not exist.
+   */
+  modelContextLengths?: Record<string, number>;
+  /** myrmidon(BOT-RUNTIME-TUNING-B): instance-wide auxiliary model defaults. */
+  auxiliary?: HermesProfileAuxiliaryDefaults;
 }
 
 export interface HermesProfileInput {
@@ -242,6 +293,17 @@ export interface HermesProfileInput {
   mcpServers: readonly HermesProfileMcpServer[];
   /** gateway.api_server.max_concurrent_runs — must be a positive integer. */
   maxConcurrentRuns: number;
+  /**
+   * myrmidon(PARALLEL-HELPERS): the resolved "Parallel helpers" values for this
+   * agent — what `delegation.*` gets and whether the `delegation` toolset stays
+   * available. Already resolved against the company ceiling by the caller
+   * ({@link resolveParallelHelpers}), because the ceiling is instance
+   * settings and this function is pure. Absent means "this agent has no
+   * parallel helpers" — the pre-feature behavior for every card that says
+   * nothing, except that the toolset is left exactly as the card's toolsets
+   * already select it.
+   */
+  parallelHelpers?: ResolvedParallelHelpers;
   instanceDefaults: HermesProfileInstanceDefaults;
   /** Becomes API_SERVER_KEY in .env — the token runs authenticate to this bot's gateway with. */
   apiServerKey: string;
@@ -433,10 +495,79 @@ function hasMcpServerHeaders(servers: readonly HermesProfileMcpServer[]): boolea
   return servers.some((server) => server.headers && Object.keys(server.headers).length > 0);
 }
 
-function buildAuxiliary(vision: string | undefined): YamlMapping | undefined {
-  const model = nonEmpty(vision);
-  if (!model) return undefined;
-  return { vision: { model } };
+// myrmidon(BOT-RUNTIME-TUNING-B): validation range for compression.threshold_tokens.
+const COMPRESSION_THRESHOLD_TOKENS_MIN = 10_000;
+const COMPRESSION_THRESHOLD_TOKENS_MAX = 2_000_000;
+// myrmidon(BOT-RUNTIME-TUNING-B): validation range for model.context_length.
+const MODEL_CONTEXT_LENGTH_MIN = 8_000;
+const MODEL_CONTEXT_LENGTH_MAX = 10_000_000;
+
+function buildAuxiliary(
+  vision: string | undefined,
+  titleGeneration: string | undefined,
+  compression: string | undefined,
+): YamlMapping | undefined {
+  const visionModel = nonEmpty(vision);
+  const titleModel = nonEmpty(titleGeneration);
+  const compressionModel = nonEmpty(compression);
+  if (!visionModel && !titleModel && !compressionModel) return undefined;
+  const mapping: Record<string, YamlMapping> = Object.create(null);
+  if (compressionModel) mapping.compression = { model: compressionModel };
+  if (titleModel) mapping.title_generation = { model: titleModel };
+  if (visionModel) mapping.vision = { model: visionModel };
+  return mapping;
+}
+
+/**
+ * myrmidon(PARALLEL-HELPERS): the `delegation` section Hermes reads for
+ * `delegate_task` (tools/delegate_tool.py `_resolve_delegation_credentials`,
+ * `_get_max_concurrent_children`). Written only when the agent's card turns
+ * helpers on: an empty mapping is dropped by the writer anyway, but being
+ * explicit keeps the intent legible in the diff.
+ *
+ *   - `max_concurrent_children`: parallel children per call and concurrent
+ *     background delegation units (the value the card's limit maps to).
+ *   - `model` / `provider`: the child model. The card carries "provider/model"
+ *     (the same shape adapterConfig.model uses), which Hermes resolves as a
+ *     pinned child provider; a bare name leaves the provider empty so the child
+ *     inherits the parent's credentials, exactly as an unset
+ *     `delegation.provider` does.
+ *   - `max_iterations`: the per-child turn budget. Only written when the card
+ *     sets one; otherwise Hermes' own default (250) stays in place, and this
+ *     compiler must not silently change a child's budget.
+ */
+function buildDelegation(helpers: ResolvedParallelHelpers | undefined): YamlMapping | undefined {
+  if (!helpers || !helpers.enabled) return undefined;
+  const model = nonEmpty(helpers.model) ?? "";
+  // "provider/model" pins the child's provider; a bare model name inherits the
+  // parent's provider + credentials (delegation.provider = "" in the vendor's
+  // own defaults). Splitting on the FIRST slash keeps ids that themselves
+  // contain one (e.g. "openrouter/google/gemini-3-flash-preview").
+  const slash = model.indexOf("/");
+  const provider = slash > 0 ? model.slice(0, slash) : undefined;
+  const bareModel = slash > 0 ? model.slice(slash + 1) : model;
+  return {
+    max_concurrent_children: helpers.maxConcurrent,
+    model: nonEmpty(bareModel),
+    provider,
+    max_iterations: helpers.childTurnBudget,
+  };
+}
+
+/**
+ * myrmidon(PARALLEL-HELPERS): the agent-level toolset switch that turns
+ * `delegate_task` itself off. `delegate_task` is a member of
+ * `_HERMES_CORE_TOOLS` (toolsets.py), so it is present on every surface unless
+ * a toolset listing removes it; `agent.disabled_toolsets` is subtracted LAST
+ * and wins over any composite that re-enables it, which is why the switch
+ * belongs there rather than in `toolsets`.
+ *
+ * Returns undefined for the default "helpers off" case so a card that never
+ * mentioned helpers compiles to exactly its previous config.yaml.
+ */
+function buildDisabledToolsets(helpers: ResolvedParallelHelpers | undefined): string[] | undefined {
+  if (!helpers || helpers.enabled) return undefined;
+  return ["delegation"];
 }
 
 /** stt/tts: the card carries only a model name, never a provider — see module docstring. */
@@ -457,14 +588,79 @@ function warnUnplacedVoiceModels(
   }
 }
 
-function buildCompression(defaults: HermesProfileCompressionDefaults | undefined): YamlMapping | undefined {
+function buildCompression(
+  defaults: HermesProfileCompressionDefaults | undefined,
+  warnings: string[],
+): YamlMapping | undefined {
   if (!defaults) return undefined;
+  // myrmidon(BOT-RUNTIME-TUNING-B): absolute token cap. Set means the instance
+  // chose it; unset means "let Hermes default" (256K). Out of range — drop
+  // with a warning, never fail the compile: a bot profile is still usable.
+  let thresholdTokens = defaults.thresholdTokens;
+  if (thresholdTokens !== undefined) {
+    if (!Number.isFinite(thresholdTokens) || thresholdTokens <= 0) {
+      warnings.push(
+        `compression.threshold_tokens: "${thresholdTokens}" is not a positive number; dropped (Hermes applies its own default)`,
+      );
+      thresholdTokens = undefined;
+    } else if (!Number.isInteger(thresholdTokens) || thresholdTokens < COMPRESSION_THRESHOLD_TOKENS_MIN || thresholdTokens > COMPRESSION_THRESHOLD_TOKENS_MAX) {
+      warnings.push(
+        `compression.threshold_tokens: ${thresholdTokens} is outside the supported range ${COMPRESSION_THRESHOLD_TOKENS_MIN}..${COMPRESSION_THRESHOLD_TOKENS_MAX}; dropped`,
+      );
+      thresholdTokens = undefined;
+    }
+  }
   const mapping: YamlMapping = {
     enabled: defaults.enabled,
     threshold: defaults.threshold,
     target_ratio: defaults.targetRatio,
+    // myrmidon(BOT-RUNTIME-TUNING-B): absolute token cap, see above.
+    threshold_tokens: thresholdTokens,
   };
   return mapping;
+}
+
+/**
+ * myrmidon(BOT-RUNTIME-TUNING-B): the context window written to
+ * `model.context_length`. The card's explicit `models.contextLength` wins;
+ * otherwise the instance's alias map is consulted for the card's model name
+ * (both the bare name and any "provider/model" form's model part). Range
+ * 8_000..10_000_000; out of range — dropped with a warning, never thrown.
+ */
+function buildModelContextLength(
+  input: HermesProfileInput,
+  warnings: string[],
+): number | undefined {
+  const explicit = input.adapterConfig.models?.contextLength;
+  if (explicit !== undefined) {
+    if (Number.isInteger(explicit) && explicit >= MODEL_CONTEXT_LENGTH_MIN && explicit <= MODEL_CONTEXT_LENGTH_MAX) {
+      return explicit;
+    }
+    warnings.push(
+      `model.context_length: ${explicit} from the card is outside the supported range ${MODEL_CONTEXT_LENGTH_MIN}..${MODEL_CONTEXT_LENGTH_MAX}; dropped`,
+    );
+    return undefined;
+  }
+  const model = nonEmpty(input.adapterConfig.model);
+  if (!model) return undefined;
+  const map = input.instanceDefaults.modelContextLengths;
+  if (!map) return undefined;
+  // The card's model may be "provider/model" or a bare gateway alias; both the
+  // full string and the model part are looked up (first hit wins, map order).
+  const candidates = [model, model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : undefined];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const value = map[candidate];
+    if (value === undefined) continue;
+    if (Number.isInteger(value) && value >= MODEL_CONTEXT_LENGTH_MIN && value <= MODEL_CONTEXT_LENGTH_MAX) {
+      return value;
+    }
+    warnings.push(
+      `model.context_length: ${value} for model "${candidate}" is outside the supported range ${MODEL_CONTEXT_LENGTH_MIN}..${MODEL_CONTEXT_LENGTH_MAX}; dropped`,
+    );
+    return undefined;
+  }
+  return undefined;
 }
 
 function buildConfigYaml(input: HermesProfileInput, warnings: string[]): string {
@@ -478,10 +674,24 @@ function buildConfigYaml(input: HermesProfileInput, warnings: string[]): string 
   const llmApiKeyEnv = resolveLlmApiKeyEnv(input.llm, warnings);
 
   const root: YamlMapping = {
+    agent: {
+      reasoning_effort: buildReasoningEffort(adapterConfig.effort, warnings),
+      // myrmidon(PARALLEL-HELPERS): "helpers off" removes delegate_task from the
+      // agent's tool surface. Omitted entirely when helpers are on (or the card
+      // predates the field), so no unrelated toolset is ever disabled.
+      disabled_toolsets: buildDisabledToolsets(input.parallelHelpers),
+    },
     approvals: { mode: "off" },
-    agent: { reasoning_effort: buildReasoningEffort(adapterConfig.effort, warnings) },
-    auxiliary: buildAuxiliary(adapterConfig.models?.vision),
-    compression: buildCompression(input.instanceDefaults.compression),
+    // myrmidon(BOT-RUNTIME-TUNING-B): title/compression auxiliary models — the
+    // card's map entry first, the instance default when the card is empty.
+    auxiliary: buildAuxiliary(
+      adapterConfig.models?.vision,
+      adapterConfig.models?.titleGeneration ?? input.instanceDefaults.auxiliary?.titleGenerationModel,
+      adapterConfig.models?.compressionSummary ?? input.instanceDefaults.auxiliary?.compressionModel,
+    ),
+    compression: buildCompression(input.instanceDefaults.compression, warnings),
+    // myrmidon(PARALLEL-HELPERS): delegate_task's own limits and child model.
+    delegation: buildDelegation(input.parallelHelpers),
     fallback_model: buildFallbackModelSequence(
       adapterConfig.models?.fallbacks,
       adapterConfig.provider,
@@ -495,6 +705,8 @@ function buildConfigYaml(input: HermesProfileInput, warnings: string[]): string 
     model: {
       default: nonEmpty(adapterConfig.model),
       provider: nonEmpty(adapterConfig.provider),
+      // myrmidon(BOT-RUNTIME-TUNING-B): explicit context window override; see buildModelContextLength.
+      context_length: buildModelContextLength(input, warnings),
       // Instance-level LLM gateway settings — see HermesProfileLlmSettings.
       // api_key is a "${VAR}" reference, never the key's value.
       base_url: llmBaseUrl,

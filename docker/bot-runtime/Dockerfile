@@ -214,13 +214,14 @@ raise SystemExit(0 if o.status in ('installed', 'none') else 1)"
 RUN /opt/hermes-src/.venv/bin/python -c 'import aiohttp, mcp, hindsight_client'
 
 # myrmidon(G1): import smoke for every module a patch in patches/ changes
-# (hermes_state: 04, 06; tools.environments.base and base_session_env: 02; gateway.run: 05)
+# (hermes_state: 04, 06; tools.environments.base and base_session_env: 02; gateway.run: 05;
+# gateway.platforms.api_server_runs, tools.environments.local and tools.github_broker_context: 09)
 # plus the vendored memory provider (a relative-import package, so a broken plugin tree
 # fails the build here, not at the first bot start). `git apply` only proves the hunks
 # land; a patch that applies cleanly but breaks a module's imports or top-level code
 # would otherwise surface only when a bot starts. No bytecode is written, so the sealed
 # tree stays as the build left it.
-RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python -c 'import hermes_state, tools.environments.base, tools.environments.base_session_env, gateway.run'
+RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python -c 'import hermes_state, tools.environments.base, tools.environments.base_session_env, gateway.run, gateway.platforms.api_server_runs, tools.environments.local, tools.github_broker_context'
 
 # myrmidon(G1): behaviour check for patch 06 — the state-DB generation probe must not
 # walk /proc/self/fd once per write while the gateway holds hundreds of descriptors
@@ -230,6 +231,11 @@ RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python -c 'import hermes
 # stage only; the tests directory is not copied into the runtime image.
 COPY tests/ /tmp/patch-tests/
 RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python /tmp/patch-tests/state_db_fd_probe_budget.py /opt/hermes-src
+# myrmidon(G1): behaviour regression for 09-run-scoped-github-broker.patch
+# (CONTAINER-GITHUB-WRITE): the github_broker body field must bind per-run
+# (contextvars), bridge into terminal child envs, and never touch the process
+# env shared by concurrent runs.
+RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python /tmp/patch-tests/github_broker_run_scope.py /opt/hermes-src
 
 # The provider itself, through hermes' OWN discovery path (the same one the gateway uses at
 # start): a staging home gets the same symlink the entrypoint will make at run time, and
@@ -652,6 +658,29 @@ RUN PATH=/opt/node24/bin:$PATH npm install --global --prefix /opt/pnpm "pnpm@${P
   && PATH=/opt/node24/bin:$PATH /opt/pnpm/bin/pnpm --version | grep -x "${PNPM_VERSION}" \
   && rm -rf /root/.npm
 
+# myrmidon(G1) CONTAINER-GITHUB-WRITE: the run-scoped GitHub broker wrappers
+# for the dev variant. The hermes patch 09 exports the run's broker capability
+# (PAPERCLIP_GITHUB_BROKER_URL/TOKEN) into exactly that run's terminal
+# children; these wrappers consume it:
+#   - /opt/paperclip/bin/git-credential-paperclip answers git's `get` for
+#     github.com/https from the board's POST /runtime-tools/github/credentials;
+#   - /opt/paperclip/bin/gh resolves the credential the same way and runs the
+#     real gh with the returned env;
+#   - /etc/gitconfig installs the helper URL-scoped (leading empty value
+#     clears ambient helpers), so no GIT_CONFIG_* env vars are needed (the
+#     terminal env scrub would drop those).
+# Everything lands under /opt and /etc — PATH policy keeps only /opt and /usr
+# elements, and the root filesystem is read-only at run time, so a bot cannot
+# plant or rewrite a helper. The wrappers are Node scripts using the image's
+# own /opt/node24 (no extra runtime), carry no secrets, and fail open: without
+# a capability in the environment, git/gh behave exactly as before.
+COPY --chown=root:root github-broker/git-credential-paperclip github-broker/gh /opt/paperclip/bin/
+COPY --chown=root:root github-broker/gitconfig /etc/gitconfig
+RUN chmod 0755 /opt/paperclip/bin/git-credential-paperclip /opt/paperclip/bin/gh \
+  && /opt/node24/bin/node --check /opt/paperclip/bin/git-credential-paperclip \
+  && /opt/node24/bin/node --check /opt/paperclip/bin/gh \
+  && git config --system --list >/dev/null
+
 # The root filesystem is read-only at run time and the bot's writable
 # directories are exactly its three volumes, so every path pnpm or the
 # toolchains write to must live under one of them:
@@ -662,7 +691,11 @@ RUN PATH=/opt/node24/bin:$PATH npm install --global --prefix /opt/pnpm "pnpm@${P
 #     target dir into the checked-out workspace, never into the image;
 #   - Go's build cache defaults under $HOME (/data/hermes) — the durable volume.
 # PATH is assembled from /opt and /usr only — never a writable volume.
-ENV PATH=/opt/node24/bin:/opt/pnpm/bin:/opt/go/bin:/opt/cargo/bin:/opt/docker-cli/bin:/opt/hermes-src/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+# myrmidon(G1) CONTAINER-GITHUB-WRITE: /opt/paperclip/bin is prepended so the
+# gh wrapper (which resolves run-scoped credentials before exec'ing the real
+# gh) is found first; git needs no PATH entry — it reaches the credential
+# helper through /etc/gitconfig's absolute path.
+ENV PATH=/opt/paperclip/bin:/opt/node24/bin:/opt/pnpm/bin:/opt/go/bin:/opt/cargo/bin:/opt/docker-cli/bin:/opt/hermes-src/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     npm_config_store_dir=/data/hermes/.pnpm-store \
     GOTOOLCHAIN=local \
     GOFLAGS=-mod=mod

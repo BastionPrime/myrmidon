@@ -45,6 +45,8 @@ import { preserveBotCanaryGeneralKey } from "../myrmidon/bot-containers/canary-s
 import { preserveCloudConnectorGeneralKey } from "../myrmidon/cloud-connector/store.js";
 // myrmidon(SEC1): keep the access-hub host registry across vendor writes of `general`
 import { preserveAccessHubHostsGeneralKey } from "../myrmidon/access-hub/host-registry.js";
+// myrmidon(1.6-AUTONOMY): keep the autonomy matrix and regulations across vendor writes of `general`
+import { preserveAutonomyGeneralKey } from "../myrmidon/autonomy/store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -225,6 +227,9 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       ...(parsed.data.workspaceHygiene ? { workspaceHygiene: parsed.data.workspaceHygiene } : {}),
       // myrmidon(C0): the stored run admission limits survive every general write
       ...(parsed.data.runLimits ? { runLimits: parsed.data.runLimits } : {}),
+      // myrmidon(PARALLEL-HELPERS): the stored helper ceiling/default survive
+      // every general write (they are edited on their own settings page).
+      ...(parsed.data.parallelHelpers ? { parallelHelpers: parsed.data.parallelHelpers } : {}),
       // myrmidon(EXTCASE-B): the stored browser-bridge allowlist survives every general write
       ...(parsed.data.browserBridge ? { browserBridge: parsed.data.browserBridge } : {}),
     };
@@ -571,6 +576,7 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
             ...preserveBotCanaryGeneralKey(current.general), // myrmidon(R5-B)
             ...preserveAccessHubHostsGeneralKey(current.general), // myrmidon(SEC1)
             ...preserveCloudConnectorGeneralKey(current.general), // myrmidon(CLOUD-CONNECTOR)
+            ...preserveAutonomyGeneralKey(current.general), // myrmidon(1.6-AUTONOMY)
           },
           updatedAt: now,
         })

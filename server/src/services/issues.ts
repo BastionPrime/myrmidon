@@ -194,6 +194,7 @@ import { buildIssueChanges } from "./issue-change-receipt.js";
 import { projectSafeChatPublication } from "./chat-publication-projection.js";
 // myrmidon(X8g): absolute board links in the copy of an agent reply that reaches Telegram
 import { absolutizedTextByTelegramEndpoint } from "../myrmidon/agent-chat-bridge/links.js";
+import { stageChannelTaskCompletionPublication } from "../myrmidon/channel-task-control-completion.js";
 import { issueThreadInteractionAttentionAgentAllowed } from "./issue-thread-interaction-resolution.js";
 
 const ALL_ISSUE_STATUSES = [
@@ -10030,6 +10031,12 @@ export function issueService(db: Db) {
 
         const values = {
           ...issueData,
+          // myrmidon(S5): issue descriptions are stored with secret values masked.
+          // Applied here (the single write point for create) so every creation
+          // path — board, agent, API — stores the masked description.
+          ...(issueData.description
+            ? { description: maskSecretsInText(issueData.description) }
+            : {}),
           originRunId: issueData.originRunId ?? actorRunId ?? null,
           responsibleUserId,
           requestDepth: clampIssueRequestDepth(issueData.requestDepth),
@@ -10585,6 +10592,12 @@ export function issueService(db: Db) {
 
       const patch: Partial<typeof issues.$inferInsert> = {
         ...issueData,
+        // myrmidon(S5): issue descriptions are stored with secret values masked.
+        // The single write point for update: every path that PATCHes the
+        // description (board edit, agent amend, API) stores the masked text.
+        ...(issueData.description
+          ? { description: maskSecretsInText(issueData.description) }
+          : {}),
         updatedAt: new Date(),
       };
       if (existing.status !== "blocked" && issueData.status === "blocked") {
@@ -10886,6 +10899,19 @@ export function issueService(db: Db) {
           }
           if (updated.status === "done" || updated.status === "cancelled") {
             await finalizeSummarySlotsForTerminalIssue(tx, updated);
+            // myrmidon(CHANNEL-TASK-CLOSE): the assigned agent's status-only
+            // close of a channel-bound (Telegram-born) task must notify the
+            // bound conversation the same way the chat-side /close command
+            // does. See server/src/myrmidon/channel-task-control-completion.ts.
+            await stageChannelTaskCompletionPublication(tx, {
+              companyId: updated.companyId,
+              issueId: updated.id,
+              issueIdentifier: updated.identifier ?? updated.id,
+              issueTitle: updated.title,
+              issueStatus: updated.status,
+              actorAgentId: actorAgentId ?? null,
+              assigneeAgentId: existing.assigneeAgentId,
+            });
             // Every terminal transition funnels through here, including direct
             // service callers (tree control, recovery, pipelines, status cards)
             // that never touch the HTTP routes, so pending interaction cards

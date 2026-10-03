@@ -256,5 +256,132 @@
       "created": "Draft task created: {{identifier}}",
       "failed": "The task could not be created: {{message}}"
     }
+  },
+  "autonomy": {
+    "title": "Autonomy matrix",
+    "breadcrumb": "Autonomy matrix",
+    "intro": "What each role may do on its own, what needs a human approval, and the regulations behind it. Changing a cell applies at the action point; every edit lands in the change log.",
+    "loading": "Loading the autonomy matrix...",
+    "noCompany": "Select a company to edit its autonomy matrix.",
+    "verdict": {
+      "allowed": "Allowed",
+      "approval_required": "Approval",
+      "forbidden": "Forbidden"
+    },
+    "actionClass": {
+      "merge": "Merge",
+      "deploy": "Deploy",
+      "spend_above_threshold": "Spend above threshold",
+      "external_message": "External message",
+      "delete": "Delete",
+      "pause_wake_agents": "Pause/wake agents",
+      "change_instructions": "Change instructions",
+      "other": "Other"
+    },
+    "matrix": {
+      "title": "Matrix",
+      "hint": "Click a cell to cycle: allowed → approval required → forbidden. A cell without a rule uses the action's default verdict.",
+      "role": "Role",
+      "default": "default",
+      "defaults": "Default verdicts",
+      "cycleHint": "Click to cycle the verdict",
+      "save": "Save matrix",
+      "saving": "Saving...",
+      "unsaved": "Unsaved changes",
+      "versionConflict": "The matrix changed on the server while you edited it. Reload and apply your changes again."
+    },
+    "regulations": {
+      "title": "Regulations",
+      "hint": "Per-role regulations. A draft can be edited; approving freezes the text into the approved revision. Prior revisions stay retrievable.",
+      "empty": "No regulations yet.",
+      "revision": "revision {{count}}",
+      "restore": "Restore revision {{count}}",
+      "approve": "Approve",
+      "saveDraft": "Save draft",
+      "newTitle": "New regulation",
+      "roleLabel": "Role",
+      "titleLabel": "Title",
+      "bodyLabel": "Body (markdown)",
+      "create": "Create draft"
+    },
+    "regulationStatus": {
+      "draft": "Draft",
+      "approved": "Approved"
+    },
+    "changeLog": {
+      "title": "Change log",
+      "empty": "No changes recorded yet."
+    },
+    "changeAction": {
+      "matrix_edit": "Matrix edit",
+      "regulation_created": "Regulation created",
+      "regulation_edited": "Regulation edited",
+      "regulation_approved": "Regulation approved",
+      "regulation_rejected": "Regulation rejected",
+      "regulation_rolled_back": "Regulation rolled back"
+    },
+    "placeholders": {
+      "title": "Coming with a later release",
+      "reminders": "Reminders — read-only placeholder; the reminder scheduler lands after 1.6.",
+      "nightMode": "Night mode — read-only placeholder; scheduled for a 1.6+ follow-up.",
+      "answerChannel": "Answer channel — read-only placeholder; channel routing is chosen after 1.6."
+    }
+  },
+  "modelProviders": {
+    "title": "Model providers",
+    "breadcrumb": "Model providers",
+    "intro": "Provider keys for the model gateway: add a provider, rotate or remove its key, enable the models the company may use. The key is write-only — it is stored once and never shown again. Free models come first in every list; among them, free DashScope models lead (owner rule).",
+    "loading": "Loading model providers...",
+    "noCompany": "Select a company to manage its model providers.",
+    "free": "Free",
+    "paid": "Paid",
+    "add": {
+      "title": "Add provider",
+      "open": "Add provider",
+      "cancel": "Cancel",
+      "type": "Type",
+      "name": "Name",
+      "baseUrl": "Base URL",
+      "key": "API key",
+      "keyHint": "Write-only: the key is stored in the secret store and never displayed again.",
+      "free": "Free tier (free models first)",
+      "save": "Save provider",
+      "saving": "Saving..."
+    },
+    "list": {
+      "title": "Providers",
+      "empty": "No model providers yet. Add one to enable its models for the company.",
+      "keyStored": "Key stored",
+      "keyMissing": "No key",
+      "modelsLoading": "Loading models...",
+      "modelsEmpty": "No models discovered for this provider yet."
+    },
+    "rotate": {
+      "open": "Rotate key",
+      "placeholder": "New key",
+      "save": "Rotate",
+      "saving": "Rotating...",
+      "cancel": "Cancel"
+    },
+    "remove": {
+      "open": "Remove",
+      "confirm": "Confirm remove",
+      "removing": "Removing...",
+      "cancel": "Cancel"
+    },
+    "changeLog": {
+      "title": "Change log",
+      "empty": "No provider changes recorded yet."
+    }
+  },
+  "cardModels": {
+    "free": "Free",
+    "paid": "Paid",
+    "freeFirstHint": "Free models are listed first.",
+    "fromBoard": "From board settings",
+    "fromEnvDefault": "Default list",
+    "refresh": "Refresh models",
+    "refreshing": "Refreshing…",
+    "loadError": "Could not load the model list."
   }
 }

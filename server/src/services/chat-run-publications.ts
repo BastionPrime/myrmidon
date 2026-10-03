@@ -40,6 +40,11 @@ import { inboundCommentCandidateIds } from "../myrmidon/chat-reconciliation/inbo
 // replacement in chat-channels.ts).
 import { telegramDmStatusEnabled } from "../myrmidon/telegram-dm-status-settings.js";
 import { parseTelegramConversationUserId } from "../myrmidon/agent-chat-bridge/identity.js";
+// myrmidon(OPE-3650): live progress text for the editable DM status row.
+import {
+  composeDmStatusText,
+  readDmStatusSteps,
+} from "../myrmidon/telegram-dm-status-progress.js";
 import {
   SAFE_NATIVE_CHAT_PROGRESS_EVENT_TYPES,
   safeNativeChatProgressForEvent,
@@ -109,6 +114,8 @@ type ChatRunMilestoneCandidate = {
   runStatus: string;
   runErrorCode: string | null;
   runUpdatedAt: Date;
+  /** myrmidon(OPE-3650): run start time for the DM status elapsed line. */
+  runStartedAt: Date | null;
   issueId: string;
   companyId: string;
   endpointId: string;
@@ -666,6 +673,9 @@ export async function enqueueChatRunMilestones(
         runStatus: heartbeatRuns.status,
         runErrorCode: heartbeatRuns.errorCode,
         runUpdatedAt: heartbeatRuns.updatedAt,
+        // myrmidon(OPE-3650): run start time for the elapsed-time line in the
+        // live DM status text.
+        runStartedAt: heartbeatRuns.startedAt,
         issueId: chatConversations.issueId,
         companyId: chatConversations.companyId,
         endpointId: chatConversations.endpointId,
@@ -956,24 +966,39 @@ export async function enqueueChatRunMilestones(
       }
       let insertedRows: { id: string }[] = [];
       if (dmStatusMilestone) {
-        // myrmidon(U1): the text stays the vendor's safe milestone wording;
-        // only the durable key differs (one row per run, not per milestone).
+        // myrmidon(OPE-3650): the status text is live progress, not just
+        // "… is working…": the current step in plain words from the run's own
+        // recorded events, the elapsed time, and the last few completed
+        // steps. Steps come from the run-log rows the board already records
+        // (heartbeat_run_events; already redacted at the append boundary).
+        // A run without step events falls back to the vendor's safe wording.
+        const steps = milestone === "working"
+          ? await readDmStatusSteps(db, {
+              companyId: row.companyId,
+              runId: row.runId,
+            })
+          : [];
+        const dmStatusText = composeDmStatusText({
+          agentName: row.agentName,
+          milestone,
+          startedAt: row.runStartedAt,
+          steps,
+          now: new Date(),
+        });
         const dmStatusPayload = projectSafeChatPublication({
           classification: "external",
           source: "safe_milestone",
-          text: safeMilestoneText({
-            agentName: row.agentName,
-            errorCode: row.runErrorCode,
-            milestone,
-            issueId: row.issueId,
-            publicBaseUrl: input.publicBaseUrl,
-          }),
+          text: dmStatusText,
           progressState: milestone,
         });
         // myrmidon(U1): one durable status row per run for the bridged DM.
         // queued and working coalesce here; a later milestone updates the
         // same row (payload only — the state stays pending/retry so the
         // delivery lane can edit the same provider message in place).
+        // myrmidon(OPE-3650): re-open only when the provider-visible text
+        // actually changed (queued -> working, or a new live step). The old
+        // unconditional re-open made every sweep re-send the identical
+        // "… is working…" text — the 3-duplicate-messages defect.
         insertedRows = await db
           .insert(chatPublications)
           .values({
@@ -988,12 +1013,18 @@ export async function enqueueChatRunMilestones(
           .onConflictDoUpdate({
             target: [chatPublications.companyId, chatPublications.idempotencyKey],
             set: { payload: dmStatusPayload, updatedAt: new Date() },
-            setWhere: sql`${chatPublications.state} in ('pending', 'retry', 'published', 'streaming', 'delivery_unknown')`,
+            setWhere: sql`(
+              ${chatPublications.state} in ('pending', 'retry', 'published', 'streaming', 'delivery_unknown')
+              and ${chatPublications.payload} ->> 'text' is distinct from ${dmStatusPayload.text}
+            )`,
           })
           .returning({ id: chatPublications.id });
-        // A published status row is being superseded by a newer milestone:
+        // A published status row is being superseded by newer text:
         // re-open it for delivery so the sweep picks the update up and edits
         // the existing provider message. A pending/retry row is already queued.
+        // The payload-changed condition above keeps the identical-text case
+        // closed, so the elapsed-time line does not flip the row every sweep;
+        // elapsed time updates ride along with real step changes only.
         const updated = insertedRows[0];
         if (updated && milestone === "working") {
           await db
@@ -1002,6 +1033,7 @@ export async function enqueueChatRunMilestones(
             .where(
               and(
                 eq(chatPublications.id, updated.id),
+                sql`${chatPublications.payload} ->> 'text' = ${dmStatusPayload.text}`,
                 inArray(chatPublications.state, [
                   "published",
                   "streaming",

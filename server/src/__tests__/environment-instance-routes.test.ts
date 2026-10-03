@@ -8,6 +8,12 @@ const mockIssueService = vi.hoisted(() => ({
   clearExecutionWorkspaceEnvironmentSelection: vi.fn(),
 }));
 
+const mockAccessService = vi.hoisted(() => ({
+  canUser: vi.fn(),
+  hasPermission: vi.fn(),
+  decide: vi.fn(),
+}));
+
 const mockProjectService = vi.hoisted(() => ({
   clearExecutionWorkspaceEnvironmentSelection: vi.fn(),
 }));
@@ -53,6 +59,7 @@ const mockSecretService = vi.hoisted(() => ({
 }));
 
 vi.mock("../services/index.js", () => ({
+  accessService: () => mockAccessService,
   issueService: () => mockIssueService,
   instanceSettingsService: () => mockInstanceSettingsService,
   environmentCustomImageService: () => mockEnvironmentCustomImageService,
@@ -130,6 +137,9 @@ function createApp(actor: Record<string, unknown>) {
 
 describe("environment instance routes", () => {
   beforeEach(() => {
+    mockAccessService.canUser.mockReset();
+    mockAccessService.hasPermission.mockReset();
+    mockAccessService.decide.mockReset();
     mockIssueService.clearExecutionWorkspaceEnvironmentSelection.mockReset();
     mockProjectService.clearExecutionWorkspaceEnvironmentSelection.mockReset();
     mockInstanceSettingsService.listCompanyIds.mockReset();
@@ -203,7 +213,8 @@ describe("environment instance routes", () => {
     expect(mockEnvironmentService.list).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects company agents from enumerating the shared environment catalog", async () => {
+  it("rejects company agents without the environments:manage grant from enumerating the shared environment catalog", async () => {
+    mockAccessService.hasPermission.mockResolvedValue(false);
     const app = createApp({
       type: "agent",
       agentId: "agent-1",
@@ -215,7 +226,26 @@ describe("environment instance routes", () => {
     const res = await request(app).get("/api/companies/company-1/environments");
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("Board access required");
+    expect(res.body.error).toContain("Missing permission: environments:manage");
+    expect(mockEnvironmentService.list).not.toHaveBeenCalled();
+  });
+
+  it("allows company agents with the environments:manage grant to enumerate the shared environment catalog", async () => {
+    mockEnvironmentService.list.mockResolvedValue([createEnvironment()]);
+    mockAccessService.hasPermission.mockResolvedValue(true);
+    const app = createApp({
+      type: "agent",
+      agentId: "agent-1",
+      companyId: "company-1",
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await request(app).get("/api/companies/company-1/environments");
+
+    expect(res.status).toBe(200);
+    expect(mockAccessService.hasPermission).toHaveBeenCalledWith("company-1", "agent", "agent-1", "environments:manage");
+    expect(mockEnvironmentService.list).toHaveBeenCalledTimes(1);
   });
 
   it("rejects non-admin signed-in board members from mutating instance environments", async () => {

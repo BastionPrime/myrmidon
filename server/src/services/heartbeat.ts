@@ -631,7 +631,12 @@ import {
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { serverVersion } from "../version.js";
 // myrmidon(R3): maintenance mode admission gate
-import { isAgentUnderMaintenance, isRunUnderMaintenance } from "../myrmidon/maintenance/gate.js";
+import {
+  isAgentUnderMaintenance,
+  isChatWakeExemptFromBotProfileWindow,
+  isRunUnderMaintenance,
+  maintenanceWindowsForAgent,
+} from "../myrmidon/maintenance/gate.js";
 // myrmidon(D2): uuid-typed json comparisons for the board DB hot path. See
 // docs/myrmidon/DIVERGENCE.md.
 import { jsonTextUuid } from "../myrmidon/db-hot-path/json-uuid.js";
@@ -646,6 +651,13 @@ import {
 } from "../myrmidon/idle-pickup.js";
 // myrmidon(AUTO-RESUME): the board resumes an agent left in `error` with backoff
 import { createAutoResumeSweeper } from "../myrmidon/auto-resume.js";
+// myrmidon(1.6-SWARM): the expired-claim sweep of the per-role task queues
+import { buildSwarmClaimSweeper } from "../myrmidon/swarm-claim/index.js";
+// myrmidon(1.6-SWARM): the checkout/release claim hooks of the run lifecycle
+import {
+  recordSwarmClaimOnCheckoutImpl,
+  releaseSwarmClaimsForRunImpl,
+} from "../myrmidon/swarm-claim/hooks.js";
 import { scheduleQueuedResweep, sharedRunAdmission } from "../myrmidon/run-admission.js";
 // myrmidon(S2-hostcred): a run never inherits the host's GitHub credentials
 import {
@@ -18064,6 +18076,24 @@ export function heartbeatService(
     isAgentUnderMaintenance: (agentId) => isAgentUnderMaintenance(db, agentId),
   });
 
+  // myrmidon(1.6-SWARM): the expired-claim sweep of the per-role task queues.
+  // The release path wakes the next agent of the role directly; this pass is
+  // the safety net that makes "an idle agent with a non-empty queue of its
+  // role" impossible past one lease period (TTL + one sweep interval). All
+  // admission gates still apply inside enqueueWakeup; with the pilot flag off
+  // the pass reads once and releases nothing.
+  const swarmClaimSweeper = buildSwarmClaimSweeper({
+    db,
+    settings: {
+      getGeneral: () => instanceSettings.getGeneral(),
+      updateGeneral: () => {
+        throw new Error("not used by the sweep");
+      },
+    },
+    enqueueWakeup: (agentId, opts) => enqueueWakeup(agentId, opts),
+    env: process.env,
+  });
+
   async function sweepPendingCleanupLeases(opts?: {
     backoffMs?: number;
     /** One cleanup attempt per explicit user Retry, for this failed run only.
@@ -18889,6 +18919,19 @@ export function heartbeatService(
       logger.warn({ errorKind: "stale_active_lease_sweep_failed" }, "stale active environment lease sweep failed");
     }
 
+    // myrmidon(1.6-SWARM): the expired-claim sweep on the same tick. Cheap
+    // when the pilot flag is off; with the pilot on it returns expired tasks
+    // to their role's queue and wakes the next agent, keeping an idle agent
+    // with a non-empty queue impossible past one lease period.
+    try {
+      const swarmSwept = await swarmClaimSweeper.sweep();
+      if (swarmSwept.expiredReleased > 0 || swarmSwept.closedReleased > 0 || swarmSwept.failed > 0) {
+        logger.warn(swarmSwept, "swept expired swarm claims on this tick");
+      }
+    } catch {
+      logger.warn({ errorKind: "swarm_claim_sweep_failed" }, "swarm claim sweep failed");
+    }
+
     // Retry stranded pending_cleanup leases on the same tick. Isolate the sweep
     // so its failure never hides the reaper result. The backoff equals the
     // reaper staleness threshold.
@@ -19384,7 +19427,30 @@ export function heartbeatService(
 
   async function startNextQueuedRunForAgent(agentId: string) {
     if ((await getSchedulingSuppression()).suppressed) return [];
-    if (await isAgentUnderMaintenance(db, agentId)) return []; // myrmidon(R3): queued runs wait for maintenance exit
+    // myrmidon(R3): queued runs wait for maintenance exit — except the
+    // CHAT-FIRST exemption below.
+    const maintenanceWindows = await maintenanceWindowsForAgent(db, agentId);
+    if (maintenanceWindows.length > 0) {
+      // myrmidon(CHAT-FIRST, OPE-3638): the bot's owner must never wait in
+      // chat behind the bot-container reconciler's profile-update window.
+      // Read the queued runs first: a user-authored external-chat wake is
+      // admitted through a single agent-scoped bot-profile window that is
+      // still `entering` (drain in progress, container untouched). The
+      // reconciler's drain wait then never reaches zero, its finally exits
+      // the window, and the profile update retries on the next sweep.
+      const queuedPeek = await db
+        .select({ contextSnapshot: heartbeatRuns.contextSnapshot, requestedByActorType: agentWakeupRequests.requestedByActorType })
+        .from(heartbeatRuns)
+        .leftJoin(agentWakeupRequests, eq(agentWakeupRequests.id, heartbeatRuns.wakeupRequestId))
+        .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.status, "queued")));
+      const chatExempt = queuedPeek.some((row) =>
+        isChatWakeExemptFromBotProfileWindow(maintenanceWindows, {
+          contextSource: readNonEmptyString(parseObject(row.contextSnapshot).source) ?? null,
+          requestedByActorType: row.requestedByActorType ?? null,
+        }),
+      );
+      if (!chatExempt) return [];
+    }
     const cutoff = await getWorktreeExecutionCutoff();
 
     return withAgentStartLock(agentId, async () => {
@@ -19635,8 +19701,12 @@ export function heartbeatService(
   ) {
     const attemptStartedAtMs = Date.now();
     let attestedQuestionResponseAtMs: number | null = null;
-    // myrmidon(R3): a maintenance window that opened after the claim releases the run like a task drain
-    if ((await getSchedulingSuppression()).suppressed || (await isRunUnderMaintenance(db, runId))) {
+    // myrmidon(R3): a maintenance window that opened after the claim releases the run like a task drain.
+    // myrmidon(CHAT-FIRST, OPE-3638): except the owner's chat turn admitted
+    // through a bot-profile `entering` window in startNextQueuedRunForAgent —
+    // releasing it here would put the owner back into the queue the exemption
+    // just let them out of.
+    if ((await getSchedulingSuppression()).suppressed) {
       try {
         await releaseRunClaimedJustBeforeSuppression(runId);
       } catch (err) {
@@ -19646,6 +19716,36 @@ export function heartbeatService(
         );
       }
       return;
+    } else if (await isRunUnderMaintenance(db, runId)) {
+      const runPeek = await db
+        .select({
+          contextSnapshot: heartbeatRuns.contextSnapshot,
+          agentId: heartbeatRuns.agentId,
+          requestedByActorType: agentWakeupRequests.requestedByActorType,
+        })
+        .from(heartbeatRuns)
+        .leftJoin(agentWakeupRequests, eq(agentWakeupRequests.id, heartbeatRuns.wakeupRequestId))
+        .where(eq(heartbeatRuns.id, runId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      const windows = runPeek ? await maintenanceWindowsForAgent(db, runPeek.agentId) : [];
+      const chatExempt = runPeek
+        ? isChatWakeExemptFromBotProfileWindow(windows, {
+            contextSource: readNonEmptyString(parseObject(runPeek.contextSnapshot).source) ?? null,
+            requestedByActorType: runPeek.requestedByActorType ?? null,
+          })
+        : false;
+      if (!chatExempt) {
+        try {
+          await releaseRunClaimedJustBeforeSuppression(runId);
+        } catch (err) {
+          logger.error(
+            { err, runId },
+            "failed to release run claimed just before task-drain suppression; the run row stays running, and the orphan reaper finalizes it and releases the issue lock on its next cycle",
+          );
+        }
+        return;
+      }
     }
 
     let legacyAdapterEntered = false;
@@ -19919,6 +20019,13 @@ export function heartbeatService(
             run.id,
           );
           context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = true;
+          // myrmidon(1.6-SWARM): the checkout is the claim event — the run now
+          // holds the issue's lease. Failure is non-fatal: the checkout itself
+          // already guards the atomic handover; without a claim row the issue
+          // simply stays claimable by the queue rules (no lease to expire).
+          await recordSwarmClaimOnCheckout(run, agent, issueId).catch((err) =>
+            logger.warn({ err, issueId, runId: run.id }, "swarm claim on checkout failed"),
+          );
         } catch (error) {
           if (!isCheckoutConflictError(error)) throw error;
           const staleness = await runDispatch.cancelStaleQueuedRun({
@@ -19956,6 +20063,11 @@ export function heartbeatService(
             run.id,
           );
           context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = true;
+          // myrmidon(1.6-SWARM): the auto-checkout path claims the lease too —
+          // same event, same non-fatal treatment.
+          await recordSwarmClaimOnCheckout(run, agent, issueId).catch((err) =>
+            logger.warn({ err, issueId, runId: run.id }, "swarm claim on checkout failed"),
+          );
         } catch (error) {
           if (!isCheckoutConflictError(error)) throw error;
           context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = false;
@@ -25677,10 +25789,36 @@ export function heartbeatService(
     }
   }
 
+  // myrmidon(1.6-SWARM): the two claim-lifecycle hooks of the run. The claim
+  // row itself and the release/wake logic live in
+  // server/src/myrmidon/swarm-claim/; these hooks only call them and turn any
+  // failure into a warning so the vendor paths stay untouched in behavior.
+  async function recordSwarmClaimOnCheckout(
+    run: Pick<typeof heartbeatRuns.$inferSelect, "id" | "companyId" | "agentId">,
+    agent: Pick<typeof agents.$inferSelect, "id" | "role">,
+    issueId: string,
+  ) {
+    await recordSwarmClaimOnCheckoutImpl({ db, settings: instanceSettings }, { run, agent, issueId });
+  }
+
+  async function releaseSwarmClaimsForRun(
+    run: Pick<typeof heartbeatRuns.$inferSelect, "id" | "companyId">,
+  ) {
+    await releaseSwarmClaimsForRunImpl({ db, settings: instanceSettings }, run, enqueueWakeup);
+  }
+
   async function releaseIssueExecutionAndPromote(
     run: Pick<typeof heartbeatRuns.$inferSelect, "id" | "companyId">,
     options: { suppressImmediateRecovery?: boolean } = {},
   ) {
+    // myrmidon(1.6-SWARM): the run is done holding its issue — release the
+    // claim so the task returns to its role queue and the next agent wakes.
+    // Before the wake-queue release below: the claim drop must not delay (nor
+    // be delayed by) the vendor recovery path, and its failure never blocks
+    // the vendor release.
+    await releaseSwarmClaimsForRun(run).catch((err) =>
+      logger.warn({ err, runId: run.id }, "swarm claim release on run finish failed"),
+    );
     try {
       const { postCommitEffects } = await wakeQueue.releaseIssueExecution({
         companyId: run.companyId,

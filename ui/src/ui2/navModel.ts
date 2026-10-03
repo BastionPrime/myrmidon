@@ -50,7 +50,9 @@ export const UI2_NAV_GROUPS: Ui2NavGroup[] = [
     labelKey: "ui2.nav.group.decide",
     items: [
       { labelKey: "ui2.nav.waiting", to: "/decisions", icon: CircleAlert, badge: "attention" },
-      { labelKey: "ui2.nav.commander", to: "/board-chat", icon: MessagesSquare },
+      // myrmidon(1.6-CTO-CHAT-A): Commander now opens the real Commander chat
+      // (planning conversation) instead of the legacy conference-room board chat.
+      { labelKey: "ui2.nav.commander", to: "/commander-chat", icon: MessagesSquare },
     ],
   },
   {
@@ -64,6 +66,7 @@ export const UI2_PHONE_TABS: Ui2NavItem[] = [
   { labelKey: "ui2.nav.center", to: "/dashboard", icon: Gauge },
   { labelKey: "ui2.nav.waiting", to: "/decisions", icon: CircleAlert, badge: "attention" },
   { labelKey: "ui2.nav.fleet", to: "/agents/all", icon: Server },
-  { labelKey: "ui2.nav.commander", to: "/board-chat", icon: MessagesSquare },
+  // myrmidon(1.6-CTO-CHAT-A): same switch on the phone tab bar.
+  { labelKey: "ui2.nav.commander", to: "/commander-chat", icon: MessagesSquare },
   { labelKey: "ui2.nav.more", to: "/agents/all", icon: LayoutGrid },
 ];

@@ -27,6 +27,8 @@ import path from "node:path";
 
 import { agentApiKeys, companies, companyMemberships, type Db } from "@paperclipai/db";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
+// myrmidon(PARALLEL-HELPERS): the settings type the parallel-helpers port returns.
+import type { ParallelHelpersSettings } from "@paperclipai/shared";
 import {
   readPaperclipSkillSyncPreference,
   resolveLegacyPaperclipDesiredSkillNames,
@@ -40,6 +42,8 @@ import {
   secretService,
 } from "../../services/index.js";
 import { skillVersionSelectionMap } from "../../services/runtime-skill-selections.js";
+// myrmidon(1.6-SKILL-LIFE): the lifecycle decides what reaches this agent.
+import { skillLifecycleService } from "../skill-lifecycle/index.js";
 import { BOT_AGENT_API_KEY_NAME, ensureBotAgentKey } from "./agent-key.js";
 import { createBotBoardGatewayDeps, releaseStrayBotGateways } from "./board-gateway-ports.js";
 import {
@@ -51,6 +55,7 @@ import {
 import { createBotCardSync, type BotCardSyncPorts, type BotCardSyncResult } from "./card-sync.js";
 import { createCardEnvResolver } from "./card-env.js";
 import { loadBotInstructionsBundle } from "./instructions-source.js";
+import { readBotProfileSettings } from "./profile-input.js";
 import {
   createActivityWarningSink,
   createBotProfileCompile,
@@ -61,6 +66,10 @@ import {
 import type { HermesProfileSkillFile } from "./profile-compiler.js";
 import type { BotContainerActivitySink } from "./reconciler.js";
 import type { CompiledProfile } from "./types.js";
+// myrmidon(1.6-WIKI): approved wiki regulations reach a bot through its compiled profile.
+import { loadRegulationWorkspaceFiles } from "../wiki-cortex/delivery.js";
+import { createWikiRegulationService } from "../wiki-cortex/service.js";
+import { createDbRegulationStore } from "../wiki-cortex/store.js";
 
 export { BOT_AGENT_API_KEY_NAME };
 
@@ -179,6 +188,7 @@ function toAgentRecord(row: {
   id: string;
   companyId: string;
   name: string;
+  role?: string;
   adapterType: string;
   adapterConfig: unknown;
   runtimeConfig: unknown;
@@ -190,6 +200,8 @@ function toAgentRecord(row: {
     adapterType: row.adapterType,
     adapterConfig: asRecord(row.adapterConfig),
     runtimeConfig: asRecord(row.runtimeConfig),
+    // myrmidon(1.6-WIKI): the role picks which approved regulations reach this agent.
+    ...(row.role ? { role: row.role } : {}),
   };
 }
 
@@ -208,8 +220,13 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
   const agents = agentService(db);
   const secrets = secretService(db);
   const skills = companySkillService(db);
+  // myrmidon(1.6-SKILL-LIFE): the profile compiler filters and pins company
+  // skills by their lifecycle state through this service.
+  const skillLifecycle = skillLifecycleService(db);
   const instructions = agentInstructionsService();
   const instanceSettings = instanceSettingsService(db);
+  // myrmidon(1.6-WIKI): the wiki regulations of the company, delivered through the profile.
+  const wikiRegulations = createWikiRegulationService(createDbRegulationStore(db));
   const resolveCardEnv = createCardEnvResolver(
     {
       resolveEnvBindings: (companyId, bindings, context) => secrets.resolveEnvBindings(companyId, bindings, context),
@@ -396,10 +413,20 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
       const warnings: string[] = [];
       const preference = readPaperclipSkillSyncPreference(agent.adapterConfig);
       const experimental = await instanceSettings.getExperimental();
+      // myrmidon(1.6-SKILL-LIFE): the company lifecycle decides what reaches
+      // this agent — a deprecated skill reaches nobody, a candidate only the
+      // pilot agent set, and a verified skill is pinned to its verified
+      // revision, so a rollback takes effect on the next compile tick.
+      const lifecycle = await skillLifecycle.resolveDelivery(agent.companyId, agent.id);
+      const versionSelections = skillVersionSelectionMap(preference.desiredSkillEntries, {
+        versionPinsEnabled: experimental.enableBetaSkills === true,
+      });
+      for (const [key, versionId] of lifecycle.pinnedVersions) {
+        // The card's own pin wins when it set one; the lifecycle fills the rest.
+        if (!versionSelections.get(key)) versionSelections.set(key, versionId);
+      }
       const entries = await skills.listRuntimeSkillEntries(agent.companyId, {
-        versionSelections: skillVersionSelectionMap(preference.desiredSkillEntries, {
-          versionPinsEnabled: experimental.enableBetaSkills === true,
-        }),
+        versionSelections,
       });
       // The same resolution hermes_local uses, so a bot in a container carries the
       // skills it would have had running locally (including the board's own skill).
@@ -407,6 +434,12 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
       const byKey = new Map(entries.map((entry) => [entry.key, entry] as const));
       const result: Record<string, readonly HermesProfileSkillFile[]> = {};
       for (const key of desiredKeys) {
+        if (lifecycle.blockedKeys.has(key)) {
+          warnings.push(
+            lifecycle.reasons.get(key) ?? `skill ${key}: withheld by the skill lifecycle`,
+          );
+          continue;
+        }
         const entry = byKey.get(key);
         if (!entry) {
           warnings.push(`skill ${key}: not found in the company catalog, skipped`);
@@ -437,6 +470,40 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
           return (await instructions.readFile(agent, relativePath)).content;
         },
       });
+    },
+
+    // myrmidon(BOT-RUNTIME-TUNING-B): instance defaults for the profile compiler,
+    // from the MYRMIDON_BOT_* settings via the existing reader (readBotProfileSettings
+    // pattern; re-read on every call, so a corrected variable needs no rebuild).
+    // The per-tick compile call in profile-compile.ts merges these with the settings
+    // it read itself; this port supplies the same map for callers that go through
+    // buildHermesProfileInput without their own instanceDefaults source.
+    async instanceDefaults() {
+      const settings = readBotProfileSettings(process.env);
+      return {
+        compression: {
+          ...(settings.compressionThresholdTokens !== null ? { thresholdTokens: settings.compressionThresholdTokens } : {}),
+        },
+        ...(settings.modelContextLengths ? { modelContextLengths: settings.modelContextLengths } : {}),
+        auxiliary: {
+          ...(settings.auxiliaryTitleModel ? { titleGenerationModel: settings.auxiliaryTitleModel } : {}),
+          ...(settings.auxiliaryCompressionModel ? { compressionModel: settings.auxiliaryCompressionModel } : {}),
+        },
+      };
+    },
+
+    // myrmidon(PARALLEL-HELPERS): the company ceiling/default for helpers. Read
+    // from the instance settings row on every tick (see the port's contract):
+    // a settings change applies on the next reconcile, without a restart.
+    async parallelHelpers(): Promise<ParallelHelpersSettings | undefined> {
+      const general = await instanceSettings.getGeneral();
+      return general.parallelHelpers;
+    },
+
+    // myrmidon(1.6-WIKI): the approved regulations of the agent's role, as workspace files
+    // for the container profile. An empty wiki produces no file at all.
+    async loadRegulations(agent, context) {
+      return loadRegulationWorkspaceFiles(wikiRegulations, { companyId: agent.companyId, role: agent.role }, context);
     },
   };
 }

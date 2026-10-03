@@ -13,6 +13,8 @@ export { approvalsApi } from "./approvals";
 export { decisionsApi } from "./decisions";
 export { costsApi } from "./costs";
 export { baselineApi } from "./baseline"; // myrmidon(1.6-BASELINE)
+export { swarmSupervisorApi } from "./swarmSupervisor"; // myrmidon(1.6-SWARM-CLAIM-B)
+export { foragingApi } from "./foraging"; // myrmidon(1.6-FORAGE)
 export { activityApi } from "./activity";
 export { dashboardApi } from "./dashboard";
 export { heartbeatsApi } from "./heartbeats";

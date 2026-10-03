@@ -1,0 +1,190 @@
+diff --git a/gateway/platforms/api_server_runs.py b/gateway/platforms/api_server_runs.py
+index fc389b3..ae87615 100644
+--- a/gateway/platforms/api_server_runs.py
++++ b/gateway/platforms/api_server_runs.py
+@@ -453,6 +453,12 @@ class _RunLaunch:
+     browser_control_principal: Any
+     browser_control_transport_family: Any
+     turn_author: Optional[Dict[str, Any]] = None  # memory-attribution label only; grants nothing
++    # myrmidon(G1): run-scoped GitHub broker capability (CONTAINER-GITHUB-WRITE).
++    # ``{"broker_url": str, "capability": str}`` or None. Carried here because the
++    # run task outlives the request; _run_agent_sync binds it into contextvars
++    # (see set_github_broker_vars) for the whole turn so tool subprocesses of
++    # THIS run — and only this run — can resolve managed GitHub credentials.
++    github_broker: Optional[Dict[str, str]] = None
+ 
+     @property
+     def approval_session_key(self) -> str:
+@@ -582,6 +588,22 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
+         v if isinstance(v, dict) else None for v in (
+             (body.get("hosted_room_dispatch"), body.get("_room_execution_policy"))
+             if isinstance(body, dict) else (None, None)))
++    # myrmidon(G1): run-scoped GitHub broker capability (CONTAINER-GITHUB-WRITE).
++    # The board's hermes_gateway adapter forwards the pair heartbeat minted for
++    # this run; it rides the body (so the idempotency fingerprint covers it) and
++    # is bound per-run through contextvars in _run_agent_sync — never through
++    # the process env, which concurrent runs share. Only the two known string
++    # fields are accepted, and only when both are non-empty: anything else
++    # (wrong types, a partial pair, a plain string) is ignored, leaving the run
++    # without managed GitHub credentials, exactly as before this patch.
++    github_broker = body.get("github_broker") if isinstance(body, dict) else None
++    github_broker = {
++        "broker_url": str(github_broker.get("broker_url") or "").strip(),
++        "capability": str(github_broker.get("capability") or "").strip(),
++    } if isinstance(github_broker, dict) else None
++    if github_broker and not (github_broker["broker_url"] and github_broker["capability"]):
++        github_broker = None
++
+     idempotency_key = request.headers.get("Idempotency-Key", "").strip()
+     if len(idempotency_key) > 255 or any(ord(ch) < 33 or ord(ch) > 126 for ch in idempotency_key):
+         return _json_error(
+@@ -685,7 +707,9 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
+         request_profile=_api_server._api_request_profile.get(),
+         browser_control_principal=_api_server._api_request_browser_control_principal.get(),
+         browser_control_transport_family=_api_server._api_request_browser_control_transport_family.get(),
+-        turn_author=turn_author)
++        turn_author=turn_author,
++        # myrmidon(G1): run-scoped GitHub broker capability (CONTAINER-GITHUB-WRITE).
++        github_broker=github_broker)
+     self._activate_admitted_request()
+     # A canonical Bot Chat that a Desktop holds live is that Desktop's to run: executing here would
+     # be a second writer beside its lease (#114959). The owner's mailbox takes the turn and its
+@@ -738,6 +762,8 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
+     # accumulate until the OS refuses new process spawns.
+     from tools.approval import register_gateway_notify, unregister_gateway_notify
+     from tools.approval_context import reset_current_session_key, set_current_session_key
++    # myrmidon(G1): run-scoped GitHub broker capability (CONTAINER-GITHUB-WRITE).
++    from tools.github_broker_context import reset_github_broker_vars, set_github_broker_vars
+     session_id = run.session_id
+     effective_task_id = session_id or run.run_id
+     # (token, reset) pairs unwound in the finally block; bound only once each step succeeds.
+@@ -746,6 +772,12 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
+         try:
+             # Contextvars, not process env: concurrent runs must not share identity.
+             resets.append((set_current_session_key(run.approval_session_key), reset_current_session_key))
++            # myrmidon(G1): bind this run's GitHub broker capability the same way —
++            # contextvars, reset in the finally block, never the process env. A run
++            # without a capability leaves the vars unset, and the child-env bridge in
++            # tools/environments/local.py then strips them for this run's spawns.
++            if run.github_broker:
++                resets.append(set_github_broker_vars(run.github_broker))
+             # chat_id carries the raw session id like _run_agent() does; without it
+             # tools.async_delegation sees no HERMES_SESSION_CHAT_ID and forces delegations sync.
+             session_tokens = self._bind_api_server_session(
+diff --git a/tools/environments/local.py b/tools/environments/local.py
+index 89a06ee..48607c0 100644
+--- a/tools/environments/local.py
++++ b/tools/environments/local.py
+@@ -238,6 +238,29 @@ def _inject_session_context_env(env: dict) -> None:
+             env[var_name] = "" if value is None else str(value)
+         elif _engaged:
+             env.pop(var_name, None)
++    # myrmidon(G1): bridge this run's GitHub broker capability the same way
++    # (CONTAINER-GITHUB-WRITE). A bound pair wins over any inherited value, and
++    # a run WITHOUT a capability gets both names STRIPPED — a value left in the
++    # child env by an earlier surface must never serve a different run.
++    try:
++        from tools.github_broker_context import github_broker_bound, github_broker_env
++    except Exception:
++        return
++    bound = github_broker_bound()
++    if bound:
++        env.update(github_broker_env())
++        # A broker capability is present, so managed GitHub credentials are in
++        # charge: blank any inherited card/profile token (GH_TOKEN/GITHUB_TOKEN
++        # plus the other keys the board's launcher blanks) so a dead or stale
++        # static token cannot shadow the broker-acquired credential. The
++        # credential helpers fill these from the broker per invocation.
++        for key in (
++            "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "PAPERCLIP_GIT_TOKEN",
++        ):
++            env.pop(key, None)
++    else:
++        env.pop("PAPERCLIP_GITHUB_BROKER_URL", None)
++        env.pop("PAPERCLIP_GITHUB_BROKER_TOKEN", None)
+ 
+ 
+ def _filter_secret_env(
+diff --git a/tools/github_broker_context.py b/tools/github_broker_context.py
+new file mode 100644
+index 0000000..ed67d39
+--- /dev/null
++++ b/tools/github_broker_context.py
+@@ -0,0 +1,77 @@
++"""Run-scoped GitHub broker capability context (myrmidon G1, CONTAINER-GITHUB-WRITE).
++
++The board's hermes_gateway adapter forwards, per /v1/runs request, the pair
++heartbeat minted for exactly that run: the URL of the Paperclip GitHub
++credential broker and the ``github_credentials`` runtime-tools capability
++token. ``gateway/platforms/api_server_runs.py`` carries the pair on the run
++record and binds it here for the whole turn — contextvars, never the process
++env, because a gateway process serves many concurrent runs in executor
++threads that all share ``os.environ``.
++
++``tools/environments/local.py`` bridges the bound values into the environment
++of every terminal/execute_code child spawned inside the turn, so the image's
++``git`` credential helper and ``gh`` wrapper (which read them and call the
++broker) see them, while a concurrent run without a capability of its own gets
++nothing: the bridge copies only values bound in the CURRENT context, and an
++unset var is stripped, not inherited.
++
++The token is a secret: it never appears in argv, in the session snapshot
++(credential-shaped names are excluded there), or in the process env.
++"""
++
++from __future__ import annotations
++
++from contextvars import ContextVar, Token
++from typing import Any, Callable, Mapping
++
++# (broker_url, capability), or None when the run carries no capability.
++_GITHUB_BROKER: ContextVar[tuple[str, str] | None] = ContextVar("PAPERCLIP_GITHUB_BROKER", default=None)
++
++
++def set_github_broker_vars(broker: Mapping[str, str]) -> tuple[Callable[[], None], Callable[[Any], None]]:
++    """Bind *broker* (``broker_url``/``capability``) for this context.
++
++    Returns ``(marker, reset)`` shaped exactly like the other (token, reset)
++    pairs the API server collects: the ``finally`` block calls
++    ``reset(token)`` for every entry, so ``reset`` must accept and ignore one
++    positional argument (the token is already closed over here).
++    """
++    url = str(broker.get("broker_url") or "").strip()
++    capability = str(broker.get("capability") or "").strip()
++    if not url or not capability:
++        # A partial or malformed pair binds nothing: the run continues without
++        # managed GitHub credentials rather than with a half-usable secret.
++        token: Token[tuple[str, str] | None] | None = None
++    else:
++        token = _GITHUB_BROKER.set((url, capability))
++
++    def reset(_token: Any = None) -> None:
++        # myrmidon(G1): reset to the pre-bind value, not to None — a nested
++        # binding (delegate workers re-running this module's setter under a
++        # copied context) must not clear an outer scope's capability. The
++        # argument is ignored: the real token is closed over (the caller's
++        # `reset(token)` convention passes its own marker back).
++        if token is not None:
++            _GITHUB_BROKER.reset(token)
++
++    return (lambda _marker=None: None), reset
++
++
++def github_broker_env() -> dict[str, str]:
++    """The broker pair as a child-process env fragment, or ``{}`` when unbound.
++
++    Called from the terminal child-env bridge (``local.py``) at spawn time, so
++    each subprocess sees only its own run's values.
++    """
++    bound = _GITHUB_BROKER.get()
++    if bound is None:
++        return {}
++    return {
++        "PAPERCLIP_GITHUB_BROKER_URL": bound[0],
++        "PAPERCLIP_GITHUB_BROKER_TOKEN": bound[1],
++    }
++
++
++def github_broker_bound() -> bool:
++    """True when the current context carries a broker capability."""
++    return _GITHUB_BROKER.get() is not None

@@ -5,6 +5,8 @@ import { documentRevisions, documents, issueDocuments, issues } from "@paperclip
 import { isSystemIssueDocumentKey, issueDocumentKeySchema } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation } from "../db-errors.js";
+// myrmidon(S5): mask secret values in document bodies at the single write point
+import { maskSecretsInText } from "../myrmidon/secret-masking.js";
 import { insertRowsInChunks } from "./batch-insert.js";
 import type { ImportIssueDocumentRow } from "./import-write-types.js";
 
@@ -209,6 +211,8 @@ export function documentService(db: Db) {
       lockedDocumentStrategy?: "conflict" | "create_new_document";
     }) => {
       const key = normalizeDocumentKey(input.key);
+      // myrmidon(S5): mask secret values in document bodies at the single write point
+      input = { ...input, body: maskSecretsInText(input.body) };
       const issue = await db
         .select({ id: issues.id, companyId: issues.companyId })
         .from(issues)

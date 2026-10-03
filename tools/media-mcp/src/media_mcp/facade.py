@@ -48,7 +48,8 @@ INSTRUCTIONS = (
     "PUT /v1/files?name=<name> (body = raw bytes) and download with GET /v1/files/<id> on the same address "
     "(same authentication), then use the returned file_id. "
     "Tools: file_put/file_get/file_list/file_delete, media_probe, audio_loudness, ffmpeg_submit + job_status/job_cancel, "
-    "image_transform, pdf_to_images, office_to_pdf, html_to_pdf, extract_text. "
+    "audio_split (long audio -> 16 kHz mono wav chunks with startMs offsets), stt_transcribe (speech -> text + segments), "
+    "image_transform, pdf_to_images, office_to_pdf, html_to_pdf, extract_text, dwg_convert. "
     "Arbitrary shell or node scripts are not available here."
 )
 
@@ -299,6 +300,37 @@ def build_app(cfg: Settings | None = None) -> Any:
 
     # ---- media -----------------------------------------------------------------
     @tool
+    async def dwg_convert(input: FileInput, kind: str, dxf_version: str = "R2010",
+                          output_name: str | None = None, width: int = 1600, height: int = 1200,
+                          paper: str | None = None, inline: bool = False) -> dict:
+        """Convert a DWG or DXF drawing to DXF, SVG or PDF. kind: dxf|svg|pdf.
+        DXF output: dxf_version R12..R2018 (default R2010). SVG/PDF: width/height in px
+        (page size for the rendered drawing), pdf also accepts paper like 420x297 (mm).
+        DWG input is read with LibreDWG (dwg2dxf), rendering uses ezdxf. Returns the
+        converted file from your store."""
+        bot = gate("dwg_convert")
+        if kind not in ("dxf", "svg", "pdf"):
+            raise ToolError("kind must be one of dxf, svg, pdf")
+        meta, temp = await resolve(bot, input)
+        try:
+            alias = safe_name(meta["name"])
+            if not specs.is_cad_input(alias):
+                raise ToolError("input must be a .dwg or .dxf file")
+            spec: dict[str, Any] = {"input": alias, "kind": kind, "output": {"name": output_name or ("drawing." + kind)}}
+            if kind == "dxf":
+                spec["dxf_version"] = dxf_version
+            else:
+                spec["output"]["width"] = width
+                spec["output"]["height"] = height
+                if paper:
+                    spec["output"]["paper"] = paper
+            _, outs = await run_sync(bot, "dwg", {alias: meta}, spec)
+        finally:
+            if temp:
+                await drop(bot, [meta])
+        return with_inline(outs[0], inline)
+
+    @tool
     async def media_probe(input: FileInput) -> dict:
         """ffprobe a video/audio/image file: duration, streams (codec, size, fps, channels), container."""
         bot = gate("media_probe")
@@ -379,8 +411,66 @@ def build_app(cfg: Settings | None = None) -> Any:
         return {"job_id": job, "status": st.get("status", "queued")}
 
     @tool
+    async def audio_split(input: FileInput, chunk_sec: float = 300.0, inline: bool = False) -> dict:
+        """Split a long audio (or video) file into 16 kHz mono wav chunks (ffmpeg segment muxer),
+        for transcription of meeting recordings. chunk_sec: 5..1800 (default 300). Returns a
+        job_id; poll job_status. When done, each chunk is a file in your store and the answer
+        lists them with startMs offsets back into the original recording."""
+        bot = gate("audio_split")
+        if not specs.MIN_CHUNK_S <= chunk_sec <= specs.MAX_CHUNK_S:
+            raise ToolError(f"chunk_sec must be in [{specs.MIN_CHUNK_S}, {specs.MAX_CHUNK_S}] seconds")
+        meta, temp = await resolve(bot, input)
+        alias = safe_name(meta["name"])
+        spec = {"input": alias, "chunk_sec": chunk_sec}
+        try:
+            async with bot_lock(bot.key):
+                if active_jobs(bot) >= cfg.max_active_jobs_per_bot:
+                    raise ToolError(f"too many active jobs (limit {cfg.max_active_jobs_per_bot}); wait or job_cancel")
+                limit = await max_out(bot)
+                job, d = prepare_job(bot, {alias: meta}, queued=True)
+                try:
+                    st = await be.worker_submit(bot.key, job, "audio_split", spec, limit)
+                except BaseException:
+                    shutil.rmtree(d, ignore_errors=True)
+                    raise
+        finally:
+            if temp:
+                await drop(bot, [meta])
+        return {"job_id": job, "status": st.get("status", "queued"), "chunk_sec": chunk_sec}
+
+    @tool
+    async def stt_transcribe(input: FileInput, model: str | None = None, language: str | None = None,
+                             start_ms: int | None = None) -> dict:
+        """Transcribe an audio file directly (speech -> text). Optional model (the gateway's
+        registered name; default from the server config), language like 'ru' or 'en-US', and
+        start_ms: offset to add to every segment when the file is a chunk of a longer recording
+        (see audio_split). Returns {text, segments:[{speaker,startMs,endMs}]} when the provider
+        returns them. Large audio: split first with audio_split (see limits in server instructions)."""
+        bot = gate("stt_transcribe")
+        model = specs.check_stt_model(model or cfg.stt_default_model)
+        if language is not None:
+            language = specs.check_stt_language(language)
+        if start_ms is not None and (not isinstance(start_ms, int) or isinstance(start_ms, bool) or not 0 <= start_ms < 2**40):
+            raise ToolError("start_ms must be a non-negative integer")
+        meta, temp = await resolve(bot, input)
+        try:
+            with store.blob(bot.key, meta["id"]).open("rb") as fh:
+                payload = await be.stt_transcribe(safe_name(meta["name"]), fh, meta["size"], model, language)
+        finally:
+            if temp:
+                await drop(bot, [meta])
+        out = specs.normalize_stt_response(payload)
+        if start_ms:
+            for seg in out["segments"]:
+                seg["startMs"] += start_ms
+                seg["endMs"] += start_ms
+        return {"model": model, "language": language, **out}
+
+    @tool
     async def job_status(job_id: str, inline: bool = False) -> dict:
-        """Status of an ffmpeg job. When done: outputs (file ids). inline=true adds base64 for small outputs."""
+        """Status of an ffmpeg or audio_split job. When done: outputs (file ids); for
+        audio_split the outputs carry startMs offsets into the source recording.
+        inline=true adds base64 for small outputs."""
         bot = gate("job_status")
         if not JOB_IDS.match(job_id or ""):
             raise ToolError("bad job id")
@@ -390,7 +480,21 @@ def build_app(cfg: Settings | None = None) -> Any:
         st = await be.worker_status(bot.key, job_id)
         out = {"job_id": job_id, "status": st.get("status")}
         if st.get("status") == "done":
-            out["outputs"] = [with_inline(m, inline) for m in await register_outputs(bot, job_id, d, st)]
+            metas = await register_outputs(bot, job_id, d, st)
+            if st.get("kind") == "audio_split":
+                chunk = st.get("chunk_sec")
+                outs = []
+                for m in metas:
+                    entry = with_inline(m, inline)
+                    mt = re.fullmatch(r"chunk_(\d{6})\.wav", m["name"])
+                    if chunk and mt:
+                        entry["startMs"] = round(int(mt.group(1)) * chunk * 1000)
+                    outs.append(entry)
+                out["chunk_sec"] = chunk
+                out["startMs_step"] = round(chunk * 1000) if chunk else None
+            else:
+                outs = [with_inline(m, inline) for m in metas]
+            out["outputs"] = outs
         elif st.get("status") in ("failed", "cancelled"):
             out["error"] = st.get("error", "")
             for sub in ("in", "out"):  # normally the worker already did; belt and braces

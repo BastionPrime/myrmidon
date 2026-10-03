@@ -18,6 +18,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { en } from "./catalogs/en";
 import { ru } from "./catalogs/ru";
+import { ui2Messages } from "./locales";
 
 const UI2_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -56,6 +57,11 @@ function flatten(source: Record<string, unknown>, prefix = ""): Set<string> {
 
 const catalogKeys = flatten(en);
 const ruKeys = flatten(ru);
+// The re-skin screens carry their copy in the flat ui2.* catalog of
+// locales.ts (UI2 re-skin); the guard must accept keys from BOTH catalogs —
+// the nested ui2: namespace (UI2-I18N panels) and the flat screen catalog.
+for (const key of Object.keys(ui2Messages.en)) catalogKeys.add(key);
+for (const key of Object.keys(ui2Messages.ru)) ruKeys.add(key);
 
 /** Attributes whose string values a human reads. */
 const USER_VISIBLE_ATTRIBUTES = new Set([
@@ -139,7 +145,10 @@ function scanFile(path: string): Array<Violation> {
 
     // JSX text children: `> Words here <` between tags. Identifier-like
     // single tokens are machine-facing (TS generics `>(T)<`, keys).
-    for (const match of line.matchAll(/>([^<>{}]+)</g)) {
+    // A `>` that belongs to an arrow (`=>`) is code, not markup: with a
+    // comparison `<` later on the same line the pair would otherwise read
+    // as a JSX text node (useIsMobileViewport precedent).
+    for (const match of line.matchAll(/(?<!=)>([^<>{}]+)</g)) {
       const text = match[1].trim();
       if (looksLikeProse(text)) {
         violations.push({ file: relative, line: lineNumber, kind: "jsx-text", excerpt: text });

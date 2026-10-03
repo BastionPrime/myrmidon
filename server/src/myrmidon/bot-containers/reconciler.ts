@@ -146,8 +146,17 @@ async function withAgentPaused(
     };
   }
   try {
-    const drained = await waitForZeroRunning(maintenance, agentId, drainTimeoutSec, sleep);
-    if (!drained) {
+    const drain = await waitForZeroRunning(maintenance, agentId, drainTimeoutSec, sleep);
+    if (drain.chatPreempted) {
+      // myrmidon(CHAT-FIRST, OPE-3638): the owner started a chat turn inside
+      // the window. Defer the profile update; the finally below exits the
+      // window at once so nothing else is held either.
+      return {
+        kind: "deferred",
+        reason: "the bot owner is in a chat conversation; the profile update is deferred to a later pass",
+      };
+    }
+    if (!drain.drained) {
       throw new Error(`agent ${agentId} still had running work after the maintenance drain timeout`);
     }
     await apply();
@@ -262,13 +271,24 @@ async function waitForZeroRunning(
   agentId: string,
   drainTimeoutSec: number,
   sleep: (ms: number) => Promise<void>,
-): Promise<boolean> {
+): Promise<{ drained: boolean; chatPreempted?: boolean }> {
   const deadline = Date.now() + drainTimeoutSec * 1000 + DRAIN_POLL_GRACE_MS;
+  // myrmidon(CHAT-FIRST, OPE-3638): the owner's chat turn outranks the profile
+  // update. The admission gate lets a user-authored chat wake start inside
+  // this window (the only wake it lets through), so a rising running-count
+  // mid-drain means the owner is in chat right now: stop waiting, leave the
+  // window (the caller's finally exits it), and retry the update on the next
+  // sweep instead of interrupting their turn at the drain deadline.
+  let minRunning = Number.POSITIVE_INFINITY;
   while (Date.now() < deadline) {
     const view = await maintenance.status(agentId);
-    if (view.runningRuns === 0) return true;
+    if (view.runningRuns === 0) return { drained: true };
+    if (view.runningRuns > minRunning) return { drained: false, chatPreempted: true };
+    minRunning = Math.min(minRunning, view.runningRuns);
     await sleep(DRAIN_POLL_INTERVAL_MS);
   }
   const last = await maintenance.status(agentId);
-  return last.runningRuns === 0;
+  if (last.runningRuns === 0) return { drained: true };
+  if (last.runningRuns > minRunning) return { drained: false, chatPreempted: true };
+  return { drained: false };
 }
