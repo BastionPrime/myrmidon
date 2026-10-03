@@ -15,6 +15,7 @@ import { useStreamlinedUiEnabled } from "../hooks/useStreamlinedUiEnabled";
 import { queryKeys } from "../lib/queryKeys";
 import { isPlatformManagedEnvironment } from "../lib/managed-sandbox-environment";
 import { AgentStatusBadge, AgentStatusCapsule } from "../components/StatusBadge";
+import { AgentWipBadge } from "../components/myrmidon/AgentWipBadge"; // myrmidon(1.6.1 WIP-LIMIT-B)
 import { MembershipAction } from "../components/MembershipAction";
 import { StarToggle } from "../components/StarToggle";
 import { EntityRow } from "../components/EntityRow";
@@ -421,6 +422,8 @@ export function Agents({ initialView = "list" }: { initialView?: AgentsView } = 
                 showEnvironment={showEnvironmentColumn}
               />
             </div>
+            {/* myrmidon(1.6.1 WIP-LIMIT-B): current WIP badge from the part-A status endpoint */}
+            <AgentWipBadge agentId={agent.id} /> {/* myrmidon(1.6.1 WIP-LIMIT-B) */}
           </div>
         }
         metaSpacerClassName="hidden @5xl:block"
