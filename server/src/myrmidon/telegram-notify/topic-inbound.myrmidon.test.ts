@@ -1,4 +1,4 @@
-// myrmidon(OPE-3789): unit coverage for the topic-inbound gate and task
+// myrmidon(TG-NOTIFY-D): unit coverage for the topic-inbound gate and task
 // title/body helpers (part D of the 1.6.1 TG-NOTIFY settings contract).
 import { describe, expect, it } from "vitest";
 import {

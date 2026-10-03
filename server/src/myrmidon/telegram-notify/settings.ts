@@ -1,4 +1,4 @@
-// myrmidon(OPE-3789): inbound topic routing settings for the Telegram
+// myrmidon(TG-NOTIFY-D): inbound topic routing settings for the Telegram
 // group-topics bridge (part D).
 //
 // Storage: instance settings `general.telegramNotify` (area key of the
@@ -18,7 +18,7 @@ import { instanceSettings, type Db } from "@paperclipai/db";
 
 /** An open instance-settings transaction handle (same pattern as the vendor settings service). */
 type InstanceSettingsTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
-// myrmidon(OPE-3789): the shared contract of the settings document.
+// myrmidon(TG-NOTIFY-D): the shared contract of the settings document.
 import {
   defaultTelegramNotifySettings,
   telegramNotifySettingsSchema,

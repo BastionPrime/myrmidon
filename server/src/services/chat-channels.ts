@@ -375,7 +375,7 @@ import {
   telegramDmConversationsConfigured,
   telegramDmConversationsEnabled,
 } from "../myrmidon/agent-chat-bridge/settings.js";
-// myrmidon(OPE-3789): inbound topic settings + gate for Telegram forum
+// myrmidon(TG-NOTIFY-D): inbound topic settings + gate for Telegram forum
 // topics (server/src/myrmidon/telegram-notify/). Off by default: the
 // settings document lives in instance settings; the gate only relaxes the
 // vendor's addressed requirement when the owner enabled topic inbound.
@@ -383,7 +383,7 @@ import {
   readTelegramNotifyInbound,
   type TelegramNotifyInboundSettings,
 } from "../myrmidon/telegram-notify/settings.js";
-// myrmidon(OPE-3789): pure gate/title/body helpers for topic inbound.
+// myrmidon(TG-NOTIFY-D): pure gate/title/body helpers for topic inbound.
 import {
   topicInboundAdmitted,
   topicTaskBody,
@@ -14626,14 +14626,14 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     // identity, so it must not defeat durable deduplication.
     const providerEventId = `${durableExternalThreadIdentity(thread.id)}:${message.id}`;
     const surfaceKind = chatSurfaceKind(endpoint.provider, thread);
-    // myrmidon(OPE-3789): topic inbound settings are read once per message
+    // myrmidon(TG-NOTIFY-D): topic inbound settings are read once per message
     // from instance settings (runtime-changeable, OFF by default). The
     // vendor path is byte-for-byte unchanged while the document is absent.
     const telegramNotifyInbound: TelegramNotifyInboundSettings | null =
       endpoint.provider === "telegram" && !thread.isDM
         ? await readTelegramNotifyInbound(db)
         : null;
-    // myrmidon(OPE-3789): with topic inbound enabled, an unaddressed topic
+    // myrmidon(TG-NOTIFY-D): with topic inbound enabled, an unaddressed topic
     // message may still become task work (topic → task / topic → bound
     // conversation). requireMention (default true) keeps the vendor's
     // group privacy contract: unaddressed messages stay ignored.
@@ -14648,7 +14648,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           message.isMention === true,
       });
     const addressed =
-      // myrmidon(OPE-3789): topic inbound admission (see above).
+      // myrmidon(TG-NOTIFY-D): topic inbound admission (see above).
       topicInbound ||
       endpoint.provider === "imessage-photon" ||
       trigger === "mention" ||
@@ -16296,11 +16296,11 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           const issue = await issuesSvc.create(
             endpoint.companyId,
             {
-              // myrmidon(OPE-3789): a task created from a Telegram forum
+              // myrmidon(TG-NOTIFY-D): a task created from a Telegram forum
               // topic message carries the message's first words as the title
               // and the thread link in the description.
               title:
-                // myrmidon(OPE-3789): see the topic-inbound gate above.
+                // myrmidon(TG-NOTIFY-D): see the topic-inbound gate above.
                 topicInbound && endpoint.provider === "telegram" && !thread.isDM
                   ? topicTaskTitle(
                       message.text,

@@ -1,4 +1,4 @@
-// myrmidon(OPE-3789): TG-NOTIFY settings contract (1.6.1, part A/D shared).
+// myrmidon(TG-NOTIFY-D): TG-NOTIFY settings contract (1.6.1, part A/D shared).
 //
 // One place for the settings document shape that lives under
 // `instance_settings.general.telegramNotify`: the area is runtime-changeable

@@ -18,7 +18,7 @@ import { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema } fro
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in the same general settings row
 import { browserBridgeSettingsSchema } from "../myrmidon-browser-bridge.js";
 import { swarmClaimSettingsSchema } from "../myrmidon-swarm-claim.js";
-// myrmidon(OPE-3789): the TG-NOTIFY settings document stored in the same
+// myrmidon(TG-NOTIFY-D): the TG-NOTIFY settings document stored in the same
 // general settings row (routes from part A, consumers in part D).
 import { telegramNotifySettingsSchema } from "../myrmidon-telegram-notify.js";
 
@@ -70,7 +70,7 @@ export const instanceGeneralSettingsSchema = z.object({
   // /api/myrmidon/swarm-claim; absent means "use the environment variable, then
   // the default (the pilot is off)".
   swarmClaim: swarmClaimSettingsSchema.optional(),
-  // myrmidon(OPE-3789): TG-NOTIFY settings (digest/errors/inbound/escalations/
+  // myrmidon(TG-NOTIFY-D): TG-NOTIFY settings (digest/errors/inbound/escalations/
   // proactivity) changed from part A's routes; absent means every surface is
   // off (the 1.6.1 release criterion).
   telegramNotify: telegramNotifySettingsSchema.optional(),

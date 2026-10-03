@@ -1,4 +1,4 @@
-// myrmidon(OPE-3789-D): integration coverage for inbound from Telegram group
+// myrmidon(TG-NOTIFY-D): integration coverage for inbound from Telegram group
 // topics: a topic message becomes a task (no binding) or continues the bound
 // conversation, gated by the `telegramNotify.inbound` instance settings.
 // Helper functions (the fakes, thread/message builders, company/service
@@ -40,7 +40,7 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
-// myrmidon(OPE-3789): the settings writer under test (part D gate).
+// myrmidon(TG-NOTIFY-D): the settings writer under test (part D gate).
 import { mutateTelegramNotifySettings } from "../myrmidon/telegram-notify/settings.js";
 import { isTelegramTopicThread } from "../myrmidon/telegram-notify/topic-inbound.js";
 
@@ -192,7 +192,7 @@ class FakeChatSdkRuntime {
 }
 
 describeEmbeddedPostgres(
-  "Telegram group topic inbound becomes task work (OPE-3789 part D)",
+  "Telegram group topic inbound becomes task work (TG-NOTIFY part D)",
   () => {
     let db!: TestDb;
     let tempDb: Awaited<

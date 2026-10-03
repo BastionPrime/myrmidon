@@ -8,7 +8,7 @@ import type { ParallelHelpersSettings } from "../myrmidon-parallel-helpers.js";
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in instance settings
 import type { BrowserBridgeSettings } from "../myrmidon-browser-bridge.js";
 import type { SwarmClaimSettings } from "../myrmidon-swarm-claim.js";
-// myrmidon(OPE-3789): TG-NOTIFY settings document (part A routes / part D topic inbound).
+// myrmidon(TG-NOTIFY-D): TG-NOTIFY settings document (part A routes / part D topic inbound).
 import type { TelegramNotifySettings } from "../myrmidon-telegram-notify.js";
 
 export const DAILY_RETENTION_PRESETS = [3, 7, 14] as const;
@@ -88,7 +88,7 @@ export interface InstanceGeneralSettings {
    */
   swarmClaim?: SwarmClaimSettings;
   /**
-   * myrmidon(OPE-3789): TG-NOTIFY settings changed from part A's
+   * myrmidon(TG-NOTIFY-D): TG-NOTIFY settings changed from part A's
    * `GET/PATCH /api/myrmidon/telegram-notify` routes. Absent means every
    * surface is off; kept in sync with the validator of the same field.
    */
