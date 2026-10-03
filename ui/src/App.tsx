@@ -89,6 +89,7 @@ import { AccessHubPage } from "./components/myrmidon/access-hub/AccessHubPage";
 import { BrowsersSettingsPage } from "./components/myrmidon/browsers/BrowsersSettingsPage"; // myrmidon(BROWSER-CONSOLE)
 import { CloudsSettingsPage } from "./components/myrmidon/clouds/CloudsSettingsPage"; // myrmidon(CLOUD-CONNECTOR)
 import { StackScreen } from "./components/myrmidon/stack/StackScreen"; // myrmidon(SUC)
+import { AutonomyMatrixScreen } from "./components/myrmidon/autonomy/AutonomyMatrixContainer"; // myrmidon(1.6 AUTONOMY-MATRIX B)
 import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
@@ -207,6 +208,7 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
         <Route path="company/settings/access-hub" element={<AccessHubPage />} />
       </Route>
       <Route path="company/settings/browsers" element={<BrowsersSettingsPage />} /> {/* myrmidon(BROWSER-CONSOLE) */}
+      <Route path="company/settings/autonomy" element={<AutonomyMatrixScreen />} /> {/* myrmidon(1.6 AUTONOMY-MATRIX B) */}
       <Route path="company/settings/clouds" element={<CloudsSettingsPage />} /> {/* myrmidon(CLOUD-CONNECTOR) */}
       <Route path="company/settings/tools" element={<LegacyToolsSettingsRedirect />} />
       <Route path="company/settings/tools/:tab" element={<LegacyToolsSettingsRedirect />} />

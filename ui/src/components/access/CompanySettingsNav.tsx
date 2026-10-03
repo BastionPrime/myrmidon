@@ -21,6 +21,8 @@ const items = [
   { value: "instance-adapters", label: "Adapters", href: `${INSTANCE_SETTINGS_PATH_PREFIX}/adapters` },
   { value: "browsers", label: "Browsers", href: "/company/settings/browsers" },
   { value: "clouds", label: "Clouds", href: "/company/settings/clouds" }, // myrmidon(CLOUD-CONNECTOR)
+  // myrmidon(1.6 AUTONOMY-MATRIX B): role×action matrix screen
+  { value: "autonomy", label: "Autonomy", href: "/company/settings/autonomy" },
 ] as const;
 
 type CompanySettingsTab = (typeof items)[number]["value"];
@@ -107,6 +109,11 @@ export function getCompanySettingsTab(pathname: string): CompanySettingsTab {
   // myrmidon(CLOUD-CONNECTOR): the Clouds settings section
   if (pathname.includes("/company/settings/clouds")) {
     return "clouds";
+  }
+
+  // myrmidon(1.6 AUTONOMY-MATRIX B): the Autonomy matrix settings section
+  if (pathname.includes("/company/settings/autonomy")) {
+    return "autonomy";
   }
 
   return "general";
