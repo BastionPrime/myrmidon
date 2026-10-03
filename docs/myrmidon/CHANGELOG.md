@@ -8,6 +8,17 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
+## Unreleased
+
+### Telegram notification settings UI (TG-NOTIFY-SETTINGS part F)
+
+- The "Telegram notifications" panel on the System screen of the 2.0 UI: all
+  five sections of the telegramNotify settings are visible and editable
+  (digest, errors, owner messages, escalations, head-bot proactivity), every
+  section off by default, with the settings change log rendered from the
+  document the settings core serves. Saving sends one PATCH with only the
+  changed fields. Depends on the settings core (part A); while that is not
+  merged the UI is covered by tests against the mocked JSON contract.
 ## 1.6.1
 
 ### Custom castes, consumers (CUSTOM-CASTES B)

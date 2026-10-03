@@ -1,21 +1,372 @@
-// myrmidon(1.6-TG-PROACTIVITY-E): head-bot proactivity policy contract.
+// myrmidon(OPE-3789): the telegramNotify settings contract — one runtime-
+// changeable company-level document that says what the board sends to the
+// owner in Telegram: the daily digest, error notifications, inbound rules,
+// escalation routing and head-bot proactivity.
 //
-// Shared half of part E of the TG-NOTIFY-SETTINGS epic (1.6.1): the
-// `proactivity` settings area (mode + rarelyMaxPerDay) stored under
-// instance settings area `telegramNotify`, plus the same per-agent mode
-// override kept in agent metadata under the key `mode`.
+// This module is the shared half of the TG-NOTIFY-SETTINGS core (part A):
+// the server stores and serves the document, the board UI edits it, and both
+// sides read the same types and zod validators. It contains no I/O and no
+// database access on purpose, so the resolver stays unit-testable and the UI
+// can validate a PATCH payload before sending it. Parts B–E of the epic
+// consume `defaultTelegramNotifySettings()` and `parseTelegramNotifyDocument`
+// when they mock this contract in their tests, before the core merges.
 //
-// This module contains no I/O on purpose: the server resolves the effective
-// mode from the document + agent metadata, tests and consumers that cannot
-// reach the settings area yet (the area itself is merged by part A) can mock
-// the document. Types and zod validators live here so the server and the UI
-// read one contract.
+// Every enabled flag defaults to OFF. With the defaults the owner keeps
+// receiving only the replies to their own messages and the U2 decision cards
+// (the 1.6.1 release criterion): nothing else is sent to Telegram until the
+// board turns a section on.
 //
-// The default is the quiet mode: `only_on_owner_request` — with defaults the
-// owner receives only replies to their own messages and the U2 decision
-// cards; the head bot sends nothing on its own initiative.
+// The contract is fixed at this version. Later changes may only ADD optional
+// fields; existing field names are never renamed or repurposed.
 
 import { z } from "zod";
+
+/** The storage key inside `instance_settings.general` (company-keyed map). */
+export const TELEGRAM_NOTIFY_GENERAL_KEY = "myrmidonTelegramNotify";
+
+/** The activity-log action prefix every settings mutation is written under. */
+export const TELEGRAM_NOTIFY_ACTIVITY_SOURCE = "myrmidon.telegram_notify";
+
+/** How many changelog entries are kept in the document and returned by GET. */
+export const TELEGRAM_NOTIFY_CHANGELOG_LIMIT = 200;
+
+// ---------------------------------------------------------------------------
+// Enums (closed, additive-only by contract)
+// ---------------------------------------------------------------------------
+
+/** Which sections the digest may contain. */
+export const TELEGRAM_DIGEST_SECTIONS = ["done", "blocked", "needs_decision", "spend"] as const;
+
+/** Error severities the error gate understands. */
+export const TELEGRAM_ERROR_SEVERITIES = ["warn", "error", "fatal"] as const;
+
+/** Where an escalation goes: direct message, topic, or nowhere. */
+export const TELEGRAM_ESCALATION_CHANNELS = ["dm", "topic", "none"] as const;
+
+/** How proactive the head bot may be. */
+export const TELEGRAM_PROACTIVITY_MODES = ["only_on_owner_request", "rarely", "normal"] as const;
+
+export type TelegramDigestSection = (typeof TELEGRAM_DIGEST_SECTIONS)[number];
+export type TelegramErrorSeverity = (typeof TELEGRAM_ERROR_SEVERITIES)[number];
+export type TelegramEscalationChannel = (typeof TELEGRAM_ESCALATION_CHANNELS)[number];
+export type TelegramProactivityMode = (typeof TELEGRAM_PROACTIVITY_MODES)[number];
+
+// ---------------------------------------------------------------------------
+// Sections
+// ---------------------------------------------------------------------------
+
+/** The daily digest: what happened on the board, once a day, all sections. */
+export interface TelegramDigestSettings {
+  enabled: boolean;
+  /** Local time of day, "HH:MM" 24-hour. */
+  time: string;
+  chatId: string | null;
+  topicId: string | null;
+  sections: TelegramDigestSection[];
+}
+
+/** Error notifications: runtime and run errors above a severity floor. */
+export interface TelegramErrorsSettings {
+  enabled: boolean;
+  chatId: string | null;
+  topicId: string | null;
+  minSeverity: TelegramErrorSeverity;
+  /** Rate limit: at most this many error notifications per hour. */
+  maxPerHour: number;
+}
+
+/** Inbound owner messages: whether the bot reacts without an explicit mention. */
+export interface TelegramInboundSettings {
+  enabled: boolean;
+  requireMention: boolean;
+}
+
+/** Escalations: work stuck longer than `hours` reaches the owner. */
+export interface TelegramEscalationsSettings {
+  enabled: boolean;
+  hours: number;
+  channel: TelegramEscalationChannel;
+  chatId: string | null;
+  topicId: string | null;
+}
+
+/** Head-bot proactivity: whether the bot may write unprompted. */
+export interface TelegramProactivitySettings {
+  mode: TelegramProactivityMode;
+  /** Cap per day when mode is "rarely". */
+  rarelyMaxPerDay: number;
+}
+
+/** The settings document every company reads and edits. All fields always present. */
+export interface TelegramNotifySettings {
+  digest: TelegramDigestSettings;
+  errors: TelegramErrorsSettings;
+  inbound: TelegramInboundSettings;
+  escalations: TelegramEscalationsSettings;
+  proactivity: TelegramProactivitySettings;
+}
+
+// ---------------------------------------------------------------------------
+// Changelog
+// ---------------------------------------------------------------------------
+
+/** One recorded settings change: a single field path, its previous and next JSON value. */
+export interface TelegramNotifyChangeLogEntry {
+  at: string;
+  /** Who changed it: a user id or an agent id. */
+  actor: string;
+  /** The field path, e.g. "digest.enabled" or "errors.maxPerHour". */
+  field: string;
+  from: unknown;
+  to: unknown;
+}
+
+/** The stored document: the settings plus the bounded changelog. */
+export interface TelegramNotifyDocument {
+  version: 1;
+  settings: TelegramNotifySettings;
+  changelog: TelegramNotifyChangeLogEntry[];
+}
+
+// ---------------------------------------------------------------------------
+// Zod schemas
+// ---------------------------------------------------------------------------
+
+const chatIdSchema = z.string().min(1).max(200).nullable();
+const topicIdSchema = z.string().min(1).max(200).nullable();
+
+const timeSchema = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "time must be HH:MM in 24-hour form");
+
+export const telegramDigestSettingsSchema = z.object({
+  enabled: z.boolean(),
+  time: timeSchema,
+  chatId: chatIdSchema,
+  topicId: topicIdSchema,
+  sections: z.array(z.enum(TELEGRAM_DIGEST_SECTIONS)),
+}).strict();
+
+export const telegramErrorsSettingsSchema = z.object({
+  enabled: z.boolean(),
+  chatId: chatIdSchema,
+  topicId: topicIdSchema,
+  minSeverity: z.enum(TELEGRAM_ERROR_SEVERITIES),
+  maxPerHour: z.number().int().min(0).max(1000),
+}).strict();
+
+export const telegramInboundSettingsSchema = z.object({
+  enabled: z.boolean(),
+  requireMention: z.boolean(),
+}).strict();
+
+export const telegramEscalationsSettingsSchema = z.object({
+  enabled: z.boolean(),
+  hours: z.number().int().min(1).max(24 * 30),
+  channel: z.enum(TELEGRAM_ESCALATION_CHANNELS),
+  chatId: chatIdSchema,
+  topicId: topicIdSchema,
+}).strict();
+
+export const telegramProactivitySettingsSchema = z.object({
+  mode: z.enum(TELEGRAM_PROACTIVITY_MODES),
+  rarelyMaxPerDay: z.number().int().min(0).max(1000),
+}).strict();
+
+export const telegramNotifySettingsSchema = z.object({
+  digest: telegramDigestSettingsSchema,
+  errors: telegramErrorsSettingsSchema,
+  inbound: telegramInboundSettingsSchema,
+  escalations: telegramEscalationsSettingsSchema,
+  proactivity: telegramProactivitySettingsSchema,
+});
+
+export const telegramNotifyChangeLogEntrySchema = z.object({
+  at: z.string().min(1),
+  actor: z.string().min(1).max(200),
+  field: z.string().min(1).max(500),
+  from: z.unknown(),
+  to: z.unknown(),
+});
+
+/**
+ * The PATCH body: a partial update of the settings sections. Each section is
+ * itself partial (send only the fields you change) and every section key is
+ * optional (send only the sections you change), but at least one section must
+ * be present.
+ */
+export const telegramNotifySettingsPatchSchema = z
+  .object({
+    digest: z.optional(telegramDigestSettingsSchema.partial()),
+    errors: z.optional(telegramErrorsSettingsSchema.partial()),
+    inbound: z.optional(telegramInboundSettingsSchema.partial()),
+    escalations: z.optional(telegramEscalationsSettingsSchema.partial()),
+    proactivity: z.optional(telegramProactivitySettingsSchema.partial()),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.digest !== undefined ||
+      value.errors !== undefined ||
+      value.inbound !== undefined ||
+      value.escalations !== undefined ||
+      value.proactivity !== undefined,
+    { message: "at least one section is required" },
+  );
+
+export type TelegramNotifySettingsPatch = z.infer<typeof telegramNotifySettingsPatchSchema>;
+
+// ---------------------------------------------------------------------------
+// Defaults and parsing (tolerant: a bad stored value falls back to the default)
+// ---------------------------------------------------------------------------
+
+export function defaultTelegramNotifySettings(): TelegramNotifySettings {
+  return {
+    digest: {
+      enabled: false,
+      time: "09:00",
+      chatId: null,
+      topicId: null,
+      sections: [...TELEGRAM_DIGEST_SECTIONS],
+    },
+    errors: {
+      enabled: false,
+      chatId: null,
+      topicId: null,
+      minSeverity: "error",
+      maxPerHour: 10,
+    },
+    inbound: {
+      enabled: false,
+      requireMention: true,
+    },
+    escalations: {
+      enabled: false,
+      hours: 24,
+      channel: "none",
+      chatId: null,
+      topicId: null,
+    },
+    proactivity: {
+      mode: "only_on_owner_request",
+      rarelyMaxPerDay: 3,
+    },
+  };
+}
+
+/** The empty document: defaults plus an empty changelog. */
+export function emptyTelegramNotifyDocument(): TelegramNotifyDocument {
+  return { version: 1, settings: defaultTelegramNotifySettings(), changelog: [] };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function bool(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function str(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function int(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    return fallback;
+  }
+  return value;
+}
+
+function enumValue<T extends string>(value: unknown, options: readonly T[], fallback: T): T {
+  return typeof value === "string" && (options as readonly string[]).includes(value)
+    ? (value as T)
+    : fallback;
+}
+
+function digestSections(value: unknown): TelegramDigestSection[] {
+  const fallback = [...TELEGRAM_DIGEST_SECTIONS];
+  if (!Array.isArray(value)) return fallback;
+  const parsed = value.filter(
+    (entry): entry is TelegramDigestSection =>
+      typeof entry === "string" && (TELEGRAM_DIGEST_SECTIONS as readonly string[]).includes(entry),
+  );
+  return parsed.length > 0 ? parsed : fallback;
+}
+
+function digestTime(value: unknown): string {
+  return typeof value === "string" && timeSchema.safeParse(value).success ? value : "09:00";
+}
+
+/**
+ * Parse a stored document into the full contract: every field of every section
+ * is always present after this call — an absent or invalid stored value falls
+ * back to the default (the repo convention for stored settings), so a corrupt
+ * row can never disable a section or produce a partial answer.
+ */
+export function parseTelegramNotifyDocument(raw: unknown): TelegramNotifyDocument {
+  if (!isRecord(raw)) return emptyTelegramNotifyDocument();
+  const defaults = defaultTelegramNotifySettings();
+  const d = isRecord(raw.digest) ? raw.digest : {};
+  const e = isRecord(raw.errors) ? raw.errors : {};
+  const i = isRecord(raw.inbound) ? raw.inbound : {};
+  const s = isRecord(raw.escalations) ? raw.escalations : {};
+  const p = isRecord(raw.proactivity) ? raw.proactivity : {};
+  const settings: TelegramNotifySettings = {
+    digest: {
+      enabled: bool(d.enabled, defaults.digest.enabled),
+      time: digestTime(d.time),
+      chatId: str(d.chatId),
+      topicId: str(d.topicId),
+      sections: digestSections(d.sections),
+    },
+    errors: {
+      enabled: bool(e.enabled, defaults.errors.enabled),
+      chatId: str(e.chatId),
+      topicId: str(e.topicId),
+      minSeverity: enumValue(e.minSeverity, TELEGRAM_ERROR_SEVERITIES, defaults.errors.minSeverity),
+      maxPerHour: int(e.maxPerHour, defaults.errors.maxPerHour, 0, 1000),
+    },
+    inbound: {
+      enabled: bool(i.enabled, defaults.inbound.enabled),
+      requireMention: bool(i.requireMention, defaults.inbound.requireMention),
+    },
+    escalations: {
+      enabled: bool(s.enabled, defaults.escalations.enabled),
+      hours: int(s.hours, defaults.escalations.hours, 1, 24 * 30),
+      channel: enumValue(s.channel, TELEGRAM_ESCALATION_CHANNELS, defaults.escalations.channel),
+      chatId: str(s.chatId),
+      topicId: str(s.topicId),
+    },
+    proactivity: {
+      mode: enumValue(p.mode, TELEGRAM_PROACTIVITY_MODES, defaults.proactivity.mode),
+      rarelyMaxPerDay: int(p.rarelyMaxPerDay, defaults.proactivity.rarelyMaxPerDay, 0, 1000),
+    },
+  };
+  const changelog = Array.isArray(raw.changelog)
+    ? raw.changelog.flatMap((entry): TelegramNotifyChangeLogEntry[] => {
+        if (!isRecord(entry)) return [];
+        const at = typeof entry.at === "string" ? entry.at : "";
+        const actor = str(entry.actor);
+        const field = str(entry.field);
+        if (!at || !actor || !field) return [];
+        return [{ at, actor, field, from: entry.from, to: entry.to }];
+      })
+    : [];
+  return { version: 1, settings, changelog };
+}
+
+/** Keep our key across vendor writes of `instance_settings.general`. */
+export function preserveTelegramNotifyGeneralKey(storedGeneral: unknown): Record<string, unknown> {
+  if (typeof storedGeneral !== "object" || storedGeneral === null) return {};
+  const value = (storedGeneral as Record<string, unknown>)[TELEGRAM_NOTIFY_GENERAL_KEY];
+  return value === undefined ? {} : { [TELEGRAM_NOTIFY_GENERAL_KEY]: value };
+}
+
+// ---------------------------------------------------------------------------
+// myrmidon(1.6-TG-PROACTIVITY-E): proactivity policy contract (merged from main).
+// The settings document / patch / defaults above are the part-A contract; the
+// names below are the part-E surface the server proactivity policy imports.
 
 /** Proactivity modes of the head bot. */
 export const TELEGRAM_NOTIFY_PROACTIVITY_MODES = [
@@ -53,110 +404,6 @@ export const telegramNotifyProactivitySchema = z.object({
 
 export type TelegramNotifyProactivity = z.infer<
   typeof telegramNotifyProactivitySchema
->;
-
-/** The whole `telegramNotify` settings document (all areas, defaults off). */
-export const telegramNotifySettingsSchema = z.object({
-  digest: z.object({
-    enabled: z.boolean(),
-    time: z.string(),
-    chatId: z.string().nullable(),
-    topicId: z.string().nullable(),
-    sections: z.array(z.string()),
-  }),
-  errors: z.object({
-    enabled: z.boolean(),
-    chatId: z.string().nullable(),
-    topicId: z.string().nullable(),
-    minSeverity: z.string(),
-    maxPerHour: z.number().int().min(1),
-  }),
-  inbound: z.object({
-    enabled: z.boolean(),
-    requireMention: z.boolean(),
-  }),
-  escalations: z.object({
-    enabled: z.boolean(),
-    hours: z.number().int().min(1),
-    channel: z.enum(["dm", "topic", "none"]),
-    chatId: z.string().nullable(),
-    topicId: z.string().nullable(),
-  }),
-  proactivity: telegramNotifyProactivitySchema,
-});
-
-export type TelegramNotifySettings = z.infer<typeof telegramNotifySettingsSchema>;
-
-/** Defaults of the whole document: every new setting is OFF/quiet. */
-export function defaultTelegramNotifySettings(): TelegramNotifySettings {
-  return {
-    digest: {
-      enabled: false,
-      time: "09:00",
-      chatId: null,
-      topicId: null,
-      sections: ["done", "blocked", "needs_decision", "spend"],
-    },
-    errors: {
-      enabled: false,
-      chatId: null,
-      topicId: null,
-      minSeverity: "error",
-      maxPerHour: 10,
-    },
-    inbound: { enabled: false, requireMention: true },
-    escalations: {
-      enabled: false,
-      hours: 24,
-      channel: "none",
-      chatId: null,
-      topicId: null,
-    },
-    proactivity: {
-      mode: DEFAULT_TELEGRAM_NOTIFY_PROACTIVITY_MODE,
-      rarelyMaxPerDay:
-        DEFAULT_TELEGRAM_NOTIFY_PROACTIVITY_RARELY_MAX_PER_DAY,
-    },
-  };
-}
-
-/**
- * One change-log entry of a settings patch (point 6 of the epic: every
- * change writes an entry; field is a path like `proactivity.mode`).
- */
-export interface TelegramNotifyChangelogEntry {
-  at: string;
-  actor: string;
-  field: string;
-  from: unknown;
-  to: unknown;
-}
-
-/** PATCH body: a partial update of the same fields. */
-export const telegramNotifySettingsPatchSchema = z
-  .object({
-    digest: telegramNotifySettingsSchema.shape.digest.partial().optional(),
-    errors: telegramNotifySettingsSchema.shape.errors.partial().optional(),
-    inbound: telegramNotifySettingsSchema.shape.inbound.partial().optional(),
-    escalations: telegramNotifySettingsSchema.shape.escalations.partial().optional(),
-    // An area may arrive whole or partial; an unknown key inside an area is
-    // still rejected (strict on the inner objects).
-    proactivity: z
-      .object({
-        mode: z.enum(TELEGRAM_NOTIFY_PROACTIVITY_MODES).optional(),
-        rarelyMaxPerDay: z
-          .number()
-          .int()
-          .min(1)
-          .max(MAX_TELEGRAM_NOTIFY_PROACTIVITY_RARELY_PER_DAY)
-          .optional(),
-      })
-      .strict(),
-  })
-  .strict();
-
-export type TelegramNotifySettingsPatch = z.infer<
-  typeof telegramNotifySettingsPatchSchema
 >;
 
 // ---------------------------------------------------------------------------
