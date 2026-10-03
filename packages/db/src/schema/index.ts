@@ -229,3 +229,10 @@ export {
 } from "./myrmidon_wiki_regulations.js";
 // myrmidon(1.6-EVALS): reference tasks and judge runs for the evals module.
 export { evalReferenceTasks, evalRuns } from "./myrmidon_evals.js";
+// myrmidon(1.6.1 MODEL-PROVIDERS): company model-provider registry and model cache.
+export {
+  modelProviders,
+  modelProviderModels,
+  MODEL_PROVIDER_TYPES,
+  type ModelProviderType,
+} from "./model_providers.js";

@@ -674,3 +674,10 @@ outside: an operator turns it on together with `MYRMIDON_FORAGING_KEY_SECRET` wh
 sources need a token. Findings are recorded `unverified` until the skill lifecycle accepts
 them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand.
 
+
+## 1.6.1 — model providers (MODEL-PROVIDERS A)
+
+No `MYRMIDON_*` settings: the module reads the provider registry from the database
+(`model_providers`) and the provider credential from the company secret store by the name
+stored on the row. Default base URLs per provider type are constants in
+`packages/shared/src/myrmidon-model-providers.ts`, not settings.
