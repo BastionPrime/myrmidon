@@ -95,6 +95,8 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/wiki-regulations.md](guides/wiki-regulations.md) | Регламенты компании в вики (1.6 WIKI-CORTEX): жизненный цикл «черновик → одобрено», ревизии и откат, роли и ключ `*`, доставка `REGULATIONS.md` в профиль бота, агент-википедист |
 | [guides/agent-board-admin.md](guides/agent-board-admin.md) | Администратор доски из агентов (1.6.1 ADMIN-AGENT C): переключатель «Board administrator» на вкладке Permissions карточки агента, кто его видит, страница Members с бейджем админа-агента, fail-closed чтение флага |
 
+| [media-tools.md](media-tools.md) | Общие медиа- и офисные инструменты для контейнерных ботов: сервис media-mcp, хранилище и квоты, инструменты (ffmpeg, офис, OCR, `dwg_convert`), развёртывание и границы изоляции |
+
 ## Сборка и запуск
 
 Пока всё как у вендора: [doc/DEVELOPING.md](../../doc/DEVELOPING.md),
