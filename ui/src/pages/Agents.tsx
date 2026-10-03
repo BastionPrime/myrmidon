@@ -37,6 +37,8 @@ import {
 import { usePublishSharedQueryData, useSharedPollingQuery } from "../hooks/useSharedPolling";
 
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
+import { AgentWipBadge } from "../components/myrmidon/AgentWipBadge"; // myrmidon(1.6.1 WIP-LIMIT B)
+import { wipLimitApi, wipLimitStatusQueryKey, type WipLimitStatusEntry } from "../components/myrmidon/wip-limit/wipLimitApi"; // myrmidon(1.6.1 WIP-LIMIT B)
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 
@@ -284,6 +286,22 @@ export function Agents({ initialView = "list" }: { initialView?: AgentsView } = 
   const membershipsQuery = useResourceMemberships(selectedCompanyId);
   const membershipMutation = useResourceMembershipMutation(selectedCompanyId);
 
+  // myrmidon(1.6.1 WIP-LIMIT B): per-agent live WIP (in progress + in review)
+  // with its resolved limit, for the badge on each agent row. Read-only here;
+  // the limit is edited on the WIP limit settings screen. A failing or empty
+  // status simply shows no badge — the roster stays usable without part A.
+  const { data: wipStatus } = useQuery({
+    queryKey: wipLimitStatusQueryKey(selectedCompanyId ?? ""),
+    queryFn: () => wipLimitApi.getStatus(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+    retry: false,
+  });
+  const wipStatusByAgent = useMemo(() => {
+    const map = new Map<string, WipLimitStatusEntry>();
+    for (const entry of wipStatus ?? []) map.set(entry.agentId, entry);
+    return map;
+  }, [wipStatus]);
+
   // Map agentId -> first live run + live run count
   const liveRunByAgent = useMemo(() => {
     const map = new Map<string, { runId: string; liveCount: number }>();
@@ -428,6 +446,7 @@ export function Agents({ initialView = "list" }: { initialView?: AgentsView } = 
           <div className="flex items-center gap-3">
             {agentChat.enabled && <Button variant="ghost" size="sm" onClick={event => { event.preventDefault(); event.stopPropagation(); navigate(`/chats/${agentRouteRef(agent)}`); }}>Chat</Button>}
             <div className="hidden sm:flex items-center gap-3">
+              <AgentWipBadge status={wipStatusByAgent.get(agent.id)} /> {/* myrmidon(1.6.1 WIP-LIMIT B) */}
               {liveRunByAgent.has(agent.id) && (
                 <LiveRunIndicator
                   agentRef={agentRouteRef(agent)}
@@ -597,6 +616,7 @@ function OrgTreeNode({
   membershipMutation,
   builtInByAgentId,
   onConfigureBuiltIn,
+  wipStatusByAgent,
 }: {
   node: OrgNode;
   depth: number;
@@ -610,6 +630,7 @@ function OrgTreeNode({
   membershipMutation: ReturnType<typeof useResourceMembershipMutation>;
   builtInByAgentId: Map<string, BuiltInAgentState>;
   onConfigureBuiltIn: (state: BuiltInAgentState) => void;
+  wipStatusByAgent: Map<string, WipLimitStatusEntry>;
 }) {
   const agent = agentMap.get(node.id);
   const builtInState = builtInByAgentId.get(node.id);
@@ -680,6 +701,7 @@ function OrgTreeNode({
             )}
           </span>
           <div className="hidden sm:flex items-center gap-3">
+            <AgentWipBadge status={wipStatusByAgent.get(node.id)} /> {/* myrmidon(1.6.1 WIP-LIMIT B) */}
             {liveRunByAgent.has(node.id) && (
               <LiveRunIndicator
                 agentRef={agent ? agentRouteRef(agent) : node.id}
@@ -755,6 +777,7 @@ function OrgTreeNode({
               membershipMutation={membershipMutation}
               builtInByAgentId={builtInByAgentId}
               onConfigureBuiltIn={onConfigureBuiltIn}
+              wipStatusByAgent={wipStatusByAgent}
             />
           ))}
         </div>
