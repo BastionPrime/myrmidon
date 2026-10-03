@@ -21,6 +21,16 @@ export {
   STALE_BLOCK_INTERVAL_SEC_ENV,
   type StaleBlockSettings,
 } from "./settings.js";
+export {
+  readStaleBlockSignals,
+  recordStaleBlockSignal,
+  resetStaleBlockSignals,
+  staleBlockSignalDedupKey,
+  staleBlockSignalWhyNow,
+  type StaleBlockSignal,
+  DEFAULT_STALE_BLOCK_SIGNAL_TTL_MS,
+  STALE_BLOCK_SIGNAL_TTL_ENV,
+} from "./attention.js";
 
 /**
  * Builds the stale-block pass the scheduler tick calls. The event/gate
@@ -39,6 +49,12 @@ export function createStaleBlockScheduler(input: {
     db: input.db,
     isEventStillSet: input.isEventStillSet ?? (async () => true),
     isUnderMaintenance: isInstanceUnderMaintenance,
+    logActivity: async (entry) => {
+      // Loaded lazily with the service layer, for the same partial-mock
+      // startup-graph reason as the issue service import.
+      const { logActivity } = await import("../../services/activity-log.js");
+      await logActivity(input.db, entry);
+    },
     env: input.env,
     now: input.now,
   });

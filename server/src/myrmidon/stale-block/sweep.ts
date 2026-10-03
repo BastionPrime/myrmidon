@@ -33,6 +33,7 @@ import {
   type StaleBlockReasonDeadWhy,
 } from "./policy.js";
 import { readStaleBlockSettings, type StaleBlockSettings } from "./settings.js";
+import { recordStaleBlockSignal, type StaleBlockSignal } from "./attention.js";
 
 export const STALE_BLOCK_SWEEP_PAGE_SIZE = 50;
 export const STALE_BLOCK_ACTIVITY_ACTOR = "stale_block_sweep";
@@ -247,6 +248,7 @@ export function createStaleBlockSweep(deps: StaleBlockSweepDeps) {
           id: issues.id,
           companyId: issues.companyId,
           identifier: issues.identifier,
+          title: issues.title,
           status: issues.status,
           unblockDescriptor: issues.unblockDescriptor,
         })
@@ -311,6 +313,17 @@ export function createStaleBlockSweep(deps: StaleBlockSweepDeps) {
     if (!done) return false;
     for (const publication of publications) publishActivity(publication);
     await services.executeIssuePostCommitActions(deps.db, actions);
+    // myrmidon(STALE-BLOCK): the lead/operator signal — one attention-feed card
+    // per lifted block, read on the fly from the signal registry (no store).
+    const signal: StaleBlockSignal = {
+      issueId: row.id,
+      companyId: row.companyId,
+      identifier: row.identifier,
+      title: row.title,
+      reasonTexts: dead.map((reason) => describeStaleBlockReason(reason.why)),
+      liftedAt: at.toISOString(),
+    };
+    recordStaleBlockSignal(signal, at);
     return true;
   }
 

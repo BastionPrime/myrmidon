@@ -18,6 +18,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "../../__tests__/helpers/embedded-postgres.js";
 import { createStaleBlockSweep, type StaleBlockSweepDeps } from "./sweep.js";
+import { readStaleBlockSignals, resetStaleBlockSignals } from "./attention.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -25,6 +26,10 @@ const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : 
 const NOW = new Date("2026-10-03T12:00:00.000Z");
 
 describeEmbeddedPostgres("stale block sweep", () => {
+  // myrmidon(STALE-BLOCK): the unblock path goes through the full issue update
+  // service with embedded PostgreSQL; under a loaded CI box 15 s is not
+  // enough, so this suite uses the same headroom as run-stall's.
+  vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
   let db!: ReturnType<typeof createDb>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
@@ -34,6 +39,7 @@ describeEmbeddedPostgres("stale block sweep", () => {
   }, 60_000);
 
   afterEach(async () => {
+    resetStaleBlockSignals();
     await db.delete(issueComments);
     await db.delete(issueRelations);
     await db.delete(issues);
@@ -309,6 +315,20 @@ describeEmbeddedPostgres("stale block sweep", () => {
       action: "myrmidon.stale_block.unblocked",
       entityType: "issue",
       entityId: seeded.issueId,
+    });
+  });
+
+  it("records the operator signal for the attention feed after an unblock", async () => {
+    const seeded = await seed({ blockerStatus: "done", withRelation: true });
+    const { sweep } = sweepWith();
+    await sweep.sweep();
+    const signals = readStaleBlockSignals(seeded.companyId, NOW);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toMatchObject({
+      issueId: seeded.issueId,
+      identifier: expect.any(String),
+      reasonTexts: ["the blocking task is done"],
+      liftedAt: NOW.toISOString(),
     });
   });
 
