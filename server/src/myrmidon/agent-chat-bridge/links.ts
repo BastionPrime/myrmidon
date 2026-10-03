@@ -9,8 +9,8 @@
  * other provider, and the board comment itself, keep the original text.
  */
 
-import { and, eq, inArray } from "drizzle-orm";
-import { chatEndpoints, type Db } from "@paperclipai/db";
+import { and, eq, inArray, ne } from "drizzle-orm";
+import { agents, chatEndpoints, type Db } from "@paperclipai/db";
 import { sanitizeExternalChatUrl } from "../../services/chat-publication-projection.js";
 
 /** Board routes a relative link or bare path may point at (`ui/src/App.tsx`). */
@@ -154,4 +154,56 @@ export async function absolutizedTextByTelegramEndpoint(
   const publicBaseUrl = resolveBoardPublicBaseUrl();
   const absolutized = absolutizeBoardLinks(text, publicBaseUrl);
   return new Map([...telegramIds].map((id) => [id, absolutized]));
+}
+
+/**
+ * myrmidon(X9b): the `[<displayName>] ` reply prefix for each of
+ * `endpointIds` whose endpoint's assigned agent is NOT the conversation's
+ * own `conversationAgentId` — i.e. the reply of an @<alias>-addressed agent
+ * coming back into a chat whose bot belongs to another agent. The name comes
+ * from `agents.name` (the same display-name source the vendor's milestones
+ * use). Endpoints whose assigned agent IS the conversation agent, and every
+ * non-Telegram endpoint, are left out of the map: a missing entry means "no
+ * prefix", which is exactly the pre-X9b behavior. The caller composes the
+ * prefix with X8g's absolutized text so both transformations apply.
+ */
+export async function addressedReplyPrefixByTelegramEndpoint(
+  dbOrTx: Db,
+  input: {
+    companyId: string;
+    /** The conversation issue's own agent (issues.conversation_agent_id). */
+    conversationAgentId: string | null;
+    endpointIds: readonly string[];
+  },
+): Promise<ReadonlyMap<string, string>> {
+  if (!input.conversationAgentId) return new Map();
+  const unique = [...new Set(input.endpointIds)];
+  if (!unique.length) return new Map();
+  // The prefix names the CONVERSATION's agent (the addressed addressee), so
+  // it is resolved once here; it applies only on endpoints whose assigned
+  // agent differs from it (the endpoint-assigned agent's own replies are the
+  // chat's own voice and stay unprefixed) and only on Telegram endpoints.
+  const [conversationAgent] = await dbOrTx
+    .select({ name: agents.name })
+    .from(agents)
+    .where(
+      and(
+        eq(agents.companyId, input.companyId),
+        eq(agents.id, input.conversationAgentId),
+      ),
+    );
+  if (!conversationAgent?.name) return new Map();
+  const rows = await dbOrTx
+    .select({ endpointId: chatEndpoints.id })
+    .from(chatEndpoints)
+    .where(
+      and(
+        eq(chatEndpoints.companyId, input.companyId),
+        eq(chatEndpoints.provider, "telegram"),
+        inArray(chatEndpoints.id, unique),
+        ne(chatEndpoints.assignedAgentId, input.conversationAgentId),
+      ),
+    );
+  const prefix = `[${conversationAgent.name}] `;
+  return new Map(rows.map((row: { endpointId: string }) => [row.endpointId, prefix]));
 }

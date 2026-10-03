@@ -71,6 +71,14 @@ import { readTracingHealthAttentionSignal } from "../myrmidon/tracing-health/att
 // myrmidon(BOT-RUNTIME-TUNING D): the model fallback share raises one card per agent
 import { readModelFallbackSignals } from "../myrmidon/litellm-fallback-signal/attention.js";
 
+// myrmidon(STALE-BLOCK): the lifted-block operator signal registry.
+import {
+  readStaleBlockSignals,
+  staleBlockSignalDedupKey,
+  staleBlockSignalSeverity,
+  staleBlockSignalWhyNow,
+} from "../myrmidon/stale-block/attention.js";
+
 /**
  * myrmidon(TRACING-HEALTH): a stable UUID for the synthetic "LLM tracing"
  * subject. The attention enrichment joins subject ids against uuid columns
@@ -102,6 +110,8 @@ const ATTENTION_SOURCE_KINDS: AttentionSourceKind[] = [
   "agent_error_alert",
   "stack_update",
   "model_fallback_alert",
+  // myrmidon(STALE-BLOCK): one card per block the watchdog lifted.
+  "stale_block",
 ];
 
 const SEVERITY_RANK: Record<AttentionSeverity, number> = {
@@ -124,7 +134,8 @@ const SOURCE_RANK: Record<AttentionSourceKind, number> = {
   productivity_review: 9,
   join_request: 10,
   stack_update: 11,
-  model_fallback_alert: 12,
+  stale_block: 12,
+  model_fallback_alert: 13,
 };
 
 const PENDING_INTERACTION_STATUSES = ["pending"] as const;
@@ -1941,6 +1952,50 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           detail: {
             kind: "generic",
             summaryExcerpt: card.summaryExcerpt,
+            images: [],
+          },
+        }));
+      }
+
+      // myrmidon(STALE-BLOCK): one card per block the stale-block watchdog
+      // lifted. The sweep records the signal into a process-level registry
+      // (myrmidon/stale-block/attention.ts) — the feed computes the items on
+      // the fly, no notification store. Dedup is stable per task and lift;
+      // the card disappears when the TTL expires or the operator dismisses.
+      for (const signal of readStaleBlockSignals(companyId)) {
+        add(createItem({
+          companyId,
+          sourceKind: "stale_block",
+          subject: {
+            kind: "issue",
+            id: signal.issueId,
+            companyId,
+            title: signal.title ?? "Task",
+            identifier: signal.identifier,
+            status: "in_progress",
+            href: signal.identifier ? `/${prefix}/issues/${signal.identifier}` : null,
+            metadata: {
+              liftedAt: signal.liftedAt,
+              reasonTexts: signal.reasonTexts,
+            },
+          },
+          whyNow: staleBlockSignalWhyNow(signal),
+          decisionVerbs: decisionVerbs(
+            { id: "inspect", label: "Inspect", description: "Open the task and check the unblock." },
+            { id: "dismiss", label: "Dismiss", description: "Dismiss this notice." },
+          ),
+          inlineResolvable: true,
+          entryRule: "the stale-block watchdog lifted the task's dead block",
+          exitRule: "The TTL expires or the row is dismissed.",
+          dedupKey: staleBlockSignalDedupKey(signal),
+          severity: staleBlockSignalSeverity(),
+          activityAt: signal.liftedAt,
+          createdAt: signal.liftedAt,
+          updatedAt: signal.liftedAt,
+          relatedIssue: null,
+          detail: {
+            kind: "generic",
+            summaryExcerpt: excerpt(signal.reasonTexts.join("; ")),
             images: [],
           },
         }));

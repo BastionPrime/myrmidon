@@ -24,6 +24,9 @@ export const ATTENTION_SOURCE_KINDS = [
   // myrmidon(BOT-RUNTIME-TUNING D): a bot's gateway calls were served by a
   // model outside its card more than the configured share of the window.
   "model_fallback_alert",
+  // myrmidon(STALE-BLOCK): the watchdog lifted a dead block off a task; the
+  // lead and operator must see the routing change the machine made.
+  "stale_block",
 ] as const;
 
 export type AttentionSourceKind = (typeof ATTENTION_SOURCE_KINDS)[number];
