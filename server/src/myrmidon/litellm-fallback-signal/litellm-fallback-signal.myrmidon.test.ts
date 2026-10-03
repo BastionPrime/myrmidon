@@ -247,8 +247,11 @@ describe("myrmidon(BOT-RUNTIME-TUNING D) sweep", () => {
 
   it("dedups by agent: two agents, one signal each", async () => {
     const entries = [
+      // agent A: 10 of 25 calls off-card (40%) — trips
       ...Array.from({ length: 15 }, (_, i) => entry({ requestId: `req-a-${i}`, model: "model-primary" })),
       ...Array.from({ length: 10 }, (_, i) => entry({ requestId: `req-a-o-${i}`, model: "model-swapped" })),
+      // agent B: 10 of 35 calls off-card (29%) — trips
+      ...Array.from({ length: 25 }, (_, i) => entry({ requestId: `req-b-${i}`, apiKey: gatewayKeyHash(KEY_B), model: "model-primary" })),
       ...Array.from({ length: 10 }, (_, i) => entry({ requestId: `req-b-o-${i}`, apiKey: gatewayKeyHash(KEY_B), model: "model-swapped" })),
     ];
     const result = await sweepModelFallbackSignals(deps(entries), SETTINGS);
