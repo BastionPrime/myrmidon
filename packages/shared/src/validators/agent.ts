@@ -2,7 +2,6 @@ import { aiConnectionBindingSchema } from "../ai-connections.js";
 import { z } from "zod";
 import {
   AGENT_ICON_NAMES,
-  AGENT_ROLES,
   AGENT_STATUSES,
   INBOX_MINE_ISSUE_STATUS_FILTER,
 } from "../constants.js";
@@ -77,7 +76,20 @@ export const agentRuntimeConfigSchema = z.object({
 
 export const createAgentSchema = z.object({
   name: z.string().min(1),
-  role: z.enum(AGENT_ROLES).optional().default("general"),
+  // myrmidon(1.6.1 CUSTOM-CASTES B): the role is a caste key from the
+  // company caste directory, not the fixed 12-role enum. The format is the
+  // stable key contract (latin letters, digits, hyphen, 1–60); whether the
+  // key exists in the company's directory is a server-side check in the
+  // agent service (create/update), so a shared validator stays
+  // company-agnostic.
+  role: z
+    .string()
+    .trim()
+    .regex(/^[a-zA-Z0-9-]+$/, "role must be a caste key: latin letters, digits, hyphens")
+    .min(1)
+    .max(60)
+    .optional()
+    .default("general"),
   title: z.string().optional().nullable(),
   icon: z.enum(AGENT_ICON_NAMES).optional().nullable(),
   reportsTo: z.string().guid().optional().nullable(),

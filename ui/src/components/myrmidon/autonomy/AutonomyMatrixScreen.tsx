@@ -37,7 +37,7 @@ import {
   type AutonomyVerdict,
   type AutonomySnapshot as AutonomyView,
 } from "@paperclipai/shared";
-import { AGENT_ROLES, AGENT_ROLE_LABELS, type AgentRole } from "@paperclipai/shared";
+import { AGENT_ROLES, AGENT_ROLE_LABELS } from "@paperclipai/shared";
 
 function formatTime(value: string): string {
   const date = new Date(value);
@@ -59,7 +59,7 @@ function verdictClass(verdict: AutonomyVerdict): string {
 
 /** A role label, robust to a role stored in the matrix that the catalog lacks. */
 export function roleLabel(role: string): string {
-  return AGENT_ROLE_LABELS[role as AgentRole] ?? role;
+  return AGENT_ROLE_LABELS[role as keyof typeof AGENT_ROLE_LABELS] ?? role;
 }
 
 export interface RegulationDraft {
