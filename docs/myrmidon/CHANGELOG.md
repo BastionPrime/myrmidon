@@ -58,6 +58,25 @@ version file to edit. Base Paperclip version is in the image label
   rollback) is exposed as `POST …/evals/verdict`; the merged lifecycle module
   does not wire it to the board yet. Guide: [guides/reference-task-evals.md](guides/reference-task-evals.md).
 
+### Stack update screen (STACK-UPDATES part C)
+
+- The «Stack» screen in the panel (Company → Stack, route `/stack`): every
+  component of the stack registry with our version/commit/digest (or an honest
+  `unknown` with the reason), where it runs, the latest upstream release, the
+  release lag, the notable security/breaking lines of the release notes as a
+  collapsible excerpt and the patch-closed verdict per carried delta; lagging
+  components sort first, with a name filter. *Refresh data* and *Check
+  releases* run the instance-admin `POST /api/myrmidon/stack/refresh` /
+  `POST /api/myrmidon/stack/check` from the screen — a failure, including the
+  503 of a broken probe, is shown in place without losing the table. The
+  *Schedule update* button on a lagging row opens a dialog with a default plan
+  (versions, our patches, notable lines, canary then production, rollback) and
+  creates an unassigned backlog draft task through the existing issue-creation
+  route — nothing is deployed from the screen. The release check itself
+  (part B: the schedule, the excerpt rules and the patch-closed verdict) and
+  the registry API are documented in the same guide. Guide:
+  [guides/stack-registry.md](guides/stack-registry.md).
+
 ## 1.5.0
 
 ### Tracing health (TRACING-HEALTH)
