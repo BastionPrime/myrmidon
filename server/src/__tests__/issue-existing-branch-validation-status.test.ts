@@ -15,7 +15,9 @@ import { validateIssueMutationBody } from "../middleware/validate.js";
 const EXISTING_BRANCH_PATH = ["executionWorkspaceSettings", "workspaceStrategy", "existingBranch"];
 
 // Mirrors the route-level schema in routes/issues.ts.
-const updateIssueRouteSchema = updateIssueSchema.extend({
+// myrmidon(STALE-BLOCK): updateIssueSchema now carries a superRefine, so zod
+// requires .safeExtend() on refined objects (same change as routes/issues.ts).
+const updateIssueRouteSchema = updateIssueSchema.safeExtend({
   interrupt: z.boolean().optional(),
 });
 
