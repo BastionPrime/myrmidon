@@ -639,6 +639,20 @@ The flow end to end — how the owner asks from the portal or the Telegram DM,
 what the proposal and the approval card look like, and what acceptance
 creates — is the operator guide
 [guides/cto-chat-planner.md](guides/cto-chat-planner.md).
+## 1.6 — SWARM-CLAIM supervisor and pilot report (part B)
+
+Settings of `server/src/myrmidon/swarm-claim-supervisor/` — the lead's supervisor
+view over the per-role claim queues, the rebalance action and the pilot report
+of the SWARM-CLAIM epic, part B (`GET /api/myrmidon/companies/:companyId/swarm-claim/supervisor/overview`,
+`POST .../supervisor/release-lease`, `GET .../pilot-report`). The claim table
+`issue_claims` and its write path belong to part A
+(`server/src/myrmidon/swarm-claim/`); this module only reads them, so while part
+A is unmerged the supervisor answers `{ enabled: false }`.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_SWARM_SUPERVISOR_TASK_MAX` | 1.6-SWARM-CLAIM-B | `500` | Row cap of queue candidates reported per role in the supervisor overview; a ceiling, not a page size | Positive integer from 1 to 5000; anything else — the default (500). Values above the 5000 ceiling are clamped to it, so a typo cannot ask for an unbounded scan |
+| `MYRMIDON_SWARM_PILOT_BASELINE_DOC` | 1.6-SWARM-CLAIM-B | `baseline-snapshot-14d` | Issue document key the pilot report reads the frozen BASELINE snapshot from before comparing a window against it | Empty, blank or unset — the default key. Until a document under the key exists the pilot report answers `baseline: null` (there is nothing to compare the window against yet) |
 
 ## 1.6 — FORAGING (source registry, snapshot comparison, skill candidates)
 
