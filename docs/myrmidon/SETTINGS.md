@@ -698,8 +698,35 @@ sources need a token. Findings are recorded `unverified` until the skill lifecyc
 them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand.
 
 
+
 ## 1.6 — PARALLEL-HELPERS (delegated helper agents)
 
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
+
+## 1.6.1 — TG-NOTIFY (part D): inbound from Telegram group topics
+
+Settings of `server/src/myrmidon/telegram-notify/` (part D of the 1.6.1
+TG-NOTIFY settings epic): a message in a Telegram forum topic becomes a
+Myrmidon task (topic without a binding) or continues the bound task's
+conversation (topic with a binding). The gate is the `inbound` block of the
+`telegramNotify` document in instance settings `general` (the shared contract
+in `packages/shared/src/myrmidon-telegram-notify.ts`; the GET/PATCH routes
+`/api/myrmidon/telegram-notify` belong to part A). Until part A merges, the
+document is written by the `mutateTelegramNotifySettings` store helper in
+`server/src/myrmidon/telegram-notify/settings.ts` and every surface is off.
+
+| Field | Default | What it does |
+|---|---|---|
+| `telegramNotify.inbound.enabled` | `false` | Master switch of topic inbound: with `false` (or no stored document) an unaddressed topic message is filtered exactly as the vendor does; nothing is created |
+| `telegramNotify.inbound.requireMention` | `true` | Keeps the vendor's group privacy contract: with `true` only messages that address the bot (mention, reply) become task work; commands in topics therefore only fire when the bot is mentioned, as in a DM. `false` admits every topic message of the enabled group |
+
+The rest of the vendor contract stays in force: the endpoint must be active,
+the group must be an enabled destination (Telegram resources are `chat` type:
+the operator grants the whole group once), and the sender must be a linked
+user or a sponsored guest — an unadmitted sender still gets the vendor's
+filtering. A task created from a topic message carries the message's first
+words as the title and the full text plus the thread link in the description;
+follow-up messages in the same topic continue that task's conversation.
+

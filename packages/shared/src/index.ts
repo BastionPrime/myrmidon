@@ -2798,3 +2798,6 @@ export * from "./myrmidon-swarm-claim.js";
 export * from "./myrmidon-autonomy.js";
 // myrmidon(1.6-CTO-CHAT-B): the owner-message-to-epic proposal contract of the CTO chat.
 export * from "./myrmidon-cto-chat.js";
+// myrmidon(OPE-3789): TG-NOTIFY settings contract shared by the routes (part A)
+// and the topic-inbound consumers (part D).
+export * from "./myrmidon-telegram-notify.js";
