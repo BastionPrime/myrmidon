@@ -36,6 +36,24 @@ version file to edit. Base Paperclip version is in the image label
   enabled from the environment) — fixed together with the journal key.
   See [SETTINGS.md](SETTINGS.md).
 
+### Board administrators from agents (ADMIN-AGENT part C)
+
+- The UI half of making an agent a board administrator. The agent card's
+  **Permissions / Trust** tab gains a fourth flag, **Board administrator**:
+  flipping it goes through the same permissions PATCH as the three sibling
+  flags, the state comes from the agent detail API
+  (`access.boardAdmin`, falling back to `permissions.boardAdmin`), and both
+  readers are fail-closed — anything but an explicit `true` reads as "not an
+  administrator". Operators see the toggle only with permission-management
+  authority (owner or admin membership, instance admin, local implicit
+  board); a 403 from the API becomes a plain-language note under the toggle.
+  The Company Settings **Members** page names every agent administrator: one
+  table row per non-terminated flagged agent, with a **Board administrator**
+  badge and a link to the agent's Permissions tab. The grant semantics (the
+  permission keys, the grant snapshot, the self-toggle prohibition) are the
+  server half of the feature and merge separately. Operator guide:
+  [guides/agent-board-admin.md](guides/agent-board-admin.md).
+
 ## 1.6.0
 
 ### CTO chat planner (CTO-CHAT B)
@@ -104,6 +122,22 @@ version file to edit. Base Paperclip version is in the image label
   (part B: the schedule, the excerpt rules and the patch-closed verdict) and
   the registry API are documented in the same guide. Guide:
   [guides/stack-registry.md](guides/stack-registry.md).
+
+### Stack update cycle documentation (STACK-UPDATES part D)
+
+- The stack-updates overview document (EN + RU) for the whole release-watch
+  cycle: where «ours» comes from per probe (health-commit, docker-image,
+  container-labels, env, manual, none) and where «latest» comes from (the
+  anonymous GitHub releases/tags read), how the lag is counted and why an
+  unmatched local version reads `unknown`, the notable-lines excerpt rules,
+  the patch-closed verdict (closed/open/unknown per carried delta through the
+  compare API, with the aggregate), the daily sweep behind
+  `MYRMIDON_STACK_CHECK_INTERVAL_SEC` and the manual check, the
+  `stack_update` attention card with its dedup key, the unassigned backlog
+  draft the planner creates, both settings and the network-down behavior
+  (transport failure → 503 with the previous cache intact; a per-source HTTP
+  error → a per-component unknown). The screen-by-column screen guide is
+  referenced, not duplicated. Document: [stack-updates.md](stack-updates.md).
 
 ### Company regulations in the wiki (WIKI-CORTEX)
 
@@ -434,6 +468,7 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   is snapshotted into the append-only `agent_instructions_revisions` history, and any
   earlier revision can be restored through the API — the restore itself becomes a new
   revision. Guide: [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) (#273, #299).
+
 ### Deploy and reliability
 
 - Automatic rollback by health for the board and the bot fleet (R5-C). A failed
