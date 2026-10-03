@@ -305,6 +305,14 @@ except the registry. While a session is open, the screen node receives `pause` f
 the board server rejects MCP calls into that browser (423, a safeguard). Site-data cleanup takes a
 domain typed in (bare domain); cookies+storage are cleaned on the node via CDP.
 
+## 1.6.1 — TG-NOTIFY (part D): inbound from Telegram group topics
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| (Settings are instance-level under `instance_settings.general.telegramNotify.inbound`.) | TG-NOTIFY-D | All disabled | Controls inbound messages from Telegram group topics: `enabled` (off by default — no topic messages are processed), `requireMention` (on by default — a topic message without a bot mention is ignored, preserving group privacy) | `enabled: false` — all topic inbound is off (vendor behavior). `requireMention: false` — any topic message is processed (same as in DM). Both are changed via `PATCH /api/myrmidon/telegram-notify` (requires company scope, owner/instance admin) |
+
+When enabled, a message in a Telegram group topic creates an issue (if no chat-conversation binding exists) or continues an existing conversation (if the topic is bound). Command handling in topics follows the same `requireMention` rule as in DM.
+
 ## 1.3 — WORKSPACE-HYGIENE (agent workspaces)
 
 | Variable | Function | Default | What it does | How to disable / special |
