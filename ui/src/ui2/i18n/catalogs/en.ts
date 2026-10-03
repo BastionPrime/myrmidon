@@ -328,6 +328,8 @@ export const en = {
         fleet: "Fleet",
         fleetAttention: "Fleet: 1 attention",
         forecast: "{{spend}} of {{budget}}",
+        // myrmidon(HERMES-USAGE-COST): spend-only variant when no budget is set.
+        forecastSpendOnly: "{{spend}} spent",
       },
       commander: {
         aria: "Tell the Commander (Ctrl K)",
@@ -683,6 +685,8 @@ export type Ui2Catalog = {
       fleet: string;
       fleetAttention: string;
       forecast: string;
+      // myrmidon(HERMES-USAGE-COST): spend-only variant when no budget is set.
+      forecastSpendOnly: string;
     },
     commander: {
       aria: string;
