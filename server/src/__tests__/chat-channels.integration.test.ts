@@ -70534,5 +70534,201 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         }
       },
     );
+
+    // myrmidon(1.6.1 VOICE-STT B): a Telegram voice message with the setting
+    // on and a wired transcriber gets its transcript in the task comment
+    // body, the attachment itself still stored, and a single wakeup. A skip
+    // (transcriber error) keeps the vendor body and the delivery intact.
+    it.each([
+      "transcribed",
+      "stt_error",
+      "stt_disabled",
+    ] as const)(
+      "attaches the voice transcript to the inbound comment (%s)",
+      async (mode) => {
+        const fixture = await seedCompany();
+        const storage = createStorageService();
+        // myrmidon(1.6.1 VOICE-STT B): the switch is read per delivery; only
+        // the disabled mode keeps the environment untouched.
+        const previousStt = process.env.MYRMIDON_TELEGRAM_VOICE_STT;
+        if (mode !== "stt_disabled")
+          process.env.MYRMIDON_TELEGRAM_VOICE_STT = "1";
+        else delete process.env.MYRMIDON_TELEGRAM_VOICE_STT;
+        // myrmidon(1.6.1 VOICE-STT B): the transcriber stands in for the
+        // shared STT core's `transcribeAudio` contract.
+        const transcribeAudio = vi.fn(async () => {
+          if (mode === "stt_error") {
+            const error = new Error("gateway said no") as Error & {
+              code: string;
+            };
+            error.code = "stt_upstream_error";
+            throw error;
+          }
+          return {
+            text: "привет, это голосовое сообщение",
+            segments:
+              mode === "transcribed"
+                ? [
+                    {
+                      speaker: "1",
+                      startMs: 0,
+                      endMs: 400,
+                      text: "привет, это голосовое сообщение",
+                    },
+                  ]
+                : undefined,
+            language: "ru",
+            durationMs: 400,
+            truncated: false,
+            backend: "mock",
+          };
+        });
+        const context = await configuredTelegramEndpoint(fixture, {
+          storage: storage.storage,
+          telegramVoiceTranscriber: { transcribeAudio },
+        });
+        const { service, runtime, endpoint, callbacks, wakeup } = context;
+        const pinned = createChatSdkEndpointRuntime({
+          ...runtime.configurations.get(endpoint.id)!,
+          logger: "silent",
+        });
+        const requests: string[] = [];
+        const fetchSpy = vi
+          .spyOn(globalThis, "fetch")
+          .mockImplementation(async (input, init) => {
+            const url = new URL(
+              input instanceof Request ? input.url : String(input),
+            );
+            if (url.hostname !== "api.telegram.org")
+              throw new Error("Unexpected fixture host");
+            if (url.pathname.endsWith("/getFile")) {
+              requests.push("getFile");
+              return Response.json({
+                ok: true,
+                result: { file_path: "fixture/optional-media" },
+              });
+            }
+            requests.push("download");
+            return new Response(TELEGRAM_VOICE_OGG);
+          });
+        try {
+          Object.assign(runtime.endpoints.get(endpoint.id)!, {
+            attachmentRecoveryDescriptor:
+              pinned.attachmentRecoveryDescriptor.bind(pinned),
+            rehydrateAttachment: pinned.rehydrateAttachment.bind(pinned),
+          });
+          const media = {
+            file_id: "optional-media",
+            file_unique_id: "optional-media-unique",
+            file_size: TELEGRAM_VOICE_OGG.length,
+            duration: 1,
+          };
+          const raw = {
+            message_id: 4100 + mode.length,
+            date: Math.floor(Date.now() / 1_000),
+            chat: { id: 77115579, type: "private" },
+            from: {
+              id: 77115579,
+              is_bot: false,
+              first_name: "Voice fixture",
+            },
+            voice: media,
+          };
+          const message = pinned.parseTelegramCommandMessage(raw)!;
+          await deliverMessage({
+            callbacks,
+            endpointId: endpoint.id,
+            provider: "telegram",
+            thread: makeThread({
+              channelId: "77115579",
+              id: "telegram:77115579",
+              isDM: true,
+            }).thread,
+            message,
+            trigger: "direct_message",
+          });
+          // The attachment goes through the unchanged vendor ingest path.
+          expect(
+            storage.putFile.mock.calls.some(
+              ([input]) =>
+                input.body.equals(TELEGRAM_VOICE_OGG) &&
+                input.contentType === "audio/ogg",
+            ),
+          ).toBe(true);
+          const [comment] = await db
+            .select()
+            .from(issueComments)
+            .where(eq(issueComments.companyId, fixture.companyId));
+          expect(comment).toBeDefined();
+          if (mode === "transcribed") {
+            expect(comment!.body).toContain("привет, это голосовое сообщение");
+            expect(comment!.body).toContain("Говорящий 1 [0:00]");
+            // The transcript is the body: the placeholder is gone.
+            expect(comment!.body).not.toContain("Shared");
+            expect(transcribeAudio).toHaveBeenCalledOnce();
+          } else {
+            // Fallback: the vendor placeholder body, delivery intact, and
+            // (when the core ran and failed) the redacted skip code in the
+            // comment metadata.
+            expect(comment!.body).toContain("Shared 1 file.");
+            if (mode === "stt_error") {
+              expect(transcribeAudio).toHaveBeenCalledOnce();
+              expect(comment!.metadata).toMatchObject({
+                sections: [
+                  {
+                    rows: expect.arrayContaining([
+                      {
+                        type: "key_value",
+                        label: "Voice transcription",
+                        value: "stt_skipped: stt_upstream_error",
+                      },
+                    ]),
+                  },
+                ],
+              });
+              expect(JSON.stringify(comment)).not.toContain("gateway said no");
+            } else {
+              // Guard: the setting is off — zero transcriber calls.
+              expect(transcribeAudio).not.toHaveBeenCalled();
+              expect(comment!.metadata?.sections?.[0]?.rows ?? []).not.toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({ label: "Voice transcription" }),
+                ]),
+              );
+            }
+          }
+          expect(wakeup).toHaveBeenCalledOnce();
+          const [delivery] = await db
+            .select()
+            .from(chatDeliveries)
+            .where(eq(chatDeliveries.endpointId, endpoint.id));
+          expect(delivery).toMatchObject({ state: "processed" });
+          const [attachment] = await db
+            .select({ id: issueAttachments.id })
+            .from(issueAttachments)
+            .where(eq(issueAttachments.companyId, fixture.companyId));
+          expect(attachment).toBeDefined();
+        } finally {
+          try {
+            await pinned.shutdown();
+          } finally {
+            try {
+              await retirePublicationFixture(service, endpoint.id);
+            } finally {
+              try {
+                fetchSpy.mockRestore();
+              } finally {
+                // myrmidon(1.6.1 VOICE-STT B): restore the ambient switch.
+                if (previousStt === undefined)
+                  delete process.env.MYRMIDON_TELEGRAM_VOICE_STT;
+                else
+                  process.env.MYRMIDON_TELEGRAM_VOICE_STT = previousStt;
+              }
+            }
+          }
+        }
+      },
+      30_000,
+    );
   });
 });

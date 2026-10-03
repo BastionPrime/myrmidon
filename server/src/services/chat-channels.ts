@@ -163,6 +163,11 @@ import {
   identifyTelegramMedia,
   telegramMediaNeedsIdentification,
 } from "./chat-telegram-media-intake.js";
+// myrmidon(1.6.1 VOICE-STT B): inbound transcription of Telegram voice/audio.
+import {
+  transcribeTelegramVoiceIntake,
+  type TelegramVoiceTranscriber,
+} from "../myrmidon/telegram-voice-stt-intake/index.js";
 import { normalizeTelegramRichMessage } from "./chat-telegram-rich-intake.js";
 import {
   TELEGRAM_DRAFT_ACTION_KIND,
@@ -1538,6 +1543,11 @@ export interface ChatChannelServiceOptions {
     claimId: string;
   }) => Promise<void>;
   storage?: StorageService;
+  // myrmidon(1.6.1 VOICE-STT B): optional transcription hook for inbound
+  // Telegram voice/audio. Production wires the shared STT core once it is
+  // merged; tests pass a mock. Null (or unset) keeps the vendor intake path
+  // byte for byte — no byte prefetch, no transcription call.
+  telegramVoiceTranscriber?: TelegramVoiceTranscriber | null;
 }
 
 interface CredentialMutationLeaseGuard {
@@ -1970,6 +1980,30 @@ function sanitizeFilename(value: string | undefined): string | null {
   if (!value) return null;
   const leaf = value.replaceAll("\\", "/").split("/").pop()?.trim();
   return leaf ? leaf.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 255) : null;
+}
+
+// myrmidon(1.6.1 VOICE-STT B): the voice/audio attachments of a Telegram turn
+// that are eligible for inbound transcription. A turn qualifies only when the
+// provider is Telegram, every attachment is a runtime-provenance voice/audio
+// item (no mixed media), and a download closure exists. Anything else returns
+// null and the vendor path is byte for byte.
+function telegramVoiceSttAttachments(
+  endpoint: Pick<EndpointRow, "provider">,
+  message: Pick<Message, "attachments" | "text">,
+): ReadonlyArray<Attachment> | null {
+  if (endpoint.provider !== "telegram" || message.attachments.length === 0)
+    return null;
+  const voice: Attachment[] = [];
+  for (const attachment of message.attachments) {
+    if (
+      attachment.type !== "audio" ||
+      !hasTelegramMediaProvenance(attachment) ||
+      typeof attachment.fetchData !== "function"
+    )
+      return null;
+    voice.push(attachment);
+  }
+  return voice;
 }
 
 function redactError(error: unknown): string {
@@ -16265,6 +16299,37 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       }
 
       const inboundActivityPublications: ActivityPublication[] = [];
+      // myrmidon(1.6.1 VOICE-STT B): prefetch+transcribe the turn's Telegram
+      // voice/audio BEFORE the task/comment transaction below. The vendor
+      // creates the comment before attachments download, and the open task
+      // may read it immediately — so the transcript must already be in the
+      // body at addComment time. Runs only when the setting is on and every
+      // guard passes; a skip returns null here and the vendor body is used.
+      // Delivery ordering: this runs after admission and the reach gates, so
+      // an unlinked or filtered turn never pays a prefetch.
+      const voiceSttAttachmentInput = telegramVoiceSttAttachments(endpoint, message);
+      const voiceSttOutcome = voiceSttAttachmentInput
+        ? await transcribeTelegramVoiceIntake({
+            companyId: endpoint.companyId,
+            senderText: message.text,
+            voiceAttachments: voiceSttAttachmentInput,
+            env: process.env,
+            transcriber: options.telegramVoiceTranscriber ?? null,
+          })
+        : null;
+      const voiceSttBody = voiceSttOutcome?.body ?? null;
+      // myrmidon(1.6.1 VOICE-STT B): resolve the transcript for THIS endpoint —
+      // only Telegram task endpoints consume the prefetched transcript; every
+      // other provider falls through to the vendor body untouched.
+      const voiceSttBodyFor = (taskEndpoint: EndpointRow): string | null =>
+        taskEndpoint.provider === "telegram" ? voiceSttBody : null;
+      // myrmidon(1.6.1 VOICE-STT B): `stt_disabled` is not a failure — it is
+      // the switch being off, and the vendor path must stay byte for byte
+      // (no metadata row, no body change) in that case.
+      const voiceSttSkip =
+        voiceSttOutcome?.skip && voiceSttOutcome.skip !== "stt_disabled"
+          ? voiceSttOutcome.skip
+          : null;
       const persistTaskMutation = async (
         taskTx: DbOrTransaction,
         taskEndpoint: EndpointRow,
@@ -16445,9 +16510,13 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         const x9Body = x9Addressee
           ? x9StripAddressToken(message.text)
           : message.text;
-        const body =
-          x8MessageBody ??
-          (x9Body.trim() ||
+        // myrmidon(1.6.1 VOICE-STT B): the transcript of a Telegram
+        // voice/audio turn, prefetched and recognized before this comment
+        // is created, replaces the placeholder "Shared N file(s)." body.
+        // A skip falls back to the vendor body below; the attachment keeps
+        // going through the unchanged ingest path either way. The order is
+        // x8 bridge > transcript > the sender's own (alias-stripped) text.
+        const body = x8MessageBody ?? voiceSttBodyFor(taskEndpoint) ?? (x9Body.trim() ||
           (message.attachments.length > 0
             ? taskEndpoint.provider === "microsoft-teams" &&
               !thread.isDM &&
@@ -16529,6 +16598,19 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                         ? "Linked Myrmidon user"
                         : "Sponsored external guest (restricted)",
                     },
+                    // myrmidon(1.6.1 VOICE-STT B): the redacted skip code of
+                    // this turn's transcription attempt. Only the stable code
+                    // is recorded — never the error text, the provider
+                    // payload or any transcript content.
+                    ...(voiceSttSkip
+                      ? [
+                          {
+                            type: "key_value" as const,
+                            label: "Voice transcription",
+                            value: `stt_skipped: ${voiceSttSkip}`,
+                          },
+                        ]
+                      : []),
                   ],
                 },
               ],
