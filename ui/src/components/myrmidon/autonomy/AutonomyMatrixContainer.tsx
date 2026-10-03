@@ -12,6 +12,8 @@ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { ApiError } from "@/api/client";
 import { AutonomyMatrixScreenView, type RegulationDraft } from "./AutonomyMatrixScreen";
 import { autonomyApi, autonomyQueryKey, isVersionConflict } from "./autonomyApi";
+// myrmidon(1.6.1 CUSTOM-CASTES C): role rows from the caste directory
+import { useCasteOptions } from "@/components/myrmidon/castes/useCasteOptions";
 import type {
   AutonomyActionClass,
   AutonomyMatrix,
@@ -38,6 +40,11 @@ export function AutonomyMatrixScreen() {
   const [draft, setDraft] = useState<AutonomyMatrix | null>(null);
   const [matrixError, setMatrixError] = useState<string | null>(null);
   const [regulationError, setRegulationError] = useState<string | null>(null);
+
+  // myrmidon(1.6.1 CUSTOM-CASTES C): the matrix rows and the regulation role
+  // select come from the caste directory; the hook falls back to the
+  // built-in twelve when the directory is unavailable.
+  const { options: casteOptions } = useCasteOptions();
 
   const queryKey = autonomyQueryKey(companyId);
   const viewQuery = useQuery({
@@ -161,6 +168,7 @@ export function AutonomyMatrixScreen() {
       view={view}
       matrix={matrix}
       matrixDirty={draft !== null}
+      roleOptions={casteOptions}
       onCellClick={cycleCell}
       onDefaultChange={changeDefault}
       onSaveMatrix={() =>

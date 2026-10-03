@@ -598,7 +598,7 @@ async function renderStatefulCreateClaudeSandbox(environments: Environment[]) {
 }
 
 async function selectEnvironment(container: HTMLElement, environmentId: string) {
-  const select = container.querySelector("select");
+  const select = container.querySelector('[data-testid="agent-config-environment-select"]');
   await act(async () => {
     if (select) {
       const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
@@ -791,7 +791,7 @@ describe("AgentConfigForm environment selector", () => {
     roots.push(result.root);
 
     expect(result.container.textContent).not.toContain("Environment override");
-    expect(result.container.querySelector("select")).toBeNull();
+    expect(result.container.querySelector('[data-testid="agent-config-environment-select"]')).toBeNull();
   });
 
   it("renders GPT-6 Astra and its model-specific reasoning efforts", async () => {
@@ -918,7 +918,7 @@ describe("AgentConfigForm environment selector", () => {
     roots.push(result.root);
 
     const text = result.container.textContent ?? "";
-    const selector = result.container.querySelector("select");
+    const selector = result.container.querySelector('[data-testid="agent-config-environment-select"]');
 
     expect(text).toContain("Environment");
     expect(text).toContain("Environment override");
@@ -945,7 +945,7 @@ describe("AgentConfigForm environment selector", () => {
     roots.push(result.root);
 
     const text = result.container.textContent ?? "";
-    const selector = result.container.querySelector("select");
+    const selector = result.container.querySelector('[data-testid="agent-config-environment-select"]');
 
     expect(text).toContain("Environment override");
     expect(selector?.textContent).toContain("E2B · sandbox");
@@ -967,7 +967,7 @@ describe("AgentConfigForm environment selector", () => {
     roots.push(result.root);
 
     const text = result.container.textContent ?? "";
-    const selector = result.container.querySelector("select");
+    const selector = result.container.querySelector('[data-testid="agent-config-environment-select"]');
 
     expect(text).toContain("Environment override");
     expect(selector?.textContent).toContain("E2B · sandbox");
@@ -989,7 +989,7 @@ describe("AgentConfigForm environment selector", () => {
     roots.push(result.root);
 
     const text = result.container.textContent ?? "";
-    const selector = result.container.querySelector("select");
+    const selector = result.container.querySelector('[data-testid="agent-config-environment-select"]');
 
     expect(text).toContain("Environment override");
     expect(selector?.textContent).toContain("Default: Local");
@@ -1009,7 +1009,7 @@ describe("AgentConfigForm environment selector", () => {
     ]);
     roots.push(result.root);
 
-    const selector = result.container.querySelector("select");
+    const selector = result.container.querySelector('[data-testid="agent-config-environment-select"]');
 
     expect(selector?.textContent).toContain("Default: Paperclip Computer");
     expect(selector?.textContent).toContain("Paperclip Computer");
@@ -2375,7 +2375,7 @@ describe("AgentConfigForm environment selector", () => {
     await runTest(result.container);
     expect(findButton(result.container, "Sign in")).toBeTruthy();
 
-    const select = result.container.querySelector("select");
+    const select = result.container.querySelector('[data-testid="agent-config-environment-select"]');
     await act(async () => {
       if (select) {
         const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;

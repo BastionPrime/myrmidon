@@ -62,6 +62,8 @@ import { environmentDisplayLabel } from "../lib/managed-sandbox-environment";
 import { extractModelName, extractProviderId } from "../lib/model-utils";
 import { queryKeys } from "../lib/queryKeys";
 import { useCompany } from "../context/CompanyContext";
+// myrmidon(1.6.1 CUSTOM-CASTES C): role options from the caste directory
+import { useCasteOptions } from "./myrmidon/castes/useCasteOptions";
 import {
   Field,
   ToggleField,
@@ -360,6 +362,11 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const { selectedCompanyId } = useCompany();
   const queryClient = useQueryClient();
   const environmentVariablesEditorRef = useRef<EnvironmentVariablesEditorHandle | null>(null);
+
+  // myrmidon(1.6.1 CUSTOM-CASTES C): the role select options come from the
+  // caste directory; useCasteOptions falls back to the built-in twelve when
+  // the directory is empty or unavailable.
+  const { options: casteOptions } = useCasteOptions();
 
   // Sync disabled adapter types from server so dropdown filters them out.
   const disabledTypes = useDisabledAdaptersSync();
@@ -1490,6 +1497,23 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 placeholder="e.g. VP of Engineering"
               />
             </Field>
+            {/* myrmidon(1.6.1 CUSTOM-CASTES C): the caste select lists the
+                company directory (with the built-in fallback below it) —
+                the choice commits as the agent's role. */}
+            <Field label="Role" hint={help.role}>
+              <select
+                className={inputClass}
+                value={String(eff("identity", "role", props.agent.role))}
+                onChange={(e) => mark("identity", "role", e.target.value)}
+                data-testid="agent-config-role-select"
+              >
+                {casteOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="Reports to" hint={help.reportsTo}>
               <ReportsToPicker
                 agents={companyAgents}
@@ -1566,6 +1590,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
             <Field label="Environment override">
               <div className="space-y-2">
                 <select
+                  data-testid="agent-config-environment-select"
                   className={inputClass}
                   value={currentDefaultEnvironmentId}
                   onChange={(event) => {
