@@ -29,15 +29,28 @@
 //    their sums matching is the acceptance criterion.
 //  - Prices come from /v1/model/info into litellm_models (insert-per-refresh,
 //    so price history survives; the latest row per model is what reads show).
+//  - myrmidon(HERMES-USAGE-COST): after every sweep, the reconcile pass moves
+//    the gateway's prices INTO the vendor ledger's unpriced hermes_gateway
+//    rows: cost_events with cost_status='unpriced' whose heartbeat_run has
+//    matching litellm_cost_events rows get costCents filled and
+//    cost_status='reported'. Without this, every hermes_gateway run shows
+//    $0 on the dashboard/Costs screens even though the gateway billed it.
+//    The sweep is also the backfill: MYRMIDON_LITELLM_FIRST_LOOKBACK_DAYS
+//    widens the first sweep's window, and POST …/litellm/sweep accepts a
+//    { from } body to re-run from an explicit date (October backfill).
 
 import { createHash } from "node:crypto";
 import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { heartbeatRuns, litellmCostEvents, litellmModels, type Db } from "@paperclipai/db";
 import { logger } from "../../middleware/logger.js";
+// myrmidon(HERMES-USAGE-COST): the post-sweep pass that fills the vendor ledger.
+import { reconcileUnpricedCostEvents } from "./reconcile.js";
 
 export const LITELLM_BASE_URL_ENV = "MYRMIDON_LITELLM_BASE_URL";
 export const LITELLM_KEY_SECRET_ENV = "MYRMIDON_LITELLM_KEY_SECRET";
 export const LITELLM_SWEEP_INTERVAL_ENV = "MYRMIDON_LITELLM_COST_INTERVAL_SEC";
+/** myrmidon(HERMES-USAGE-COST): first-sweep lookback, in days. */
+export const LITELLM_FIRST_LOOKBACK_DAYS_ENV = "MYRMIDON_LITELLM_FIRST_LOOKBACK_DAYS";
 export const LITELLM_BILLER = "litellm";
 
 const DEFAULT_SWEEP_INTERVAL_SEC = 300;
@@ -45,6 +58,9 @@ const MIN_SWEEP_INTERVAL_SEC = 30;
 const MAX_SWEEP_INTERVAL_SEC = 86400;
 /** First-sweep lookback when no collected row exists yet. */
 const FIRST_SWEEP_LOOKBACK_MS = 24 * 3_600_000;
+/** myrmidon(HERMES-USAGE-COST): bounds for the first-sweep lookback setting, days. */
+const FIRST_LOOKBACK_DAYS_MIN = 1;
+const FIRST_LOOKBACK_DAYS_MAX = 90;
 /** /spend/logs page size. */
 const SPEND_LOGS_PAGE_SIZE = 1000;
 /** Page cap; a window larger than this fails the sweep rather than truncating. */
@@ -63,12 +79,28 @@ export interface LitellmCostSettings {
   baseUrl: string | null;
   keySecret: string | null;
   intervalMs: number;
+  /** myrmidon(HERMES-USAGE-COST): first-sweep lookback in days (1..90). */
+  firstLookbackDays: number;
 }
 
 export function readLitellmCostSettings(env: NodeJS.ProcessEnv = process.env): LitellmCostSettings {
   const baseUrl = env[LITELLM_BASE_URL_ENV]?.trim() || null;
   const keySecret = env[LITELLM_KEY_SECRET_ENV]?.trim() || null;
   const enabled = Boolean(baseUrl && keySecret);
+  // myrmidon(HERMES-USAGE-COST): how far back a first sweep (no collected
+  // rows yet) reads. Out-of-range or non-integer values fall back to 1 day.
+  let firstLookbackDays = 1;
+  const rawDays = env[LITELLM_FIRST_LOOKBACK_DAYS_ENV]?.trim();
+  if (rawDays) {
+    const value = Number(rawDays);
+    if (
+      Number.isInteger(value) &&
+      value >= FIRST_LOOKBACK_DAYS_MIN &&
+      value <= FIRST_LOOKBACK_DAYS_MAX
+    ) {
+      firstLookbackDays = value;
+    }
+  }
   let intervalSec = DEFAULT_SWEEP_INTERVAL_SEC;
   const raw = env[LITELLM_SWEEP_INTERVAL_ENV]?.trim();
   if (raw) {
@@ -77,7 +109,7 @@ export function readLitellmCostSettings(env: NodeJS.ProcessEnv = process.env): L
       intervalSec = value;
     }
   }
-  return { enabled, baseUrl, keySecret, intervalMs: intervalSec * 1000 };
+  return { enabled, baseUrl, keySecret, intervalMs: intervalSec * 1000, firstLookbackDays };
 }
 
 // ---------------------------------------------------------------------------
@@ -352,27 +384,39 @@ export interface SweepResult {
   written: number;
   skippedUnattributed: number;
   modelsRefreshed: number | null;
+  /** myrmidon(HERMES-USAGE-COST): unpriced vendor cost_events filled by the reconcile pass. */
+  reconciledCostEvents: number;
   window: { from: Date; to: Date };
 }
 
-/** One sweep for one company; see the module comment for the design. */
+/**
+ * One sweep for one company; see the module comment for the design.
+ * myrmidon(HERMES-USAGE-COST): `opts.from` pins the window start (the October
+ * backfill); without it the window starts at the last collected row, or the
+ * configured first-sweep lookback when nothing is collected yet. Either way
+ * the sweep ends by reconciling the vendor cost ledger (see reconcile module).
+ */
 export async function sweepLitellmCosts(
   deps: LitellmCostsDeps,
   companyId: string,
   settings: LitellmCostSettings,
+  opts: { from?: Date } = {},
 ): Promise<SweepResult> {
   if (!settings.enabled || !settings.baseUrl || !settings.keySecret) {
     throw new Error("litellm cost collection is not configured");
   }
   const log = deps.log ?? logger;
   const to = deps.now();
-  const from = await readCollectedSince(deps.db, companyId, to);
+  const from =
+    opts.from instanceof Date && !Number.isNaN(opts.from.getTime()) && opts.from < to
+      ? opts.from
+      : await readCollectedSince(deps.db, companyId, to, settings);
   const window = { from, to };
 
   const keyValue = await deps.readGatewayKey(companyId, settings.keySecret);
   if (!keyValue) {
     log.warn({ companyId }, "litellm cost sweep skipped: gateway key secret not found");
-    return { collected: 0, written: 0, skippedUnattributed: 0, modelsRefreshed: null, window };
+    return { collected: 0, written: 0, skippedUnattributed: 0, modelsRefreshed: null, reconciledCostEvents: 0, window };
   }
 
   const entries = await deps.client(settings.baseUrl, keyValue).listSpendLogs(window);
@@ -390,16 +434,33 @@ export async function sweepLitellmCosts(
     log.warn({ err }, "litellm cost sweep: model catalog refresh failed");
   }
 
+  // myrmidon(HERMES-USAGE-COST): move the gateway's prices into the vendor
+  // ledger so the dashboard/Costs screens stop showing unpriced $0 runs.
+  let reconciledCostEvents = 0;
+  try {
+    reconciledCostEvents = await reconcileUnpricedCostEvents(deps.db, companyId, window);
+  } catch (err) {
+    log.warn({ err, companyId }, "litellm cost sweep: vendor ledger reconcile failed");
+  }
+
   log.info(
-    { companyId, collected: entries.length, written, skippedUnattributed, modelsRefreshed },
+    { companyId, collected: entries.length, written, skippedUnattributed, modelsRefreshed, reconciledCostEvents },
     "litellm cost sweep done",
   );
-  return { collected: entries.length, written, skippedUnattributed, modelsRefreshed, window };
+  return { collected: entries.length, written, skippedUnattributed, modelsRefreshed, reconciledCostEvents, window };
 }
 
 /** Window start: the newest collected row's occurred_at (bounded by lookback). */
-async function readCollectedSince(db: Db, companyId: string, now: Date): Promise<Date> {
-  const fallback = new Date(now.getTime() - FIRST_SWEEP_LOOKBACK_MS);
+async function readCollectedSince(
+  db: Db,
+  companyId: string,
+  now: Date,
+  settings: LitellmCostSettings,
+): Promise<Date> {
+  // myrmidon(HERMES-USAGE-COST): the lookback is configurable so a first
+  // sweep on a live deployment can cover the whole unpriced month.
+  const lookbackMs = Math.max(1, settings.firstLookbackDays) * 24 * 3_600_000;
+  const fallback = new Date(now.getTime() - lookbackMs);
   const rows = await db
     .select({ last: litellmCostEvents.occurredAt })
     .from(litellmCostEvents)
