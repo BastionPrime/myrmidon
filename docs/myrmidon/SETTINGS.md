@@ -601,3 +601,24 @@ The flow end to end — how the owner asks from the portal or the Telegram DM,
 what the proposal and the approval card look like, and what acceptance
 creates — is the operator guide
 [guides/cto-chat-planner.md](guides/cto-chat-planner.md).
+
+## 1.6 — FORAGING (source registry, snapshot comparison, skill candidates)
+
+Settings of `server/src/myrmidon/foraging/` (the 1.6 track). The feature is off by default:
+without `MYRMIDON_FORAGING_ENABLED=1` no timer is armed, no source is read and the manual
+pass answers `503 {enabled: false}`. The registry and the findings list stay readable while
+it is off.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_FORAGING_ENABLED` | FORAGING | unset (off) | Master switch of the periodic comparison pass. Only the exact value `1` turns it on: the sweep then reads the enabled sources of every company that has a registry row, once per interval | Any other value (or unset) — the sweep never starts, `POST …/foraging/sweep` answers `503 enabled: false`, and the page shows that passes are off. A typo does not silently turn the feature on |
+| `MYRMIDON_FORAGING_INTERVAL_SEC` | FORAGING | `3600` | Period of the pass, in seconds. A pass whose previous run is still going is skipped, not queued | From 60 to 86400; non-integer or out of bounds — `3600` |
+| `MYRMIDON_FORAGING_BUDGET_CENTS` | FORAGING | `50` | Ceiling of the cost estimate of one pass, in cents. The sweep prices every fetched kilobyte and stops once the estimate reaches the ceiling; sources after the stop stay untouched and the next pass continues with them | A configured `0` or a negative number is the explicit "no limit"; empty or unset — `50` |
+| `MYRMIDON_FORAGING_KEY_SECRET` | FORAGING | unset | **Name** of the company secret whose value is sent as a bearer token to the sources of that company. The value is read for the duration of the read, is never logged and never stored | Empty — sources are read without an authorization header |
+| `MYRMIDON_FORAGING_MIN_HOST_INTERVAL_SEC` | FORAGING | `60` | Pause between two reads of one host, in seconds. Shared by every company of the process, so two roles pointing at one host cannot double the rate | From 5 to 86400; non-integer or out of bounds — `60`. A host that fails twice in a row is left alone for 6 h (breaker, not a setting) |
+
+The sweep is off by default because it is the only part of the feature that talks to the
+outside: an operator turns it on together with `MYRMIDON_FORAGING_KEY_SECRET` when the
+sources need a token. Findings are recorded `unverified` until the skill lifecycle accepts
+them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand.
+
