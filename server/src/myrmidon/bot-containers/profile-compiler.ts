@@ -65,6 +65,26 @@ export interface HermesProfileAdapterConfig {
     stt?: string;
     tts?: string;
     fallbacks?: string[];
+    /**
+     * myrmidon(BOT-RUNTIME-TUNING-B): explicit context window (tokens) for the
+     * card's model, written to `model.context_length`. Wins over the
+     * instance-wide alias map (HermesProfileInstanceDefaults.modelContextLengths).
+     */
+    contextLength?: number;
+    /**
+     * myrmidon(BOT-RUNTIME-TUNING-B): model for `auxiliary.title_generation.model`
+     * (a gateway model alias); the instance default
+     * (HermesProfileInstanceDefaults.auxiliary.titleGenerationModel) applies when
+     * this is empty.
+     */
+    titleGeneration?: string;
+    /**
+     * myrmidon(BOT-RUNTIME-TUNING-B): model for `auxiliary.compression.model`
+     * (a gateway model alias); the instance default
+     * (HermesProfileInstanceDefaults.auxiliary.compressionModel) applies when
+     * this is empty.
+     */
+    compressionSummary?: string;
   };
   /** adapterConfig.toolsets — comma-separated Hermes toolset names. */
   toolsets?: string;
@@ -201,11 +221,39 @@ export interface HermesProfileCompressionDefaults {
   threshold?: number;
   /** Fraction of the context window (0-1) compression aims to leave behind. */
   targetRatio?: number;
+  /**
+   * myrmidon(BOT-RUNTIME-TUNING-B): absolute token cap — Hermes compresses at
+   * the LOWER of the ratio threshold and this count (hermes_cli
+   * config_defaults.py `compression.threshold_tokens`, vendor default 256_000;
+   * for a large-window model the 0.5 ratio fires far above 256K). Written to
+   * `compression.threshold_tokens` whenever set and in 10_000..2_000_000;
+   * outside the range it is dropped with a warning, never thrown. Unset —
+   * nothing is written and Hermes applies its own 256K default: the default
+   * value is the instance's decision (an env default), not this compiler's.
+   */
+  thresholdTokens?: number;
+}
+
+/** myrmidon(BOT-RUNTIME-TUNING-B): per-model auxiliary models, instance-wide defaults. */
+export interface HermesProfileAuxiliaryDefaults {
+  /** Gateway model alias for `auxiliary.title_generation.model`. Empty = not written. */
+  titleGenerationModel?: string;
+  /** Gateway model alias for `auxiliary.compression.model`. Empty = not written. */
+  compressionModel?: string;
 }
 
 export interface HermesProfileInstanceDefaults {
   compression?: HermesProfileCompressionDefaults;
   sessionsRetentionDays?: number;
+  /**
+   * myrmidon(BOT-RUNTIME-TUNING-B): explicit context window per model alias
+   * (gateway model name -> tokens). The card's own
+   * `adapterConfig.models.contextLength` wins for the card's model; this map
+   * is the instance-wide fallback while the model registry does not exist.
+   */
+  modelContextLengths?: Record<string, number>;
+  /** myrmidon(BOT-RUNTIME-TUNING-B): instance-wide auxiliary model defaults. */
+  auxiliary?: HermesProfileAuxiliaryDefaults;
 }
 
 export interface HermesProfileInput {
@@ -433,10 +481,27 @@ function hasMcpServerHeaders(servers: readonly HermesProfileMcpServer[]): boolea
   return servers.some((server) => server.headers && Object.keys(server.headers).length > 0);
 }
 
-function buildAuxiliary(vision: string | undefined): YamlMapping | undefined {
-  const model = nonEmpty(vision);
-  if (!model) return undefined;
-  return { vision: { model } };
+// myrmidon(BOT-RUNTIME-TUNING-B): validation range for compression.threshold_tokens.
+const COMPRESSION_THRESHOLD_TOKENS_MIN = 10_000;
+const COMPRESSION_THRESHOLD_TOKENS_MAX = 2_000_000;
+// myrmidon(BOT-RUNTIME-TUNING-B): validation range for model.context_length.
+const MODEL_CONTEXT_LENGTH_MIN = 8_000;
+const MODEL_CONTEXT_LENGTH_MAX = 10_000_000;
+
+function buildAuxiliary(
+  vision: string | undefined,
+  titleGeneration: string | undefined,
+  compression: string | undefined,
+): YamlMapping | undefined {
+  const visionModel = nonEmpty(vision);
+  const titleModel = nonEmpty(titleGeneration);
+  const compressionModel = nonEmpty(compression);
+  if (!visionModel && !titleModel && !compressionModel) return undefined;
+  const mapping: Record<string, YamlMapping> = Object.create(null);
+  if (compressionModel) mapping.compression = { model: compressionModel };
+  if (titleModel) mapping.title_generation = { model: titleModel };
+  if (visionModel) mapping.vision = { model: visionModel };
+  return mapping;
 }
 
 /** stt/tts: the card carries only a model name, never a provider — see module docstring. */
@@ -457,14 +522,79 @@ function warnUnplacedVoiceModels(
   }
 }
 
-function buildCompression(defaults: HermesProfileCompressionDefaults | undefined): YamlMapping | undefined {
+function buildCompression(
+  defaults: HermesProfileCompressionDefaults | undefined,
+  warnings: string[],
+): YamlMapping | undefined {
   if (!defaults) return undefined;
+  // myrmidon(BOT-RUNTIME-TUNING-B): absolute token cap. Set means the instance
+  // chose it; unset means "let Hermes default" (256K). Out of range — drop
+  // with a warning, never fail the compile: a bot profile is still usable.
+  let thresholdTokens = defaults.thresholdTokens;
+  if (thresholdTokens !== undefined) {
+    if (!Number.isFinite(thresholdTokens) || thresholdTokens <= 0) {
+      warnings.push(
+        `compression.threshold_tokens: "${thresholdTokens}" is not a positive number; dropped (Hermes applies its own default)`,
+      );
+      thresholdTokens = undefined;
+    } else if (!Number.isInteger(thresholdTokens) || thresholdTokens < COMPRESSION_THRESHOLD_TOKENS_MIN || thresholdTokens > COMPRESSION_THRESHOLD_TOKENS_MAX) {
+      warnings.push(
+        `compression.threshold_tokens: ${thresholdTokens} is outside the supported range ${COMPRESSION_THRESHOLD_TOKENS_MIN}..${COMPRESSION_THRESHOLD_TOKENS_MAX}; dropped`,
+      );
+      thresholdTokens = undefined;
+    }
+  }
   const mapping: YamlMapping = {
     enabled: defaults.enabled,
     threshold: defaults.threshold,
     target_ratio: defaults.targetRatio,
+    // myrmidon(BOT-RUNTIME-TUNING-B): absolute token cap, see above.
+    threshold_tokens: thresholdTokens,
   };
   return mapping;
+}
+
+/**
+ * myrmidon(BOT-RUNTIME-TUNING-B): the context window written to
+ * `model.context_length`. The card's explicit `models.contextLength` wins;
+ * otherwise the instance's alias map is consulted for the card's model name
+ * (both the bare name and any "provider/model" form's model part). Range
+ * 8_000..10_000_000; out of range — dropped with a warning, never thrown.
+ */
+function buildModelContextLength(
+  input: HermesProfileInput,
+  warnings: string[],
+): number | undefined {
+  const explicit = input.adapterConfig.models?.contextLength;
+  if (explicit !== undefined) {
+    if (Number.isInteger(explicit) && explicit >= MODEL_CONTEXT_LENGTH_MIN && explicit <= MODEL_CONTEXT_LENGTH_MAX) {
+      return explicit;
+    }
+    warnings.push(
+      `model.context_length: ${explicit} from the card is outside the supported range ${MODEL_CONTEXT_LENGTH_MIN}..${MODEL_CONTEXT_LENGTH_MAX}; dropped`,
+    );
+    return undefined;
+  }
+  const model = nonEmpty(input.adapterConfig.model);
+  if (!model) return undefined;
+  const map = input.instanceDefaults.modelContextLengths;
+  if (!map) return undefined;
+  // The card's model may be "provider/model" or a bare gateway alias; both the
+  // full string and the model part are looked up (first hit wins, map order).
+  const candidates = [model, model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : undefined];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const value = map[candidate];
+    if (value === undefined) continue;
+    if (Number.isInteger(value) && value >= MODEL_CONTEXT_LENGTH_MIN && value <= MODEL_CONTEXT_LENGTH_MAX) {
+      return value;
+    }
+    warnings.push(
+      `model.context_length: ${value} for model "${candidate}" is outside the supported range ${MODEL_CONTEXT_LENGTH_MIN}..${MODEL_CONTEXT_LENGTH_MAX}; dropped`,
+    );
+    return undefined;
+  }
+  return undefined;
 }
 
 function buildConfigYaml(input: HermesProfileInput, warnings: string[]): string {
@@ -480,8 +610,14 @@ function buildConfigYaml(input: HermesProfileInput, warnings: string[]): string 
   const root: YamlMapping = {
     approvals: { mode: "off" },
     agent: { reasoning_effort: buildReasoningEffort(adapterConfig.effort, warnings) },
-    auxiliary: buildAuxiliary(adapterConfig.models?.vision),
-    compression: buildCompression(input.instanceDefaults.compression),
+    // myrmidon(BOT-RUNTIME-TUNING-B): title/compression auxiliary models — the
+    // card's map entry first, the instance default when the card is empty.
+    auxiliary: buildAuxiliary(
+      adapterConfig.models?.vision,
+      adapterConfig.models?.titleGeneration ?? input.instanceDefaults.auxiliary?.titleGenerationModel,
+      adapterConfig.models?.compressionSummary ?? input.instanceDefaults.auxiliary?.compressionModel,
+    ),
+    compression: buildCompression(input.instanceDefaults.compression, warnings),
     fallback_model: buildFallbackModelSequence(
       adapterConfig.models?.fallbacks,
       adapterConfig.provider,
@@ -495,6 +631,8 @@ function buildConfigYaml(input: HermesProfileInput, warnings: string[]): string 
     model: {
       default: nonEmpty(adapterConfig.model),
       provider: nonEmpty(adapterConfig.provider),
+      // myrmidon(BOT-RUNTIME-TUNING-B): explicit context window override; see buildModelContextLength.
+      context_length: buildModelContextLength(input, warnings),
       // Instance-level LLM gateway settings — see HermesProfileLlmSettings.
       // api_key is a "${VAR}" reference, never the key's value.
       base_url: llmBaseUrl,

@@ -956,6 +956,247 @@ describe("myrmidon(G2) compileHermesProfile — instance defaults", () => {
     expect(yaml).toContain("compression:\n  enabled: true\n  target_ratio: 0.2\n  threshold: 0.5");
   });
 
+  // myrmidon(BOT-RUNTIME-TUNING-B): the absolute compression token cap.
+  describe("myrmidon(BOT-RUNTIME-TUNING-B) compression.threshold_tokens", () => {
+    it("writes threshold_tokens when the instance default sets it", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({ instanceDefaults: { compression: { thresholdTokens: 100_000 } } }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain("compression:\n  threshold_tokens: 100000");
+    });
+
+    it("writes threshold_tokens alongside the ratio settings", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({
+            instanceDefaults: { compression: { enabled: true, threshold: 0.5, targetRatio: 0.2, thresholdTokens: 100_000 } },
+          }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain(
+        "compression:\n  enabled: true\n  target_ratio: 0.2\n  threshold: 0.5\n  threshold_tokens: 100000",
+      );
+    });
+
+    it("leaves threshold_tokens out when it is not set (Hermes applies its own default)", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({ instanceDefaults: { compression: { enabled: true, threshold: 0.5 } } }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain("compression:");
+      expect(yaml).not.toContain("threshold_tokens");
+    });
+
+    it("drops a threshold_tokens below the supported floor with a warning, never throws", () => {
+      const { profile, warnings } = compileHermesProfileDetailed(
+        baseInput({ instanceDefaults: { compression: { thresholdTokens: 9_999 } } }),
+      );
+      const yaml = fileByPath(profile.files, "hermes/config.yaml").content;
+      expect(yaml).not.toContain("threshold_tokens");
+      expect(warnings.some((warning) => warning.includes("compression.threshold_tokens"))).toBe(true);
+    });
+
+    it("drops a threshold_tokens above the supported ceiling the same way", () => {
+      const { profile, warnings } = compileHermesProfileDetailed(
+        baseInput({ instanceDefaults: { compression: { thresholdTokens: 2_000_001 } } }),
+      );
+      expect(fileByPath(profile.files, "hermes/config.yaml").content).not.toContain("threshold_tokens");
+      expect(warnings.some((warning) => warning.includes("compression.threshold_tokens"))).toBe(true);
+    });
+
+    it("drops a non-integer or non-finite threshold_tokens with a warning", () => {
+      for (const bad of [Number.NaN, 0, -5]) {
+        const { profile, warnings } = compileHermesProfileDetailed(
+          baseInput({ instanceDefaults: { compression: { thresholdTokens: bad } } }),
+        );
+        expect(fileByPath(profile.files, "hermes/config.yaml").content).not.toContain("threshold_tokens");
+        expect(warnings.some((warning) => warning.includes("compression.threshold_tokens"))).toBe(true);
+      }
+    });
+  });
+
+  // myrmidon(BOT-RUNTIME-TUNING-B): the model context window override.
+  describe("myrmidon(BOT-RUNTIME-TUNING-B) model.context_length", () => {
+    it("writes model.context_length from the card's models.contextLength", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({
+            adapterConfig: { model: "model-a", models: { contextLength: 262_144 } },
+          }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain("context_length: 262144");
+    });
+
+    it("writes model.context_length from the instance alias map for the card's model", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({
+            adapterConfig: { model: "model-a" },
+            instanceDefaults: { modelContextLengths: { "model-a": 131_072 } },
+          }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain("context_length: 131072");
+    });
+
+    it("matches the model part of a provider/model string against the alias map", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({
+            adapterConfig: { model: "provider-a/model-a" },
+            instanceDefaults: { modelContextLengths: { "model-a": 131_072 } },
+          }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain("context_length: 131072");
+    });
+
+    it("the card's explicit models.contextLength wins over the instance alias map", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({
+            adapterConfig: { model: "model-a", models: { contextLength: 262_144 } },
+            instanceDefaults: { modelContextLengths: { "model-a": 131_072 } },
+          }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain("context_length: 262144");
+    });
+
+    it("leaves context_length out when neither the card nor the map has it", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(baseInput({ adapterConfig: { model: "model-a" } })).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain("model:");
+      expect(yaml).not.toContain("context_length");
+    });
+
+    it("leaves context_length out when the model is not in the map", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({
+            adapterConfig: { model: "model-b" },
+            instanceDefaults: { modelContextLengths: { "model-a": 131_072 } },
+          }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).not.toContain("context_length");
+    });
+
+    it("drops an out-of-range context_length with a warning, never throws", () => {
+      for (const bad of [7_999, 10_000_001, 200_000.5]) {
+        const { profile, warnings } = compileHermesProfileDetailed(
+          baseInput({ adapterConfig: { model: "model-a", models: { contextLength: bad } } }),
+        );
+        expect(fileByPath(profile.files, "hermes/config.yaml").content).not.toContain("context_length");
+        expect(warnings.some((warning) => warning.includes("model.context_length"))).toBe(true);
+      }
+    });
+
+    it("drops an out-of-range map value with a warning naming the alias", () => {
+      const { profile, warnings } = compileHermesProfileDetailed(
+        baseInput({
+          adapterConfig: { model: "model-a" },
+          instanceDefaults: { modelContextLengths: { "model-a": 10_000_001 } },
+        }),
+      );
+      expect(fileByPath(profile.files, "hermes/config.yaml").content).not.toContain("context_length");
+      expect(warnings.some((warning) => warning.includes("model-a") && warning.includes("model.context_length"))).toBe(true);
+    });
+  });
+
+  // myrmidon(BOT-RUNTIME-TUNING-B): auxiliary models for title generation and compression.
+  describe("myrmidon(BOT-RUNTIME-TUNING-B) auxiliary title_generation and compression models", () => {
+    it("writes auxiliary.title_generation.model from the card's models.titleGeneration", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({ adapterConfig: { models: { titleGeneration: "model-title" } } }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain('auxiliary:\n  title_generation:\n    model: "model-title"');
+    });
+
+    it("writes auxiliary.compression.model from the card's models.compressionSummary", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({ adapterConfig: { models: { compressionSummary: "model-summary" } } }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain('auxiliary:\n  compression:\n    model: "model-summary"');
+    });
+
+    it("writes vision, title_generation and compression together, sorted keys", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({
+            adapterConfig: { models: { vision: "model-vision", titleGeneration: "model-title", compressionSummary: "model-summary" } },
+          }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain(
+        'auxiliary:\n  compression:\n    model: "model-summary"\n  title_generation:\n    model: "model-title"\n  vision:\n    model: "model-vision"',
+      );
+    });
+
+    it("the instance defaults apply when the card sets none", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({
+            adapterConfig: {},
+            instanceDefaults: { auxiliary: { titleGenerationModel: "model-title", compressionModel: "model-summary" } },
+          }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain('auxiliary:\n  compression:\n    model: "model-summary"\n  title_generation:\n    model: "model-title"');
+    });
+
+    it("the card's entry wins over the instance default", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(
+          baseInput({
+            adapterConfig: { models: { titleGeneration: "model-card" } },
+            instanceDefaults: { auxiliary: { titleGenerationModel: "model-instance" } },
+          }),
+        ).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).toContain('model: "model-card"');
+      expect(yaml).not.toContain('model: "model-instance"');
+    });
+
+    it("leaves the auxiliary sections out when neither the card nor the defaults set them", () => {
+      const yaml = fileByPath(compileHermesProfile(baseInput()).files, "hermes/config.yaml").content;
+      expect(yaml).not.toContain("auxiliary:");
+      expect(yaml).not.toContain("title_generation");
+      expect(yaml).not.toContain("compression:");
+    });
+
+    it("a blank string is treated as unset, not as an empty model", () => {
+      const yaml = fileByPath(
+        compileHermesProfile(baseInput({ adapterConfig: { models: { titleGeneration: "   " } } })).files,
+        "hermes/config.yaml",
+      ).content;
+      expect(yaml).not.toContain("auxiliary:");
+    });
+  });
+
   it("maps sessionsRetentionDays to sessions.retention_days", () => {
     const yaml = fileByPath(
       compileHermesProfile(baseInput({ instanceDefaults: { sessionsRetentionDays: 30 } })).files,
