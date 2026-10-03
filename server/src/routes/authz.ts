@@ -4,7 +4,6 @@ import type { PermissionKey, SecretBindingTargetType } from "@paperclipai/shared
 import { forbidden, HttpError, unauthorized } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { responsibleUserAuthzShadowMode } from "../services/authorization.js";
-import { accessService } from "../services/index.js";
 
 function throwOrShadowResponsibleUserCompanyAccessDeny(
   req: Request,
@@ -145,6 +144,11 @@ export async function assertActorCompanyPermission(
   permissionKey: PermissionKey,
 ) {
   assertCompanyAccess(req, companyId);
+  // Loaded lazily: a static import of the services barrel here closes an import
+  // cycle (services -> heartbeat -> routes/authz -> services) that makes
+  // heartbeat consumers bind the real heartbeatService instead of a test mock
+  // and changes module-evaluation order in production.
+  const { accessService } = await import("../services/index.js");
   if (req.actor.type === "agent") {
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
     const access = accessService(db);
