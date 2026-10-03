@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import { compileHermesProfile } from "./profile-compiler.js";
 import {
+  BOT_AUX_COMPRESSION_MODEL_ENV,
+  BOT_AUX_TITLE_MODEL_ENV,
   BOT_BOARD_URL_ENV,
+  BOT_COMPRESSION_THRESHOLD_TOKENS_ENV,
   BOT_HINDSIGHT_ALLOWED_BANKS_ENV,
   BOT_HINDSIGHT_API_URL_ENV,
   BOT_HINDSIGHT_BANK_ENV,
@@ -11,13 +14,16 @@ import {
   BOT_LLM_API_KEY_SECRET_ENV,
   BOT_LLM_BASE_URL_ENV,
   BOT_MCP_SERVERS_ENV,
+  BOT_MODEL_CONTEXT_LENGTH_ENV,
   BOT_RUNTIME_MCP_URL_BASE_ENV,
   BotProfileInputError,
   assertBotLlmSettingsForCard,
   assertBotProfileSettings,
   buildHermesProfileInput,
   cardUsesLlmGateway,
+  parseBotCompressionThresholdTokens,
   parseBotMcpServers,
+  parseBotModelContextLengths,
   parseBotHindsightAllowedBanks,
   parseObservationScopes,
   readBotProfileSettings,
@@ -42,6 +48,12 @@ function settings(overrides: Partial<BotProfileSettings> = {}): BotProfileSettin
     runtimeMcpUrlBase: null,
     mcpServers: [],
     mcpServersError: null,
+    compressionThresholdTokens: null,
+    compressionThresholdTokensError: null,
+    modelContextLengths: null,
+    modelContextLengthsError: null,
+    auxiliaryTitleModel: null,
+    auxiliaryCompressionModel: null,
     ...overrides,
   };
 }
@@ -91,6 +103,12 @@ describe("myrmidon(W2a) readBotProfileSettings", () => {
       runtimeMcpUrlBase: "http://board.example.com:3100",
       mcpServers: [],
       mcpServersError: null,
+      compressionThresholdTokens: null,
+      compressionThresholdTokensError: null,
+      modelContextLengths: null,
+      modelContextLengthsError: null,
+      auxiliaryTitleModel: null,
+      auxiliaryCompressionModel: null,
     });
     expect(readBotProfileSettings({ [BOT_BOARD_URL_ENV]: "   " }).boardUrl).toBeNull();
     expect(readBotProfileSettings({}).hindsightApiUrl).toBeNull();
@@ -103,6 +121,116 @@ describe("myrmidon(W2a) readBotProfileSettings", () => {
     });
     expect(read.llmApiKeyEnv).toBe("FLEET_LLM_API_KEY");
     expect(read.llmApiKeySecret).toBe("fleet-llm-gateway-key");
+  });
+});
+
+// myrmidon(BOT-RUNTIME-TUNING-B): the instance settings behind compression
+// threshold_tokens, per-model context windows and auxiliary models.
+describe("myrmidon(BOT-RUNTIME-TUNING-B) instance settings", () => {
+  it("reads MYRMIDON_BOT_COMPRESSION_THRESHOLD_TOKENS as an integer", () => {
+    const read = readBotProfileSettings({ [BOT_COMPRESSION_THRESHOLD_TOKENS_ENV]: "100000" });
+    expect(read.compressionThresholdTokens).toBe(100_000);
+    expect(read.compressionThresholdTokensError).toBeNull();
+  });
+
+  it("treats an unset or blank threshold as unset (Hermes's own default applies)", () => {
+    expect(readBotProfileSettings({}).compressionThresholdTokens).toBeNull();
+    expect(readBotProfileSettings({ [BOT_COMPRESSION_THRESHOLD_TOKENS_ENV]: "   " }).compressionThresholdTokens).toBeNull();
+  });
+
+  it("reports a non-integer threshold instead of throwing", () => {
+    const read = readBotProfileSettings({ [BOT_COMPRESSION_THRESHOLD_TOKENS_ENV]: "100k" });
+    expect(read.compressionThresholdTokens).toBeNull();
+    expect(read.compressionThresholdTokensError).toContain(BOT_COMPRESSION_THRESHOLD_TOKENS_ENV);
+    expect(parseBotCompressionThresholdTokens(null)).toEqual({ value: null, error: null });
+    expect(parseBotCompressionThresholdTokens("0")).toEqual({ value: 0, error: null });
+  });
+
+  it("parses MYRMIDON_BOT_MODEL_CONTEXT_LENGTH as alias=tokens pairs", () => {
+    const read = readBotProfileSettings({ [BOT_MODEL_CONTEXT_LENGTH_ENV]: "model-a=131072, model-b=262144" });
+    expect(read.modelContextLengths).toEqual({ "model-a": 131_072, "model-b": 262_144 });
+    expect(read.modelContextLengthsError).toBeNull();
+  });
+
+  it("an invalid pair is reported and skipped, the valid ones still apply", () => {
+    const read = readBotProfileSettings({ [BOT_MODEL_CONTEXT_LENGTH_ENV]: "model-a=131072,broken,model-c=oops" });
+    expect(read.modelContextLengths).toEqual({ "model-a": 131_072 });
+    expect(read.modelContextLengthsError).toContain(BOT_MODEL_CONTEXT_LENGTH_ENV);
+    expect(parseBotModelContextLengths(null)).toEqual({ map: null, error: null });
+  });
+
+  it("the last value wins for a repeated alias", () => {
+    expect(parseBotModelContextLengths("model-a=131072,model-a=262144").map).toEqual({ "model-a": 262_144 });
+  });
+
+  it("reads the auxiliary model settings, trimming them", () => {
+    const read = readBotProfileSettings({
+      [BOT_AUX_TITLE_MODEL_ENV]: " model-title ",
+      [BOT_AUX_COMPRESSION_MODEL_ENV]: "model-summary",
+    });
+    expect(read.auxiliaryTitleModel).toBe("model-title");
+    expect(read.auxiliaryCompressionModel).toBe("model-summary");
+  });
+
+  it("the auxiliary model settings default to unset, not to a hard-coded model", () => {
+    const read = readBotProfileSettings({});
+    expect(read.auxiliaryTitleModel).toBeNull();
+    expect(read.auxiliaryCompressionModel).toBeNull();
+  });
+
+  it("carries the settings into instanceDefaults and then into the compiled config.yaml", () => {
+    const { input, warnings } = buildHermesProfileInput(source(), settings({
+      compressionThresholdTokens: 100_000,
+      modelContextLengths: { "model-a": 131_072 },
+      auxiliaryTitleModel: "model-title",
+      auxiliaryCompressionModel: "model-summary",
+    }));
+    expect(warnings).toEqual([]);
+    const yaml = fileContent(compileHermesProfile(input), "hermes/config.yaml");
+    expect(yaml).toContain("threshold_tokens: 100000");
+    expect(yaml).not.toContain("context_length"); // the card names no model
+    expect(yaml).toContain('auxiliary:\n  compression:\n    model: "model-summary"\n  title_generation:\n    model: "model-title"');
+  });
+
+  it("the alias map reaches model.context_length for the card's model", () => {
+    const { input } = buildHermesProfileInput(
+      source({ adapterConfig: { model: "model-a" } }),
+      settings({ modelContextLengths: { "model-a": 131_072 } }),
+    );
+    expect(fileContent(compileHermesProfile(input), "hermes/config.yaml")).toContain("context_length: 131072");
+  });
+
+  it("the card's own models.contextLength reaches model.context_length over the map", () => {
+    const { input } = buildHermesProfileInput(
+      source({ adapterConfig: { model: "model-a", models: { contextLength: 262_144 } } }),
+      settings({ modelContextLengths: { "model-a": 131_072 } }),
+    );
+    expect(fileContent(compileHermesProfile(input), "hermes/config.yaml")).toContain("context_length: 262144");
+  });
+
+  it("the card's models.titleGeneration and models.compressionSummary reach the compiled auxiliary block", () => {
+    const { input } = buildHermesProfileInput(
+      source({
+        adapterConfig: {
+          model: "model-a",
+          models: { titleGeneration: "model-card-title", compressionSummary: "model-card-summary" },
+        },
+      }),
+      settings({ auxiliaryTitleModel: "model-instance-title" }),
+    );
+    const yaml = fileContent(compileHermesProfile(input), "hermes/config.yaml");
+    expect(yaml).toContain('model: "model-card-title"');
+    expect(yaml).toContain('model: "model-card-summary"');
+    expect(yaml).not.toContain('model: "model-instance-title"');
+  });
+
+  it("a settings parse error is surfaced as a warning, not a compile error", () => {
+    const { warnings } = buildHermesProfileInput(source(), settings({
+      compressionThresholdTokens: null,
+      compressionThresholdTokensError: `${BOT_COMPRESSION_THRESHOLD_TOKENS_ENV}: "100k" is not an integer`,
+      modelContextLengthsError: null,
+    }));
+    expect(warnings).toEqual([`${BOT_COMPRESSION_THRESHOLD_TOKENS_ENV}: "100k" is not an integer`]);
   });
 });
 
