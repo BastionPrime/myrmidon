@@ -2045,6 +2045,13 @@
       "when": 1790974687874,
       "tag": "0294_baseline_metric_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 295,
+      "version": "7",
+      "when": 1790974688874,
+      "tag": "0295_pretty_gravity",
+      "breakpoints": true
     }
   ]
 }
