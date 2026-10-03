@@ -79,6 +79,7 @@ import {
   syncInstructionsBundleConfigFromFilePath,
   workspaceOperationService,
 } from "../services/index.js";
+import type { AgentCasteDirectoryPort } from "../services/agents.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { PAPERCLIP_CORE_SKILL_KEYS } from "../services/company-skills.js";
 import { createRunSecretRedactionRegistry } from "../services/run-secret-redaction.js";
@@ -501,6 +502,13 @@ export function agentRoutes(
        */
       completeCredential?: SetupTokenSecretWriter;
     };
+    /**
+     * myrmidon(1.6.1 CUSTOM-CASTES B): the company caste directory read. When
+     * present, the agent create/update service refuses a role key that is not
+     * a caste of the company (400). Absent until part A lands — the check is
+     * then a no-op, which keeps the pre-directory behavior exactly.
+     */
+    casteDirectory?: AgentCasteDirectoryPort;
   } = {},
 ) {
   // Legacy hardcoded maps — used as fallback when adapter module does not
@@ -543,7 +551,7 @@ export function agentRoutes(
   const KNOWN_INSTRUCTIONS_BUNDLE_KEY_SET: ReadonlySet<string> = new Set(KNOWN_INSTRUCTIONS_BUNDLE_KEYS);
 
   const router = Router();
-  const svc = agentService(db);
+  const svc = agentService(db, { castes: options.casteDirectory });
   const access = accessService(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
