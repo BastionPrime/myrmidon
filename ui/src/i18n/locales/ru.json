@@ -383,5 +383,17 @@
     "refresh": "Обновить модели",
     "refreshing": "Обновление…",
     "loadError": "Не удалось загрузить список моделей."
+  },
+  "agentsTree": {
+    "expandNode": "Развернуть {{name}}",
+    "collapseNode": "Свернуть {{name}}",
+    "noManager": "Без руководителя",
+    "searchPlaceholder": "Поиск агентов...",
+    "searchAria": "Поиск агентов по имени",
+    "errorIndicator": "В этой ветке есть агенты в состоянии ошибки",
+    "agentsCount": "агентов: {{count}}",
+    "runningCount": "работает: {{count}}",
+    "sortModeTree": "Дерево",
+    "viewTree": "Вид деревом"
   }
 }

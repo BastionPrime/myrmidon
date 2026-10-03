@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "@/i18n";
 import { Link, useLocation } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -43,6 +44,13 @@ import {
   type AgentSidebarSortMode,
   writeAgentSortMode,
 } from "../lib/agent-order";
+import {
+  buildAgentForest,
+  getAgentTreeCollapsedStorageKey,
+  readAgentTreeCollapsed,
+  writeAgentTreeCollapsed,
+} from "../lib/agent-tree";
+import { SidebarAgentTreeRows } from "./SidebarAgentTree";
 import { AgentIcon } from "./AgentIconPicker";
 import { BudgetSidebarMarker } from "./BudgetSidebarMarker";
 import { SidebarNavItem } from "./SidebarNavItem";
@@ -67,6 +75,7 @@ const RECENT_AGENT_LIMIT = 3;
 const LIVE_AGENT_LINGER_MS = 120_000;
 
 const AGENT_SORT_CHOICES: SidebarSectionRadioChoice[] = [
+  { value: "tree", label: "Tree" },
   { value: "top", label: "Top" },
   { value: "alphabetical", label: "Alphabetical" },
   { value: "recent", label: "Recent" },
@@ -80,7 +89,7 @@ function agentTimestamp(agent: Agent, field: "lastHeartbeatAt" | "updatedAt" | "
 }
 
 function sortAgents(agents: Agent[], sortMode: AgentSidebarSortMode): Agent[] {
-  if (sortMode === "top") return agents;
+  if (sortMode === "top" || sortMode === "tree") return agents;
   const sorted = [...agents];
   if (sortMode === "alphabetical") {
     sorted.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
@@ -105,7 +114,9 @@ function sortAgents(agents: Agent[], sortMode: AgentSidebarSortMode): Agent[] {
 const AGENT_STAR_ROW_REVEAL =
   "opacity-0 transition-opacity group-hover/agent:opacity-100 group-focus-within/agent:opacity-100";
 
-function SidebarAgentItem({
+// myrmidon(AGENTS-TREE): exported so the tree wrapper (SidebarAgentTree.tsx)
+// and the roster tree reuse the exact same row chrome.
+export function SidebarAgentItem({
   activeAgentId,
   activeTab,
   agent,
@@ -390,6 +401,21 @@ export function SidebarAgents({ streamlined = false }: { streamlined?: boolean }
     if (!sortModeStorageKey) return "top";
     return readAgentSortMode(sortModeStorageKey);
   });
+  // myrmidon(AGENTS-TREE): per-user persisted collapse state, stored as the
+  // set of collapsed node ids (default = first level expanded).
+  const treeCollapsedStorageKey = useMemo(() => {
+    if (!selectedCompanyId) return null;
+    return getAgentTreeCollapsedStorageKey(selectedCompanyId, currentUserId);
+  }, [currentUserId, selectedCompanyId]);
+  const [treeCollapsed, setTreeCollapsed] = useState<Set<string>>(() => {
+    if (!treeCollapsedStorageKey) return new Set();
+    return readAgentTreeCollapsed(treeCollapsedStorageKey);
+  });
+  useEffect(() => {
+    setTreeCollapsed(
+      treeCollapsedStorageKey ? readAgentTreeCollapsed(treeCollapsedStorageKey) : new Set(),
+    );
+  }, [treeCollapsedStorageKey]);
   const { orderedAgents } = useAgentOrder({
     agents: visibleAgents,
     companyId: selectedCompanyId,
@@ -399,6 +425,8 @@ export function SidebarAgents({ streamlined = false }: { streamlined?: boolean }
     () => sortAgents(orderedAgents, sortMode),
     [orderedAgents, sortMode],
   );
+  // myrmidon(AGENTS-TREE): the hierarchy forest used by the "Tree" sort mode.
+  const agentForest = useMemo(() => buildAgentForest(sortedAgents), [sortedAgents]);
   const sortedAgentIdSet = useMemo(
     () => new Set(sortedAgents.map((agent: Agent) => agent.id)),
     [sortedAgents],
@@ -433,7 +461,9 @@ export function SidebarAgents({ streamlined = false }: { streamlined?: boolean }
     });
   }, [liveCountByAgent, liveLingerVersion, sortedAgents]);
   const hasActiveAgents = runningAgents.length > 0;
-  const displayedAgents = !streamlined
+  // myrmidon(AGENTS-TREE): tree mode always renders the full hierarchy — the
+  // active/recent subset is a flat-list concept and would hide structure.
+  const displayedAgents = !streamlined || sortMode === "tree"
     ? sortedAgents
     : hasActiveAgents
       ? runningAgents
@@ -503,7 +533,7 @@ export function SidebarAgents({ streamlined = false }: { streamlined?: boolean }
   const persistSortMode = useCallback(
     (value: string) => {
       const nextSortMode: AgentSidebarSortMode =
-        value === "alphabetical" || value === "recent" ? value : "top";
+        value === "alphabetical" || value === "recent" || value === "tree" ? value : "top";
       setSortMode(nextSortMode);
       if (sortModeStorageKey) {
         writeAgentSortMode(sortModeStorageKey, nextSortMode);
@@ -608,6 +638,20 @@ export function SidebarAgents({ streamlined = false }: { streamlined?: boolean }
     [displayedAgents, starredAgentIdSet],
   );
 
+  // myrmidon(AGENTS-TREE): toggle one node and persist the collapsed set.
+  const toggleTreeNode = useCallback(
+    (agentId: string) => {
+      setTreeCollapsed((current) => {
+        const next = new Set(current);
+        if (next.has(agentId)) next.delete(agentId);
+        else next.add(agentId);
+        if (treeCollapsedStorageKey) writeAgentTreeCollapsed(treeCollapsedStorageKey, next);
+        return next;
+      });
+    },
+    [treeCollapsedStorageKey],
+  );
+
   const renderAgentRow = (agent: Agent, isStarredRow: boolean) => (
     <SidebarAgentItem
       key={agent.id}
@@ -650,8 +694,20 @@ export function SidebarAgents({ streamlined = false }: { streamlined?: boolean }
         onRadioValueChange: persistSortMode,
       }}
     >
-      {starredAgents.map((agent: Agent) => renderAgentRow(agent, true))}
-      {dedupedDisplayedAgents.map((agent: Agent) => renderAgentRow(agent, false))}
+      {sortMode === "tree" ? (
+        <SidebarAgentTreeSection
+          forest={agentForest}
+          collapsed={treeCollapsed}
+          onToggleNode={toggleTreeNode}
+          renderRow={(agent) => renderAgentRow(agent, false)}
+          rail={rail}
+        />
+      ) : (
+        <>
+          {starredAgents.map((agent: Agent) => renderAgentRow(agent, true))}
+          {dedupedDisplayedAgents.map((agent: Agent) => renderAgentRow(agent, false))}
+        </>
+      )}
       {showSeeAllLink && (() => {
         // Deliberately NOT a SidebarNavItem: this is a quiet muted affordance
         // (plain Link) that must not adopt nav-row active-route highlighting.
@@ -679,5 +735,57 @@ export function SidebarAgents({ streamlined = false }: { streamlined?: boolean }
         );
       })()}
     </SidebarSection>
+  );
+}
+
+// myrmidon(AGENTS-TREE): the sidebar's tree body — rooted hierarchy, the
+// flat rootless agents, and the dedicated "No manager" orphan group.
+function SidebarAgentTreeSection({
+  forest,
+  collapsed,
+  onToggleNode,
+  renderRow,
+  rail,
+}: {
+  forest: ReturnType<typeof buildAgentForest>;
+  collapsed: Set<string>;
+  onToggleNode: (agentId: string) => void;
+  renderRow: (agent: Agent) => ReactNode;
+  rail: boolean;
+}) {
+  // myrmidon(AGENTS-TREE): i18n labels (agentsTree namespace, ru translated).
+  const { t } = useTranslation();
+  const treeLabels = {
+    expandNode: (name: string) => t("agentsTree.expandNode", { name }),
+    collapseNode: (name: string) => t("agentsTree.collapseNode", { name }),
+    agentsCount: (count: number) => t("agentsTree.agentsCount", { count }),
+    runningCount: (count: number) => t("agentsTree.runningCount", { count }),
+  };
+  return (
+    <div data-slot="agent-tree">
+      <SidebarAgentTreeRows
+        nodes={forest.roots}
+        renderRow={renderRow}
+        collapsed={collapsed}
+        onToggleNode={onToggleNode}
+        rail={rail}
+        labels={treeLabels}
+      />
+      {forest.orphans.length > 0 && (
+        <div data-slot="agent-tree-orphans">
+          <p className="mx-2 mt-2 px-2 text-(length:--text-nano) font-semibold uppercase tracking-wide text-muted-foreground/80">
+            {t("agentsTree.noManager")}
+          </p>
+          <SidebarAgentTreeRows
+            nodes={forest.orphans}
+            renderRow={renderRow}
+            collapsed={collapsed}
+            onToggleNode={onToggleNode}
+            rail={rail}
+            labels={treeLabels}
+          />
+        </div>
+      )}
+    </div>
   );
 }

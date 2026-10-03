@@ -1,9 +1,11 @@
 import { useAgentChatEnabled } from "../hooks/useAgentChatEnabled";
+import { useTranslation } from "@/i18n";
 import { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { Link, useNavigate, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
 import { builtInAgentsApi, type BuiltInAgentState } from "../api/builtInAgents";
+import { authApi } from "../api/auth";
 import { environmentsApi } from "../api/environments";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
@@ -22,11 +24,12 @@ import { BuiltInLifecycleChip } from "../components/BuiltInAgentBadges";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { OrgChart } from "./OrgChart";
+import { AgentTree } from "../components/AgentTree";
 import { relativeTime, cn, agentRouteRef, agentUrl } from "../lib/utils";
 import { PageTabBar } from "../components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, Bot, Plus, List, Network } from "lucide-react";
+import { AlertTriangle, Bot, Plus, List, ListTree, Network } from "lucide-react";
 import { AGENT_ROLE_LABELS, type Agent, type Environment, type EnvironmentCapabilities } from "@paperclipai/shared";
 import {
   isStarred,
@@ -190,9 +193,10 @@ function filterOrgTree(nodes: OrgNode[], tab: FilterTab, builtInAgentIds: Set<st
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export type AgentsView = "list" | "org";
+export type AgentsView = "tree" | "list" | "org";
 
-export function Agents({ initialView = "list" }: { initialView?: AgentsView } = {}) {
+export function Agents({ initialView = "tree" }: { initialView?: AgentsView } = {}) {
+  const { t } = useTranslation();
   const agentChat = useAgentChatEnabled();
   const { selectedCompanyId } = useCompany();
   const { openNewAgent } = useDialogActions();
@@ -205,7 +209,13 @@ export function Agents({ initialView = "list" }: { initialView?: AgentsView } = 
   const requestedTab: FilterTab = isFilterTab(pathSegment) ? pathSegment : "all";
   const [view, setView] = useState<AgentsView>(() => streamlinedUiEnabled ? initialView : "org");
   const forceListView = !streamlinedUiEnabled && isMobile;
-  const effectiveView: AgentsView = forceListView ? "list" : view;
+  // myrmidon(AGENTS-TREE): the hierarchy view works on phones too (the
+  // org-chart's absolute layout was the mobile problem, not nesting).
+  const effectiveView: AgentsView = !streamlinedUiEnabled && isMobile
+    ? view === "org"
+      ? "list"
+      : view
+    : view;
 
   useEffect(() => {
     setView(streamlinedUiEnabled ? initialView : "org");
@@ -216,6 +226,13 @@ export function Agents({ initialView = "list" }: { initialView?: AgentsView } = 
     queryFn: () => instanceSettingsApi.get(),
     enabled: !!selectedCompanyId,
   });
+  // myrmidon(AGENTS-TREE): the tree collapse state is per user; read the
+  // session lazily (same pattern as the sidebar).
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+  });
+  const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
   const builtInAgentsEnabled = instanceSettings?.experimental.enableBuiltInAgents === true;
   const tab: FilterTab = requestedTab === "builtin" && !builtInAgentsEnabled ? "all" : requestedTab;
   const visibleTabItems = useMemo(
@@ -349,7 +366,7 @@ export function Agents({ initialView = "list" }: { initialView?: AgentsView } = 
       : environmentByAgentId.get(agentId) ?? localEnvironmentDescriptor
   );
 
-  const renderAgentRow = (agent: Agent) => {
+  const renderAgentRow = (agent: Agent, _node?: unknown) => {
     const hasInvalidOrgChain = agent.orgChainHealth?.status === "invalid_org_chain";
     const agentPending =
       membershipMutation.isPending &&
@@ -495,8 +512,20 @@ export function Agents({ initialView = "list" }: { initialView?: AgentsView } = 
               <Button
                 type="button"
                 size="icon-sm"
-                variant={effectiveView === "list" ? "secondary" : "ghost"}
+                variant={effectiveView === "tree" ? "secondary" : "ghost"}
                 className="rounded-none"
+                onClick={() => setView("tree")}
+                title={t("agentsTree.viewTree")}
+                aria-label={t("agentsTree.viewTree")}
+                aria-pressed={effectiveView === "tree"}
+              >
+                <ListTree className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant={effectiveView === "list" ? "secondary" : "ghost"}
+                className="rounded-none border-l border-border"
                 onClick={() => setView("list")}
                 title="List view"
                 aria-label="List view"
@@ -537,6 +566,22 @@ export function Agents({ initialView = "list" }: { initialView?: AgentsView } = 
           action="New Agent"
           onAction={openNewAgent}
         />
+      )}
+
+      {/* Tree view — myrmidon(AGENTS-TREE): hierarchy by reportsTo, default */}
+      {effectiveView === "tree" && filtered.length > 0 && (
+        <AgentTree
+          agents={filtered}
+          companyId={selectedCompanyId}
+          userId={currentUserId}
+          renderRow={renderAgentRow}
+        />
+      )}
+
+      {effectiveView === "tree" && agents && agents.length > 0 && filtered.length === 0 && (
+        <p className="text-sm text-muted-foreground text-center py-8">
+          No agents match the selected status.
+        </p>
       )}
 
       {/* List view */}
