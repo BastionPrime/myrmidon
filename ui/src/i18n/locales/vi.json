@@ -40,7 +40,10 @@
     },
     "group": "Agent maintenance ({{state}}) since {{since}}: {{reason}} — agents: {{count}}, queued wakeups: {{queued}}. New agent runs are paused; wakes are delivered when maintenance ends.",
     "ending": "Agent maintenance ending — agents: {{count}}",
-    "idsSummary": "Agent ids"
+    "idsSummary": "Agent ids",
+    "summary": "Maintenance windows: {{count}} across {{rows}} kind(s), {{state}}",
+    "row": "{{scope}} ({{state}}) since {{since}}: {{reason}} — windows: {{count}}, queued wakeups: {{queued}}.",
+    "endsBy": "ends by {{time}}"
   },
   "about": {
     "title": "About Myrmidon",

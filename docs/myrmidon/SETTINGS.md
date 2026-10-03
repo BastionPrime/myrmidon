@@ -732,3 +732,80 @@ them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
+
+
+
+
+
+## 1.6.1 — TG-NOTIFY-SETTINGS part F: the board UI for the Telegram notification settings
+
+The board-facing half of the Telegram notification settings: the "Telegram
+notifications" panel on the System screen of the 2.0 UI (Settings → System,
+under the UI-2.0 shell). It edits the company-level `telegramNotify` document
+the settings core (part A) stores and serves; no environment variables —
+everything is runtime-changeable per company through the same API.
+
+- The panel shows all five sections with their options: the daily digest
+  (send time, chat id, topic id, sections), error notifications (chat id,
+  topic id, minimum severity, rate limit per hour), owner messages
+  (require mention), escalations (stuck hours, channel, chat id, topic id) and
+  head-bot proactivity (mode, cap per day in "rarely" mode). With the contract
+  defaults every section reads OFF.
+- Saving sends one `PATCH /api/myrmidon/telegram-notify` with only the fields
+  that differ from the stored values; the answer is applied back, so a change
+  is reflected immediately. Editing is board-only on the server; a read
+  without board access renders the denied state.
+- The settings change log from the GET answer (actor, field path, previous and
+  next value) is rendered under the sections — the same changelog the core
+  records for every changed field.
+
+## 1.6.1 — TG-NOTIFY head-bot proactivity (part E: gate, rarely limit, U2 bundling)
+
+Settings of `server/src/myrmidon/telegram-notify/` (the proactivity half of the
+TG-NOTIFY-SETTINGS epic, part E). The head bot's own-initiative publications are
+gated per agent: `only_on_owner_request` (the default — the owner receives only
+replies to their own messages and the U2 decision cards), `rarely` (at most
+`rarelyMaxPerDay` proactive messages per agent per UTC day, everything beyond
+the ceiling is bundled into a daily summary publication), or `normal` (no
+limit). The mode and the ceiling live in the `proactivity` area of the
+`telegramNotify` settings document (instance settings, runtime-changeable; the
+contract and defaults are defined in `packages/shared/src/myrmidon-telegram-notify.ts`).
+A per-agent override uses the same enum under the `mode` key of the agent's
+metadata and wins over the company default.
+
+Storage: no new tables. The rarely day counters and the bundle queues sit under
+`instance_settings.general.myrmidonTelegramNotify` (the instance-settings JSON
+pattern; preserved across vendor `general` writes). The U2 card bundling turns
+several pending interaction cards older than 5 minutes in one conversation into
+one summary publication; each bundled card keeps its own callback action rows,
+so every card stays individually answerable.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `telegramNotify.proactivity.mode` (settings area) | 1.6-TG-PROACTIVITY-E | `only_on_owner_request` | Proactivity of the head bot per company: `only_on_owner_request` blocks every own-initiative publication; `rarely` allows at most `rarelyMaxPerDay` per agent per day and bundles the rest; `normal` removes the limit | Any other value is rejected by the validator; a malformed stored value falls back to the default |
+| `telegramNotify.proactivity.rarelyMaxPerDay` (settings area) | 1.6-TG-PROACTIVITY-E | `3` | Daily ceiling of proactive messages per agent in `rarely` mode; the counter resets on the UTC day boundary | Integer from 1 to 50; anything else falls back to 3 |
+| agent metadata key `mode` | 1.6-TG-PROACTIVITY-E | unset | Per-agent override of the mode (the same three values). Wins over the company default for that agent | A malformed value is ignored — the company default applies; an override can only pick one of the three modes |
+
+No environment variables, no new secrets. The gate runs inside the chat
+publication sweep; the bundling window is fixed at 5 minutes. Remove: the
+`server/src/myrmidon/telegram-notify/` tree, the export line in
+`packages/shared/src/index.ts`, the two marker lines in `app.ts` and
+`instance-settings.ts`, and this section.
+
+## 1.6.1 — WIP-LIMIT: the WIP limit screen and badge (part B, UI)
+
+The UI half of the WIP-LIMIT feature: the "WIP limit" screen in Company
+Settings (`/company/settings/wip-limit`) edits the contract of part A —
+`GET/PUT /api/myrmidon/companies/:companyId/wip-limit/settings`
+(`{ defaultLimit, perAgent }`, empty default = no limit) — and the agents
+list shows each agent's live `wip/limit` badge from
+`GET .../wip-limit/status` (red when `overLimit`). No environment variables,
+no new secrets: the values live in part A's store. While part A is unmerged
+the routes answer nothing — the screen shows its error state and the roster
+shows no badge, both harmless. Remove: the `ui/src/components/myrmidon/wip-limit/`
+tree, `AgentWipBadge.tsx`, the nav item, the route, the `Agents.tsx` status
+query/badge and the `wipLimit` i18n namespace.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| — | 1.6.1-WIP-LIMIT-B | — (always on) | The settings screen writes the row through part A's PUT; the badge on an agent row reads the status endpoint | Not configurable: no deployment-specific values in the UI half |
