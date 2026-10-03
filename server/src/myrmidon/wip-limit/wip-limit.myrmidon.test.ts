@@ -33,7 +33,7 @@ import {
   type WipLimitSettings,
 } from "@paperclipai/shared";
 import { buildWipLimitAttentionCards } from "./attention.js";
-import { deliverWipLimitSignal } from "./signal.js";
+import { deliverWipLimitSignal, type WipLimitSignalPorts } from "./signal.js";
 import { createWipLimitSweeper, wipLimitsAllDisabled } from "./sweep.js";
 
 const AGENT_A = "11111111-1111-4111-8111-111111111111";
@@ -196,11 +196,9 @@ describe("myrmidon(1.6.1-WIP-LIMIT-A) signal dedup", () => {
     const written: string[] = [];
     const commentsByKey = new Set<string>();
     const windowStart = new Date("2026-10-03T00:00:00Z");
-    const ports = {
-      addComment: async (_issueId: string, _body: string, _actor: Record<string, never>, options: {
-        metadata: { sections: Array<{ rows: Array<{ value: string }> }> };
-      }) => {
-        const key = options.metadata.sections[0].rows[0].value;
+    const ports: WipLimitSignalPorts = {
+      addComment: async (_issueId, _body, _actor, options) => {
+        const key = (options.metadata.sections[0].rows[0] as { value: string }).value;
         if (commentsByKey.has(key)) throw new Error("duplicate signal comment");
         commentsByKey.add(key);
         written.push(key);
