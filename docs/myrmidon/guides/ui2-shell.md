@@ -79,8 +79,9 @@ Desktop (viewport width 768 px and up):
   scope; the multi-project selector arrives later), status chips — colony
   (running agents of total), Fleet (turns into "Fleet: 1 attention" when
   agents are in error or runs failed), and the month's spend of budget —
-  and the "Tell the Commander" entry with a `Ctrl K` shortcut and a navy
-  decisions badge next to it.
+  and the "Tell the Commander" entry with a `Ctrl K` hint on it (the shortcut
+  itself arrives with the 1.6 chat update; today the palette opens by click),
+  and a navy decisions badge next to it.
 - On company settings routes a 10-section settings side panel (General,
   Members, Access, Secrets, Runs and queue, Budgets, Autonomy, Guardrails,
   Castes and models, System).
