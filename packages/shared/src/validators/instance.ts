@@ -12,8 +12,19 @@ import { shapeWithoutDefaults } from "./partial.js";
 import { workspaceHygieneLimitsSchema } from "../myrmidon-workspace-hygiene.js";
 // myrmidon(C0): run admission limits that can be changed while the server runs
 import { runLimitsSchema } from "../myrmidon-runtime-limits.js";
+// myrmidon(PARALLEL-HELPERS): company ceiling/default for parallel helper
+// subagents, changed from the instance settings page and /api/myrmidon/parallel-helpers.
+import { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema } from "../myrmidon-parallel-helpers.js";
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in the same general settings row
 import { browserBridgeSettingsSchema } from "../myrmidon-browser-bridge.js";
+import { swarmClaimSettingsSchema } from "../myrmidon-swarm-claim.js";
+// myrmidon(TG-NOTIFY-D): the TG-NOTIFY settings document stored in the same
+// general settings row (routes from part A, consumers in part D).
+import { telegramNotifySettingsSchema } from "../myrmidon-telegram-notify.js";
+
+// myrmidon(PARALLEL-HELPERS): re-exported for the barrel so the settings page and the
+// /api/myrmidon/parallel-helpers route validate with the exact schema stored here.
+export { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema };
 
 function presetSchema<T extends readonly number[]>(presets: T, label: string) {
   return z.number().refine(
@@ -46,9 +57,23 @@ export const instanceGeneralSettingsSchema = z.object({
   // page and /api/myrmidon/runtime-limits; absent means "use the environment
   // variable, then the default" (see packages/shared/src/myrmidon-runtime-limits.ts).
   runLimits: runLimitsSchema.optional(),
+  // myrmidon(PARALLEL-HELPERS): company ceiling and default for the "Parallel
+  // helpers" block on an agent card, changed from the instance settings page
+  // and /api/myrmidon/parallel-helpers; absent means the module defaults apply
+  // (see packages/shared/src/myrmidon-parallel-helpers.ts).
+  parallelHelpers: parallelHelpersSettingsSchema.optional(),
   // myrmidon(EXTCASE-B): browser-bridge allowlist changed from the bridge panel;
   // absent means "no domain is allowed" (deny by default).
   browserBridge: browserBridgeSettingsSchema.optional(),
+  // myrmidon(1.6-SWARM): per-role queues with leased claims — the pilot flag,
+  // the lease TTL, the per-agent ceiling and the sweep interval, changed from
+  // /api/myrmidon/swarm-claim; absent means "use the environment variable, then
+  // the default (the pilot is off)".
+  swarmClaim: swarmClaimSettingsSchema.optional(),
+  // myrmidon(TG-NOTIFY-D): TG-NOTIFY settings (digest/errors/inbound/escalations/
+  // proactivity) changed from part A's routes; absent means every surface is
+  // off (the 1.6.1 release criterion).
+  telegramNotify: telegramNotifySettingsSchema.optional(),
 }).strict();
 
 export const patchInstanceGeneralSettingsSchema = z

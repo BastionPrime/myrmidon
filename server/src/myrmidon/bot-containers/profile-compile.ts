@@ -15,6 +15,7 @@
 //   - warnings are reported when they change, not on every tick.
 
 import { isBotBoardGatewayEnabled } from "./board-gateway.js";
+import type { ParallelHelpersSettings } from "@paperclipai/shared";
 import {
   assertBotEgressSettings,
   BOT_EGRESS_MODE_ENV,
@@ -129,6 +130,15 @@ export interface BotProfilePorts {
   listMcpServers?(agent: BotProfileAgentRecord, context: BotMcpServersContext): Promise<BotMcpServersResult>;
   /** Instance-wide compression/retention defaults. Optional. */
   instanceDefaults?(): Promise<HermesProfileInstanceDefaults>;
+  /**
+   * myrmidon(PARALLEL-HELPERS): the company ceiling and default from
+   * instance settings (`general.parallelHelpers`). Optional: without it the
+   * module defaults apply (ceiling 10, default 2), the same values every
+   * card compiled before this feature existed. Re-read per tick like the other
+   * per-tick settings, so changing the ceiling takes effect on the next
+   * reconcile without a restart.
+   */
+  parallelHelpers?(): Promise<ParallelHelpersSettings | undefined>;
   /** myrmidon(1.6-WIKI): the approved regulations of the agent's role, as workspace files.
    *  Optional: without it a profile carries no regulations. `takenPaths` are the bundle's own
    *  paths, so a regulation file never overwrites one the agent ships. */
@@ -230,7 +240,7 @@ export function createBotProfileCompile(
     // ports below create the bot's keys, so a broken instance setting leaves nothing behind.
     const staticMcpServers = await resolveStaticMcpServers(ports, agent.companyId, settings);
 
-    const [cardEnv, skills, instructions, apiServerKey, paperclipApiKey, gatewayResult, instanceDefaults] =
+    const [cardEnv, skills, instructions, apiServerKey, paperclipApiKey, gatewayResult, instanceDefaults, parallelHelpersSettings] =
       await Promise.all([
         ports.resolveCardEnv(agent),
         ports.loadSkills(agent),
@@ -242,6 +252,9 @@ export function createBotProfileCompile(
             ports.listMcpServers(agent, { boardUrl: settings.boardUrl as string, enabled: boardGatewayEnabled })
           : Promise.resolve([] as BotMcpSource[]),
         ports.instanceDefaults ? ports.instanceDefaults() : Promise.resolve(undefined),
+        // myrmidon(PARALLEL-HELPERS): re-read per tick, like the other per-tick
+        // settings, so a ceiling change applies on the next reconcile.
+        ports.parallelHelpers ? ports.parallelHelpers() : Promise.resolve(undefined),
       ]);
 
     // myrmidon(1.6-WIKI): the approved regulations of the agent's role ride the profile's
@@ -297,6 +310,9 @@ export function createBotProfileCompile(
         // for any other name shared by two sources the declared server comes first and wins.
         mcpServers: [...staticMcpServers, ...gatewayMcpServers],
         instanceDefaults,
+        // myrmidon(PARALLEL-HELPERS): the company ceiling/default; the input
+        // builder resolves them against the card.
+        parallelHelpersSettings,
       },
       settings,
     );

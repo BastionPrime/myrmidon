@@ -27,8 +27,8 @@ from . import specs
 from .config import BOT_KEY_RE, Settings, load_settings
 
 JOB_ID_RE = __import__("re").compile(r"^[0-9a-f]{32}$")
-TIMEOUTS = {"ffmpeg": 1800, "image": 60, "pdf_images": 180, "probe": 30, "loudness": 600}
-SYNC_KINDS = {"image", "pdf_images", "probe", "loudness"}  # the facade waits for these on one HTTP call
+TIMEOUTS = {"ffmpeg": 1800, "image": 60, "pdf_images": 180, "probe": 30, "loudness": 600, "dwg": 300}
+SYNC_KINDS = {"image", "pdf_images", "probe", "loudness", "dwg"}  # the facade waits for these on one HTTP call
 NO_OUTPUT = {"probe", "loudness"}  # results come back as text, not files
 MAX_OUT_BYTES = 2 * 1024**3  # hard ceiling per file; the facade passes the bot's remaining quota, which is lower
 MIN_OUT_BYTES = 1 << 20
@@ -126,6 +126,8 @@ class Worker:
             return specs.build_probe_argv(specs.check_alias(spec.get("input"), aliases))
         if kind == "loudness":
             return specs.build_loudness_argv(specs.check_alias(spec.get("input"), aliases))
+        if kind == "dwg":
+            return specs.build_dwg_argv(spec, aliases)
         raise specs.SpecError(f"unknown job kind {kind!r}")
 
     async def run(self, bot: str, job: str) -> None:
