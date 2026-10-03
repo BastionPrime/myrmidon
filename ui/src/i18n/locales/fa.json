@@ -425,7 +425,9 @@
       "confirm": "Confirm remove",
       "removing": "Removing...",
       "cancel": "Cancel",
-      "inUse": "This caste is in use: agents still hold this role. Move or remove those agents first."
+      "inUse": "This caste is in use: agents still hold this role. Pick the caste to move them to, then confirm the removal.",
+      "reassignTo": "Reassign the agents on this caste to...",
+      "reassignPlaceholder": "Select a target caste"
     }
   },
   "cardModels": {

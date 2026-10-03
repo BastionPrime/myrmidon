@@ -73,7 +73,11 @@ export function CastesScreen() {
   });
 
   const removeMutation = useMutation({
-    mutationFn: (key: string) => castesApi.remove(companyId, key),
+    // myrmidon(1.6.1 CUSTOM-CASTES C annex): the DELETE may carry
+    // { reassignTo } to move live agents to another caste first; without a
+    // target the server 409s and the view tier demands the target.
+    mutationFn: (input: { key: string; reassignTo: string | null }) =>
+      castesApi.remove(companyId, input.key, input.reassignTo),
     onSuccess: () => {
       void invalidate();
     },
@@ -111,7 +115,7 @@ export function CastesScreen() {
       addError={addMutation.isError ? readable(addMutation.error) : null}
       onUpdate={(key, patch) => updateMutation.mutate({ key, patch })}
       updating={updateMutation.isPending}
-      onRemove={(key) => removeMutation.mutate(key)}
+      onRemove={(key, reassignTo) => removeMutation.mutate({ key, reassignTo })}
       removing={removeMutation.isPending}
       error={
         removeMutation.isError
@@ -122,6 +126,7 @@ export function CastesScreen() {
             ? readable(updateMutation.error)
             : null
       }
+      removeNeedsTarget={removeMutation.isError ? isCasteInUse(removeMutation.error) : false}
     />
   );
 }

@@ -77,6 +77,7 @@ export function CastesScreenView({
   onRemove,
   removing,
   error,
+  removeNeedsTarget = false,
 }: {
   castes: CasteView[];
   onAdd: (input: AddCasteInput) => void;
@@ -84,9 +85,15 @@ export function CastesScreenView({
   addError: string | null;
   onUpdate: (key: string, input: UpdateCasteInput) => void;
   updating: boolean;
-  onRemove: (key: string) => void;
+  onRemove: (key: string, reassignTo: string | null) => void;
   removing: boolean;
   error: string | null;
+  /**
+   * myrmidon(1.6.1 CUSTOM-CASTES C annex): true when the last DELETE came
+   * back 409 in-use — the confirm row must demand a reassignment target
+   * before the next attempt.
+   */
+  removeNeedsTarget?: boolean;
 }) {
   const { t } = useTranslation();
   const [form, setForm] = useState<AddCasteInput>(EMPTY_FORM);
@@ -94,6 +101,7 @@ export function CastesScreenView({
   const [editKey, setEditKey] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<UpdateCasteInput>({});
   const [confirmRemoveKey, setConfirmRemoveKey] = useState<string | null>(null);
+  const [reassignTo, setReassignTo] = useState<string>("");
 
   const keyValid = KEY_RE.test(readableKey(form.key));
   const namesValid = form.nameEn.trim().length > 0 && form.nameRu.trim().length > 0;
@@ -403,21 +411,71 @@ export function CastesScreenView({
                           </Button>
                         )}
                         {confirmRemoveKey === caste.key ? (
-                          <div className="flex items-center gap-2" data-testid={`myrmidon-castes-confirm-${caste.key}`}>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              disabled={removing}
-                              onClick={() => {
-                                onRemove(caste.key);
-                                setConfirmRemoveKey(null);
-                              }}
-                            >
-                              {removing ? t("castes.remove.removing") : t("castes.remove.confirm")}
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={() => setConfirmRemoveKey(null)}>
-                              {t("castes.remove.cancel")}
-                            </Button>
+                          <div
+                            className="flex flex-col gap-2 rounded-md border border-border p-2"
+                            data-testid={`myrmidon-castes-confirm-${caste.key}`}
+                          >
+                            {/* myrmidon(1.6.1 CUSTOM-CASTES C annex): when the
+                                caste holds live agents, the DELETE contract
+                                requires a reassignment target first. The need
+                                is learned from the 409 the confirm without a
+                                target produced; a caste without agents never
+                                reaches this branch (204 removes the row). */}
+                            {removeNeedsTarget && (
+                              <div className="space-y-1" data-testid={`myrmidon-castes-reassign-${caste.key}`}>
+                                <Label
+                                  htmlFor={`caste-reassign-${caste.key}`}
+                                  className="text-xs"
+                                >
+                                  {t("castes.remove.reassignTo")}
+                                </Label>
+                                <select
+                                  id={`caste-reassign-${caste.key}`}
+                                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+                                  value={reassignTo}
+                                  onChange={(e) => setReassignTo(e.target.value)}
+                                  data-testid={`myrmidon-castes-reassign-select-${caste.key}`}
+                                >
+                                  <option value="">{t("castes.remove.reassignPlaceholder")}</option>
+                                  {castes
+                                    .filter((candidate) => candidate.key !== caste.key)
+                                    .map((candidate) => (
+                                      <option key={candidate.key} value={candidate.key}>
+                                        {casteDisplayName(candidate)}
+                                      </option>
+                                    ))}
+                                </select>
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                disabled={removing || (removeNeedsTarget && reassignTo === "")}
+                                onClick={() => {
+                                  onRemove(
+                                    caste.key,
+                                    removeNeedsTarget && reassignTo !== "" ? reassignTo : null,
+                                  );
+                                  // The dialog stays after the send: a 409
+                                  // (in-use) turns it into the reassign form;
+                                  // a 204 removes the row — and the dialog
+                                  // with it. Cancel still closes it.
+                                }}
+                              >
+                                {removing ? t("castes.remove.removing") : t("castes.remove.confirm")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  setConfirmRemoveKey(null);
+                                  setReassignTo("");
+                                }}
+                              >
+                                {t("castes.remove.cancel")}
+                              </Button>
+                            </div>
                           </div>
                         ) : (
                           <Button
@@ -425,6 +483,7 @@ export function CastesScreenView({
                             variant="outline"
                             onClick={() => {
                               setConfirmRemoveKey(caste.key);
+                              setReassignTo("");
                               setEditKey(null);
                             }}
                             data-testid={`myrmidon-castes-remove-open-${caste.key}`}

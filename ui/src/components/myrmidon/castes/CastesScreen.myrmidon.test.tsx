@@ -46,7 +46,7 @@ let root: Root | null = null;
 let handlers: {
   onAdd: (input: AddCasteInput) => void;
   onUpdate: (key: string, input: UpdateCasteInput) => void;
-  onRemove: (key: string) => void;
+  onRemove: (key: string, reassignTo: string | null) => void;
 };
 
 beforeEach(() => {
@@ -163,8 +163,42 @@ describe("myrmidon(1.6.1 CUSTOM-CASTES C) view tier", () => {
     await flushReact();
     await click('[data-testid="myrmidon-castes-remove-open-engineer"]');
     expect(handlers.onRemove).not.toHaveBeenCalled();
+    // a caste with no known live agents: no reassign select in the dialog
+    expect(container.querySelector('[data-testid="myrmidon-castes-reassign-engineer"]')).toBeNull();
     await click('[data-testid="myrmidon-castes-confirm-engineer"] button');
-    expect(handlers.onRemove).toHaveBeenCalledWith("engineer");
+    expect(handlers.onRemove).toHaveBeenCalledWith("engineer", null);
+  });
+
+  it("myrmidon(1.6.1 CUSTOM-CASTES C annex) the in-use dialog demands a reassign target and sends it", async () => {
+    render([caste(), caste({ key: "data-steward", nameEn: "Data steward", nameRu: "Данные", builtIn: false })], {
+      removeNeedsTarget: true,
+    });
+    await flushReact();
+    await click('[data-testid="myrmidon-castes-remove-open-engineer"]');
+    // the dialog shows the reassign select (no target chosen yet)
+    const select = container.querySelector<HTMLSelectElement>(
+      '[data-testid="myrmidon-castes-reassign-select-engineer"]',
+    );
+    expect(select).not.toBeNull();
+    // options: placeholder + every caste except the removed one
+    const options = Array.from(select!.options).map((option) => option.value);
+    expect(options).toEqual(["", "data-steward"]);
+    // without a choice the confirm stays disabled
+    const confirm = container.querySelector<HTMLButtonElement>(
+      '[data-testid="myrmidon-castes-confirm-engineer"] button',
+    );
+    expect(confirm?.disabled).toBe(true);
+
+    // pick the target — the confirm unlocks
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+      setter?.call(select!, "data-steward");
+      select!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(confirm?.disabled).toBe(false);
+
+    await click('[data-testid="myrmidon-castes-confirm-engineer"] button');
+    expect(handlers.onRemove).toHaveBeenCalledWith("engineer", "data-steward");
   });
 
   it("edit opens the inline form (never the key) and PATCHes via onUpdate", async () => {

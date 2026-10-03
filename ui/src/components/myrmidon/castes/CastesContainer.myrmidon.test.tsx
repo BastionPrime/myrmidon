@@ -217,7 +217,46 @@ describe("myrmidon(1.6.1 CUSTOM-CASTES C) container", () => {
     expect(apiMock.remove).not.toHaveBeenCalled();
     await click('[data-testid="myrmidon-castes-confirm-data-steward"] button');
     await settle();
-    expect(apiMock.remove).toHaveBeenCalledWith(COMPANY_ID, "data-steward");
+    // no reassign needed — the DELETE carries no body
+    expect(apiMock.remove).toHaveBeenCalledWith(COMPANY_ID, "data-steward", null);
+  });
+
+  it("myrmidon(1.6.1 CUSTOM-CASTES C annex) a 409 from the remove demands a reassign target and the DELETE carries it", async () => {
+    // the directory holds more than the in-use caste, so a target exists
+    await renderScreen();
+    // first attempt without a target: 409 in-use
+    apiMock.remove.mockRejectedValueOnce(new ApiError("Caste in use", 409, { error: "caste_in_use" }));
+    await click('[data-testid="myrmidon-castes-remove-open-engineer"]');
+    await click('[data-testid="myrmidon-castes-confirm-engineer"] button');
+    await settle();
+    expect(apiMock.remove).toHaveBeenCalledWith(COMPANY_ID, "engineer", null);
+
+    // the dialog stayed open and gained the reassign select
+    const error = container.querySelector('[data-testid="myrmidon-castes-mutation-error"]');
+    expect(error).not.toBeNull();
+    expect(error?.textContent).toContain("in use");
+    const select = container.querySelector<HTMLSelectElement>(
+      '[data-testid="myrmidon-castes-reassign-select-engineer"]',
+    );
+    expect(select).not.toBeNull();
+    // confirm blocked until a target is picked
+    const confirm = container.querySelector<HTMLButtonElement>(
+      '[data-testid="myrmidon-castes-confirm-engineer"] button',
+    );
+    expect(confirm?.disabled).toBe(true);
+
+    // pick data-steward as the target; the DELETE goes out with the body
+    apiMock.remove.mockResolvedValueOnce({ ok: true });
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+      setter?.call(select!, "data-steward");
+      select!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await click('[data-testid="myrmidon-castes-confirm-engineer"] button');
+    await settle();
+    expect(apiMock.remove).toHaveBeenLastCalledWith(COMPANY_ID, "engineer", "data-steward");
+    // 204 path: the error clears after the successful reassign-delete
+    expect(container.querySelector('[data-testid="myrmidon-castes-mutation-error"]')).toBeNull();
   });
 
   it("a 409 from the remove renders the readable in-use message", async () => {

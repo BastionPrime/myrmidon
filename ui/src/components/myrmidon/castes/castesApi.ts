@@ -72,7 +72,14 @@ export const castesApi = {
   update: (companyId: string, key: string, input: UpdateCasteInput) =>
     api.patch<{ caste: CasteView }>(`${base(companyId)}/${encodeURIComponent(key)}`, input),
 
-  /** DELETE /castes/:key — 409 while live agents hold the role; else 204. */
-  remove: (companyId: string, key: string) =>
-    api.delete<{ ok: true }>(`${base(companyId)}/${encodeURIComponent(key)}`),
+  /**
+   * DELETE /castes/:key — 204 when the caste holds no agents; 409 while live
+   * agents hold the role (the screen then asks for a reassignment target).
+   * myrmidon(1.6.1 CUSTOM-CASTES C annex): `reassignTo` moves the live agents
+   * to another caste key before the delete, when provided.
+   */
+  remove: (companyId: string, key: string, reassignTo?: string | null) =>
+    api.delete<{ ok: true }>(`${base(companyId)}/${encodeURIComponent(key)}`, {
+      ...(reassignTo ? { reassignTo } : {}),
+    }),
 };
