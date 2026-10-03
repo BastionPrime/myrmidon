@@ -21,6 +21,8 @@ version file to edit. Base Paperclip version is in the image label
   merged the UI is covered by tests against the mocked JSON contract.
 ## 1.6.1
 
+
+
 ### Custom castes, consumers (CUSTOM-CASTES B)
 
 - The server-side consumers of the company caste directory (part A ships the

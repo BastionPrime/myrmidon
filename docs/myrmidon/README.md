@@ -78,6 +78,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/agent-memory-card.md](guides/agent-memory-card.md) | Вкладка «Memory» карточки агента: просмотр, выгрузка и удаление записей банка памяти, журнал |
 | [guides/browsers.md](guides/browsers.md) | Раздел «Браузеры» в настройках: экран живого браузера, пауза ботов на время сессии, журнал, очистка данных сайта |
 | [guides/stack-registry.md](guides/stack-registry.md) | Реестр компонентов стека и экран «Стек» (Company → Stack): колонки, отстающие сверху, кнопки refresh/check (503 показан на месте), планирование обновления в backlog-задачу, сверка релизов и вердикт «патч закрыт» |
+| [guides/cloud-connector.md](guides/cloud-connector.md) | Облака через коннектор (1.4): аккаунт владельца, корни-папки, раздача доступа агентам, инструменты, журнал |
 | [guides/tracing-health.md](guides/tracing-health.md) | Здоровье LLM-трейсинга: карточка «LLM tracing» в настройках компании, состояния, сигнал оператору, журнал переходов |
 | [guides/reference-task-evals.md](guides/reference-task-evals.md) | Эталоны и судья (1.6 EVALS-A): корпус эталонных задач, LLM-судья за шлюзом, вердикт «порог+повтор», экспорт в Langfuse |
 | [guides/bridge-extension.md](guides/bridge-extension.md) | Браузерный мост, расширение (части C и D): действия open/read/click/fill/download/screenshot, шаг подтверждения человеком, сопряжение кодом, сборка и load-unpacked |

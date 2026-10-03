@@ -68,6 +68,9 @@ import { buildStackAttentionCards } from "../myrmidon/stack-registry/attention.j
 import { readStackDocument } from "../myrmidon/stack-registry/store.js";
 // myrmidon(TRACING-HEALTH): the "LLM tracing" red state raises one operator card (part D)
 import { readTracingHealthAttentionSignal } from "../myrmidon/tracing-health/attention.js";
+// myrmidon(BOT-RUNTIME-TUNING D): the model fallback share raises one card per agent
+import { readModelFallbackSignals } from "../myrmidon/litellm-fallback-signal/attention.js";
+
 // myrmidon(STALE-BLOCK): the lifted-block operator signal registry.
 import {
   readStaleBlockSignals,
@@ -106,6 +109,7 @@ const ATTENTION_SOURCE_KINDS: AttentionSourceKind[] = [
   "budget_alert",
   "agent_error_alert",
   "stack_update",
+  "model_fallback_alert",
   // myrmidon(STALE-BLOCK): one card per block the watchdog lifted.
   "stale_block",
 ];
@@ -131,6 +135,7 @@ const SOURCE_RANK: Record<AttentionSourceKind, number> = {
   join_request: 10,
   stack_update: 11,
   stale_block: 12,
+  model_fallback_alert: 13,
 };
 
 const PENDING_INTERACTION_STATUSES = ["pending"] as const;
@@ -2039,6 +2044,54 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           detail: {
             kind: "generic",
             summaryExcerpt: excerpt(tracingSignal.whyNow),
+            images: [],
+          },
+        }));
+      }
+
+      // myrmidon(BOT-RUNTIME-TUNING D): the periodic fallback sweep records
+      // one signal per agent whose gateway calls were served by a model
+      // outside its card above the configured share; the feed just turns the
+      // recorded signals into cards (subject = the agent, one dedupKey per
+      // agent, severity medium). The signal clears when the share drops
+      // below half the threshold — no dismissal bookkeeping, the same
+      // registry pattern tracing-health uses.
+      for (const fallback of readModelFallbackSignals(companyId)) {
+        add(createItem({
+          companyId,
+          sourceKind: "model_fallback_alert",
+          subject: {
+            kind: "agent",
+            id: fallback.agentId,
+            companyId,
+            title: fallback.title,
+            identifier: null,
+            status: null,
+            href: `/${prefix}/agents/${fallback.agentId}`,
+            metadata: {
+              sharePct: fallback.sharePct,
+              fallbacks: fallback.fallbacks,
+              total: fallback.total,
+              servedModels: fallback.servedModels,
+            },
+          },
+          whyNow: fallback.whyNow,
+          decisionVerbs: decisionVerbs(
+            { id: "inspect", label: "Inspect", description: "Open the agent card and the gateway routing." },
+            { id: "dismiss", label: "Dismiss", description: "Dismiss this fallback alert." },
+          ),
+          inlineResolvable: true,
+          entryRule: "the agent's fallback share over the window is at or above the threshold with enough calls.",
+          exitRule: "the share drops below half the threshold, the window empties below min calls, or the row is dismissed.",
+          dedupKey: fallback.dedupKey,
+          severity: fallback.severity,
+          activityAt: fallback.activityAt,
+          createdAt: fallback.activityAt,
+          updatedAt: fallback.activityAt,
+          relatedIssue: null,
+          detail: {
+            kind: "generic",
+            summaryExcerpt: excerpt(fallback.summaryExcerpt),
             images: [],
           },
         }));
