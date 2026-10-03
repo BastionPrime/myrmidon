@@ -75,7 +75,10 @@ Myrmidon, — колония: координация метками в обще�
   ([telegram-dm-status](docs/myrmidon/guides/telegram-dm-status.ru.md));
   планировщик чата с доской превращает свободный текст владельца в
   предложенный эпик с дочерними задачами, согласовываемый карточкой
-  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.ru.md)).
+  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.ru.md)); чат
+  с Полководцем в оболочке 2.0 даёт тому же потоку планирования экран —
+  ввод свободным текстом, предложенный эпик только на чтение
+  ([commander-chat](docs/myrmidon/guides/commander-chat.ru.md)).
 - **Память на агента.** Просмотр, выгрузка и удаление банка памяти агента из
   его карточки ([agent-memory-card](docs/myrmidon/guides/agent-memory-card.ru.md)).
 - **Окна обслуживания и безопасные выкаты.** Окно обслуживания останавливает

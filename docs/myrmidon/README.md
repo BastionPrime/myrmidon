@@ -89,6 +89,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) | История ревизий инструкций агента: снимки, откат, журнал |
 | [guides/auto-resume.md](guides/auto-resume.md) | Автовозобновление агента из `error`: бэкофф 1/5/15, карточка оператору после потолка попыток, настройки |
 | [guides/task-pr-sync.md](guides/task-pr-sync.md) | Закрытие задачи по слитым PR: проход по рабочим продуктам `pull_request`, возврат исполнителю без слияния, гейты после выката, сторож побудок |
+| [guides/commander-chat.md](guides/commander-chat.md) | Экран «Чат с Полководцем» в интерфейсе 2.0 (CTO-CHAT A): входы (рейка, телефон, палитра с подсказкой `Ctrl K`), запрос свободным текстом, предложенный план, карточка согласования, тот же поток из Telegram-лички |
 
 ## Сборка и запуск
 
