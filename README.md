@@ -77,7 +77,10 @@ what exists as of 1.5:
   ([telegram-dm-status](docs/myrmidon/guides/telegram-dm-status.md)); the
   board chat planner turns the owner's free text into a proposed epic with
   child tasks, approved by a card
-  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.md)).
+  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.md)); the
+  Commander chat of the 2.0 shell gives the same planning flow a screen —
+  free-text entry with the proposed epic rendered read-only
+  ([commander-chat](docs/myrmidon/guides/commander-chat.md)).
 - **Memory per agent.** View, export and remove an agent's memory bank from
   its card ([agent-memory-card](docs/myrmidon/guides/agent-memory-card.md)).
 - **Maintenance windows and safe deploys.** A maintenance window pauses new
