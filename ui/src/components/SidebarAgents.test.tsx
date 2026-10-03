@@ -928,3 +928,139 @@ describe("SidebarAgents", () => {
     expect(mockAgentsApi.resume).not.toHaveBeenCalled();
   });
 });
+
+// myrmidon(AGENTS-TREE): the sidebar's hierarchy sort mode.
+describe("SidebarAgents tree mode", () => {
+  let container: HTMLDivElement;
+  let root: ReturnType<typeof createRoot> | null;
+  let queryClient: QueryClient;
+
+  async function flushReact2() {
+    await act(async () => {
+      await Promise.resolve();
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+  }
+
+  async function renderSidebar() {
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <SidebarAgents streamlined />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact2();
+  }
+
+  beforeEach(() => {
+    mockSidebarState.collapsed = false;
+    mockSidebarState.peeking = false;
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = null;
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    mockAgentsApi.list.mockResolvedValue([
+      makeAgent({ id: "ceo", name: "Ava CEO", role: "ceo" }),
+      makeAgent({ id: "cto", name: "Cara CTO", role: "cto", reportsTo: "ceo" }),
+      makeAgent({ id: "eng", name: "Bob Engineer", reportsTo: "cto" }),
+      makeAgent({ id: "orphan", name: "Oscar Orphan", reportsTo: "missing-manager" }),
+    ]);
+    mockAgentsApi.pause.mockResolvedValue(makeAgent({ status: "paused" }));
+    mockAgentsApi.resume.mockResolvedValue(makeAgent({}));
+    mockBuiltInAgentsApi.list.mockResolvedValue([]);
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableBuiltInAgents: false });
+    mockAuthApi.getSession.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1" },
+    });
+    mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
+    mockResourceMembershipsApi.listMine.mockResolvedValue({
+      projectMemberships: {},
+      agentMemberships: {},
+      starredDocumentIds: [],
+      documentStarredAt: {},
+      updatedAt: null,
+    });
+    mockResourceMembershipsApi.updateAgent.mockResolvedValue({});
+    localStorage.clear();
+  });
+
+  afterEach(async () => {
+    const currentRoot = root;
+    if (currentRoot) {
+      await act(async () => {
+        currentRoot.unmount();
+      });
+    }
+    queryClient.clear();
+    container.remove();
+    document.body.innerHTML = "";
+    localStorage.clear();
+    vi.clearAllMocks();
+  });
+
+  it("tree mode shows the hierarchy with the no-manager group", async () => {
+    localStorage.setItem("paperclip.agentSortMode:company-1:user-1", "tree");
+    await renderSidebar();
+
+    const tree = container.querySelector('[data-slot="agent-tree"]');
+    expect(tree).not.toBeNull();
+    // Root + nested children visible (first level expanded by default).
+    expect(container.textContent).toContain("Cara CTO");
+    expect(container.textContent).toContain("Bob Engineer");
+    // Orphan group present with its label.
+    const orphans = container.querySelector('[data-slot="agent-tree-orphans"]');
+    expect(orphans).not.toBeNull();
+    expect(orphans?.textContent).toContain("No manager");
+    expect(orphans?.textContent).toContain("Oscar Orphan");
+  });
+
+  it("collapses a node and shows the subtree count badge, persisting state", async () => {
+    localStorage.setItem("paperclip.agentSortMode:company-1:user-1", "tree");
+    await renderSidebar();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[data-slot="agent-tree-toggle"][data-agent-id="ceo"]',
+    );
+    expect(toggle).not.toBeNull();
+    await act(async () => {
+      toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact2();
+
+    expect(container.textContent).not.toContain("Bob Engineer");
+    const badge = container.querySelector('[data-slot="agent-tree-collapsed-badge"]');
+    expect(badge?.textContent).toContain("3");
+    expect(localStorage.getItem("paperclip.agentTreeCollapsed:company-1:user-1")).toContain("ceo");
+  });
+
+  it("tree mode keeps the full roster visible in streamlined mode (no active-run subset)", async () => {
+    localStorage.setItem("paperclip.agentSortMode:company-1:user-1", "tree");
+    // Live run on one agent would normally narrow the flat list to it.
+    queryClient.setQueryData(queryKeys.liveRuns("company-1"), [
+      { id: "run-1", agentId: "eng", status: "running" },
+    ]);
+    await renderSidebar();
+
+    // Everyone is still in the tree.
+    expect(container.textContent).toContain("Ava CEO");
+    expect(container.textContent).toContain("Oscar Orphan");
+    expect(container.textContent).toContain("Bob Engineer");
+  });
+
+  it("selecting Tree from the sort menu persists the mode", async () => {
+    await renderSidebar();
+    await openAgentsSectionMenu();
+    await chooseSortMode("Tree");
+    await flushReact2();
+
+    expect(localStorage.getItem("paperclip.agentSortMode:company-1:user-1")).toBe("tree");
+    expect(container.querySelector('[data-slot="agent-tree"]')).not.toBeNull();
+  });
+});

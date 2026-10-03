@@ -383,5 +383,17 @@
     "refresh": "Refresh models",
     "refreshing": "Refreshing…",
     "loadError": "Could not load the model list."
+  },
+  "agentsTree": {
+    "expandNode": "Expand {{name}}",
+    "collapseNode": "Collapse {{name}}",
+    "noManager": "No manager",
+    "searchPlaceholder": "Search agents...",
+    "searchAria": "Search agents by name",
+    "errorIndicator": "Some agents in this branch are in an error state",
+    "agentsCount": "{{count}} agents",
+    "runningCount": "{{count}} running",
+    "sortModeTree": "Tree",
+    "viewTree": "Tree view"
   }
 }
