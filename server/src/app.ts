@@ -131,6 +131,8 @@ import { myrmidonOcrRoutes } from "./myrmidon/ocr/index.js";
 import { myrmidonEvalsRoutes } from "./myrmidon/evals/index.js"; // myrmidon(1.6-EVALS)
 // myrmidon(TRACING-HEALTH): LLM tracing health check (GET /api/myrmidon/tracing/health)
 import { myrmidonTracingHealthRoutes } from "./myrmidon/tracing-health/index.js"; // myrmidon(TRACING-HEALTH)
+// myrmidon(1.6-WIKI): company regulations as wiki pages (statuses, revisions, rollback, resolver)
+import { myrmidonWikiCortexRoutes } from "./myrmidon/wiki-cortex/wiring.js";
 // myrmidon(1.6-CTO-CHAT-B): the board chat planner (owner text -> proposed epic).
 import { myrmidonCtoChatRoutes } from "./myrmidon/cto-chat/index.js";
 import { instanceSettingsService } from "./services/instance-settings.js";
@@ -863,6 +865,7 @@ export async function createApp(
   api.use(myrmidonCtoChatRoutes(db)); // myrmidon(1.6-CTO-CHAT-B): board chat planner (owner text -> proposed epic)
   api.use(ui2LanguageRoutes(db)); // myrmidon(UI2-I18N): per-user UI language preference
   api.use(myrmidonForagingRoutes(db)); // myrmidon(1.6-FORAGE): source registry, findings and the manual sweep
+  api.use(myrmidonWikiCortexRoutes(db)); // myrmidon(1.6-WIKI): company regulations (wiki pages, revisions, resolver)
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }
