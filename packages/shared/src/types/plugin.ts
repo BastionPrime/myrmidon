@@ -17,7 +17,6 @@ import type {
   PluginDatabaseNamespaceMode,
   PluginDatabaseNamespaceStatus,
   AgentAdapterType,
-  AgentRole,
   AgentStatus,
   IssuePriority,
   ProjectStatus,
@@ -269,8 +268,8 @@ export interface PluginManagedAgentDeclaration {
   agentKey: string;
   /** Suggested visible agent name. */
   displayName: string;
-  /** Optional suggested role. Defaults to `general`. */
-  role?: AgentRole | string;
+  /** Optional suggested role (a caste key). Defaults to `general`. */
+  role?: string;
   /** Optional suggested title shown in agent surfaces. */
   title?: string | null;
   /** Optional icon for agent list/detail surfaces. */
