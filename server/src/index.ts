@@ -138,6 +138,7 @@ import { interactionContinuationOutboxService } from "./myrmidon/interaction-con
 import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
 import { createRunStallSweepFromHeartbeat } from "./myrmidon/run-stall/index.js"; // myrmidon(RUN-STALL)
 import { createTaskPrSyncScheduler } from "./myrmidon/task-pr-sync/index.js"; // myrmidon(TASK-PR-SYNC)
+import { createStaleBlockScheduler } from "./myrmidon/stale-block/index.js"; // myrmidon(STALE-BLOCK)
 import { buildWipLimitSweeper } from "./myrmidon/wip-limit/index.js"; // myrmidon(1.6.1-WIP-LIMIT-A)
 import {
   createPendingInteractionWakeSweep,
@@ -1329,6 +1330,11 @@ async function startServerWithDatabaseTeardown(
   // PR refs / merge sha / time) once every PR is merged — or returns it to the
   // assignee when a PR was closed without merging.
   const scheduleTaskPrSyncSweep = createTaskPrSyncScheduler({ db: db as any, track: trackHeartbeatSchedulerWork });
+  // myrmidon(STALE-BLOCK): the periodic watchdog that lifts dead blocked
+  // reasons (a done/cancelled blocker, a passed due date, a cleared gate) off
+  // blocked tasks through the ordinary issue update path. Opt-in via
+  // MYRMIDON_STALE_BLOCK_ENABLED; the interval is enforced inside the sweep.
+  const scheduleStaleBlockSweep = createStaleBlockScheduler({ db: db as any, track: trackHeartbeatSchedulerWork });
   // myrmidon(1.6.1-WIP-LIMIT-A): the periodic WIP check — one pass per interval
   // per company behind its own settings gate (no limit set = no pass); the
   // attention feed needs no sweep, it recomputes on every list.
@@ -1812,6 +1818,7 @@ async function startServerWithDatabaseTeardown(
         scheduleEnvironmentLeaseCleanupSweep();
         schedulePendingInteractionWakeSweep(); // myrmidon(P12)
         scheduleTaskPrSyncSweep(); // myrmidon(TASK-PR-SYNC)
+        scheduleStaleBlockSweep(); // myrmidon(STALE-BLOCK)
         scheduleWipLimitSweep(); // myrmidon(1.6.1-WIP-LIMIT-A)
         scheduleAutoResumeSweep(); // myrmidon(AUTO-RESUME)
 
@@ -1991,6 +1998,7 @@ async function startServerWithDatabaseTeardown(
       scheduleEnvironmentLeaseCleanupSweep();
       schedulePendingInteractionWakeSweep(); // myrmidon(P12)
       scheduleAutoResumeSweep(); // myrmidon(AUTO-RESUME)
+      scheduleStaleBlockSweep(); // myrmidon(STALE-BLOCK)
       scheduleGitHubConnectionEventPoll();
       scheduleGitHubConnectionContinuitySweep();
     });
