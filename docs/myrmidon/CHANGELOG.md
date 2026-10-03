@@ -10,6 +10,22 @@ version file to edit. Base Paperclip version is in the image label
 
 ## 1.6.1
 
+### Gateway-priced hermes runs (HERMES-USAGE-COST)
+
+- hermes_gateway runs no longer land in the cost ledger as unpriced $0
+  rows: after every LLM-gateway spend collection sweep, a reconcile pass
+  fills each run's `cost_events` row with the gateway's own spend for that
+  run (cost_status=reported) and refreshes the agent/company monthly
+  counters. Only unpriced hermes_gateway rows are touched — adapter-priced
+  rows and other providers are never overwritten, and a run with no
+  collected spend stays unpriced instead of getting an invented price. The
+  first sweep can look back up to 90 days
+  (`MYRMIDON_LITELLM_FIRST_LOOKBACK_DAYS`), and
+  `POST /api/myrmidon/companies/:id/litellm/sweep` accepts a `from` body
+  for one-off month backfills. The UI-2.0 forecast chip shows
+  "spent" only when no monthly budget is configured, ending the
+  "$0 of $0" placeholder.
+
 ### Board administrators from agents (ADMIN-AGENT part C)
 
 - The UI half of making an agent a board administrator. The agent card's
