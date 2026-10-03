@@ -96,6 +96,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/wiki-regulations.md](guides/wiki-regulations.md) | Регламенты компании в вики (1.6 WIKI-CORTEX): жизненный цикл «черновик → одобрено», ревизии и откат, роли и ключ `*`, доставка `REGULATIONS.md` в профиль бота, агент-википедист |
 | [guides/agent-board-admin.md](guides/agent-board-admin.md) | Администратор доски из агентов (1.6.1 ADMIN-AGENT C): переключатель «Board administrator» на вкладке Permissions карточки агента, кто его видит, страница Members с бейджем админа-агента, fail-closed чтение флага |
 | [guides/wip-limit.md](guides/wip-limit.md) | Лимит WIP (1.6.1 WIP-LIMIT): экран «WIP limit» в настройках компании (умолчание и лимиты по агентам, живая загрузка), бейдж wip/limit в списке агентов, сигнал сверх лимита (карточка внимания + system-notice, sweep 300 с, лид-правило), контракт API |
+| [guides/foraging.md](guides/foraging.md) | Фуражировка (1.6 FORAGING): реестр источников по ролям, проход сравнения снимков, находки и кандидаты в навыки, бюджет прохода, экран «Foraging», API |
 
 | [media-tools.md](media-tools.md) | Общие медиа- и офисные инструменты для контейнерных ботов: сервис media-mcp, хранилище и квоты, инструменты (ffmpeg, офис, OCR, `dwg_convert`), развёртывание и границы изоляции |
 
