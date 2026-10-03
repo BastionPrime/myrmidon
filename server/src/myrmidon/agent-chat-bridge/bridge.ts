@@ -39,6 +39,10 @@ import {
   type ConversationKey,
 } from "./identity.js";
 import { telegramDmConversationsEnabled } from "./settings.js";
+// myrmidon(X9b): @<alias> addressing — alias resolution plus the reply prefix
+// and the first-contact context quote for an addressed agent's turn.
+import { resolveTelegramAddressee, type TelegramAddressee } from "./addressing.js";
+import { buildMentionedChatContext } from "./cross-channel.js";
 
 type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
 // myrmidon(X8b): mirrors chat-channels.ts's own local `DbOrTransaction` alias
@@ -214,7 +218,16 @@ function redactTelegramDmError(error: unknown): string {
   return redactSensitiveText(withoutTelegramBotTokens).slice(0, MAX_LOGGED_ERROR_TEXT);
 }
 
-/** Gets or creates the standing Telegram conversation issue for (agent, boardUserId). */
+/**
+ * Gets or creates the standing Telegram conversation issue for
+ * (agent, boardUserId).
+ * myrmidon(X9b): `input.agentId` may be a company agent other than the
+ * endpoint's assigned agent — an @<alias>-addressed turn gets its own
+ * standing conversation with the same `telegram:<boardUserId>` key (the
+ * vendor's unique index is `(companyId, conversationAgentId,
+ * conversationUserId)`, so the same key with a different agent is a distinct
+ * row).
+ */
 export async function ensureTelegramDmConversation(
   tx: DbOrTx,
   deps: TelegramDmBridgeDeps,
@@ -259,6 +272,8 @@ export async function ensureTelegramDmConversation(
       action: "issue.conversation_opened",
       entityType: "issue",
       entityId: issue.id,
+      // myrmidon(X9b): `details.agentId` names the conversation's own agent,
+      // which an addressed turn may differ from the endpoint's assigned agent.
       details: { agentId: input.agentId, channel: "telegram", endpointId: input.endpointId },
     },
     publications,
@@ -270,6 +285,11 @@ export async function ensureTelegramDmConversation(
  * Gets or creates the `chat_conversations` row (a native-thread binding, one
  * generation) that ties this Telegram DM thread to the standing conversation
  * issue for (agent, boardUserId).
+ * myrmidon(X9b): `input.conversationAgentId` routes the binding to a
+ * company agent other than the endpoint's assigned one (an @<alias>-addressed
+ * turn). Omitted/undefined keeps the assigned agent — the pre-X9b path, byte
+ * for byte. When the resolved addressee IS the assigned agent, the caller
+ * passes it and the behavior is identical either way.
  */
 export async function ensureTelegramDmBinding(
   tx: DbOrTx,
@@ -282,6 +302,8 @@ export async function ensureTelegramDmBinding(
     boardUserId: string;
     current: ConversationRow | null;
     latestConversation: { sessionGeneration: number } | null;
+    /** myrmidon(X9b): the @<alias>-addressed agent, when one was resolved. */
+    conversationAgentId?: string;
   },
   publications: ActivityPublication[],
 ): Promise<{ conversation: ConversationRow; issue: IssueRow }> {
@@ -290,7 +312,7 @@ export async function ensureTelegramDmBinding(
     deps,
     {
       companyId: input.endpoint.companyId,
-      agentId: input.endpoint.assignedAgentId,
+      agentId: input.conversationAgentId ?? input.endpoint.assignedAgentId,
       endpointId: input.endpoint.id,
       boardUserId: input.boardUserId,
     },
@@ -608,4 +630,81 @@ export async function afterTelegramDmMessage(input: {
       }),
     );
   }
+}
+
+// myrmidon(X9b) -------------------------------------------------------------
+// @<alias> addressing: routing an inbound Telegram turn to an addressed
+// company agent, prefixing that agent's reply, and quoting the chat's recent
+// messages into its first turn.
+
+/**
+ * myrmidon(X9b): resolves the @<alias> addressee of an inbound bridged
+ * Telegram message. Only same-company agents match (resolveTelegramAddressee
+ * scopes the lookup to `companyId`); a message with no resolvable @-token
+ * returns null and the turn keeps the vendor/X8b assigned-agent path, byte
+ * for byte.
+ */
+export async function resolveBridgedAddressee(
+  db: Db,
+  input: {
+    companyId: string;
+    endpointAgentId: string;
+    text: string;
+  },
+): Promise<TelegramAddressee | null> {
+  return resolveTelegramAddressee(db, input);
+}
+
+/**
+ * myrmidon(X9b): the prefix an addressed agent's reply carries in the
+ * Telegram chat it was mentioned in — `[<displayName>]`, mirroring the
+ * Russian-display-name example in the task. Only an actually-addressed agent
+ * (not the endpoint's assigned agent answering its own conversation) gets a
+ * prefix: the assigned agent's replies are already the chat's own voice.
+ */
+export function addressedReplyPrefix(displayName: string): string {
+  return `[${displayName}] `;
+}
+
+/**
+ * myrmidon(X9b): stages and delivers an addressed agent's reply into the same
+ * Telegram `thread`/`resource` of the same endpoint through the bridge's
+ * existing `stageProviderEffect` -> `processProviderEffect` lane, prefixed
+ * with the agent's display name. `liveTarget` is the caller's thread double
+ * (chat-channels.ts passes the exact `thread` it received for this delivery).
+ */
+export async function sendAddressedAgentReply(
+  db: Db,
+  deps: TelegramDmBridgeDeps,
+  input: {
+    endpoint: EndpointRow;
+    thread: { id: string; post: (...args: any[]) => any };
+    resourceId: string;
+    principalId: string;
+    deliveryId: string | null;
+    /** The addressed agent's conversation row id, for the effect's own binding. */
+    conversationId?: string | null;
+    displayName: string;
+    text: string;
+    runtimeContext: { credentialFingerprint: string; generation: number };
+  },
+): Promise<void> {
+  const prefixed = `${addressedReplyPrefix(input.displayName)}${input.text}`;
+  const effect = await deps.stageProviderEffect(db, {
+    endpoint: input.endpoint,
+    conversationId: input.conversationId ?? null,
+    deliveryId: input.deliveryId,
+    principalId: input.principalId,
+    providerActionId: `provider_effect:x9-reply:${input.deliveryId ?? "unknown"}`,
+    payload: {
+      version: 1,
+      effect: "thread_message",
+      threadId: input.thread.id,
+      text: prefixed,
+      settleDelivery: false,
+      resourceId: input.resourceId,
+    },
+    runtimeContext: input.runtimeContext,
+  });
+  if (effect) await deps.processProviderEffect(effect.id, input.thread);
 }
