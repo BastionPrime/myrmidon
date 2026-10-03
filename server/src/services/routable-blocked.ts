@@ -52,3 +52,26 @@ export async function deliverAgentUnblockNotification(input: {
   await input.markNotified((input.now ?? (() => new Date()))());
   return true;
 }
+
+// myrmidon(STALE-BLOCK): transitions into blocked after this rollout moment
+// must carry a reason reference (blockedByIssueIds or unblockDescriptor.reasonRef);
+// records blocked earlier stay valid and are never retro-rejected.
+export const STALE_BLOCK_ROLLOUT_AT = new Date("2026-10-03T12:00:00.000Z");
+
+export function isStaleBlockGuardedTransition(input: {
+  status: string;
+  blockedTransitionAt?: Date | string | null;
+}): boolean {
+  const transitionAt =
+    input.blockedTransitionAt == null
+      ? null
+      : input.blockedTransitionAt instanceof Date
+        ? input.blockedTransitionAt
+        : new Date(input.blockedTransitionAt);
+  return (
+    input.status === "blocked" &&
+    transitionAt !== null &&
+    !Number.isNaN(transitionAt.getTime()) &&
+    transitionAt.getTime() >= STALE_BLOCK_ROLLOUT_AT.getTime()
+  );
+}
