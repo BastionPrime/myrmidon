@@ -261,7 +261,13 @@ async function enqueueSafeNativeChatProgress(
           eq(chatEndpoints.companyId, chatConversations.companyId),
           eq(chatEndpoints.id, chatConversations.endpointId),
           eq(chatEndpoints.publicationMode, "automatic"),
-          eq(chatEndpoints.assignedAgentId, heartbeatRuns.agentId),
+          // myrmidon(X9b): an @<alias>-addressed conversation's agent is its
+          // own conversationAgentId, not the endpoint's assigned agent; the
+          // conversation row is pinned to this run's issue, so accept either.
+          or(
+            eq(chatEndpoints.assignedAgentId, heartbeatRuns.agentId),
+            sql`exists (select 1 from issues conv where conv.company_id = ${chatConversations.companyId} and conv.id = ${chatConversations.issueId} and conv.conversation_agent_id = ${heartbeatRuns.agentId})`,
+          ),
         ),
       )
       .innerJoin(agents, eq(agents.id, heartbeatRuns.agentId))
@@ -709,7 +715,13 @@ export async function enqueueChatRunMilestones(
           eq(chatEndpoints.companyId, chatConversations.companyId),
           eq(chatEndpoints.id, chatConversations.endpointId),
           eq(chatEndpoints.publicationMode, "automatic"),
-          eq(chatEndpoints.assignedAgentId, heartbeatRuns.agentId),
+          // myrmidon(X9b): an @<alias>-addressed conversation's agent is its
+          // own conversationAgentId, not the endpoint's assigned agent; the
+          // conversation row is pinned to this run's issue, so accept either.
+          or(
+            eq(chatEndpoints.assignedAgentId, heartbeatRuns.agentId),
+            sql`exists (select 1 from issues conv where conv.company_id = ${chatConversations.companyId} and conv.id = ${chatConversations.issueId} and conv.conversation_agent_id = ${heartbeatRuns.agentId})`,
+          ),
         ),
       )
       .innerJoin(agents, eq(agents.id, heartbeatRuns.agentId))
