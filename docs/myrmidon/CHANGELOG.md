@@ -21,7 +21,15 @@ version file to edit. Base Paperclip version is in the image label
   merged the UI is covered by tests against the mocked JSON contract.
 ## 1.6.1
 
+### Aggregated maintenance plaque (MAINTENANCE-BANNER)
 
+- The maintenance banner is now always a single collapsed plaque instead of
+  one line per window: the summary carries the total window count, the
+  aggregate state (on / draining / ending) and an ends-by bound from the
+  latest drain deadline; the expanded details keep one row per kind of
+  window (scope type + state + reason, agent ids stripped), with agent ids
+  only inside the expanded rows. See
+  [guides/maintenance-banner.md](guides/maintenance-banner.md).
 
 ### Custom castes, consumers (CUSTOM-CASTES B)
 

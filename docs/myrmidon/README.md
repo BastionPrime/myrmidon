@@ -71,7 +71,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/run-stall.md](guides/run-stall.md) | Обнаружение зависших прогонов: что считается прогрессом, прерывание `run_stalled`, возврат задачи в `todo`, настройки |
 | [guides/workspace-cleanup.md](guides/workspace-cleanup.md) | Очистка рабочих копий после слияния и сигнал о застрявшей копии |
 | [guides/cloud-files-connector.md](guides/cloud-files-connector.md) | Коннектор Microsoft 365 для ботов-контейнеров: настройка и журнал |
-| [guides/maintenance-banner.md](guides/maintenance-banner.md) | Как баннер обслуживания группирует окна агентов |
+| [guides/maintenance-banner.md](guides/maintenance-banner.md) | Агрегированная плашка режима обслуживания: сводка, виды окон, состояния |
 | [guides/access-hub.md](guides/access-hub.md) | Хаб доступов в настройках: секреты парка, выдача агентам, ротация, SSH-ключи, журнал |
 | [guides/emergency-stop.md](guides/emergency-stop.md) | Аварийная остановка прогонов, которые осушаемая пауза оставила дорабатывать |
 | [guides/bot-container-card.md](guides/bot-container-card.md) | Раздел «Container» карточки агента: настройки контейнера, лимит одновременных прогонов, статус |
