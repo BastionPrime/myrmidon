@@ -214,6 +214,8 @@ export function createCasteService(deps: CasteServiceDeps) {
     // One transaction: reassign the agents, then drop the caste. The role
     // queue is derived from agents.role (roleQueueRows), so the moved agents'
     // assigned tasks follow into the target caste's queue by construction.
+    // The row delete happens here too — same atomic unit — so no separate
+    // delete below.
     await deps.db.transaction(async (tx) => {
       await tx
         .update(agents)
@@ -224,11 +226,6 @@ export function createCasteService(deps: CasteServiceDeps) {
         .where(and(eq(agentCastes.companyId, input.companyId), eq(agentCastes.key, input.key)));
     });
 
-    // The miss cache of a deleted custom caste needs no reset (it only caches
-    // "seeded", not rows). Mark the store's row state fresh below.
-
-    const removed = await store.deleteCaste(input.companyId, input.key);
-    if (!removed) throw notFound(`Caste "${input.key}" not found in this company`);
     await input.activity?.({
       companyId: input.companyId,
       action: "caste_removed_reassigned",
