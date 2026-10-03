@@ -170,6 +170,18 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   secret store. Only the secret id stays in the connector's own state, so no bot ever
   holds a cloud token and the token value never travels through the panel API (#252).
 
+### Owner questions and instructions
+
+- U2: question and confirmation cards (`ask_user_questions`, `request_confirmation`)
+  reach the owner's Telegram DM when the company runs the Telegram DM bridge
+  (`MYRMIDON_TELEGRAM_DM_CONVERSATIONS`) — the card is also answered from Telegram,
+  including a callback that arrives for a task the authoring agent no longer owns.
+  A task with its own live chat binding keeps its card in that conversation only.
+  Guide: [guides/owner-telegram-cards.md](guides/owner-telegram-cards.md) (#277, #284, #287).
+- H2: every change to an agent's instructions bundle (file put, file delete, patch)
+  is snapshotted into the append-only `agent_instructions_revisions` history, and any
+  earlier revision can be restored through the API — the restore itself becomes a new
+  revision. Guide: [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) (#273, #299).
 ### Deploy and reliability
 
 - Automatic rollback by health for the board and the bot fleet (R5-C). A failed
