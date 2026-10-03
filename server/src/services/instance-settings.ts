@@ -47,7 +47,7 @@ import { preserveCloudConnectorGeneralKey } from "../myrmidon/cloud-connector/st
 import { preserveAccessHubHostsGeneralKey } from "../myrmidon/access-hub/host-registry.js";
 // myrmidon(1.6-AUTONOMY): keep the autonomy matrix and regulations across vendor writes of `general`
 import { preserveAutonomyGeneralKey } from "../myrmidon/autonomy/store.js";
-// myrmidon(1.6-TG-PROACTIVITY-E): keep the telegram-notify proactivity state across vendor writes of `general`
+// myrmidon(1.6-TG-PROACTIVITY-E, 1.6.1-TG-NOTIFY-B): keep the telegram-notify state across vendor writes of `general`
 import { preserveTelegramNotifyGeneralKey } from "../myrmidon/telegram-notify/proactivity-policy.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";

@@ -400,6 +400,12 @@
 
 
 
+## 1.6.1 — TG-NOTIFY B (daily digest and escalations jobs)
+
+| ID | Что меняем | Файлы вендора | Причина | Тест-сторож | Как снимать | PR |
+|---|---|---|---|---|---|---|
+| 1.6.1-TG-NOTIFY-B | Периодические задания поверх настроек владельца: daily digest (раз в сутки в `settings.digest.time`, секции done/blocked/needs_decision/spend из attention feed и issues) и escalations (повторная отправка вопроса агента без ответа N часов в `settings.escalations.hours`, канал dm/topic/none). Оба выключены по умолчанию: без `digest.enabled`/`escalations.enabled` задания ничего не читают и не отправляют (критерий релиза 1.6.1 — владелец получает только ответы на свои сообщения и U2 decision cards). Отправка — только через существующий outbox `chat_publications` (путь публикаций чата), нового Telegram-клиента нет. Состояние (последний день digest, отметки времени отправок эскалаций) — под своим ключом `myrmidonTelegramNotify` в `instance_settings.general`, без миграций. Настройки читаются через контракт части A (`readSettings`-порт); пока A не влит, порт отдаёт фиксированный all-off документ. Монтирование maintenance-образом: одна помеченная строка `startTelegramNotifyJobs(db)` в `server/src/index.ts`, никакого общего scheduler-loop | `server/src/index.ts` (импорт + одна строка старта, метка `myrmidon(1.6.1-TG-NOTIFY-B)`), `server/src/services/instance-settings.ts` (импорт `preserveTelegramNotifyGeneralKey` + одна строка в `updateGeneral`, метка `myrmidon(1.6.1-TG-NOTIFY-B)`); + `server/src/myrmidon/telegram-notify/{index,jobs,settings,store}.ts` | Задача 1.6.1 TG-NOTIFY: владелец получает сводку и напоминания в Telegram по настройкам, доска сигнализирует через существующий attention feed без новой таблицы уведомлений | `server/src/myrmidon/telegram-notify/jobs.myrmidon.test.ts` (дефолты off, логика секций и времени), `jobs.integration.myrmidon.test.ts` (DB: «по умолчанию ничего не отправляется», включение digest end-to-end до строки outbox, эскалация только после порога и без повторов, сохранность ключа состояния при вендорской записи general) | Никогда, наше поведение, пока наш модуль. Когда вендор добавит собственные digest/нagging-задания — сверить контракт и удалить каталог `server/src/myrmidon/telegram-notify/` с двумя строками вендорских файлов | (ветка 1.6.1) |
+
 ## 1.6.1 — TG-NOTIFY-SETTINGS, часть E (политика проактивности head-бота)
 
 | ID | Что изменено | Файлы | Зачем | Тесты | Когда снимать | Ссылка |
