@@ -827,6 +827,42 @@ query/badge and the `wipLimit` i18n namespace.
 |---|---|---|---|---|
 | — | 1.6.1-WIP-LIMIT-B | — (always on) | The settings screen writes the row through part A's PUT; the badge on an agent row reads the status endpoint | Not configurable: no deployment-specific values in the UI half |
 
+## 1.6.1 — CUSTOM-CASTES B: caste-directory consumers (role validator, swarm gate)
+
+No environment variables and no new settings documents: this part wires the
+consumers of the company caste directory (the directory itself is part A).
+Both consumers read the directory through an injectable port, so until part A
+lands the port is absent and every behavior below is a no-op that matches the
+pre-directory release exactly.
+
+Agent role validation (`packages/shared/src/validators/agent.ts`,
+`server/src/services/agents.ts`): the `role` field of the agent create/update
+payload is a caste key — latin letters, digits and hyphens, 1–60 characters —
+and no longer one of the fixed twelve role names. When the directory port is
+wired, create and update refuse a key that is not a caste of the company with
+a 400 (`code` `role_not_company_caste`, the refused key in `role`); create the
+caste first, then assign it. The board UI falls back to displaying the raw key
+for any role the built-in label map does not know.
+
+Swarm claim gate (`server/src/myrmidon/swarm-claim/service.ts`): when the
+directory port is wired, the gate looks up the claiming agent's caste before
+taking a task. A caste with `swarmEligible=false` never enters the claim pool
+— the claim endpoint answers `caste_excluded` instead of taking a task (a
+supervision caste such as a lead or an on-call reviewer stays out of the pool
+the swarm draws from). A caste-set `maxActiveTasks` overrides the global
+`MYRMIDON_SWARM_MAX_ACTIVE_TASKS` ceiling for agents of that caste only;
+`null` keeps the global ceiling. A role with no directory entry behaves
+exactly as before.
+
+Unchanged: the autonomy matrix resolves the caste key as the role string with
+no schema change (moving an agent between castes changes no verdict), the
+`ceo` built-in checks stay byte-identical, custom roles keep working through
+explicit grants, and the cloud-connector caste grants are untouched.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| — | 1.6.1-CUSTOM-CASTES-B | — | This part adds no tunables of its own; the directory rows (`swarmEligible`, `maxActiveTasks`) come from part A's store, the swarm globals stay under `MYRMIDON_SWARM_*` | Until part A's directory is wired the consumers are no-ops; nothing to disable |
+
 ## 1.7 — METRICS: the board's own /metrics endpoint (Prometheus text)
 
 Settings of `server/src/myrmidon/monitoring/metrics/`. The endpoint answers
