@@ -10,6 +10,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { useCompany } from "@/context/CompanyContext";
+// myrmidon(UI-RU): panel strings through the fork i18n catalog.
+import { useTranslation } from "@/i18n";
 import {
   approverLabel,
   historyLine,
@@ -18,6 +20,7 @@ import {
   skillLifecycleHistoryQueryKey,
   skillLifecycleQueryKey,
   stateBadge,
+  stateBadgeLabel,
   type SkillLifecycleEvent,
   type SkillLifecycleView,
 } from "./lifecycleApi";
@@ -39,20 +42,21 @@ export interface SkillLifecyclePanelViewProps {
 
 /** Pure view: no data fetching, so the states are testable in isolation. */
 export function SkillLifecyclePanelView(props: SkillLifecyclePanelViewProps) {
+  const { t } = useTranslation();
   const selected = props.skills.find((skill) => skill.skillId === props.selectedSkillId) ?? null;
   return (
     <div className="space-y-4" data-testid="myrmidon-skill-lifecycle">
       <div className="rounded-lg border border-border bg-background">
         <div className="px-5 pt-5 pb-2">
-          <span className="text-base font-medium">Skill lifecycle</span>
+          <span className="text-base font-medium">{t("skillLifecycle.title")}</span>
           <p className="text-xs text-muted-foreground">
-            Candidates reach only the pilot agents; verified skills reach everyone; deprecated reach nobody.
+            {t("skillLifecycle.intro")}
           </p>
         </div>
         <div className="px-5 pb-5">
           {props.loading ? (
             <p className="text-sm text-muted-foreground" data-testid="myrmidon-skill-lifecycle-loading">
-              Loading skills...
+              {t("skillLifecycle.loading")}
             </p>
           ) : props.error ? (
             <p className="text-sm text-destructive" data-testid="myrmidon-skill-lifecycle-error">
@@ -60,7 +64,7 @@ export function SkillLifecyclePanelView(props: SkillLifecyclePanelViewProps) {
             </p>
           ) : props.skills.length === 0 ? (
             <p className="text-sm text-muted-foreground" data-testid="myrmidon-skill-lifecycle-empty">
-              This company has no skills yet.
+              {t("skillLifecycle.empty")}
             </p>
           ) : (
             <ul className="divide-y divide-border" data-testid="myrmidon-skill-lifecycle-list">
@@ -76,7 +80,7 @@ export function SkillLifecyclePanelView(props: SkillLifecyclePanelViewProps) {
                     >
                       <span className="truncate text-sm font-medium">{skill.name}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {skill.key} · {revisionLabel(skill.verifiedRevisionNumber)} · {approverLabel(skill)}
+                        {skill.key} · {revisionLabel(skill.verifiedRevisionNumber, t)} · {approverLabel(skill, t)}
                       </span>
                     </button>
                     <div className="flex items-center gap-2">
@@ -84,23 +88,23 @@ export function SkillLifecyclePanelView(props: SkillLifecyclePanelViewProps) {
                         className={`rounded-full border px-2 py-0.5 text-xs font-medium ${badge.className}`}
                         data-testid={`myrmidon-skill-state-${skill.key}`}
                       >
-                        {badge.label}
+                        {stateBadgeLabel(badge, t)}
                       </span>
                       {skill.state !== "verified" || skill.implicit ? (
                         <Button size="sm" variant="outline" disabled={props.busy} onClick={() => props.onSetCandidate(skill)}>
-                          Mark candidate
+                          {t("skillLifecycle.actions.markCandidate")}
                         </Button>
                       ) : null}
                       <Button size="sm" disabled={props.busy} onClick={() => props.onRequestPromotion(skill)}>
-                        Request promotion
+                        {t("skillLifecycle.actions.requestPromotion")}
                       </Button>
                       {skill.previousVerifiedVersionId && skill.state === "verified" ? (
                         <Button size="sm" variant="outline" disabled={props.busy} onClick={() => props.onRollback(skill)}>
-                          Roll back
+                          {t("skillLifecycle.actions.rollback")}
                         </Button>
                       ) : null}
                       <Button size="sm" variant="outline" disabled={props.busy} onClick={() => props.onDeprecate(skill)}>
-                        Deprecate
+                        {t("skillLifecycle.actions.deprecate")}
                       </Button>
                     </div>
                   </li>
@@ -113,19 +117,19 @@ export function SkillLifecyclePanelView(props: SkillLifecyclePanelViewProps) {
 
       {selected ? (
         <div className="rounded-lg border border-border bg-background" data-testid="myrmidon-skill-lifecycle-history">
-          <div className="px-5 pt-5 pb-2 text-sm font-medium">History · {selected.key}</div>
+          <div className="px-5 pt-5 pb-2 text-sm font-medium">{t("skillLifecycle.historyTitle", { key: selected.key })}</div>
           <div className="px-5 pb-5">
             {props.historyLoading ? (
-              <p className="text-sm text-muted-foreground">Loading history...</p>
+              <p className="text-sm text-muted-foreground">{t("skillLifecycle.loadingHistory")}</p>
             ) : props.history.length === 0 ? (
               <p className="text-sm text-muted-foreground" data-testid="myrmidon-skill-lifecycle-history-empty">
-                No lifecycle events yet.
+                {t("skillLifecycle.historyEmpty")}
               </p>
             ) : (
               <ul className="space-y-1">
                 {props.history.map((event) => (
                   <li key={event.id} className="text-xs text-muted-foreground">
-                    {historyLine(event)}
+                    {historyLine(event, t)}
                   </li>
                 ))}
               </ul>
@@ -138,6 +142,7 @@ export function SkillLifecyclePanelView(props: SkillLifecyclePanelViewProps) {
 }
 
 export function SkillLifecyclePanel() {
+  const { t } = useTranslation();
   const { selectedCompanyId } = useCompany();
   const companyId = selectedCompanyId ?? "";
   const queryClient = useQueryClient();
@@ -158,7 +163,8 @@ export function SkillLifecyclePanel() {
     retry: false,
   });
 
-  const onError = (err: unknown) => setError(err instanceof Error ? err.message : "The lifecycle request failed.");
+  const onError = (err: unknown) =>
+    setError(err instanceof Error ? err.message : t("skillLifecycle.requestFailed")); // myrmidon(UI-RU): server error surfaces raw
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: skillLifecycleQueryKey(companyId) });
     if (selectedSkillId) {

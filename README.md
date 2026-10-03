@@ -87,6 +87,11 @@ what exists as of 1.5:
   changes what the fleet reads, the board approves or rolls back, and the
   approved text of the agent's role rides the compiled bot profile as
   `REGULATIONS.md` ([wiki-regulations](docs/myrmidon/guides/wiki-regulations.md)).
+- **Shared media tools for container bots.** The bot image stays lean: ffmpeg,
+  LibreOffice, poppler, Tesseract and CAD conversion (the `dwg_convert` tool,
+  DWG/DXF to DXF/SVG/PDF) run in a separate media service the bots reach over
+  MCP, with per-bot file stores, quotas and tool allowlists
+  ([media-tools](docs/myrmidon/media-tools.md)).
 - **Memory per agent.** View, export and remove an agent's memory bank from
   its card ([agent-memory-card](docs/myrmidon/guides/agent-memory-card.md)).
 - **Maintenance windows and safe deploys.** A maintenance window pauses new
