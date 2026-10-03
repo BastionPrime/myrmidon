@@ -324,6 +324,8 @@ export const ru: Ui2Catalog = {
         fleet: "Флот",
         fleetAttention: "Флот: 1 требует внимания",
         forecast: "{{spend}} из {{budget}}",
+        // myrmidon(HERMES-USAGE-COST): spend-only variant when no budget is set.
+        forecastSpendOnly: "Потрачено {{spend}}",
       },
       commander: {
         aria: "Сказать Командиру (Ctrl K)",
