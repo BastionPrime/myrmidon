@@ -1295,6 +1295,75 @@ describeEmbeddedPostgres("Telegram direct messages become a standing Agent Chat 
     expect(chatChannelTasks).toHaveLength(1);
   });
 
+  // myrmidon(P7): regression for the channel-bound task close. A Telegram-born
+  // chat_channel task carries a chat_conversations row, so the vendor's update()
+  // assignment lock (chat_binding_agent_locked) applies. The assigned agent's
+  // own status-only close must resolve, notify the bound conversation the same
+  // way an operator close does, and reassignment must stay locked.
+  it("lets the assigned agent close its own chat_channel task status-only, notifies the channel, and keeps reassignment locked", async () => {
+    delete process.env[TELEGRAM_DM_CONVERSATIONS_ENV];
+    const fixture = await seedCompany();
+    const { callbacks, endpoint } = await configuredTelegramEndpoint(fixture);
+    await linkTelegramPrincipal({
+      companyId: fixture.companyId,
+      endpointId: endpoint.id,
+      userId: "770001",
+      boardUserId: "owner-user",
+    });
+
+    await sendTelegramDm({
+      callbacks,
+      endpointId: endpoint.id,
+      channelId: "770001",
+      text: "Please do the thing and report back",
+      userId: "770001",
+      messageId: 1,
+    });
+
+    const [boundTask] = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, fixture.companyId), eq(issues.originKind, "chat_channel")));
+    expect(boundTask).toBeDefined();
+    expect(boundTask.assigneeAgentId).toBe(fixture.assignedAgentId);
+    const conversation = await conversationRow(endpoint.id, "770001");
+    expect(conversation?.issueId).toBe(boundTask.id);
+
+    const svc = issueService(db);
+    // The assigned agent's status-only close of its own channel-bound task.
+    const updated = await svc.update(
+      boundTask.id,
+      { status: "done", actorAgentId: fixture.assignedAgentId },
+    );
+    expect(updated?.status).toBe("done");
+    expect(updated?.assigneeAgentId).toBe(fixture.assignedAgentId);
+
+    // The bound conversation receives the completion publication the same
+    // way the operator's manual close produces one.
+    const publications = await db
+      .select()
+      .from(chatPublications)
+      .where(eq(chatPublications.conversationId, conversation!.id));
+    const completion = publications.find((publication) =>
+      publication.idempotencyKey.startsWith("control:close:"),
+    );
+    expect(completion).toBeDefined();
+    expect(["pending", "retry", "published", "streaming", "delivery_unknown"]).toContain(
+      completion!.state,
+    );
+
+    // Reassignment of the same bound task stays locked.
+    await expect(
+      svc.update(boundTask.id, {
+        assigneeAgentId: fixture.replacementAgentId,
+        actorUserId: "owner-user",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      details: { code: "chat_binding_agent_locked" },
+    });
+  });
+
   it("follows the vendor path, without an infinite retry, when Agent Chat is disabled instance-wide", async () => {
     await instanceSettingsService(db).updateExperimental({ enableAgentChat: false });
     const fixture = await seedCompany();
