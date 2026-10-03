@@ -826,3 +826,21 @@ query/badge and the `wipLimit` i18n namespace.
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | — | 1.6.1-WIP-LIMIT-B | — (always on) | The settings screen writes the row through part A's PUT; the badge on an agent row reads the status endpoint | Not configurable: no deployment-specific values in the UI half |
+
+## 1.7 — METRICS: the board's own /metrics endpoint (Prometheus text)
+
+Settings of `server/src/myrmidon/monitoring/metrics/`. The endpoint answers
+`GET /metrics` at the origin root (outside `/api`, the same mounting shape the
+swarm-claim ingress uses) with the Prometheus text exposition format 0.0.4, so
+the existing scraper stack can collect it. Access is one bearer token: the
+value comes from the company secret named by `MYRMIDON_METRICS_TOKEN_SECRET`
+(resolved by name, the value is never returned and never logged) or, when no
+secret name is set, from the `MYRMIDON_METRICS_TOKEN` variable. Without a
+configured token the endpoint answers 401 for everyone — it never falls open.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_METRICS_TOKEN_SECRET` | 1.7-METRICS | unset | Name of the company secret that holds the scraper bearer token. The first resolvable secret of that name across companies wins (the same lookup order the litellm sweep uses); the value never appears in a log, an error or a response | Unset — the env token is used; both unset — the endpoint answers 401 |
+| `MYRMIDON_METRICS_TOKEN` | 1.7-METRICS | unset | The scraper bearer token read from the environment, used when no secret name is configured | Unset together with the secret name — 401 for every request |
+| `MYRMIDON_METRICS_ERROR_WINDOW_SEC` | 1.7-METRICS | `3600` | Window (seconds) of the error families (failed runs, gateway spend). A request may override it per scrape with `?window=<sec>` | From 60 to 86400; below 60 — 60, above 86400 — 86400, non-numeric — the default |
+| `MYRMIDON_METRICS_LATENCY_WINDOW_SEC` | 1.7-METRICS | `21600` | Window (seconds) of the latency family: p50/p95 of finished run durations (finishedAt − startedAt). A request may override it with `?latency_window=<sec>` | From 300 to 86400; below 300 — 300, above 86400 — 86400, non-numeric — the default |
