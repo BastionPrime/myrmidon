@@ -60,6 +60,13 @@ done
 declare -A MYR_COMPONENT_REPOSITORIES=(
   [dockergate]="ghcr.io/itkadr-git/myrmidon-dockergate"
   [fleetd]="ghcr.io/itkadr-git/myrmidon-fleetd"
+  # myrmidon(BOT-IMAGE-ROLLOUT): the bot runtime images of the same release.
+  # Built and tagged by .github/workflows/myrmidon-bot-image.yml with the same
+  # tags the component workflows use (sha-<short>, myr-vX.Y.Z, main), so the
+  # same resolution answers for them.
+  [hermes]="ghcr.io/itkadr-git/myrmidon-hermes"
+  [hermes-dev]="ghcr.io/itkadr-git/myrmidon-hermes-dev"
+  [hermes-node]="ghcr.io/itkadr-git/myrmidon-hermes-node"
   # myrmidon(TRACING-PINS): third-party images of the tracing pair (see the header).
   [langfuse]="docker.langfuse.com/langfuse/langfuse"
   [langfuse-worker]="docker.langfuse.com/langfuse/langfuse-worker"
