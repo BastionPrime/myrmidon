@@ -81,6 +81,11 @@ what exists as of 1.5:
   Commander chat of the 2.0 shell gives the same planning flow a screen —
   free-text entry with the proposed epic rendered read-only
   ([commander-chat](docs/myrmidon/guides/commander-chat.md)).
+- **Company regulations in the wiki.** The rules agents follow are wiki pages
+  with an audience of roles: an edit appends a draft revision and never
+  changes what the fleet reads, the board approves or rolls back, and the
+  approved text of the agent's role rides the compiled bot profile as
+  `REGULATIONS.md` ([wiki-regulations](docs/myrmidon/guides/wiki-regulations.md)).
 - **Memory per agent.** View, export and remove an agent's memory bank from
   its card ([agent-memory-card](docs/myrmidon/guides/agent-memory-card.md)).
 - **Maintenance windows and safe deploys.** A maintenance window pauses new
