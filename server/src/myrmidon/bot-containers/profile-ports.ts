@@ -27,6 +27,8 @@ import path from "node:path";
 
 import { agentApiKeys, companies, companyMemberships, type Db } from "@paperclipai/db";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
+// myrmidon(PARALLEL-HELPERS): the settings type the parallel-helpers port returns.
+import type { ParallelHelpersSettings } from "@paperclipai/shared";
 import {
   readPaperclipSkillSyncPreference,
   resolveLegacyPaperclipDesiredSkillNames,
@@ -53,6 +55,7 @@ import {
 import { createBotCardSync, type BotCardSyncPorts, type BotCardSyncResult } from "./card-sync.js";
 import { createCardEnvResolver } from "./card-env.js";
 import { loadBotInstructionsBundle } from "./instructions-source.js";
+import { readBotProfileSettings } from "./profile-input.js";
 import {
   createActivityWarningSink,
   createBotProfileCompile,
@@ -467,6 +470,34 @@ export function createDbBotProfilePorts(db: Db): BotProfilePorts {
           return (await instructions.readFile(agent, relativePath)).content;
         },
       });
+    },
+
+    // myrmidon(BOT-RUNTIME-TUNING-B): instance defaults for the profile compiler,
+    // from the MYRMIDON_BOT_* settings via the existing reader (readBotProfileSettings
+    // pattern; re-read on every call, so a corrected variable needs no rebuild).
+    // The per-tick compile call in profile-compile.ts merges these with the settings
+    // it read itself; this port supplies the same map for callers that go through
+    // buildHermesProfileInput without their own instanceDefaults source.
+    async instanceDefaults() {
+      const settings = readBotProfileSettings(process.env);
+      return {
+        compression: {
+          ...(settings.compressionThresholdTokens !== null ? { thresholdTokens: settings.compressionThresholdTokens } : {}),
+        },
+        ...(settings.modelContextLengths ? { modelContextLengths: settings.modelContextLengths } : {}),
+        auxiliary: {
+          ...(settings.auxiliaryTitleModel ? { titleGenerationModel: settings.auxiliaryTitleModel } : {}),
+          ...(settings.auxiliaryCompressionModel ? { compressionModel: settings.auxiliaryCompressionModel } : {}),
+        },
+      };
+    },
+
+    // myrmidon(PARALLEL-HELPERS): the company ceiling/default for helpers. Read
+    // from the instance settings row on every tick (see the port's contract):
+    // a settings change applies on the next reconcile, without a restart.
+    async parallelHelpers(): Promise<ParallelHelpersSettings | undefined> {
+      const general = await instanceSettings.getGeneral();
+      return general.parallelHelpers;
     },
 
     // myrmidon(1.6-WIKI): the approved regulations of the agent's role, as workspace files

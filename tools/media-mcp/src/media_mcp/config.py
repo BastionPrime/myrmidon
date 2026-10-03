@@ -42,6 +42,11 @@ class Settings:
     listen_port: int = 8080
     gotenberg_url: str = "http://gotenberg:3000"
     tika_url: str = "http://tika:9998"
+    stt_base_url: str = "http://stt-gateway:8000"
+    stt_api_key: str = ""
+    stt_default_model: str = "whisper-large-v3"
+    stt_max_multipart_bytes: int = 32 * 1024 * 1024
+    stt_max_response_bytes: int = 64 * 1024 * 1024
     worker_url: str = "http://media-worker:8081"
     worker_token: str = ""
     # limits
@@ -91,6 +96,11 @@ def load_settings(*, need_bots: bool = True) -> Settings:
         listen_port=_int("MEDIA_LISTEN_PORT", 8080),
         gotenberg_url=e("MEDIA_GOTENBERG_URL", "http://gotenberg:3000").rstrip("/"),
         tika_url=e("MEDIA_TIKA_URL", "http://tika:9998").rstrip("/"),
+        stt_base_url=e("MEDIA_STT_BASE_URL", "http://stt-gateway:8000").rstrip("/"),
+        stt_api_key=_secret("MEDIA_STT_API_KEY"),
+        stt_default_model=e("MEDIA_STT_DEFAULT_MODEL", "whisper-large-v3"),
+        stt_max_multipart_bytes=_int("MEDIA_STT_MAX_MULTIPART_BYTES", 32 * 1024 * 1024),
+        stt_max_response_bytes=_int("MEDIA_STT_MAX_RESPONSE_BYTES", 64 * 1024 * 1024),
         worker_url=e("MEDIA_WORKER_URL", "http://media-worker:8081").rstrip("/"),
         worker_token=_secret("MEDIA_WORKER_TOKEN"),
         max_request_bytes=_int("MEDIA_MAX_REQUEST_BYTES", 24 * 1024 * 1024),

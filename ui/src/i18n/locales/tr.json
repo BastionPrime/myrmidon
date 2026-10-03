@@ -326,5 +326,62 @@
       "nightMode": "Night mode — read-only placeholder; scheduled for a 1.6+ follow-up.",
       "answerChannel": "Answer channel — read-only placeholder; channel routing is chosen after 1.6."
     }
+  },
+  "modelProviders": {
+    "title": "Model providers",
+    "breadcrumb": "Model providers",
+    "intro": "Provider keys for the model gateway: add a provider, rotate or remove its key, enable the models the company may use. The key is write-only — it is stored once and never shown again. Free models come first in every list; among them, free DashScope models lead (owner rule).",
+    "loading": "Loading model providers...",
+    "noCompany": "Select a company to manage its model providers.",
+    "free": "Free",
+    "paid": "Paid",
+    "add": {
+      "title": "Add provider",
+      "open": "Add provider",
+      "cancel": "Cancel",
+      "type": "Type",
+      "name": "Name",
+      "baseUrl": "Base URL",
+      "key": "API key",
+      "keyHint": "Write-only: the key is stored in the secret store and never displayed again.",
+      "free": "Free tier (free models first)",
+      "save": "Save provider",
+      "saving": "Saving..."
+    },
+    "list": {
+      "title": "Providers",
+      "empty": "No model providers yet. Add one to enable its models for the company.",
+      "keyStored": "Key stored",
+      "keyMissing": "No key",
+      "modelsLoading": "Loading models...",
+      "modelsEmpty": "No models discovered for this provider yet."
+    },
+    "rotate": {
+      "open": "Rotate key",
+      "placeholder": "New key",
+      "save": "Rotate",
+      "saving": "Rotating...",
+      "cancel": "Cancel"
+    },
+    "remove": {
+      "open": "Remove",
+      "confirm": "Confirm remove",
+      "removing": "Removing...",
+      "cancel": "Cancel"
+    },
+    "changeLog": {
+      "title": "Change log",
+      "empty": "No provider changes recorded yet."
+    }
+  },
+  "cardModels": {
+    "free": "Free",
+    "paid": "Paid",
+    "freeFirstHint": "Free models are listed first.",
+    "fromBoard": "From board settings",
+    "fromEnvDefault": "Default list",
+    "refresh": "Refresh models",
+    "refreshing": "Refreshing…",
+    "loadError": "Could not load the model list."
   }
 }
