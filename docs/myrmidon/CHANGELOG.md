@@ -10,6 +10,26 @@ version file to edit. Base Paperclip version is in the image label
 
 ## Unreleased
 
+### Maintenance: asynchronous exit and the post-deploy fleet check (EXIT-ASYNC + POST-DEPLOY-CHECK)
+
+- Leaving maintenance mode is asynchronous (#268): the `exit` call returns as
+  soon as the window is marked `leaving`, and the leave tail (resuming the
+  queued wake backlog, the exit hook, retiring the window) runs on the
+  maintenance tick (`MYRMIDON_MAINTENANCE_TICK_SEC`, default 5 s). `leaving`
+  already reopens admission, so the fleet keeps working while the tail runs.
+- The deploy waits on the state, not on the HTTP call: after the exit POST,
+  `deploy.sh` polls the maintenance state until the instance window is `off`,
+  bounded by `MAINTENANCE_EXIT_WAIT_SEC` (default 120 s). A timeout is logged
+  loudly and does not fail an already switched and healthy deploy; a failed
+  exit request still aborts it.
+- The deploy ends with a read-only post-deploy fleet check (step 9,
+  `post_deploy_fleet_check`): with `BOARD_API_URL` and `BOARD_COMPANY_ID` set
+  it asks the board for issues that are `blocked` with an update since the
+  deploy started and re-reads the maintenance state. A hit, an unreadable
+  board or a window that did not retire prints `degraded: ...` and the run
+  ends with `DEPLOY DEGRADED` — the verdict does not fail a switched and
+  healthy deploy. Without the two settings the check is skipped.
+
 ### Telegram notification settings UI (TG-NOTIFY-SETTINGS part F)
 
 - The "Telegram notifications" panel on the System screen of the 2.0 UI: all
