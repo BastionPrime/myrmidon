@@ -43,6 +43,7 @@
 //     in input.env under that name.
 import { createHash } from "node:crypto";
 
+import type { ParallelHelpersCard, ResolvedParallelHelpers } from "@paperclipai/shared";
 import type { CompiledProfile, CompiledProfileFile } from "./types.js";
 import { writeYamlDocument, type YamlMapping } from "./deterministic-yaml.js";
 
@@ -66,6 +67,8 @@ export interface HermesProfileAdapterConfig {
     tts?: string;
     fallbacks?: string[];
   };
+  /** myrmidon(PARALLEL-HELPERS): the card's "Parallel helpers" block, as stored. */
+  parallelHelpers?: ParallelHelpersCard;
   /** adapterConfig.toolsets — comma-separated Hermes toolset names. */
   toolsets?: string;
 }
@@ -242,6 +245,17 @@ export interface HermesProfileInput {
   mcpServers: readonly HermesProfileMcpServer[];
   /** gateway.api_server.max_concurrent_runs — must be a positive integer. */
   maxConcurrentRuns: number;
+  /**
+   * myrmidon(PARALLEL-HELPERS): the resolved "Parallel helpers" values for this
+   * agent — what `delegation.*` gets and whether the `delegation` toolset stays
+   * available. Already resolved against the company ceiling by the caller
+   * ({@link resolveParallelHelpers}), because the ceiling is instance
+   * settings and this function is pure. Absent means "this agent has no
+   * parallel helpers" — the pre-feature behavior for every card that says
+   * nothing, except that the toolset is left exactly as the card's toolsets
+   * already select it.
+   */
+  parallelHelpers?: ResolvedParallelHelpers;
   instanceDefaults: HermesProfileInstanceDefaults;
   /** Becomes API_SERVER_KEY in .env — the token runs authenticate to this bot's gateway with. */
   apiServerKey: string;
@@ -439,6 +453,58 @@ function buildAuxiliary(vision: string | undefined): YamlMapping | undefined {
   return { vision: { model } };
 }
 
+/**
+ * myrmidon(PARALLEL-HELPERS): the `delegation` section Hermes reads for
+ * `delegate_task` (tools/delegate_tool.py `_resolve_delegation_credentials`,
+ * `_get_max_concurrent_children`). Written only when the agent's card turns
+ * helpers on: an empty mapping is dropped by the writer anyway, but being
+ * explicit keeps the intent legible in the diff.
+ *
+ *   - `max_concurrent_children`: parallel children per call and concurrent
+ *     background delegation units (the value the card's limit maps to).
+ *   - `model` / `provider`: the child model. The card carries "provider/model"
+ *     (the same shape adapterConfig.model uses), which Hermes resolves as a
+ *     pinned child provider; a bare name leaves the provider empty so the child
+ *     inherits the parent's credentials, exactly as an unset
+ *     `delegation.provider` does.
+ *   - `max_iterations`: the per-child turn budget. Only written when the card
+ *     sets one; otherwise Hermes' own default (250) stays in place, and this
+ *     compiler must not silently change a child's budget.
+ */
+function buildDelegation(helpers: ResolvedParallelHelpers | undefined): YamlMapping | undefined {
+  if (!helpers || !helpers.enabled) return undefined;
+  const model = nonEmpty(helpers.model) ?? "";
+  // "provider/model" pins the child's provider; a bare model name inherits the
+  // parent's provider + credentials (delegation.provider = "" in the vendor's
+  // own defaults). Splitting on the FIRST slash keeps ids that themselves
+  // contain one (e.g. "openrouter/google/gemini-3-flash-preview").
+  const slash = model.indexOf("/");
+  const provider = slash > 0 ? model.slice(0, slash) : undefined;
+  const bareModel = slash > 0 ? model.slice(slash + 1) : model;
+  return {
+    max_concurrent_children: helpers.maxConcurrent,
+    model: nonEmpty(bareModel),
+    provider,
+    max_iterations: helpers.childTurnBudget,
+  };
+}
+
+/**
+ * myrmidon(PARALLEL-HELPERS): the agent-level toolset switch that turns
+ * `delegate_task` itself off. `delegate_task` is a member of
+ * `_HERMES_CORE_TOOLS` (toolsets.py), so it is present on every surface unless
+ * a toolset listing removes it; `agent.disabled_toolsets` is subtracted LAST
+ * and wins over any composite that re-enables it, which is why the switch
+ * belongs there rather than in `toolsets`.
+ *
+ * Returns undefined for the default "helpers off" case so a card that never
+ * mentioned helpers compiles to exactly its previous config.yaml.
+ */
+function buildDisabledToolsets(helpers: ResolvedParallelHelpers | undefined): string[] | undefined {
+  if (!helpers || helpers.enabled) return undefined;
+  return ["delegation"];
+}
+
 /** stt/tts: the card carries only a model name, never a provider — see module docstring. */
 function warnUnplacedVoiceModels(
   models: HermesProfileAdapterConfig["models"],
@@ -478,10 +544,18 @@ function buildConfigYaml(input: HermesProfileInput, warnings: string[]): string 
   const llmApiKeyEnv = resolveLlmApiKeyEnv(input.llm, warnings);
 
   const root: YamlMapping = {
+    agent: {
+      reasoning_effort: buildReasoningEffort(adapterConfig.effort, warnings),
+      // myrmidon(PARALLEL-HELPERS): "helpers off" removes delegate_task from the
+      // agent's tool surface. Omitted entirely when helpers are on (or the card
+      // predates the field), so no unrelated toolset is ever disabled.
+      disabled_toolsets: buildDisabledToolsets(input.parallelHelpers),
+    },
     approvals: { mode: "off" },
-    agent: { reasoning_effort: buildReasoningEffort(adapterConfig.effort, warnings) },
     auxiliary: buildAuxiliary(adapterConfig.models?.vision),
     compression: buildCompression(input.instanceDefaults.compression),
+    // myrmidon(PARALLEL-HELPERS): delegate_task's own limits and child model.
+    delegation: buildDelegation(input.parallelHelpers),
     fallback_model: buildFallbackModelSequence(
       adapterConfig.models?.fallbacks,
       adapterConfig.provider,

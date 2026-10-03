@@ -48,7 +48,7 @@ INSTRUCTIONS = (
     "PUT /v1/files?name=<name> (body = raw bytes) and download with GET /v1/files/<id> on the same address "
     "(same authentication), then use the returned file_id. "
     "Tools: file_put/file_get/file_list/file_delete, media_probe, audio_loudness, ffmpeg_submit + job_status/job_cancel, "
-    "image_transform, pdf_to_images, office_to_pdf, html_to_pdf, extract_text. "
+    "image_transform, pdf_to_images, office_to_pdf, html_to_pdf, extract_text, dwg_convert. "
     "Arbitrary shell or node scripts are not available here."
 )
 
@@ -298,6 +298,37 @@ def build_app(cfg: Settings | None = None) -> Any:
         return {"deleted": file_id}
 
     # ---- media -----------------------------------------------------------------
+    @tool
+    async def dwg_convert(input: FileInput, kind: str, dxf_version: str = "R2010",
+                          output_name: str | None = None, width: int = 1600, height: int = 1200,
+                          paper: str | None = None, inline: bool = False) -> dict:
+        """Convert a DWG or DXF drawing to DXF, SVG or PDF. kind: dxf|svg|pdf.
+        DXF output: dxf_version R12..R2018 (default R2010). SVG/PDF: width/height in px
+        (page size for the rendered drawing), pdf also accepts paper like 420x297 (mm).
+        DWG input is read with LibreDWG (dwg2dxf), rendering uses ezdxf. Returns the
+        converted file from your store."""
+        bot = gate("dwg_convert")
+        if kind not in ("dxf", "svg", "pdf"):
+            raise ToolError("kind must be one of dxf, svg, pdf")
+        meta, temp = await resolve(bot, input)
+        try:
+            alias = safe_name(meta["name"])
+            if not specs.is_cad_input(alias):
+                raise ToolError("input must be a .dwg or .dxf file")
+            spec: dict[str, Any] = {"input": alias, "kind": kind, "output": {"name": output_name or ("drawing." + kind)}}
+            if kind == "dxf":
+                spec["dxf_version"] = dxf_version
+            else:
+                spec["output"]["width"] = width
+                spec["output"]["height"] = height
+                if paper:
+                    spec["output"]["paper"] = paper
+            _, outs = await run_sync(bot, "dwg", {alias: meta}, spec)
+        finally:
+            if temp:
+                await drop(bot, [meta])
+        return with_inline(outs[0], inline)
+
     @tool
     async def media_probe(input: FileInput) -> dict:
         """ffprobe a video/audio/image file: duration, streams (codec, size, fps, channels), container."""

@@ -392,3 +392,52 @@ def build_pdf_images_argv(spec: dict[str, Any], aliases: set[str], out_dir: str 
     if fmt not in ("png", "jpeg"):
         raise SpecError("format is png or jpeg")
     return ["pdftoppm", f"-{fmt}", "-r", str(dpi), "-f", str(first), "-l", str(last), src, f"{out_dir}/page"]
+
+
+# --- cad: dwg / dxf conversion ------------------------------------------------
+
+DXF_VERSIONS = ("R12", "R2000", "R2004", "R2007", "R2010", "R2013", "R2018")
+
+
+def build_dwg_argv(spec: dict[str, Any], aliases: set[str], out_dir: str = "../out") -> list[str]:
+    """argv for the cad conversion job. The worker runs `dwg_convert.py`
+    (LibreDWG binaries + ezdxf); every path here is a job-local alias, never a
+    bot-supplied path, exactly like the ffmpeg argv above."""
+    src = check_alias(spec.get("input"), aliases)
+    kind = spec.get("kind")
+    if kind not in ("dxf", "svg", "pdf"):
+        raise SpecError("kind must be one of dxf, svg, pdf")
+    out = spec.get("output") or {}
+    if not isinstance(out, dict):
+        raise SpecError("output must be an object")
+    name = out.get("name") or ("drawing." + kind)
+    if not OUT_NAME_RE.match(name) or "%" in name or ".." in name:
+        raise SpecError("output.name: letters, digits, . _ - only")
+    argv = ["dwg_convert", src, "--kind", kind, "--output", f"{out_dir}/{name}"]
+    if kind == "dxf":
+        version = spec.get("dxf_version", "R2010")
+        if version not in DXF_VERSIONS:
+            raise SpecError(f"dxf_version must be one of {DXF_VERSIONS}")
+        argv += ["--dxf-version", version]
+    if kind in ("svg", "pdf"):
+        for side in ("width", "height"):
+            v = out.get(side)
+            if v is not None:
+                if not isinstance(v, int) or isinstance(v, bool) or not 16 <= v <= 16384:
+                    raise SpecError(f"output.{side} must be an integer in [16, 16384]")
+                argv += [f"--{side.replace('width', 'width').replace('height', 'height')}", str(v)]
+    if kind == "pdf":
+        paper = out.get("paper")
+        if paper is not None:
+            if not isinstance(paper, str) or not re.fullmatch(r"[0-9]{2,5}x[0-9]{2,5}", paper):
+                raise SpecError("output.paper looks like 420x297 (mm)")
+            argv += ["--paper", paper]
+    return argv
+
+
+def is_cad_input(name: str) -> bool:
+    return name.lower().endswith((".dwg", ".dxf"))
+
+
+def is_dwg_input(name: str) -> bool:
+    return name.lower().endswith(".dwg")

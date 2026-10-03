@@ -15,6 +15,9 @@
 // message is safe to show in the reconcile activity log.
 
 import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS } from "@paperclipai/shared";
+// myrmidon(PARALLEL-HELPERS): card + company ceiling -> the values the compiler writes
+// into config.yaml's `delegation` section (and the toolset switch).
+import { PARALLEL_HELPERS_DEFAULT_MODEL_ENV, readParallelHelpersCard, resolveParallelHelpers, type ParallelHelpersSettings } from "@paperclipai/shared";
 import { BOT_BOARD_GATEWAY_SERVER_NAME } from "./board-gateway.js";
 import type {
   HermesProfileAdapterConfig,
@@ -107,6 +110,17 @@ export interface BotProfileSettings {
 
 function readSetting(env: NodeJS.ProcessEnv, name: string): string | null {
   const value = env[name]?.trim();
+  return value ? value : null;
+}
+
+/**
+ * myrmidon(PARALLEL-HELPERS): `readSetting` over the card's resolved env (a
+ * plain record of `HermesProfileEnvEntry`), for the instance-level default
+ * helper model. Instance-level values always win over the card here only when
+ * the card's own block names no model — the normal precedence for defaults.
+ */
+function readSettingFromRecord(env: Record<string, HermesProfileEnvEntry>, name: string): string | null {
+  const value = env[name]?.value?.trim();
   return value ? value : null;
 }
 
@@ -373,6 +387,14 @@ export interface BotProfileSource {
   paperclipApiKey: string;
   mcpServers: readonly BotMcpSource[];
   instanceDefaults?: HermesProfileInstanceDefaults;
+  /**
+   * myrmidon(PARALLEL-HELPERS): the company ceiling/default for helpers, from
+   * instance settings (`general.parallelHelpers`), as the ports read it.
+   * Optional: absent = module defaults. The RESOLUTION against the card happens
+   * here (not in the compiler) so that the pure compiler keeps no settings
+   * knowledge; `resolveParallelHelpers` also normalizes the model fallback.
+   */
+  parallelHelpersSettings?: ParallelHelpersSettings;
 }
 
 export interface BuiltBotProfileInput {
@@ -421,6 +443,9 @@ function readAdapterConfig(card: Record<string, unknown>): HermesProfileAdapterC
       tts: asTrimmedString(models.tts),
       fallbacks: asStringList(models.fallbacks),
     },
+    // myrmidon(PARALLEL-HELPERS): the raw card block; resolved against the company
+    // ceiling in buildHermesProfileInput (the ceiling is instance settings).
+    parallelHelpers: readParallelHelpersCard(card),
     toolsets,
   };
 }
@@ -651,6 +676,16 @@ export function buildHermesProfileInput(source: BotProfileSource, settings: BotP
       : {},
     mcpServers: mcp.servers,
     maxConcurrentRuns: readMaxConcurrentRuns(source.runtimeConfig),
+    // myrmidon(PARALLEL-HELPERS): card block + company ceiling -> delegation
+    // config (see resolveParallelHelpers). The default helper model comes from
+    // MYRMIDON_BOT_HELPER_MODEL on the card's env — an instance value, not a
+    // literal in code, so no model name is baked into the product. The card's
+    // env is a plain record here, so index it directly rather than casting.
+    parallelHelpers: resolveParallelHelpers(
+      card,
+      source.parallelHelpersSettings,
+      readSettingFromRecord(env, PARALLEL_HELPERS_DEFAULT_MODEL_ENV) ?? "",
+    ),
     instanceDefaults: source.instanceDefaults ?? {},
     apiServerKey: source.apiServerKey,
     // settings.boardUrl is non-null here: assertBotProfileSettings threw otherwise.

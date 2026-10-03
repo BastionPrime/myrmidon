@@ -24,6 +24,7 @@
 | `office_to_pdf` | docx/xlsx/pptx/odt/… в PDF (Gotenberg, LibreOffice) |
 | `html_to_pdf` | HTML-строка и локальные ассеты в PDF (Chromium без JavaScript, грузятся только свои ассеты) |
 | `extract_text` | текст документа или OCR картинки/скана (Tika, Tesseract rus+eng) |
+| `dwg_convert` | DWG/DXF → DXF, SVG, PDF (LibreDWG + ezdxf), см. ниже |
 
 Произвольные node- и shell-скрипты сервис не выполняет. Живые страницы рендерит браузерный MCP,
 режима URL у `html_to_pdf` нет.
@@ -47,6 +48,23 @@
   отдаётся конвертеру потоком. Ответ Tika читается только до `max_chars` (`truncated: true`, `chars`
   тогда нижняя граница), PDF от Gotenberg пишется потоком в файл и обрывается на 128 МиБ
   (`MEDIA_MAX_PDF_BYTES`) или на остатке квоты.
+
+## DWG/DXF (dwg_convert)
+
+`dwg_convert` повторяет хостовые dwg2dxf/dwg2SVG как инструмент медиасервиса (в образе бота CAD-утилит нет,
+отдельный образ бота запрещён CONVENTIONS §8). Вход — `.dwg` или `.dxf`, выход — DXF, SVG или PDF:
+
+- `kind=dxf`: DXF пишется LibreDWG (DWG-вход) или ezdxf (DXF-вход, версия `dxf_version` R12…R2018,
+  по умолчанию R2010). Замечание: LibreDWG пишет DXF входной ревизии (до r2013), `dxf_version`
+  действует только на DXF-вход.
+- `kind=svg`: рендер ezdxf (SVGBackend); `width`/`height` (по умолчанию 1600×1200) — размер страницы.
+- `kind=pdf`: рендер через SVG + LibreOffice, если LibreOffice есть в образе воркера; в базовом образе
+  его нет — воркер честно откажет («ask for svg»), PDF-путь оставлен для образа с LibreOffice.
+- Результат — обычный файл в хранилище бота (квота и срок хранения те же), при `inline=true`
+  маленькие файлы возвращаются base64.
+- Инструмент синхронный (таймаут 300 с), лимиты вывода — как у остальных заданий воркера.
+
+Проверка после выкладки: конвертация тестового DWG в DXF и SVG, округление DXF→DXF со сменой версии.
 
 ## Аутентификация бота
 
@@ -76,6 +94,7 @@
 4. Приёмка: `media_probe` на коротком ролике; `ffmpeg_submit` со `subtitles`; `extract_text` на
    скане с русским текстом; `office_to_pdf` на docx; `.xlsm` с автозапуском макроса не оставляет
    следов; бот B не открывает файл бота A; лишний запрос выше `rate_per_min` получает 429.
+   Для `dwg_convert`: тестовый DWG → DXF и → SVG от имени бота с инструментом в `tools`.
 5. Добавить `{"name":"media","url":"http://media-mcp:8080/mcp","noAuth":true}` в
    `MYRMIDON_BOT_MCP_SERVERS` (перезапустит контейнеры ботов).
 
@@ -103,7 +122,7 @@
 Готовые клиентские модули для скриптов, которые раньше звали локальный ffmpeg/ffprobe,
 лежат в `tools/media-mcp/bot-scripts/`: stdlib-only клиент MCP (`media_client.py`),
 drop-in слой `media_shim.py` (контракты `video_info`/`CompletedProcess`, fast-path на
-локальном ffmpeg) и инструкция применения в живом дереве ботов (`APPLY-OPE3288.md`).
+локальном ffmpeg) и инструкция применения в живом дереве ботов (`APPLY.md`).
 Скрипт бота получает адрес и токен из `MEDIA_TOOLS_URL`/`MEDIA_TOOLS_TOKEN`; токен —
 персональная запись бота в `config/bots.json` (см. «Аутентификация бота»).
 

@@ -43,6 +43,8 @@ export interface AgentKey {
 export interface AdapterModel {
   id: string;
   label: string;
+  /** MODEL-PROVIDERS D (1.6.1): pricing tier badge from the board DB. */
+  pricing?: "free" | "paid";
 }
 
 export interface DetectedAdapterModel {
