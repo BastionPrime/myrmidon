@@ -96,6 +96,8 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/agent-board-admin.md](guides/agent-board-admin.md) | Администратор доски из агентов (1.6.1 ADMIN-AGENT C): переключатель «Board administrator» на вкладке Permissions карточки агента, кто его видит, страница Members с бейджем админа-агента, fail-closed чтение флага |
 | [guides/actor-grant-routes.md](guides/actor-grant-routes.md) | Грантовые проверки актора (1.6.1 ADMIN-AGENT часть B): какие маршруты окружений и tool-подключений пускают агента с грантом, ключи прав по маршрутам, выдача грантов, атрибуция агента в журнале активности |
 
+| [media-tools.md](media-tools.md) | Общие медиа- и офисные инструменты для контейнерных ботов: сервис media-mcp, хранилище и квоты, инструменты (ffmpeg, офис, OCR, `dwg_convert`), развёртывание и границы изоляции |
+
 ## Сборка и запуск
 
 Пока всё как у вендора: [doc/DEVELOPING.md](../../doc/DEVELOPING.md),

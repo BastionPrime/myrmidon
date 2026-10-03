@@ -24,9 +24,11 @@ import {
   SWARM_CLAIM_RELEASED_ACTION,
   SWARM_CLAIM_RELEASE_REASON_LEASE_EXPIRED,
   SWARM_CLAIM_RELEASE_REASON_RUN_FINISHED,
+  SWARM_CLAIM_REASON_CASTE_EXCLUDED,
   SWARM_CLAIM_WAKE_IDEMPOTENCY_PREFIX,
   SWARM_CLAIM_WAKE_REASON,
   resolveSwarmClaimSettings,
+  type CompanyCastesReader,
   type SwarmClaimLease,
   type SwarmClaimSettings,
   type SwarmQueueCandidate,
@@ -70,6 +72,15 @@ export interface SwarmClaimServicePorts {
   db: Db;
   /** Instance settings read (the general block holds `swarmClaim`). */
   settings: Pick<ReturnType<typeof instanceSettingsService>, "getGeneral">;
+  /**
+   * myrmidon(1.6.1 CUSTOM-CASTES B): the company caste directory read. The
+   * gate consults the claiming agent's caste for `swarmEligible` and the
+   * per-caste `maxActiveTasks`. Absent in unit tests (a caste that is not
+   * found is treated as eligible: the directory is additive, and a missing
+   * entry must not strand an agent that could claim before the directory
+   * existed).
+   */
+  castes?: CompanyCastesReader;
   /** Wake admission; absent in unit tests. */
   enqueueWakeup?: SwarmClaimEnqueueWakeup;
   /** Activity log; absent in unit tests. */
@@ -90,8 +101,12 @@ export interface SwarmClaimServicePorts {
 export interface SwarmClaimOutcome {
   /** The task taken, with its lease. Null when the agent may not take one. */
   claim: SwarmClaimLease | null;
-  /** Why no claim happened: no queue, at the ceiling, or the pilot is off. */
-  reason: "claimed" | "queue_empty" | "limit_reached" | "disabled";
+  /**
+   * Why no claim happened: no queue, at the ceiling, the pilot is off, or
+   * the agent's caste is excluded from the swarm
+   * (`caste_excluded`, myrmidon 1.6.1 CUSTOM-CASTES B).
+   */
+  reason: "claimed" | "queue_empty" | "limit_reached" | "disabled" | "caste_excluded";
 }
 
 /**
@@ -121,6 +136,24 @@ export async function claimNextTaskForAgent(
   const agent = agentRow[0];
   if (!agent) return { claim: null, reason: "queue_empty" };
 
+  // myrmidon(1.6.1 CUSTOM-CASTES B): the caste gate. An agent whose caste is
+  // marked `swarmEligible=false` in the company directory never participates
+  // in the claim — supervision roles (a lead watching the queue, an on-call
+  // reviewer) stay out of the pool the swarm draws from. A caste that is not
+  // in the directory is eligible: the directory is additive and a missing
+  // entry must not strand an agent that could claim before it existed.
+  const caste = ports.castes
+    ? (await ports.castes(input.companyId)).find((entry) => entry.key === agent.role)
+    : undefined;
+  if (caste && !caste.swarmEligible) {
+    return { claim: null, reason: SWARM_CLAIM_REASON_CASTE_EXCLUDED };
+  }
+  // A caste-set ceiling overrides the global swarm ceiling for this agent
+  // only; `null` keeps the global setting exactly as it was.
+  const effectiveSettings: SwarmClaimSettings = caste?.maxActiveTasks != null
+    ? { ...settings, maxActiveTasks: caste.maxActiveTasks }
+    : settings;
+
   const [candidates, agentClaims, companyClaims] = await Promise.all([
     listRoleQueue(ports.db, input.companyId, agent.role),
     listAgentLiveClaims(ports.db, input.companyId, input.agentId),
@@ -134,7 +167,7 @@ export async function claimNextTaskForAgent(
     candidates,
     liveClaims,
     activeTasks: agentClaims.length,
-    settings,
+    settings: effectiveSettings,
     now,
   });
   if (!next) {
@@ -144,7 +177,7 @@ export async function claimNextTaskForAgent(
         candidates,
         liveClaims,
         activeTasks: 0,
-        settings,
+        settings: effectiveSettings,
         now,
       });
       if (bareQueue) return { claim: null, reason: "limit_reached" };
