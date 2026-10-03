@@ -90,7 +90,8 @@
       "colony": "{{active}} of {{total}}",
       "fleet": "Fleet",
       "fleetAttention": "Fleet: 1 attention",
-      "forecast": "{{spend}} of {{budget}}"
+      "forecast": "{{spend}} of {{budget}}",
+      "forecastSpendOnly": "{{spend}} spent"
     },
     "decisions": {
       "badge": "{{count}} decisions waiting"
@@ -407,6 +408,25 @@
     "secretUnset": "No secret",
     "secretHint": "Only the secret name is stored; the value lives in the company secret store and never reaches this screen.",
     "save": "Save settings",
+    "saving": "Saving..."
+  },
+  "wipLimit": {
+    "title": "WIP limit",
+    "breadcrumb": "WIP limit",
+    "intro": "How many tasks one agent may hold in work at once (in progress + in review). A capped agent is handed no new task until one of its active tasks settles; no run in flight is interrupted.",
+    "loading": "Loading the WIP limit settings...",
+    "noCompany": "Select a company to edit its WIP limit.",
+    "defaultLabel": "Default limit per agent",
+    "defaultHint": "Applies to every agent without its own value. Empty — no limit.",
+    "noLimit": "No limit",
+    "usesDefault": "uses default",
+    "agentsTitle": "Per-agent limits",
+    "colAgent": "Agent",
+    "colWip": "In work now",
+    "colLimit": "Limit",
+    "overLimit": "Over limit",
+    "noAgents": "No agents in this company yet.",
+    "save": "Save WIP limit",
     "saving": "Saving..."
   }
 }

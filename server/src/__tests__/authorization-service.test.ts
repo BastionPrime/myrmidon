@@ -2031,6 +2031,57 @@ describeEmbeddedPostgres("authorization service", () => {
     expect(decision.explanation).toContain("another company");
   });
 
+  // myrmidon(1.6.1 CUSTOM-CASTES B): the CEO checks in authorization
+  // (`agent.role === "ceo"`) stay byte-identical — ceo is a built-in caste —
+  // and a *custom* (caste-directory) role keeps working through its explicit
+  // grants exactly as a non-ceo built-in role does. The role string widening
+  // must not change either path.
+  it("a custom caste role with explicit grants authorizes exactly like a built-in non-ceo role", async () => {
+    const company = await createCompany(db, "CasteGrants");
+    const reviewerAgent = await createAgent(db, company.id, { role: "reviewer" });
+    const engineerAgent = await createAgent(db, company.id, { role: "engineer" });
+    const targetAgent = await createAgent(db, company.id);
+    await grantAgentPermission(db, company.id, reviewerAgent.id, "agents:suggest-changes");
+    await grantAgentPermission(db, company.id, engineerAgent.id, "agents:suggest-changes");
+
+    const decideAs = (agentId: string) =>
+      authorizationService(db).decide({
+        actor: { type: "agent", agentId, companyId: company.id, source: "agent_jwt" },
+        action: "agent_config:read",
+        resource: { type: "agent", companyId: company.id, agentId: targetAgent.id },
+      });
+
+    const reviewerDecision = await decideAs(reviewerAgent.id);
+    const engineerDecision = await decideAs(engineerAgent.id);
+    expect(reviewerDecision.allowed).toBe(true);
+    expect(reviewerDecision.reason).toBe(engineerDecision.reason);
+  });
+
+  it("a custom caste role is NOT the ceo: the legacy ceo-only paths stay closed for it", async () => {
+    const company = await createCompany(db, "CasteNotCeo");
+    const customAgent = await createAgent(db, company.id, { role: "reviewer", permissions: {} });
+    const ceoAgent = await createAgent(db, company.id, { role: "ceo" });
+
+    const decideAs = (agentId: string) =>
+      authorizationService(db).decide({
+        actor: { type: "agent", agentId, companyId: company.id, source: "agent_jwt" },
+        action: "agents:create",
+        resource: { type: "company", companyId: company.id },
+      });
+
+    // The ceo role keeps its legacy authority.
+    expect(await decideAs(ceoAgent.id)).toMatchObject({
+      allowed: true,
+      reason: "allow_legacy_agent_creator",
+    });
+    // A custom caste does not inherit it: without grants the answer is the
+    // same deny a built-in non-ceo role gets.
+    expect(await decideAs(customAgent.id)).toMatchObject({
+      allowed: false,
+      reason: "deny_missing_grant",
+    });
+  });
+
   it("allows scoped assignment inside a granted project and denies other projects", async () => {
     const company = await createCompany(db, "ProjectScope");
     const project = await createProject(db, company.id, "Allowed");

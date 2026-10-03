@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   assets,
@@ -485,7 +485,14 @@ export async function authorizeChatConversationForBoundRun(
           chatEndpoints.provider,
           provider as typeof chatEndpoints.$inferSelect.provider,
         ),
-        eq(chatEndpoints.assignedAgentId, binding.agentId),
+        // myrmidon(X9b): an @<alias>-addressed conversation's agent is its
+        // own conversationAgentId, not the endpoint's assigned agent; the
+        // conversation row is pinned to binding.issueId, so accept either
+        // the assigned agent matching or the conversation issue's own agent.
+        or(
+          eq(chatEndpoints.assignedAgentId, binding.agentId),
+          sql`exists (select 1 from issues conv where conv.company_id = ${chatConversations.companyId} and conv.id = ${chatConversations.issueId} and conv.conversation_agent_id = ${binding.agentId})`,
+        ),
         inArray(chatEndpoints.status, ["active", "verifying"]),
       ),
     );

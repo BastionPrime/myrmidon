@@ -136,6 +136,8 @@ describe("CompanySettingsNav", () => {
           { value: "browsers", label: "Browsers" }, // myrmidon(BROWSER-CONSOLE)
           { value: "clouds", label: "Clouds" }, // myrmidon(CLOUD-CONNECTOR)
           { value: "autonomy", label: "Autonomy" }, // myrmidon(1.6 AUTONOMY-MATRIX B)
+          { value: "wip-limit", label: "WIP limit" }, // myrmidon(1.6.1 WIP-LIMIT B)
+
           { value: "castes", label: "Castes & models" }, // myrmidon(1.6.1 MODEL-PROVIDERS C)
           { value: "voice-stt", label: "Speech" }, // myrmidon(1.6.1 VOICE-STT C)
         ],
@@ -183,6 +185,8 @@ describe("CompanySettingsNav", () => {
       "browsers", // myrmidon(BROWSER-CONSOLE)
       "clouds", // myrmidon(CLOUD-CONNECTOR)
       "autonomy", // myrmidon(1.6 AUTONOMY-MATRIX B)
+      "wip-limit", // myrmidon(1.6.1 WIP-LIMIT B)
+
       "castes", // myrmidon(1.6.1 MODEL-PROVIDERS C)
       "voice-stt", // myrmidon(1.6.1 VOICE-STT C)
     ]);
