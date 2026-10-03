@@ -91,6 +91,7 @@ const mockExecutionWorkspaceService = vi.hoisted(() => ({
 }));
 
 vi.mock("../services/index.js", () => ({
+  accessService: () => mockAccessService,
   issueService: () => mockIssueService,
   instanceSettingsService: () => mockInstanceSettingsService,
   environmentCustomImageService: () => mockEnvironmentCustomImageService,
@@ -1354,8 +1355,26 @@ describe("environment routes", () => {
     const res = await request(app).get("/api/companies/company-1/environments");
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("Board access required");
+    expect(res.body.error).toContain("Missing permission: environments:manage");
     expect(mockEnvironmentService.list).not.toHaveBeenCalled();
+  });
+
+  it("allows agent list reads with the environments:manage grant", async () => {
+    mockEnvironmentService.list.mockResolvedValue([createEnvironment()]);
+    mockAccessService.hasPermission.mockResolvedValue(true);
+    const app = createApp({
+      type: "agent",
+      agentId: "agent-1",
+      companyId: "company-1",
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await request(app).get("/api/companies/company-1/environments");
+
+    expect(res.status).toBe(200);
+    expect(mockAccessService.hasPermission).toHaveBeenCalledWith("company-1", "agent", "agent-1", "environments:manage");
+    expect(mockEnvironmentService.list).toHaveBeenCalledTimes(1);
   });
 
   it("rejects agent detail reads for instance-scoped environments", async () => {
@@ -1492,7 +1511,7 @@ describe("environment routes", () => {
     expect(mockEnvironmentService.create).not.toHaveBeenCalled();
   });
 
-  it("rejects agent environment creation even with explicit company grants", async () => {
+  it("rejects agent environment creation without the environments:manage grant", async () => {
     const environment = createEnvironment();
     mockAgentService.getById.mockResolvedValue({
       id: "agent-1",
@@ -1500,7 +1519,7 @@ describe("environment routes", () => {
       role: "engineer",
       permissions: { canCreateAgents: false },
     });
-    mockAccessService.hasPermission.mockResolvedValue(true);
+    mockAccessService.hasPermission.mockResolvedValue(false);
     mockEnvironmentService.create.mockResolvedValue(environment);
     const app = createApp({
       type: "agent",
@@ -1519,8 +1538,43 @@ describe("environment routes", () => {
       });
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("board operators");
+    expect(res.body.error).toContain("Missing permission: environments:manage");
     expect(mockEnvironmentService.create).not.toHaveBeenCalled();
+  });
+
+  it("allows agent environment creation with the environments:manage grant and logs the agent actor", async () => {
+    const environment = createEnvironment();
+    mockAccessService.hasPermission.mockResolvedValue(true);
+    mockEnvironmentService.create.mockResolvedValue(environment);
+    mockSecretService.normalizeEnvBindingsForPersistence.mockResolvedValue({});
+    const app = createApp({
+      type: "agent",
+      agentId: "agent-1",
+      companyId: "company-1",
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await request(app)
+      .post("/api/companies/company-1/environments")
+      .send({
+        name: "Local",
+        driver: "local",
+        config: {},
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockEnvironmentService.create).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: "company-1",
+        actorType: "agent",
+        actorId: "agent-1",
+        agentId: "agent-1",
+        action: "environment.created",
+      }),
+    );
   });
 
   it("rejects deleting the managed local environment", async () => {
@@ -2578,7 +2632,7 @@ describe("environment routes", () => {
     });
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("board operators");
+    expect(res.body.error).toContain("Missing permission: environments:manage");
     expect(mockEnvironmentService.create).not.toHaveBeenCalled();
   });
 

@@ -4401,7 +4401,7 @@ rl.on("line", (line) => {
     }
   });
 
-  it("denies agent actors from runtime control and raw gateway audit routes", async () => {
+  it("denies agent actors without tool grants from runtime control and raw gateway audit routes", async () => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);
     const { run } = await createIssueAndRun(db, company.id, agent.id);
@@ -4418,25 +4418,74 @@ rl.on("line", (line) => {
       .get("/api/tool-gateway/runtime-slots")
       .query({ companyId: company.id });
     expect(list.status).toBe(403);
-    expect(list.body.error).toBe("Board access required");
+    expect(list.body.error).toBe("Missing permission: tools:manage_runtime");
 
     const stop = await request(app)
       .post("/api/tool-gateway/runtime-slots/slot-1/stop")
       .send({ companyId: company.id });
     expect(stop.status).toBe(403);
-    expect(stop.body.error).toBe("Board access required");
+    expect(stop.body.error).toBe("Missing permission: tools:manage_runtime");
 
     const restart = await request(app)
       .post("/api/tool-gateway/runtime-slots/slot-1/restart")
       .send({ companyId: company.id });
     expect(restart.status).toBe(403);
-    expect(restart.body.error).toBe("Board access required");
+    expect(restart.body.error).toBe("Missing permission: tools:manage_runtime");
 
     const audit = await request(app)
       .get("/api/tool-gateway/audit")
       .query({ companyId: company.id });
     expect(audit.status).toBe(403);
-    expect(audit.body.error).toBe("Board access required");
+    expect(audit.body.error).toBe("Missing permission: tools:view_audit");
+  });
+
+  it("allows agent actors with the matching tool grants on runtime control and audit routes", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "agent",
+      principalId: agent.id,
+      status: "active",
+      membershipRole: "operator",
+    });
+    await db.insert(principalPermissionGrants).values([
+      {
+        companyId: company.id,
+        principalType: "agent",
+        principalId: agent.id,
+        permissionKey: "tools:manage_runtime",
+        scope: null,
+        grantedByUserId: "owner",
+      },
+      {
+        companyId: company.id,
+        principalType: "agent",
+        principalId: agent.id,
+        permissionKey: "tools:view_audit",
+        scope: null,
+        grantedByUserId: "owner",
+      },
+    ]);
+    const gateway = createTestToolGatewayService(db);
+    const app = createGatewayRouteApp(db, gateway, {
+      type: "agent",
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+      source: "agent_jwt",
+    });
+
+    const list = await request(app)
+      .get("/api/tool-gateway/runtime-slots")
+      .query({ companyId: company.id });
+    expect(list.status).toBe(200);
+
+    const audit = await request(app)
+      .get("/api/tool-gateway/audit")
+      .query({ companyId: company.id });
+    expect(audit.status).toBe(200);
   });
 
   it("allows board runtime control and audit reads through explicit board permissions", async () => {
