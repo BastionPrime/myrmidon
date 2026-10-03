@@ -1,39 +1,8 @@
-// server/src/myrmidon/telegram-notify/index.ts
-//
-// myrmidon(1.6.1-TG-NOTIFY-B): entry point of the jobs half of the Telegram notify
-// track. The settings routes belong to part A; this module exports only what
-// server/src/index.ts and the tests need.
-
-export {
-  startTelegramNotifyJobs,
-  runDigestForCompany,
-  runEscalationsForCompany,
-  buildDigestSections,
-  renderDigestBody,
-  parseDigestTime,
-  digestAlreadySent,
-  resolveTargetConversation,
-  readTelegramNotifyTickMs,
-  TELEGRAM_NOTIFY_TICK_SEC_ENV,
-  telegramNotifyJobPorts,
-  type TelegramNotifyJobPorts,
-  type TelegramNotifyJobs,
-  type AttentionSnapshot,
-  type AttentionSnapshotItem,
-  type DigestSection,
-  type DigestSectionView,
-} from "./jobs.js";
-export {
-  readTelegramNotifyDocument,
-  mutateTelegramNotifyDocument,
-  preserveTelegramNotifyGeneralKey,
-  emptyTelegramNotifyDocument,
-  TELEGRAM_NOTIFY_GENERAL_KEY,
-  type TelegramNotifyDocument,
-} from "./store.js";
-export {
-  defaultTelegramNotifySettings,
-  type TelegramNotifySettings,
-  type TelegramNotifyDigestSettings,
-  type TelegramNotifyEscalationsSettings,
-} from "./settings.js";
+// myrmidon(1.6-TG-NOTIFY-C): the module barrel. Part C of the telegram
+// notify umbrella: the board errors channel (severity filter + rate limit,
+// delivery through the existing chat publication path). The shared JSON
+// contract lives in packages/shared/src/myrmidon-telegram-notify.ts; part A
+// owns the settings routes and changelog.
+export * from "./errors.js";
+export * from "./settings.js";
+export * from "./sweep.js";

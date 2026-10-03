@@ -1,100 +1,61 @@
-// server/src/myrmidon/telegram-notify/settings.ts
-//
-// myrmidon(1.6.1-TG-NOTIFY-B): the settings contract of the parent track (part A
-// owns the routes; this module holds the shape both the routes and the jobs
-// share, so the server and later the UI use one contract). Fixed names — the
-// parent's contract note: after the agreed version, changes are additive
-// only, field names never change.
-//
-// All defaults are OFF. With the defaults the owner receives in Telegram
-// only replies to his own messages and U2 decision cards (release 1.6.1
-// criterion). Until part A merges, the default settings reader returns this
-// document unchanged: every job reads it, sees `enabled: false`, and sends
-// nothing.
+// myrmidon(1.6-TG-NOTIFY-C): the settings read path of the errors channel.
 
-/** channel ∈ "dm" | "topic" | "none". */
-export type TelegramNotifyEscalationChannel = "dm" | "topic" | "none";
+// The umbrella contract stores the whole telegramNotify area under
+// instance_settings.general (part A owns the store, the routes and the
+// changelog; the key name `telegramNotify` is fixed by the contract).
+// Until part A lands, this adapter is the only reader: it reads the raw
+// general row the same way the stack-registry and autonomy stores do
+// (their own key, read directly, never through the vendor settings
+// service that strips unknown keys) and parses just the `errors` block
+// with the shared schema. Absent key → the safe default: the channel is
+// OFF, which is the release criterion for 1.6.1.
 
-/** mode ∈ "only_on_owner_request" | "rarely" | "normal". */
-export type TelegramNotifyProactivityMode =
-  | "only_on_owner_request"
-  | "rarely"
-  | "normal";
+// When part A merges, it becomes the writer of this key; this reader
+// stays valid unchanged (same key, same schema).
 
-export type TelegramNotifyDigestSection = "done" | "blocked" | "needs_decision" | "spend";
+import { eq } from "drizzle-orm";
+import { instanceSettings, type Db } from "@paperclipai/db";
+import { parseTelegramNotifyErrors, type TelegramNotifyErrorsSettings } from "@paperclipai/shared";
+import type { ErrorChannelSettings } from "./errors.js";
 
-export interface TelegramNotifyDigestSettings {
-  enabled: boolean;
-  /** Send time "HH:MM" (UTC), the fixed default 09:00. */
-  time: string;
-  /** Telegram chat id the digest is published to; null = not configured. */
-  chatId: string | null;
-  /** Forum topic id inside that chat; null = the chat itself. */
-  topicId: number | null;
-  sections: TelegramNotifyDigestSection[];
+/** instance_settings.general key of the telegramNotify contract (fixed by the umbrella task). */
+export const TELEGRAM_NOTIFY_GENERAL_KEY = "telegramNotify";
+
+const SINGLETON_KEY = "default";
+
+/** Keep the telegramNotify area across vendor writes of instance_settings.general. */
+export function preserveTelegramNotifyGeneralKey(storedGeneral: unknown): Record<string, unknown> {
+  if (typeof storedGeneral !== "object" || storedGeneral === null) return {};
+  const value = (storedGeneral as Record<string, unknown>)[TELEGRAM_NOTIFY_GENERAL_KEY];
+  return value === undefined ? {} : { [TELEGRAM_NOTIFY_GENERAL_KEY]: value };
 }
 
-export interface TelegramNotifyErrorsSettings {
-  enabled: boolean;
-  chatId: string | null;
-  topicId: number | null;
-  minSeverity: "error" | "warning";
-  maxPerHour: number;
+type Runner = Pick<Db, "select">;
+
+export async function readTelegramNotifyErrors(db: Runner): Promise<TelegramNotifyErrorsSettings> {
+  const row = await db
+    .select({ general: instanceSettings.general })
+    .from(instanceSettings)
+    .where(eq(instanceSettings.singletonKey, SINGLETON_KEY))
+    .then((rows) => rows[0] ?? null);
+  const area = (row?.general as Record<string, unknown> | null | undefined)?.[TELEGRAM_NOTIFY_GENERAL_KEY];
+  const errors = typeof area === "object" && area !== null
+    ? (area as Record<string, unknown>).errors
+    : undefined;
+  return parseTelegramNotifyErrors(errors);
 }
 
-export interface TelegramNotifyInboundSettings {
-  enabled: boolean;
-  requireMention: boolean;
-}
-
-export interface TelegramNotifyEscalationsSettings {
-  enabled: boolean;
-  /** Re-send an unanswered agent question after this many hours. */
-  hours: number;
-  /** Where the re-send goes; "none" = do nothing. */
-  channel: TelegramNotifyEscalationChannel;
-  chatId: string | null;
-  topicId: number | null;
-}
-
-export interface TelegramNotifyProactivitySettings {
-  mode: TelegramNotifyProactivityMode;
-  rarelyMaxPerDay: number;
-}
-
-export interface TelegramNotifySettings {
-  digest: TelegramNotifyDigestSettings;
-  errors: TelegramNotifyErrorsSettings;
-  inbound: TelegramNotifyInboundSettings;
-  escalations: TelegramNotifyEscalationsSettings;
-  proactivity: TelegramNotifyProactivitySettings;
-}
-
-/** The all-off document: the exact defaults of the parent's GET contract. */
-export function defaultTelegramNotifySettings(): TelegramNotifySettings {
+/**
+ * The production settings source of the errors channel: one row read per
+ * company sweep, safe default when the area is absent.
+ */
+export function dbErrorChannelSettingsSource(db: Runner): {
+  read(companyId: string): Promise<ErrorChannelSettings>;
+} {
+  // instance settings are instance-scoped, but the source is shaped
+  // per-company (the contract models per-company chat targets) so part A
+  // can move storage to a company-scoped key without touching consumers.
   return {
-    digest: {
-      enabled: false,
-      time: "09:00",
-      chatId: null,
-      topicId: null,
-      sections: ["done", "blocked", "needs_decision", "spend"],
-    },
-    errors: {
-      enabled: false,
-      chatId: null,
-      topicId: null,
-      minSeverity: "error",
-      maxPerHour: 10,
-    },
-    inbound: { enabled: false, requireMention: true },
-    escalations: {
-      enabled: false,
-      hours: 24,
-      channel: "none",
-      chatId: null,
-      topicId: null,
-    },
-    proactivity: { mode: "only_on_owner_request", rarelyMaxPerDay: 3 },
+    read: async (_companyId: string) => readTelegramNotifyErrors(db),
   };
 }
