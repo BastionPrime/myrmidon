@@ -62,6 +62,9 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MYRMIDON_STALE_BLOCK_INTERVAL_SEC` | STALE-BLOCK | `300` (5 min) | Minimum spacing between two stale-block sweep passes; the scheduler queue itself ticks more often, the sweep keeps its own throttle | From 15 to 86400; values below 15, non-numeric or fractional — the default |
 | `MYRMIDON_STALE_BLOCK_SIGNAL_TTL_MS` | STALE-BLOCK | `86400000` (24 h) | How long the attention-feed card "stale block lifted" stays on the desk after the watchdog unblocked a task: the card fades after the TTL, the task's system comment stays as the durable audit trail. The feed is computed on the fly from a process-local registry, so a server restart also clears the cards | `0` — the card is not shown at all. Non-numeric or negative — the default |
 
+Behavior guide: [guides/stale-block.md](guides/stale-block.md) — what the
+sweep inspects, what unblocking does, and the attention-feed card.
+
 ## Track 3 — tool gateway and Hermes adapter
 
 | Variable | Function | Default | What it does | How to disable / special |
