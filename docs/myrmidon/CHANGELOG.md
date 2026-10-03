@@ -10,6 +10,32 @@ version file to edit. Base Paperclip version is in the image label
 
 ## 1.6.1
 
+### Role queues as instance settings (SWARM-SETTINGS-UI)
+
+- The pilot of the per-role task queues is set in the interface, without a
+  restart: the "Role queues (SWARM-CLAIM)" section of Instance → General
+  (`GET`/`PATCH /api/myrmidon/swarm-claim`, board reads, instance-admin
+  writes) holds the master switch, the pilot role set (the pilot on the dev
+  team: comma-separated roles, e.g. `engineer`), the pilot company set, the
+  lease TTL, the per-agent task ceiling, the sweep interval and the P0
+  preemption. The server re-resolves the row on every claim, checkout, sweep
+  tick and supervisor read: turning a role on takes effect within a minute,
+  and turning the pilot off releases the live leases at once — the PATCH does
+  it synchronously (the response reports the count) and the sweep repeats it
+  on its next pass with the release reason `pilot_disabled`. The `MYRMIDON_SWARM_*`
+  environment variables are now documented forced overrides: a set variable
+  beats the stored value for its key only, and every key of the GET answer
+  carries its source (`settings`, `env` or `default`) — both the settings
+  screen and the Swarm supervisor screen render where each value came from.
+  Every change appends a journal entry (who, what, when — newest first, kept
+  under `general.swarmClaimJournal`) plus the `instance.swarm_claim.updated`
+  activity row. The P0 preemption became a setting: off demotes the priority
+  rank to a tie-break, the queue is strictly oldest-first. Under the hood the
+  stored settings never survived the vendor general-settings write cycle (the
+  key was dropped on every write, so the pilot could in practice only be
+  enabled from the environment) — fixed together with the journal key.
+  See [SETTINGS.md](SETTINGS.md).
+
 ### Board administrators from agents (ADMIN-AGENT part C)
 
 - The UI half of making an agent a board administrator. The agent card's
@@ -442,6 +468,7 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   is snapshotted into the append-only `agent_instructions_revisions` history, and any
   earlier revision can be restored through the API — the restore itself becomes a new
   revision. Guide: [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) (#273, #299).
+
 ### Deploy and reliability
 
 - Automatic rollback by health for the board and the bot fleet (R5-C). A failed

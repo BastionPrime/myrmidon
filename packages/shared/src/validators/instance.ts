@@ -67,6 +67,12 @@ export const instanceGeneralSettingsSchema = z.object({
   // /api/myrmidon/swarm-claim; absent means "use the environment variable, then
   // the default (the pilot is off)".
   swarmClaim: swarmClaimSettingsSchema.optional(),
+  // myrmidon(1.6.1 SWARM-SETTINGS-UI): the change journal of the swarm-claim
+  // pilot settings (who changed what, and when), kept by the settings service
+  // under `general.swarmClaimJournal` and read by GET /api/myrmidon/swarm-claim.
+  // Stored passthrough, never validated here beyond being a list-shaped value
+  // the service re-reads defensively.
+  swarmClaimJournal: z.array(z.unknown()).optional(),
 }).strict();
 
 export const patchInstanceGeneralSettingsSchema = z

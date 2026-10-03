@@ -96,6 +96,11 @@ function fakePort(input: {
     async maxActiveTasksPerAgent() {
       return input.maxActive ?? null;
     },
+    // myrmidon(1.6.1 SWARM-SETTINGS-UI): the fake answers the source map the
+    // real DB port reads from the instance settings row.
+    async settingSources() {
+      return (input as { sources?: Record<string, string> }).sources ?? {};
+    },
     async listClaimRows() {
       return (input.claims ?? []) as unknown as FakeClaim[];
     },

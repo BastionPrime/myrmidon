@@ -72,6 +72,11 @@ export interface SwarmSupervisorOverview {
   generatedAt: string;
   leaseTtlSec: number | null;
   maxActiveTasksPerAgent: number | null;
+  /**
+   * myrmidon(1.6.1 SWARM-SETTINGS-UI): where each effective pilot setting
+   * came from — "settings" (the UI), "env" (the forced override) or "default".
+   */
+  settingSources: Record<string, string>;
   totals: SwarmSupervisorTotals;
   roles: SwarmSupervisorRole[];
   topQueue: SwarmSupervisorTopQueueItem[];

@@ -17,6 +17,9 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { readSwarmSupervisorSettings } from "./settings.js";
+// myrmidon(1.6.1 SWARM-SETTINGS-UI): the same resolver the core uses, so the
+// supervisor's "where the value came from" and the settings page agree.
+import { resolveSwarmClaimSettings } from "@paperclipai/shared";
 
 /** Wake reason part A assigns to queue-driven wakes; informational in the view. */
 export const SWARM_CLAIM_QUEUE_WAKE_REASON = "swarm_claim_queue";
@@ -65,12 +68,25 @@ export interface SwarmSupervisorOverview {
   generatedAt: string;
   leaseTtlSec: number | null;
   maxActiveTasksPerAgent: number | null;
+  /**
+   * 1.6.1 (SWARM-SETTINGS-UI): where each effective setting came from —
+   * "settings" (the UI), "env" (the forced override) or "default". Rendered
+   * by the supervisor screen next to the values, so the operator sees at a
+   * glance whether the row or the environment is in charge.
+   */
+  settingSources: Record<string, string>;
   totals: {
     queued: number;
     activeClaims: number;
     expiredClaims: number;
     agentsWithClaims: number;
     idleAgentsWithQueue: number;
+    /**
+     * myrmidon(1.6.1 SWARM-IDLE-WAKE): free agents (no live run, not
+     * paused/error, under the ceiling) at a non-empty queue. The zero metric
+     * of the ticket: this is what the idle pass drives to 0.
+     */
+    freeAgentsWithQueue: number;
   };
   roles: SwarmRoleOverview[];
   topQueue: {
@@ -126,6 +142,11 @@ export interface SwarmSupervisorReadPort {
   leaseTtlSec(): Promise<number | null>;
   /** Part A's effective per-agent limit of active tasks, when known. */
   maxActiveTasksPerAgent(): Promise<number | null>;
+  /**
+   * 1.6.1 (SWARM-SETTINGS-UI): where each effective pilot setting came from
+   * ("settings" | "env" | "default"), keyed by setting key.
+   */
+  settingSources(): Promise<Record<string, string>>;
   /** Claim rows of the company (live + released history rows included). */
   listClaimRows(companyId: string): Promise<ClaimRow[]>;
   /** Queued candidates per issue id (todo, ready, not claimed right now). */
@@ -182,13 +203,18 @@ export function swarmSupervisorView(
   async function overview(companyId: string): Promise<SwarmSupervisorOverview> {
     const generatedAt = new Date(now()).toISOString();
     const enabled = await port.claimEnabled();
+    // 1.6.1 (SWARM-SETTINGS-UI): the source map is reported even when the
+    // pilot is off — that is exactly when the operator wants to know whether
+    // the UI or the environment is holding it off.
+    const settingSources = await port.settingSources();
     if (!enabled) {
       return {
         enabled: false,
         generatedAt,
         leaseTtlSec: null,
         maxActiveTasksPerAgent: null,
-        totals: { queued: 0, activeClaims: 0, expiredClaims: 0, agentsWithClaims: 0, idleAgentsWithQueue: 0 },
+        settingSources,
+        totals: { queued: 0, activeClaims: 0, expiredClaims: 0, agentsWithClaims: 0, idleAgentsWithQueue: 0, freeAgentsWithQueue: 0 },
         roles: [],
         topQueue: [],
       };
@@ -251,6 +277,27 @@ export function swarmSupervisorView(
           list.push(issue);
         }
         queueByRole.set(role, list);
+      }
+      // myrmidon(1.6.1 SWARM-IDLE-WAKE): an unassigned task belongs to every
+      // role that could take it, the same membership the claim queue uses
+      // (roleQueueRows: unassigned tasks are offered to every role). Without
+      // this fan-out the supervisor's zero metric ("free agents with a
+      // non-empty queue") cannot see the 03.10 shape — ready tasks with no
+      // assignee and idle agents of the role that should claim them.
+      if (!row.assignee_agent_id) {
+        const rolesWithAgents = new Set(
+          agents
+            .map((agent) => agent.role)
+            .filter((role): role is string => Boolean(role)),
+        );
+        for (const role of rolesWithAgents) {
+          if (roles.includes(role)) continue;
+          const list = queueByRole.get(role) ?? [];
+          if (list.length < settings.taskMax) {
+            list.push(issue);
+          }
+          queueByRole.set(role, list);
+        }
       }
     }
 
@@ -318,6 +365,18 @@ export function swarmSupervisorView(
         (sum, entry) => sum + (entry.queue.length > 0 ? entry.idleAgents.length : 0),
         0,
       ),
+      // myrmidon(1.6.1 SWARM-IDLE-WAKE): free agents at a non-empty queue,
+      // the zero metric of the ticket. "Free" is the idle pass's own verdict
+      // (no live run, not paused/error, under the ceiling), not the looser
+      // idleAgents list: a capped agent is not free work the swarm can wake.
+      freeAgentsWithQueue: roles.reduce(
+        (sum, entry) =>
+          sum +
+          (entry.queue.length > 0
+            ? entry.idleAgents.filter((agent) => !agent.atLimit).length
+            : 0),
+        0,
+      ),
     };
 
     const topQueue = roles
@@ -339,6 +398,7 @@ export function swarmSupervisorView(
       generatedAt,
       leaseTtlSec: ttl,
       maxActiveTasksPerAgent: maxActive,
+      settingSources,
       totals,
       roles,
       topQueue,
@@ -377,6 +437,9 @@ export function createSwarmSupervisorDbPort(db: Db, env: NodeJS.ProcessEnv = pro
     },
     async maxActiveTasksPerAgent() {
       return readClaimSettingNumber(db, env, "MYRMIDON_SWARM_MAX_ACTIVE_TASKS");
+    },
+    async settingSources() {
+      return readSwarmSettingSources(db, env);
     },
     async listClaimRows(companyId) {
       const rows = await db.execute(sql`
@@ -417,10 +480,21 @@ export function createSwarmSupervisorDbPort(db: Db, env: NodeJS.ProcessEnv = pro
   };
 }
 
-/** True when part A's claim module + table are present and the flag is on. */
+/**
+ * True when part A's claim module + table are present and the flag is on.
+ *
+ * 1.6.1 (SWARM-SETTINGS-UI): the flag is resolved by the shared resolver —
+ * stored settings, then the env override, then the default — so the
+ * supervisor reflects what the UI set without a restart. The env "off" still
+ * wins outright (it is the forced override), matching the core's reading.
+ */
 async function readClaimEnabled(db: Db, env: NodeJS.ProcessEnv): Promise<boolean> {
-  const raw = env.MYRMIDON_SWARM_CLAIM_ENABLED?.trim().toLowerCase();
-  if (raw === "0" || raw === "false" || raw === "off" || raw === "no") return false;
+  const forcedOff = env.MYRMIDON_SWARM_CLAIM_ENABLED?.trim().toLowerCase();
+  if (forcedOff === "0" || forcedOff === "false" || forcedOff === "off" || forcedOff === "no") {
+    return false;
+  }
+  const resolved = await readResolvedSwarmSettings(db, env);
+  if (!resolved.settings.enabled) return false;
   try {
     const rows = await db.execute(sql`
       SELECT EXISTS (
@@ -440,33 +514,74 @@ async function readClaimEnabled(db: Db, env: NodeJS.ProcessEnv): Promise<boolean
   }
 }
 
+/**
+ * 1.6.1 (SWARM-SETTINGS-UI): the resolved pilot settings off the instance row,
+ * through the same shared resolver the core uses, with the per-key source map.
+ * Kept as one read so claimEnabled/leaseTtlSec/maxActiveTasksPerAgent (and the
+ * source rendering below) cannot disagree about what is in force.
+ */
+interface ResolvedSwarmRow {
+  settings: {
+    enabled: boolean;
+    leaseTtlSec: number;
+    maxActiveTasks: number | null;
+  };
+  sources: Record<string, string>;
+}
+
+async function readResolvedSwarmSettings(
+  db: Db,
+  env: NodeJS.ProcessEnv,
+): Promise<ResolvedSwarmRow> {
+  try {
+    const rows = await db.execute(sql`
+      SELECT (general->'swarmClaim') AS swarm
+      FROM instance_settings
+      LIMIT 1
+    `);
+    const first = Array.isArray(rows) ? rows[0] : null;
+    const stored =
+      first && typeof first === "object"
+        ? (first as Record<string, unknown>).swarm
+        : undefined;
+    const resolved = resolveSwarmClaimSettings({ stored, env });
+    return {
+      settings: resolved.settings,
+      sources: resolved.sources as unknown as Record<string, string>,
+    };
+  } catch {
+    const resolved = resolveSwarmClaimSettings({ env });
+    return {
+      settings: resolved.settings,
+      sources: resolved.sources as unknown as Record<string, string>,
+    };
+  }
+}
+
+/**
+ * 1.6.1 (SWARM-SETTINGS-UI): the supervisor overview tells the operator where
+ * the effective values came from — the UI ("settings") or the environment
+ * override ("env") — the way the settings page does. The sources map is keyed
+ * by setting key (enabled, leaseTtlSec, maxActiveTasks, ...).
+ */
+export async function readSwarmSettingSources(
+  db: Db,
+  env: NodeJS.ProcessEnv,
+): Promise<Record<string, string>> {
+  const resolved = await readResolvedSwarmSettings(db, env);
+  return resolved.sources;
+}
+
 async function readClaimSettingNumber(
   db: Db,
   env: NodeJS.ProcessEnv,
   envName: string,
 ): Promise<number | null> {
-  const raw = env[envName]?.trim();
-  if (raw && /^\d+$/.test(raw)) {
-    const value = Number(raw);
-    if (Number.isSafeInteger(value) && value > 0) return value;
-  }
-  try {
-    const rows = await db.execute(sql`
-      SELECT (general->'swarmClaim') AS swarm
-      FROM instance_settings
-      WHERE general ? 'swarmClaim'
-      LIMIT 1
-    `);
-    const first = Array.isArray(rows) ? rows[0] : null;
-    if (first && typeof first === "object") {
-      const swarm = (first as Record<string, unknown>).swarm;
-      // Part A stores the pilot settings under camelCase keys, not env names.
-      const storedKey = envName === "MYRMIDON_SWARM_LEASE_TTL_SEC" ? "leaseTtlSec" : "maxActiveTasks";
-      const ttl = swarm && typeof swarm === "object" ? (swarm as Record<string, unknown>)[storedKey] : null;
-      if (typeof ttl === "number" && Number.isSafeInteger(ttl) && ttl > 0) return ttl;
-    }
-  } catch {
-    // Optional metadata; absence is not an error.
-  }
+  // 1.6.1: the env value is the override; the stored settings are the primary
+  // source, both resolved by the shared resolver in one read.
+  const resolved = await readResolvedSwarmSettings(db, env);
+  const storedKey = envName === "MYRMIDON_SWARM_LEASE_TTL_SEC" ? "leaseTtlSec" : "maxActiveTasks";
+  const value = (resolved.settings as unknown as Record<string, unknown>)[storedKey];
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
   return null;
 }

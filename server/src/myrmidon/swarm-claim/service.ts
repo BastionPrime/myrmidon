@@ -26,6 +26,7 @@ import {
   SWARM_CLAIM_RELEASE_REASON_RUN_FINISHED,
   SWARM_CLAIM_WAKE_IDEMPOTENCY_PREFIX,
   SWARM_CLAIM_WAKE_REASON,
+  isSwarmClaimEnabledFor,
   resolveSwarmClaimSettings,
   type SwarmClaimLease,
   type SwarmClaimSettings,
@@ -120,6 +121,18 @@ export async function claimNextTaskForAgent(
     .limit(1);
   const agent = agentRow[0];
   if (!agent) return { claim: null, reason: "queue_empty" };
+  // 1.6.1 (SWARM-SETTINGS-UI): the pilot set. The master switch may be on
+  // while this company or role is deliberately outside the pilot — then the
+  // claim path answers the same "disabled" the off switch does, so an agent
+  // outside the pilot keeps vendor behavior exactly.
+  if (
+    !isSwarmClaimEnabledFor(settings, {
+      companyId: input.companyId,
+      role: agent.role,
+    })
+  ) {
+    return { claim: null, reason: "disabled" };
+  }
 
   const [candidates, agentClaims, companyClaims] = await Promise.all([
     listRoleQueue(ports.db, input.companyId, agent.role),
