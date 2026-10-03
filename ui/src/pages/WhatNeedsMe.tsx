@@ -25,6 +25,7 @@ import {
   loadAttentionSortOrder,
   loadCollapsedAttentionGroupKeys,
   buildDeskShelves,
+  localizeAttentionLabel,
   planAttentionRenderRows,
   resolveAttentionDateRange,
   saveAttentionFilters,
@@ -47,6 +48,7 @@ import { DecisionQueueRail } from "../components/DecisionQueueRail";
 import { DecisionDateChips, type AttentionCustomRange } from "../components/DecisionDateChips";
 import { DecisionResolver } from "../components/DecisionResolver";
 import { IssueGroupHeader } from "../components/IssueGroupHeader";
+import { useTranslation } from "@/i18n"; // myrmidon(UI-RU)
 
 /** Curtain rows never expand; module-level so memoized rows see one identity. */
 const noopToggleExpand = () => {};
@@ -85,6 +87,7 @@ function findScrollContainer(element: HTMLElement | null): HTMLElement | null {
 }
 
 export function WhatNeedsMe() {
+  const { t } = useTranslation(); // myrmidon(UI-RU)
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -135,8 +138,8 @@ export function WhatNeedsMe() {
   );
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Decisions" }]);
-  }, [setBreadcrumbs]);
+    setBreadcrumbs([{ label: t("decisions.title") }]);
+  }, [setBreadcrumbs, t]);
 
   // Re-hydrate per-company preferences when the company changes.
   useEffect(() => {
@@ -432,14 +435,14 @@ export function WhatNeedsMe() {
       pushToast({
         id: `attention-dismiss-${item.id}`,
         dedupeKey: `attention-dismiss-${item.dismissalKey}`,
-        title: "Dismissed",
+        title: t("decisions.dismissed"),
         body: item.subject.title ?? undefined,
         tone: "info",
         ttlMs: 8000,
-        action: { label: "Undo", onClick: () => handleUndoDismiss(item) },
+        action: { label: t("decisions.undo"), onClick: () => handleUndoDismiss(item) },
       });
     },
-    [dismiss, handleUndoDismiss, pushToast],
+    [dismiss, handleUndoDismiss, pushToast, t],
   );
   const handleSnooze = useCallback(
     (item: AttentionItem, snoozedUntil: string) => {
@@ -557,7 +560,7 @@ export function WhatNeedsMe() {
           ) : (
             <>
               {groups.map((group) => {
-              const groupLabel = group.label;
+              const groupLabel = localizeAttentionLabel(group.label, t); // myrmidon(UI-RU)
               const collapsed = groupLabel !== null && collapsedGroupKeys.has(group.key);
               return (
                 <section key={group.key} className="space-y-2">
@@ -632,7 +635,7 @@ export function WhatNeedsMe() {
 
           {snoozedItems.length > 0 && (
             <Curtain
-              label="Snoozed"
+              label={t("decisions.snoozed")}
               count={snoozedItems.length}
               open={snoozedOpen}
               onToggle={() => setSnoozedOpen((prev) => !prev)}
@@ -656,7 +659,7 @@ export function WhatNeedsMe() {
 
           {dismissedItems.length > 0 && (
             <Curtain
-              label="Dismissed"
+              label={t("decisions.dismissed")}
               count={dismissedItems.length}
               open={dismissedOpen}
               onToggle={() => setDismissedOpen((prev) => !prev)}
@@ -680,13 +683,13 @@ export function WhatNeedsMe() {
 
           {agingItems.length > 0 && (
             <Curtain
-              label="Aging"
+              label={t("decisions.aging")}
               count={agingItems.length}
               open={agingOpen}
               onToggle={() => setAgingOpen((prev) => !prev)}
             >
               <p className="text-xs text-muted-foreground">
-                Idle past {ATTENTION_AGING_DAYS} days — kept off the desk. Keep any you still want surfaced.
+                {t("decisions.agingHint", { days: ATTENTION_AGING_DAYS })}
               </p>
               {agingItems.map((item) => (
                 <AgingItemRow
@@ -711,13 +714,13 @@ export function WhatNeedsMe() {
 
       <div className="space-y-4">
         <Curtain
-          label="Decided"
+          label={t("decisions.decided")}
           count={decisionHistoryCount(decidedDecisions?.length)}
           open={decidedOpen}
           onToggle={() => setDecidedOpen((prev) => !prev)}
         >
           {decidedDecisionsLoading ? (
-            <p className="text-xs text-muted-foreground">Loading decided decisions…</p>
+            <p className="text-xs text-muted-foreground">{t("decisions.loadingDecided")}</p>
           ) : (decidedDecisions?.length ?? 0) > 0 ? (
             decidedDecisions!.slice(0, DECISION_HISTORY_VISIBLE_LIMIT).map((decision) => (
               <DecisionResolver
@@ -729,18 +732,18 @@ export function WhatNeedsMe() {
               />
             ))
           ) : (
-            <p className="text-xs text-muted-foreground">No decided decisions.</p>
+            <p className="text-xs text-muted-foreground">{t("decisions.noDecided")}</p>
           )}
         </Curtain>
 
         <Curtain
-          label="Expired"
+          label={t("decisions.expired")}
           count={decisionHistoryCount(expiredDecisions?.length)}
           open={expiredOpen}
           onToggle={() => setExpiredOpen((prev) => !prev)}
         >
           {expiredDecisionsLoading ? (
-            <p className="text-xs text-muted-foreground">Loading expired decisions…</p>
+            <p className="text-xs text-muted-foreground">{t("decisions.loadingExpired")}</p>
           ) : (expiredDecisions?.length ?? 0) > 0 ? (
             expiredDecisions!.slice(0, DECISION_HISTORY_VISIBLE_LIMIT).map((decision) => (
               <DecisionResolver
@@ -752,7 +755,7 @@ export function WhatNeedsMe() {
               />
             ))
           ) : (
-            <p className="text-xs text-muted-foreground">No expired decisions.</p>
+            <p className="text-xs text-muted-foreground">{t("decisions.noExpired")}</p>
           )}
         </Curtain>
       </div>
@@ -776,15 +779,19 @@ export function DecisionBundleHeader({
   originIssue: AttentionSubject | null;
   count: number;
 }) {
+  const { t } = useTranslation(); // myrmidon(UI-RU)
   const noun = count === 1 ? "decision" : "decisions";
   return (
     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-sm border-l-2 border-violet-500/60 bg-violet-500/5 px-3 py-1.5 text-xs">
       <span className="font-semibold text-violet-800 dark:text-violet-200">
-        {agentName ?? "An agent"} proposed {count} {noun}
+        {t("decisions.proposed", {
+          agent: agentName ?? t("decisions.anAgent"),
+          count,
+        })}
       </span>
       {originIssue && (originIssue.identifier || originIssue.title) && (
         <span className="text-muted-foreground">
-          {"· from "}
+          {t("decisions.from") + " "}
           {originIssue.href ? (
             <a href={originIssue.href} className="hover:underline">
               {originIssue.identifier ?? originIssue.title}
@@ -795,34 +802,36 @@ export function DecisionBundleHeader({
         </span>
       )}
       {title && <span className="text-muted-foreground">· {title}</span>}
-      <span className="text-muted-foreground">· {count} pending</span>
+      <span className="text-muted-foreground">{t("decisions.pending", { count })}</span>
     </div>
   );
 }
 
 function CaughtUpNote({ filtered }: { filtered: boolean }) {
+  const { t } = useTranslation(); // myrmidon(UI-RU)
   return (
     <div className="rounded-xl border border-dashed border-border py-10 text-center">
       <p className="text-sm font-medium text-foreground">
-        {filtered ? "No decisions match your filters." : "You're all caught up."}
+        {filtered ? t("decisions.noDecisionsMatch") : t("decisions.allCaughtUp")}
       </p>
       {filtered && (
-        <p className="mt-1 text-xs text-muted-foreground">Adjust or clear the filters to see the rest.</p>
+        <p className="mt-1 text-xs text-muted-foreground">{t("decisions.adjustFilters")}</p>
       )}
     </div>
   );
 }
 
 function ZeroState() {
+  const { t } = useTranslation(); // myrmidon(UI-RU)
   return (
     <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-20 text-center">
       <div className="mb-4 rounded-full bg-green-500/10 p-4">
         <CheckCircle2 className="h-10 w-10 text-green-500" />
       </div>
-      <p className="text-lg font-semibold text-foreground">You're all caught up</p>
+      <p className="text-lg font-semibold text-foreground">{t("decisions.allCaughtUpTitle")}</p>
       <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
         <Inbox className="h-4 w-4" />
-        Nothing needs a decision from you right now.
+        {t("decisions.nothingNeedsDecision")}
       </p>
     </div>
   );

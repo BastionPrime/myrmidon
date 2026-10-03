@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
+import { useTranslation } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCents, formatNumber } from "@/lib/utils";
@@ -28,11 +29,12 @@ type QualityPreset = "7d" | "14d" | "30d" | "custom";
 
 const PRESET_ORDER: QualityPreset[] = ["7d", "14d", "30d", "custom"];
 
-const PRESET_LABELS: Record<QualityPreset, string> = {
-  "7d": "Last 7 Days",
-  "14d": "Last 14 Days",
-  "30d": "Last 30 Days",
-  custom: "Custom",
+// myrmidon(UI-RU): preset labels through the fork i18n catalog.
+const PRESET_LABEL_KEYS: Record<QualityPreset, string> = {
+  "7d": "quality.presets.7d",
+  "14d": "quality.presets.14d",
+  "30d": "quality.presets.30d",
+  custom: "quality.presets.custom",
 };
 
 /** Sliding day presets like the Costs page's, plus a default of 14 days.
@@ -55,18 +57,18 @@ function computePresetRange(preset: Exclude<QualityPreset, "custom">): { from: s
   return { from, to };
 }
 
-function formatHours(value: number): string {
-  return `${value.toFixed(2)} h`;
+function formatHours(value: number, unit: string = "h"): string {
+  return `${value.toFixed(2)} ${unit}`;
 }
 
 function formatRate(rate: number): string {
   return `${(rate * 100).toFixed(0)}%`;
 }
 
-function formatGeneratedAt(generatedAt: string): string {
+function formatGeneratedAt(generatedAt: string, language: string = "en"): string {
   const date = new Date(generatedAt);
   if (Number.isNaN(date.getTime())) return generatedAt;
-  return date.toLocaleString("en-US", {
+  return date.toLocaleString(language === "ru" ? "ru-RU" : "en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -75,22 +77,22 @@ function formatGeneratedAt(generatedAt: string): string {
   });
 }
 
-const COSTS_SOURCE_LABELS: Record<BaselineSource["costs"], string> = {
-  litellm_cost_events: "LLM gateway cost events",
-  cost_events: "adapter cost events",
-  none: "no cost source",
+const COSTS_SOURCE_LABEL_KEYS: Record<BaselineSource["costs"], string> = {
+  litellm_cost_events: "quality.costsSource.litellm",
+  cost_events: "quality.costsSource.costEvents",
+  none: "quality.costsSource.none",
 };
 
 /** The row label: a project id stays as-is (neutral), null means "no project". */
-export function rowKeyLabel(key: string | null): string {
-  return key ?? "No project";
+export function rowKeyLabel(key: string | null, t?: (key: string) => string): string {
+  return key ?? (t ? t("quality.noProject") : "No project");
 }
 
 /** Top blocked causes as one compact line, most hours first. */
-export function topCausesLine(row: BaselineMetricRow): string {
+export function topCausesLine(row: BaselineMetricRow, unit: string = "h"): string {
   const causes = row.blockedHours.topCauses.slice(0, 3);
   if (causes.length === 0) return "—";
-  return causes.map((cause) => `${cause.cause} ${formatHours(cause.hours)}`).join(", ");
+  return causes.map((cause) => `${cause.cause} ${formatHours(cause.hours, unit)}`).join(", ");
 }
 
 interface MetricTableProps {
@@ -99,9 +101,10 @@ interface MetricTableProps {
   rows: BaselineMetricRow[];
   keyHeader: string;
   rowTestId: string;
+  t: (key: string) => string;
 }
 
-function MetricsTable({ title, description, rows, keyHeader, rowTestId }: MetricTableProps) {
+function MetricsTable({ title, description, rows, keyHeader, rowTestId, t }: MetricTableProps) {
   return (
     <Card>
       <CardHeader className="px-5 pt-5 pb-2">
@@ -114,27 +117,27 @@ function MetricsTable({ title, description, rows, keyHeader, rowTestId }: Metric
             <thead>
               <tr className="border-b border-border bg-accent/20">
                 <th scope="col" className="px-3 py-2 text-left font-medium text-muted-foreground">{keyHeader}</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">Tasks done</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">Cycle time (mean / med / p90)</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">Review time (mean / med)</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">Return rate</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">Blocked (total / mean)</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">Top blocked causes</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">Runs per task</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">Cost per task (total / mean)</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">{t("quality.metrics.tasksDone")}</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">{t("quality.metrics.cycleTime")}</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">{t("quality.metrics.reviewTime")}</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">{t("quality.metrics.returnRate")}</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">{t("quality.metrics.blocked")}</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">{t("quality.metrics.topCauses")}</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">{t("quality.metrics.runsPerTask")}</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">{t("quality.metrics.costPerTask")}</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => (
                 <tr key={row.key ?? "__none__"} className="border-b border-border last:border-b-0">
-                  <td className="px-3 py-2 font-mono">{rowKeyLabel(row.key)}</td>
+                  <td className="px-3 py-2 font-mono">{rowKeyLabel(row.key, t)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.tasksCompleted)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
-                    {formatHours(row.cycleTimeHours.mean)} / {formatHours(row.cycleTimeHours.median)} /{" "}
-                    {formatHours(row.cycleTimeHours.p90)}
+                    {formatHours(row.cycleTimeHours.mean, t("quality.hoursUnit"))} / {formatHours(row.cycleTimeHours.median, t("quality.hoursUnit"))} /{" "}
+                    {formatHours(row.cycleTimeHours.p90, t("quality.hoursUnit"))}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
-                    {formatHours(row.timeInReviewHours.mean)} / {formatHours(row.timeInReviewHours.median)}
+                    {formatHours(row.timeInReviewHours.mean, t("quality.hoursUnit"))} / {formatHours(row.timeInReviewHours.median, t("quality.hoursUnit"))}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums" title={`${row.returnRate.returned}/${row.returnRate.enteredReview}`}>
                     {row.returnRate.enteredReview > 0
@@ -142,9 +145,9 @@ function MetricsTable({ title, description, rows, keyHeader, rowTestId }: Metric
                       : "—"}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
-                    {formatHours(row.blockedHours.total)} / {formatHours(row.blockedHours.mean)}
+                    {formatHours(row.blockedHours.total, t("quality.hoursUnit"))} / {formatHours(row.blockedHours.mean, t("quality.hoursUnit"))}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums">{topCausesLine(row)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{topCausesLine(row, t("quality.hoursUnit"))}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {formatNumber(row.runsPerTask.total)} ({row.runsPerTask.mean.toFixed(2)})
                   </td>
@@ -161,7 +164,14 @@ function MetricsTable({ title, description, rows, keyHeader, rowTestId }: Metric
   );
 }
 
-export function Quality() {
+export interface QualityProps {
+  /** Render inside another surface without a second page-level title or breadcrumb. */
+  embedded?: boolean;
+}
+
+export function Quality({ embedded = false }: QualityProps = {}) {
+  const { t, i18n } = useTranslation();
+  const language = i18n.language;
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const companyId = selectedCompanyId ?? NO_COMPANY;
@@ -171,8 +181,8 @@ export function Quality() {
   const [customTo, setCustomTo] = useState("");
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Quality" }]);
-  }, [setBreadcrumbs]);
+    if (!embedded) setBreadcrumbs([{ label: t("quality.title") }]);
+  }, [embedded, setBreadcrumbs]);
 
   const customReady = preset !== "custom" || (!!customFrom && !!customTo);
 
@@ -192,7 +202,7 @@ export function Quality() {
   });
 
   if (!selectedCompanyId) {
-    return <EmptyState icon={Gauge} message="Select an organization to view quality metrics." />;
+    return <EmptyState icon={Gauge} message={t("quality.selectOrganization")} />;
   }
 
   const showCustomPrompt = preset === "custom" && !customReady;
@@ -202,10 +212,13 @@ export function Quality() {
       <div className="space-y-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight">Quality</h1>
+            {embedded ? (
+              <h2 className="text-lg font-semibold text-foreground">{t("quality.title")}</h2>
+            ) : (
+              <h1 className="text-3xl font-semibold tracking-tight">{t("quality.title")}</h1>
+            )}
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Delivery quality over the selected window: cycle time, review time, return rate,
-              blocked time, runs and cost per task, by project and by role.
+              {t("quality.intro")}
             </p>
           </div>
 
@@ -218,7 +231,7 @@ export function Quality() {
                 onClick={() => setPreset(key)}
                 aria-pressed={preset === key}
               >
-                {PRESET_LABELS[key]}
+                {t(PRESET_LABEL_KEYS[key])}
               </Button>
             ))}
           </div>
@@ -232,7 +245,7 @@ export function Quality() {
               onChange={(event) => setCustomFrom(event.target.value)}
               className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
             />
-            <span className="text-sm text-muted-foreground">to</span>
+            <span className="text-sm text-muted-foreground">{t("quality.rangeTo")}</span>
             <input
               type="date"
               value={customTo}
@@ -252,27 +265,27 @@ export function Quality() {
               {formatGeneratedAt(data.window.from)} – {formatGeneratedAt(data.window.to)}
             </span>
             <span>
-              Generated {formatGeneratedAt(data.generatedAt)}
+              {t("quality.generated", { time: formatGeneratedAt(data.generatedAt, language) })}
             </span>
             <span className="flex items-center gap-1.5">
               <TrendingUp className="h-4 w-4" />
-              Cost source: {COSTS_SOURCE_LABELS[data.source.costs]}
+              {t("quality.costSourceLine", { source: t(COSTS_SOURCE_LABEL_KEYS[data.source.costs]) })}
             </span>
           </div>
         ) : null}
       </div>
 
       {showCustomPrompt ? (
-        <p className="text-sm text-muted-foreground">Select a start and end date to load data.</p>
+        <p className="text-sm text-muted-foreground">{t("quality.windowPrompt")}</p>
       ) : isLoading ? (
         <PageSkeleton variant="costs" />
       ) : error ? (
         isNotEnabledError(error) ? (
           <EmptyState
             icon={Gauge}
-            title="Baseline metrics are not available"
-            message="The server answered that baseline metrics are not enabled on this instance."
-            description="The periodic metrics job is off by default; ask the operator to enable the baseline sweep."
+            title={t("quality.notAvailable")}
+            message={t("quality.notAvailableMessage")}
+            description={t("quality.notAvailableDescription")}
           />
         ) : (
           <p className="text-sm text-destructive" data-testid="quality-error">
@@ -282,25 +295,27 @@ export function Quality() {
       ) : !data || (data.byProject.length === 0 && data.byRole.length === 0) ? (
         <EmptyState
           icon={Gauge}
-          title="No tasks completed in this window"
-          message="The selected window has no completed tasks, review entries, runs or costs to aggregate."
-          description="Try a wider window — metrics count tasks whose transition to done landed inside the window."
+          title={t("quality.emptyWindow")}
+          message={t("quality.emptyWindowMessage")}
+          description={t("quality.emptyWindowHint")}
         />
       ) : (
         <div className="space-y-4">
           <MetricsTable
-            title="By project"
-            description="Tasks completed in the window, grouped by their project (rows without a project aggregate together)."
+            title={t("quality.byProject")}
+            description={t("quality.byProjectDescription")}
             rows={data.byProject}
-            keyHeader="Project"
+            keyHeader={t("quality.columns.project")}
             rowTestId="quality-by-project-table"
+            t={t}
           />
           <MetricsTable
-            title="By role"
-            description="The same metrics grouped by the role of the agent that completed the task."
+            title={t("quality.byRole")}
+            description={t("quality.byRoleDescription")}
             rows={data.byRole}
-            keyHeader="Role"
+            keyHeader={t("quality.columns.role")}
             rowTestId="quality-by-role-table"
+            t={t}
           />
         </div>
       )}
