@@ -77,6 +77,25 @@ version file to edit. Base Paperclip version is in the image label
   the registry API are documented in the same guide. Guide:
   [guides/stack-registry.md](guides/stack-registry.md).
 
+### Company regulations in the wiki (WIKI-CORTEX)
+
+- Regulation pages with a draft → approved lifecycle, revisions and rollback:
+  an edit of a draft or of an approved regulation appends a new DRAFT revision
+  and the resolver keeps serving the newest APPROVED one, so writing text
+  never changes what the fleet reads without an explicit board approval; a
+  rollback is one more revision that copies an earlier one (append-only
+  history, the restore is itself restorable). Draft writes are open to any
+  actor with access to the company — the wiki maintainer agent writes drafts —
+  while approve and rollback are board-only. The approved regulations that
+  apply to a role reach the agents through the compiled bot profile: one
+  deterministic workspace `REGULATIONS.md` beside the agent's own instruction
+  files, where the profile hash decides whether a bot restarts (same approved
+  revisions — same bytes — no restart; the file never shadows a
+  `REGULATIONS.md` the agent's own bundle ships). Roles are plain role keys
+  with `*` meaning every role. Operator guide — the API, the delivery
+  mechanics and the wiki-maintainer runbook:
+  [guides/wiki-regulations.md](guides/wiki-regulations.md).
+
 ## 1.5.0
 
 ### Tracing health (TRACING-HEALTH)
