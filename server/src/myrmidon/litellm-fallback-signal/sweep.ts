@@ -137,6 +137,7 @@ export function startModelFallbackSignalSweep(
       const client: LitellmGatewayClient = createLitellmGatewayClient(costSettings.baseUrl, keyValue);
       return client.listSpendLogs(window);
     },
+    readGatewayKey: (companyId, secretName) => defaultReadGatewayKey(db, companyId, secretName),
     listBotKeys(companyId) {
       return listGatewayBotKeys(db, companyId, env);
     },
