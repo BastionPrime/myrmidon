@@ -151,6 +151,7 @@ const ProductionQuality = lazy(() =>
 );
 const ProductionSwarmSupervisor = lazy(() =>
   import("./pages/SwarmSupervisor.production").then((module) => ({ default: module.SwarmSupervisor })), // myrmidon(1.6-SWARM-CLAIM-B): supervisor page
+);
 const ProductionForaging = lazy(() =>
   import("./pages/Foraging").then((module) => ({ default: module.Foraging })), // myrmidon(1.6-FORAGE): foraging page
 );

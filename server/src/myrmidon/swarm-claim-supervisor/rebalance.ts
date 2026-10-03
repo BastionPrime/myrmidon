@@ -40,7 +40,7 @@ export class ClaimNotLiveError extends Error {
 }
 
 export interface SwarmRebalanceDeps {
-  port: SwarmSupervisorReadPort;
+  port: SwarmSupervisorReleasePort;
   /** Board wake admission path; every limit and gate is enforced inside it. */
   enqueueWakeup: (
     agentId: string,
@@ -55,7 +55,7 @@ export interface SwarmRebalanceDeps {
   /** Optional activity log; absent in unit tests. */
   logActivity?: (input: {
     companyId: string;
-    actorType: "user" | "system";
+    actorType: "agent" | "user" | "system";
     actorId: string;
     agentId: string | null;
     runId: null;
