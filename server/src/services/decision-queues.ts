@@ -288,6 +288,16 @@ async function sourceIssueId(
       const doc = await readStackDocument(db);
       return { exists: doc.components.some((component) => component.name === sourceId), issueId: null };
     }
+    // myrmidon(STALE-BLOCK): a lifted-block signal lives in the process-level
+    // registry; the source id is the task the sweep unblocked.
+    case "stale_block": {
+      const row = await db
+        .select({ id: issues.id })
+        .from(issues)
+        .where(and(eq(issues.companyId, companyId), eq(issues.id, sourceId), isNull(issues.hiddenAt)))
+        .then((rows) => rows[0] ?? null);
+      return { exists: Boolean(row), issueId: row?.id ?? null };
+    }
     // myrmidon(BOT-RUNTIME-TUNING D): the fallback alert's source id is the
     // agent id — the card's subject — so existence is the agent row.
     case "model_fallback_alert": {
