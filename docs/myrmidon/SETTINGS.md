@@ -710,3 +710,10 @@ them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
+
+## 1.6.1 — model providers (MODEL-PROVIDERS A)
+
+No `MYRMIDON_*` settings: the module reads the provider registry from the database
+(`model_providers`) and the provider credential from the company secret store by the name
+stored on the row. Default base URLs per provider type are constants in
+`packages/shared/src/myrmidon-model-providers.ts`, not settings.

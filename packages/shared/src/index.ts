@@ -2800,3 +2800,5 @@ export * from "./myrmidon-swarm-claim.js";
 export * from "./myrmidon-autonomy.js";
 // myrmidon(1.6-CTO-CHAT-B): the owner-message-to-epic proposal contract of the CTO chat.
 export * from "./myrmidon-cto-chat.js";
+// myrmidon(1.6.1 MODEL-PROVIDERS): provider secret names, defaults and API schemas.
+export * from "./myrmidon-model-providers.js";
