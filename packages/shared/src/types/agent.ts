@@ -2,7 +2,6 @@ import type { AiConnectionLoginIntent } from "../ai-connections.js";
 import type {
   AgentAdapterType,
   PauseReason,
-  AgentRole,
   AgentStatus,
 } from "../constants.js";
 import type {
@@ -77,7 +76,7 @@ export interface AgentAccessState {
 export interface AgentChainOfCommandEntry {
   id: string;
   name: string;
-  role: AgentRole;
+  role: string;
   title: string | null;
 }
 
@@ -86,7 +85,7 @@ export interface Agent {
   companyId: string;
   name: string;
   urlKey: string;
-  role: AgentRole;
+  role: string;
   title: string | null;
   icon: string | null;
   status: AgentStatus;
