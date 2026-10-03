@@ -58,6 +58,25 @@ export function casteRoutes(deps: CasteRoutesDeps): Router {
     return result.data;
   };
 
+  // express.json() skips DELETE by default; the annex DELETE body
+  // ({"reassignTo": ...}) needs explicit parsing.
+  router.use("/myrmidon/companies/:companyId/castes/:key", (req, _res, next) => {
+    if (req.method !== "DELETE" || req.body !== undefined) {
+      next();
+      return;
+    }
+    let raw = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk: string) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      (req as { body?: unknown }).body = raw.trim() ? safeJsonParse(raw) : {};
+      next();
+    });
+    req.on("error", () => next());
+  });
+
   router.get("/myrmidon/companies/:companyId/castes", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -111,10 +130,7 @@ export function casteRoutes(deps: CasteRoutesDeps): Router {
     const key = req.params.key as string;
     assertCompanyAccess(req, companyId);
     assertBoard(req);
-    // express.json() does not parse DELETE bodies by default; accept both a
-    // parsed object and a raw JSON string.
-    const raw = req.body && typeof req.body === "string" ? safeJsonParse(req.body) : {};
-    const body = parse(deleteCasteSchema, raw ?? bodyOf(req));
+    const body = parse(deleteCasteSchema, bodyOf(req));
     await deps.service.removeCaste({
       companyId,
       key,
@@ -127,11 +143,14 @@ export function casteRoutes(deps: CasteRoutesDeps): Router {
   return router;
 }
 
-function safeJsonParse(text: string): Record<string, unknown> | null {
+function safeJsonParse(text: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(text);
     return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
   } catch {
-    return null;
+    // A malformed body is treated as empty: DELETE without reassignTo is the
+    // legal "no body" form, and the service answers 409 when agents are on
+    // the caste and the caller really needed reassignTo.
+    return {};
   }
 }
