@@ -25,6 +25,8 @@ const items = [
   { value: "autonomy", label: "Autonomy", href: "/company/settings/autonomy" },
   // myrmidon(1.6.1 MODEL-PROVIDERS C): the ui2 "Castes and models" section
   { value: "castes", label: "Castes & models", href: "/company/settings/castes" },
+  // myrmidon(1.6.1 VOICE-STT C): the STT settings section
+  { value: "voice-stt", label: "Speech", href: "/company/settings/voice-stt" },
 ] as const;
 
 type CompanySettingsTab = (typeof items)[number]["value"];
@@ -121,6 +123,11 @@ export function getCompanySettingsTab(pathname: string): CompanySettingsTab {
   // myrmidon(1.6.1 MODEL-PROVIDERS C): the Castes and models settings section
   if (pathname.includes("/company/settings/castes")) {
     return "castes";
+  }
+
+  // myrmidon(1.6.1 VOICE-STT C): the speech recognition settings section
+  if (pathname.includes("/company/settings/voice-stt")) {
+    return "voice-stt";
   }
 
   return "general";

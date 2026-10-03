@@ -383,5 +383,30 @@
     "refresh": "Refresh models",
     "refreshing": "Refreshing…",
     "loadError": "Could not load the model list."
+  },
+  "voiceStt": {
+    "title": "Speech recognition",
+    "breadcrumb": "Speech recognition",
+    "intro": "Voice and audio messages from Telegram are transcribed by the speech recognition service. Provider keys are board-managed company secrets: this screen shows and edits the secret names only — the values are stored on the server and never displayed or transferred here.",
+    "loading": "Loading speech recognition settings...",
+    "noCompany": "Select a company to manage its speech recognition settings.",
+    "enabled": "Enable speech recognition",
+    "backend": "Provider",
+    "backendHint": "DashScope runs through the model gateway (LiteLLM) and is free by default; Deepgram is optional and needs its own key.",
+    "model": "Model",
+    "modelPlaceholder": "transcription model name on the gateway",
+    "modelHint": "The model must be registered on the gateway by the operator; until then transcription degrades to stt_unconfigured.",
+    "language": "Language",
+    "diarization": "Speaker separation (diarization)",
+    "maxDuration": "Max duration, seconds",
+    "maxDurationHint": "Longer recordings are rejected with audio_too_long.",
+    "keySecret": "Gateway key secret name",
+    "deepgramKeySecret": "Deepgram key secret name",
+    "keySecretPlaceholder": "secret name",
+    "secretSet": "Secret set",
+    "secretUnset": "No secret",
+    "secretHint": "Only the secret name is stored; the value lives in the company secret store and never reaches this screen.",
+    "save": "Save settings",
+    "saving": "Saving..."
   }
 }

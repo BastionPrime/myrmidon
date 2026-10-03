@@ -137,6 +137,7 @@ describe("CompanySettingsNav", () => {
           { value: "clouds", label: "Clouds" }, // myrmidon(CLOUD-CONNECTOR)
           { value: "autonomy", label: "Autonomy" }, // myrmidon(1.6 AUTONOMY-MATRIX B)
           { value: "castes", label: "Castes & models" }, // myrmidon(1.6.1 MODEL-PROVIDERS C)
+          { value: "voice-stt", label: "Speech" }, // myrmidon(1.6.1 VOICE-STT C)
         ],
       }),
     );
@@ -183,6 +184,7 @@ describe("CompanySettingsNav", () => {
       "clouds", // myrmidon(CLOUD-CONNECTOR)
       "autonomy", // myrmidon(1.6 AUTONOMY-MATRIX B)
       "castes", // myrmidon(1.6.1 MODEL-PROVIDERS C)
+      "voice-stt", // myrmidon(1.6.1 VOICE-STT C)
     ]);
 
     await act(async () => {
