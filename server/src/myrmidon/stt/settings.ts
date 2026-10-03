@@ -58,6 +58,8 @@ export interface SttSettings {
   baseUrl: string | null;
   /** Company secret name holding the key of the active backend. */
   keySecret: string | null;
+  /** Company secret name holding the Deepgram key (when backend is deepgram). */
+  deepgramKeySecret: string | null;
   /** Model name on the gateway; null until an operator registers one. */
   model: string | null;
   language: SttLanguage;
@@ -114,6 +116,7 @@ export function sttSettings(env: NodeJS.ProcessEnv = process.env): SttSettings {
     backend,
     baseUrl,
     keySecret,
+    deepgramKeySecret: env[STT_DEEPGRAM_KEY_SECRET_ENV]?.trim() || null,
     model: env[STT_MODEL_ENV]?.trim() || null,
     language,
     diarization: readBool(env[STT_DIARIZATION_ENV]) ?? false,
@@ -191,6 +194,9 @@ export function resolveSttSettings(base: SttSettings, overrides: Partial<StoredS
       typeof overrides.maxDurationSec === "number" && Number.isInteger(overrides.maxDurationSec) && overrides.maxDurationSec > 0
         ? overrides.maxDurationSec
         : base.maxDurationSec,
+    baseUrl: overrides.baseUrl === undefined || overrides.baseUrl === null ? base.baseUrl : overrides.baseUrl,
+    keySecret: overrides.keySecret === undefined || overrides.keySecret === null ? base.keySecret : overrides.keySecret,
+    deepgramKeySecret: overrides.deepgramKeySecret === undefined || overrides.deepgramKeySecret === null ? base.deepgramKeySecret : overrides.deepgramKeySecret,
   };
   return merged;
 }
@@ -204,4 +210,7 @@ export interface StoredSttOverrides {
   language: SttLanguage;
   diarization: boolean;
   maxDurationSec: number;
+  baseUrl: string | null;
+  keySecret: string | null;
+  deepgramKeySecret: string | null;
 }
