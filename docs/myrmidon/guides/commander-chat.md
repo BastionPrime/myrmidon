@@ -26,7 +26,9 @@ Three entries lead to it:
 - the rail item "Commander" (group "Decide & talk") navigates to the screen;
 - the phone bottom bar tab "Commander" navigates to the same route;
 - the top bar's "Tell the Commander" field opens the commander palette
-  (shortcut `Ctrl K`); submitting the palette navigates to the screen with
+  (the `Ctrl K` string on the entry is a hint — the shortcut itself arrives
+  with a later update; today the palette opens by click); submitting the
+  palette navigates to the screen with
   the typed text carried over as the `draft` query parameter, so the request
   is not retyped.
 
