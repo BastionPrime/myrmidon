@@ -194,6 +194,7 @@ import { buildIssueChanges } from "./issue-change-receipt.js";
 import { projectSafeChatPublication } from "./chat-publication-projection.js";
 // myrmidon(X8g): absolute board links in the copy of an agent reply that reaches Telegram
 import { absolutizedTextByTelegramEndpoint } from "../myrmidon/agent-chat-bridge/links.js";
+import { stageChannelTaskCompletionPublication } from "../myrmidon/channel-task-control-completion.js";
 import { issueThreadInteractionAttentionAgentAllowed } from "./issue-thread-interaction-resolution.js";
 
 const ALL_ISSUE_STATUSES = [
@@ -10898,6 +10899,19 @@ export function issueService(db: Db) {
           }
           if (updated.status === "done" || updated.status === "cancelled") {
             await finalizeSummarySlotsForTerminalIssue(tx, updated);
+            // myrmidon(CHANNEL-TASK-CLOSE): the assigned agent's status-only
+            // close of a channel-bound (Telegram-born) task must notify the
+            // bound conversation the same way the chat-side /close command
+            // does. See server/src/myrmidon/channel-task-control-completion.ts.
+            await stageChannelTaskCompletionPublication(tx, {
+              companyId: updated.companyId,
+              issueId: updated.id,
+              issueIdentifier: updated.identifier ?? updated.id,
+              issueTitle: updated.title,
+              issueStatus: updated.status,
+              actorAgentId: actorAgentId ?? null,
+              assigneeAgentId: existing.assigneeAgentId,
+            });
             // Every terminal transition funnels through here, including direct
             // service callers (tree control, recovery, pipelines, status cards)
             // that never touch the HTTP routes, so pending interaction cards

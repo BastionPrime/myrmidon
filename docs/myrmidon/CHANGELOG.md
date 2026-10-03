@@ -25,7 +25,21 @@ version file to edit. Base Paperclip version is in the image label
   `dashscope-qwen-flash`; one proposal is capped at 8 child tasks (hard
   ceiling 20) and one planning call is never retried. Operator guide:
   [guides/cto-chat-planner.md](guides/cto-chat-planner.md). The portal chat
-  screen (part A) ships separately and calls the same route.
+  screen (part A) is below.
+
+### CTO chat (CTO-CHAT)
+
+- The Commander chat screen of the 2.0 shell (route `commander-chat`, reached
+  from the rail, the phone bottom bar and the `Ctrl K` "Tell the Commander"
+  palette with the typed draft carried over): the owner writes one free-text
+  request, the screen calls the board chat planner
+  (`POST /api/myrmidon/companies/:companyId/cto-chat/plan`) and renders the
+  proposed epic read-only — the epic, every child task, acceptance criteria
+  line by line. The pending `suggest_tasks` approval card from the standing
+  Agent Chat issue renders through the existing card component; accepting
+  the card creates the issues, rejecting creates nothing. The same flow is
+  reachable from the owner's Telegram DM. Operator guide:
+  [guides/commander-chat.md](guides/commander-chat.md).
 
 ### Reference-task evals (EVALS-A part A)
 
@@ -87,6 +101,23 @@ version file to edit. Base Paperclip version is in the image label
   journal with filters (device, method, outcome, signatures only) and the
   document hash per signature. Guide:
   [guides/connector-panel.md](guides/connector-panel.md).
+- The browser action primitives in the shipped extension (EXTCASE-D):
+  `browser.fill` types a value into one field (input, textarea, select or a
+  contenteditable node) and dispatches `input`/`change` so the page sees the
+  change; `browser.download` fetches the file in the page's own session —
+  the content script runs in the page's origin, so the request carries the
+  browser's cookies — and returns its name, type, size and base64 bytes under
+  a 25 MiB ceiling (`BROWSER_DOWNLOAD_MAX_BYTES`; a larger file is refused
+  with `downloadTooLarge` before it crosses the bridge). An action the board
+  marks `confirmation: "human"` runs only after a person on the client PC
+  presses Confirm in the extension's confirm page: a refusal, the 180-second
+  budget expiring — the gateway then sends the `browser.cancel` notification
+  and the extension drops the pending step — or a build without the
+  confirmation port is a `confirmationNotGranted` refusal, never a silent
+  execution. The extension declares the `fill` and `download` capabilities and
+  never `sign`. Site-specific selectors and recorded scenarios are built on
+  top of these primitives and live outside the fork. Guide:
+  [guides/bridge-extension.md](guides/bridge-extension.md).
 - The signing host contract: a generic, client-free native-messaging contract
   for local signing helpers (`extension/src/native-host-contract.ts`) — a
   closed `actionType` enum (`sign` / `sign_and_submit` / `sign_attachment`), a
@@ -129,7 +160,8 @@ version file to edit. Base Paperclip version is in the image label
   1.x shell; turning the flag off restores it. The rail badge and status chips
   read the existing dashboard and sidebar-badges aggregates until the
   STATUS-STRIP endpoint exists. i18n keys `ui2.*` ship in en/ru (translated)
-  and the other locales (English values until the translation pass).
+  and the other locales (English values until the translation pass). Operator
+  guide: [guides/ui2-shell.md](guides/ui2-shell.md).
 
 ### Task PR sync
 
@@ -145,6 +177,35 @@ version file to edit. Base Paperclip version is in the image label
   settle-pending task is skipped (reason `wake_skipped_pr_settle_pending`)
   instead of dispatching a run that would only race the settle. Operator
   guide: [guides/task-pr-sync.md](guides/task-pr-sync.md).
+
+### Container GitHub access (CONTAINER-GITHUB-WRITE)
+
+- An agent in a bot container can push to GitHub through the board's managed
+  credentials (#363): when a run's GitHub identity is board-managed (the
+  default, see `MYRMIDON_HOST_GITHUB_CREDENTIALS` in
+  [SETTINGS.md](SETTINGS.md)), the heartbeat mints a run-bound
+  `github_credentials` capability, and the `hermes_gateway` adapter now
+  carries it to the container — the pair rides the `/v1/runs` request body
+  (`github_broker`), is bound to that run alone (contextvars, never the
+  process env shared by the gateway's concurrent runs) and reaches every
+  terminal and `execute_code` subprocess of the run as
+  `PAPERCLIP_GITHUB_BROKER_URL`/`PAPERCLIP_GITHUB_BROKER_TOKEN`. Inside the
+  container, the dev image's `git` credential helper (URL-scoped to
+  `github.com` over https, `ssh://git@github.com/…` remotes rewritten to
+  https) and its `gh` wrapper resolve the credential on each invocation
+  through the board's `POST /runtime-tools/github/credentials` broker and
+  exec the real `git`/`gh`; the wrappers walk up to 6 broker address
+  candidates (`PAPERCLIP_GITHUB_BROKER_URL` → `PAPERCLIP_API_URL` →
+  `PAPERCLIP_RUNTIME_API_URL` → `PAPERCLIP_RUNTIME_API_CANDIDATES_JSON`
+  items) and never print the token. A run without a capability — or a card
+  whose GitHub identity is not board-managed — gets both names stripped and
+  the wrappers fail open, exactly as before this change. A static
+  `GH_TOKEN`/`GITHUB_TOKEN` inherited from the image profile no longer
+  shadows the credential: while a capability is bound, those names are
+  blanked in the run's subprocesses. This closes the gap that motivated
+  `MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST` (see SETTINGS.md): the
+  allowlist remains a fallback for dev bots on machines where the board's
+  broker address is genuinely unreachable.
 
 ## 1.4.0
 
@@ -169,6 +230,18 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   secret store. Only the secret id stays in the connector's own state, so no bot ever
   holds a cloud token and the token value never travels through the panel API (#252).
 
+### Owner questions and instructions
+
+- U2: question and confirmation cards (`ask_user_questions`, `request_confirmation`)
+  reach the owner's Telegram DM when the company runs the Telegram DM bridge
+  (`MYRMIDON_TELEGRAM_DM_CONVERSATIONS`) — the card is also answered from Telegram,
+  including a callback that arrives for a task the authoring agent no longer owns.
+  A task with its own live chat binding keeps its card in that conversation only.
+  Guide: [guides/owner-telegram-cards.md](guides/owner-telegram-cards.md) (#277, #284, #287).
+- H2: every change to an agent's instructions bundle (file put, file delete, patch)
+  is snapshotted into the append-only `agent_instructions_revisions` history, and any
+  earlier revision can be restored through the API — the restore itself becomes a new
+  revision. Guide: [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) (#273, #299).
 ### Deploy and reliability
 
 - Automatic rollback by health for the board and the bot fleet (R5-C). A failed

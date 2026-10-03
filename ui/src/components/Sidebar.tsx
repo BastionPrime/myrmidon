@@ -7,6 +7,7 @@ import {
   DollarSign,
   Gauge, // myrmidon(1.6-BASELINE): quality nav item
   ShieldCheck, // myrmidon(1.6-SWARM-CLAIM-B): supervisor nav item
+  Leaf, // myrmidon(1.6-FORAGE): foraging nav item
   History,
   Search,
   SquarePen,
@@ -268,6 +269,7 @@ export function Sidebar({ children }: { children?: ReactNode }) {
               <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
               <SidebarNavItem to="/quality" label="Quality" icon={Gauge} /> {/* myrmidon(1.6-BASELINE) */}
               <SidebarNavItem to="/swarm-claim" label="Swarm supervisor" icon={ShieldCheck} /> {/* myrmidon(1.6-SWARM-CLAIM-B) */}
+              <SidebarNavItem to="/foraging" label="Foraging" icon={Leaf} /> {/* myrmidon(1.6-FORAGE) */}
               <SidebarNavItem to="/activity" label="Activity" icon={History} />
               <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
             </SidebarSection>

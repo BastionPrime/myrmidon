@@ -77,7 +77,10 @@ what exists as of 1.5:
   ([telegram-dm-status](docs/myrmidon/guides/telegram-dm-status.md)); the
   board chat planner turns the owner's free text into a proposed epic with
   child tasks, approved by a card
-  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.md)).
+  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.md)); the
+  Commander chat of the 2.0 shell gives the same planning flow a screen —
+  free-text entry with the proposed epic rendered read-only
+  ([commander-chat](docs/myrmidon/guides/commander-chat.md)).
 - **Memory per agent.** View, export and remove an agent's memory bank from
   its card ([agent-memory-card](docs/myrmidon/guides/agent-memory-card.md)).
 - **Maintenance windows and safe deploys.** A maintenance window pauses new
@@ -93,9 +96,12 @@ what exists as of 1.5:
   ([SETTINGS](docs/myrmidon/SETTINGS.md)).
 - **Client connectors (the browser bridge).** A browser extension on a client
   PC dials out to the board, letting a company bot drive that browser — read,
-  click, fill, download — under an operator-set capability and domain policy,
-  with signing steps that keep the key and the PIN on the client PC
+  click, fill, download — and run any action the board marks for human
+  confirmation only after a person on that PC presses Confirm, under an
+  operator-set capability and domain policy, with signing steps that keep the
+  key and the PIN on the client PC
   ([browser-bridge-gateway](docs/myrmidon/guides/browser-bridge-gateway.md),
+  [bridge-extension](docs/myrmidon/guides/bridge-extension.md),
   [connector-panel](docs/myrmidon/guides/connector-panel.md),
   [signing-host-contract](docs/myrmidon/guides/signing-host-contract.md)).
 - **OCR path.** PDF attachments recognized into text and a structural
@@ -120,7 +126,7 @@ what exists as of 1.5:
   that survive a mass wake ([run-limits](docs/myrmidon/guides/run-limits.md)).
 - **UI 2.0 shell.** The first piece of the 2.0 interface — the rail, the
   nest switcher, the design tokens — behind an instance flag, off by
-  default.
+  default ([ui2-shell](docs/myrmidon/guides/ui2-shell.md)).
 
 Myrmidon sends no telemetry to the vendor. All settings are
 `MYRMIDON_*` environment variables documented in

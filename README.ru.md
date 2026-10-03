@@ -75,7 +75,10 @@ Myrmidon, — колония: координация метками в обще�
   ([telegram-dm-status](docs/myrmidon/guides/telegram-dm-status.ru.md));
   планировщик чата с доской превращает свободный текст владельца в
   предложенный эпик с дочерними задачами, согласовываемый карточкой
-  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.ru.md)).
+  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.ru.md)); чат
+  с Полководцем в оболочке 2.0 даёт тому же потоку планирования экран —
+  ввод свободным текстом, предложенный эпик только на чтение
+  ([commander-chat](docs/myrmidon/guides/commander-chat.ru.md)).
 - **Память на агента.** Просмотр, выгрузка и удаление банка памяти агента из
   его карточки ([agent-memory-card](docs/myrmidon/guides/agent-memory-card.ru.md)).
 - **Окна обслуживания и безопасные выкаты.** Окно обслуживания останавливает
@@ -91,9 +94,12 @@ Myrmidon, — колония: координация метками в обще�
   накопится ([SETTINGS](docs/myrmidon/SETTINGS.ru.md)).
 - **Клиентские коннекторы (браузерный мост).** Расширение браузера на машине
   клиента само подключается к доске, и бот компании управляет этим браузером
-  — читает, кликает, заполняет, скачивает — под политикой возможностей и
-  доменов, заданной оператором; шаги подписи держат ключ и PIN на машине
-  клиента ([browser-bridge-gateway](docs/myrmidon/guides/browser-bridge-gateway.ru.md),
+  — читает, кликает, заполняет, скачивает — а действие, помеченное доской
+  для подтверждения человеком, выполняется только после того, как человек
+  за этим ПК нажмёт Confirm; всё под политикой возможностей и доменов,
+  заданной оператором; шаги подписи держат ключ и PIN на машине клиента
+  ([browser-bridge-gateway](docs/myrmidon/guides/browser-bridge-gateway.ru.md),
+  [bridge-extension](docs/myrmidon/guides/bridge-extension.ru.md),
   [connector-panel](docs/myrmidon/guides/connector-panel.ru.md),
   [signing-host-contract](docs/myrmidon/guides/signing-host-contract.ru.md)).
 - **Путь OCR.** PDF-вложения распознаются в текст и структурную выжимку —
@@ -117,7 +123,8 @@ Myrmidon, — колония: координация метками в обще�
   прогонов, выдерживающие массовую побудку
   ([run-limits](docs/myrmidon/guides/run-limits.ru.md)).
 - **Оболочка UI 2.0.** Первый кусок интерфейса 2.0 — рейка, переключатель
-  гнёзд, дизайн-токены — за флагом инстанса, по умолчанию выключен.
+  гнёзд, дизайн-токены — за флагом инстанса, по умолчанию выключен
+  ([ui2-shell](docs/myrmidon/guides/ui2-shell.ru.md)).
 
 Myrmidon не отправляет телеметрию вендору. Все настройки — переменные
 `MYRMIDON_*`, описанные в

@@ -79,7 +79,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/stack-registry.md](guides/stack-registry.md) | Реестр компонентов стека: API, проба Docker, кэш, настройка сокета |
 | [guides/tracing-health.md](guides/tracing-health.md) | Здоровье LLM-трейсинга: карточка «LLM tracing» в настройках компании, состояния, сигнал оператору, журнал переходов |
 | [guides/reference-task-evals.md](guides/reference-task-evals.md) | Эталоны и судья (1.6 EVALS-A): корпус эталонных задач, LLM-судья за шлюзом, вердикт «порог+повтор», экспорт в Langfuse |
-| [guides/bridge-extension.md](guides/bridge-extension.md) | Браузерный мост, расширение (часть C): read-only действия в браузере клиентского ПК, сопряжение кодом, сборка и load-unpacked |
+| [guides/bridge-extension.md](guides/bridge-extension.md) | Браузерный мост, расширение (части C и D): действия open/read/click/fill/download/screenshot, шаг подтверждения человеком, сопряжение кодом, сборка и load-unpacked |
 | [guides/browser-bridge-gateway.md](guides/browser-bridge-gateway.md) | Браузерный мост, шлюз (EXTCASE-B): исходящее WSS-соединение расширения, сопряжение кодом, allowlist, политика подписи, журнал |
 | [guides/connector-panel.md](guides/connector-panel.md) | Панель коннекторов (Company settings → Connectors): устройства, выдача кодов, allowlist, политика подписи, журнал |
 | [guides/ocr.md](guides/ocr.md) | Путь OCR: PDF в текст в workspace бота — инструмент `ocr.pdf`, бэкенды, лимиты, журнал |
@@ -88,7 +88,9 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/external-mcp-connectors.md](guides/external-mcp-connectors.md) | Внешние MCP-коннекторы: подключение любого HTTP MCP-сервера без кода форка — вердикт разведки, две точки входа, гранты агентам, регламент и проверка здоровья |
 | [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) | История ревизий инструкций агента: снимки, откат, журнал |
 | [guides/auto-resume.md](guides/auto-resume.md) | Автовозобновление агента из `error`: бэкофф 1/5/15, карточка оператору после потолка попыток, настройки |
+| [guides/ui2-shell.md](guides/ui2-shell.md) | Оболочка Myrmidon 2.0 за флагом `enableMyrmidonUi2`: включение на инстанс и лично через `?ui=`, рамка (рейка/верхняя панель/телефонный каркас), экраны 2.0, токены и шрифты |
 | [guides/task-pr-sync.md](guides/task-pr-sync.md) | Закрытие задачи по слитым PR: проход по рабочим продуктам `pull_request`, возврат исполнителю без слияния, гейты после выката, сторож побудок |
+| [guides/commander-chat.md](guides/commander-chat.md) | Экран «Чат с Полководцем» в интерфейсе 2.0 (CTO-CHAT A): входы (рейка, телефон, палитра с подсказкой `Ctrl K`), запрос свободным текстом, предложенный план, карточка согласования, тот же поток из Telegram-лички |
 
 ## Сборка и запуск
 
