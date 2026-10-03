@@ -16,6 +16,9 @@ status message in the DM instead of silence:
 - The status is posted once, when the run is queued, and the same message is
   edited in place as the phase changes (`queued` → `working`) — no stack of
   milestone messages.
+- While the run is working, the status text is live progress, not just
+  "working…": the agent's current step in plain words, the elapsed time, and
+  the last few completed steps as a short list.
 - The run's final answer replaces the status message.
 - Failure, admin-attention and completion milestones still publish as before,
   and the terminal milestone of a turn stopped with `/stop` from the chat
@@ -25,6 +28,47 @@ status message in the DM instead of silence:
 
 Accepted on values: `1`, `true`, `yes`, `on`. Any other value (or unset)
 keeps the vendor path unchanged.
+
+### Live progress text
+
+While the run is working, the one status message carries a live progress
+text instead of a bare "working…":
+
+```text
+<agent name>: инструмент: web_search · 2 мин
+
+Сделано:
+• поиск завершён
+• план: собрать доклад
+• готово: сводка источников
+```
+
+(The step labels and the `Сделано:` heading are Russian in the product code
+itself — the strings above are the literals the message carries, not
+translation choices.)
+
+- The current step is the newest step-family event of the run's own run log
+  (`heartbeat_run_events`) — tool executions, research, delegations, plan
+  updates, completed items — worded in Russian by fixed labels (for example
+  `инструмент: <what>`, `ищу информацию…`, `помощник завершил работу`). The
+  log rows are already redacted when recorded, and the label is redacted a
+  second time and truncated hard (120 characters for the current step, 80
+  for a completed one) before it crosses to Telegram; raw payloads, tool
+  arguments and results never leave the server.
+- The elapsed time sits next to the current step and advances in coarse
+  30-second buckets (`<1 мин`, `2 мин`, `1 ч 5 мин`) — a per-second clock
+  would force a provider edit on every sweep.
+- Below the current step the last three completed steps are listed under a
+  `Сделано:` heading.
+- The status is edited in place only when the text actually changes: the
+  sweep re-publishes a durable status row per run
+  (`run:<id>:dmstatus:<endpoint>`) and re-opens the already-posted provider
+  message for editing only if the composed text differs from what is stored.
+  Identical text leaves the message untouched, so the elapsed time alone
+  rides along with real step changes instead of flipping the row every
+  sweep — this is what fixed the repeated "working…" duplicates.
+- A run with no step events yet falls back to the vendor's safe wording:
+  `<agent name> is working… (<elapsed>)`.
 
 ## Inline split of long answers (`MYRMIDON_TELEGRAM_SPLIT_MAX_PARTS`)
 
