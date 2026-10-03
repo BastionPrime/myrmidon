@@ -94,9 +94,12 @@ Myrmidon, — колония: координация метками в обще�
   накопится ([SETTINGS](docs/myrmidon/SETTINGS.ru.md)).
 - **Клиентские коннекторы (браузерный мост).** Расширение браузера на машине
   клиента само подключается к доске, и бот компании управляет этим браузером
-  — читает, кликает, заполняет, скачивает — под политикой возможностей и
-  доменов, заданной оператором; шаги подписи держат ключ и PIN на машине
-  клиента ([browser-bridge-gateway](docs/myrmidon/guides/browser-bridge-gateway.ru.md),
+  — читает, кликает, заполняет, скачивает — а действие, помеченное доской
+  для подтверждения человеком, выполняется только после того, как человек
+  за этим ПК нажмёт Confirm; всё под политикой возможностей и доменов,
+  заданной оператором; шаги подписи держат ключ и PIN на машине клиента
+  ([browser-bridge-gateway](docs/myrmidon/guides/browser-bridge-gateway.ru.md),
+  [bridge-extension](docs/myrmidon/guides/bridge-extension.ru.md),
   [connector-panel](docs/myrmidon/guides/connector-panel.ru.md),
   [signing-host-contract](docs/myrmidon/guides/signing-host-contract.ru.md)).
 - **Путь OCR.** PDF-вложения распознаются в текст и структурную выжимку —
