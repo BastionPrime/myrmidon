@@ -2786,6 +2786,10 @@ export { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema } fro
 export * from "./myrmidon-browser-bridge.js";
 // myrmidon(UI2-I18N): per-user board UI language preference contract (2.0 UI tree).
 export * from "./myrmidon-ui2-i18n.js";
+// myrmidon(OPE-3789): the telegramNotify settings contract shared by the
+// server core (part A) and the board UI (part F). Must stay byte-identical to
+// the merged core A file (PR #392); do not fork values here.
+export * from "./myrmidon-telegram-notify.js";
 // myrmidon(S6): per-agent tool and connection permissions.
 export * from "./myrmidon-agent-tool-permissions.js";
 // myrmidon(ADMIN-AGENT): the board administrator flag on an agent.
