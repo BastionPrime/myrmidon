@@ -30,6 +30,8 @@ const items = [
   { value: "castes", label: "Castes & models", href: "/company/settings/castes" },
   // myrmidon(1.6.1 CUSTOM-CASTES C): the company caste directory
   { value: "caste-directory", label: "Agent castes", href: "/company/settings/caste-directory" },
+  // myrmidon(1.6.1 VOICE-STT C): the STT settings section
+  { value: "voice-stt", label: "Speech", href: "/company/settings/voice-stt" },
 ] as const;
 
 type CompanySettingsTab = (typeof items)[number]["value"];
@@ -138,6 +140,11 @@ export function getCompanySettingsTab(pathname: string): CompanySettingsTab {
   // myrmidon(1.6.1 MODEL-PROVIDERS C): the Castes and models settings section
   if (pathname.includes("/company/settings/castes")) {
     return "castes";
+  }
+
+  // myrmidon(1.6.1 VOICE-STT C): the speech recognition settings section
+  if (pathname.includes("/company/settings/voice-stt")) {
+    return "voice-stt";
   }
 
   return "general";

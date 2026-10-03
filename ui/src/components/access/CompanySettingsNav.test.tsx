@@ -145,6 +145,7 @@ describe("CompanySettingsNav", () => {
 
           { value: "castes", label: "Castes & models" }, // myrmidon(1.6.1 MODEL-PROVIDERS C)
           { value: "caste-directory", label: "Agent castes" }, // myrmidon(1.6.1 CUSTOM-CASTES C)
+          { value: "voice-stt", label: "Speech" }, // myrmidon(1.6.1 VOICE-STT C)
         ],
       }),
     );
@@ -194,6 +195,7 @@ describe("CompanySettingsNav", () => {
 
       "castes", // myrmidon(1.6.1 MODEL-PROVIDERS C)
       "caste-directory", // myrmidon(1.6.1 CUSTOM-CASTES C)
+      "voice-stt", // myrmidon(1.6.1 VOICE-STT C)
     ]);
 
     await act(async () => {
