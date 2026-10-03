@@ -98,6 +98,15 @@
 - Доступ к MCP-адресу проверяет заголовок Host (`MEDIA_ALLOWED_HOSTS`, по умолчанию
   `media-mcp,media-mcp:8080`); если боты ходят по другому имени, добавьте его.
 
+## Скрипты на стороне бота
+
+Готовые клиентские модули для скриптов, которые раньше звали локальный ffmpeg/ffprobe,
+лежат в `tools/media-mcp/bot-scripts/`: stdlib-only клиент MCP (`media_client.py`),
+drop-in слой `media_shim.py` (контракты `video_info`/`CompletedProcess`, fast-path на
+локальном ffmpeg) и инструкция применения в живом дереве ботов (`APPLY-OPE3288.md`).
+Скрипт бота получает адрес и токен из `MEDIA_TOOLS_URL`/`MEDIA_TOOLS_TOKEN`; токен —
+персональная запись бота в `config/bots.json` (см. «Аутентификация бота»).
+
 ## Настройки фасада и воркера
 
 Переменные окружения сервиса (не сервера доски): `MEDIA_BOTS_FILE`, `MEDIA_DATA_DIR`,
