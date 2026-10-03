@@ -23,6 +23,7 @@ import {
   companies,
   companyMemberships,
   createDb,
+  heartbeatRunEvents,
   heartbeatRuns,
   issueComments,
   issues,
@@ -818,6 +819,147 @@ describeEmbeddedPostgres("Telegram DM run status (U1)", () => {
     expect(
       String((providerRuntime.edits[0]!.message as { markdown?: unknown }).markdown),
     ).toContain("working");
+  });
+
+  // myrmidon(OPE-3650): the 02.10 production defect — one owner DM message
+  // produced THREE separate "… is working…" provider messages. The status
+  // lane must produce exactly one provider post per run and edit that same
+  // message in place as the run's own recorded steps advance, and the final
+  // answer must replace the status message.
+  it("one sent message for queued -> working -> new steps -> final answer, all edits in place (OPE-3650)", async () => {
+    process.env[TELEGRAM_DM_STATUS_ENV] = "true";
+    const fixture = await seedBridgedConversation();
+    await seedTelegramStopSubscriptionReceipt(fixture);
+    const service = [...fixtureServices].at(-1);
+    if (!service) throw new Error("Expected a fixture chat channel service");
+    const serviceRuntime = service.runtime as unknown as FakeChatSdkRuntime;
+    const providerRuntime = serviceRuntime.endpoints.get(fixture.endpointId);
+    if (!providerRuntime) throw new Error("Expected Telegram provider runtime");
+    providerRuntime.posts.length = 0;
+    providerRuntime.edits.length = 0;
+    providerRuntime.postedIds.length = 0;
+
+    const startedAt = new Date();
+    const runId = await insertRun(fixture, {
+      status: "queued",
+      startedAt,
+    });
+
+    // Phase 1: queued -> one provider post.
+    await enqueueChatRunMilestones(db);
+    await service.processPendingPublications(1_000);
+    expect(providerRuntime.posts).toHaveLength(1);
+    const statusMessageId = providerRuntime.postedIds[0]!;
+    const statusThreadId = providerRuntime.posts[0]!.threadId;
+
+    // Phase 2: run starts; one recorded tool step; sweep twice — the second,
+    // identical sweep must NOT re-send or re-open (the duplicate defect).
+    await db
+      .update(heartbeatRuns)
+      .set({ status: "running", updatedAt: new Date() })
+      .where(eq(heartbeatRuns.id, runId));
+    await db.insert(heartbeatRunEvents).values({
+      companyId: fixture.companyId,
+      runId,
+      agentId: fixture.agentId,
+      seq: 1,
+      eventType: "tool.execution.started",
+      stream: "system",
+      level: "info",
+      message: "читаю файл config.json",
+    });
+    await enqueueChatRunMilestones(db);
+    await service.processPendingPublications(1_000);
+    // First working update edits the queued post in place.
+    expect(providerRuntime.posts).toHaveLength(1);
+    expect(providerRuntime.edits).toHaveLength(1);
+    expect(providerRuntime.edits[0]!.messageId).toBe(statusMessageId);
+
+    // The duplicate-producing sweep: same run state, same steps, no changes.
+    await enqueueChatRunMilestones(db);
+    await enqueueChatRunMilestones(db);
+    await service.processPendingPublications(1_000);
+    expect(providerRuntime.posts).toHaveLength(1);
+    expect(providerRuntime.edits).toHaveLength(1);
+
+    // Phase 3: a new step event advances the live status text in place.
+    await db.insert(heartbeatRunEvents).values({
+      companyId: fixture.companyId,
+      runId,
+      agentId: fixture.agentId,
+      seq: 2,
+      eventType: "tool.execution.completed",
+      stream: "system",
+      level: "info",
+      message: "запускаю сборку",
+    });
+    await db
+      .update(heartbeatRuns)
+      .set({ updatedAt: new Date() })
+      .where(eq(heartbeatRuns.id, runId));
+    await enqueueChatRunMilestones(db);
+    await service.processPendingPublications(1_000);
+    expect(providerRuntime.posts).toHaveLength(1);
+    expect(providerRuntime.edits).toHaveLength(2);
+    expect(providerRuntime.edits[1]!.messageId).toBe(statusMessageId);
+    expect(
+      String(
+        (providerRuntime.edits[1]!.message as { markdown?: unknown }).markdown,
+      ),
+    ).toContain("запускаю сборку");
+    // Live step list carries the earlier completed step too.
+    expect(
+      String(
+        (providerRuntime.edits[1]!.message as { markdown?: unknown }).markdown,
+      ),
+    ).toContain("читаю файл config.json");
+
+    // Phase 4: the run succeeds with an explicitly authored final comment; the
+    // final answer publication replaces the SAME provider message (edit, not
+    // a new post). This mirrors heartbeat's selected final presentation: an
+    // agent comment authored by the run with an allow_ authorization reason.
+    await db
+      .update(heartbeatRuns)
+      .set({ status: "succeeded", finishedAt: new Date(), updatedAt: new Date() })
+      .where(eq(heartbeatRuns.id, runId));
+    const [finalComment] = await db
+      .insert(issueComments)
+      .values({
+        companyId: fixture.companyId,
+        issueId: fixture.issueId,
+        authorAgentId: fixture.agentId,
+        authorType: "agent",
+        createdByRunId: runId,
+        body: "Готово: собрал конфиг и прогнал сборку.",
+        metadata: { authorizationReason: "allow_chat_run_presentation" },
+      })
+      .returning({ id: issueComments.id });
+    await db.insert(chatPublications).values({
+      companyId: fixture.companyId,
+      endpointId: fixture.endpointId,
+      conversationId: fixture.conversationId,
+      issueId: fixture.issueId,
+      commentId: finalComment!.id,
+      idempotencyKey: `comment:${finalComment!.id}:${fixture.endpointId}`,
+      payload: {
+        text: "Готово: собрал конфиг и прогнал сборку.",
+      },
+      state: "pending",
+    });
+    await service.processPendingPublications(1_000);
+
+    // Exactly one provider message for the whole turn; the final answer
+    // edited it in place (never a second post).
+    expect(providerRuntime.posts).toHaveLength(1);
+    expect(providerRuntime.postedIds[0]).toBe(statusMessageId);
+    expect(providerRuntime.edits).toHaveLength(3);
+    expect(providerRuntime.edits[2]!.messageId).toBe(statusMessageId);
+    expect(providerRuntime.edits[2]!.threadId).toBe(statusThreadId);
+    expect(
+      String(
+        (providerRuntime.edits[2]!.message as { markdown?: unknown }).markdown,
+      ),
+    ).toContain("Готово");
   });
 
   it("splits a long structured answer inline when MYRMIDON_TELEGRAM_SPLIT_MAX_PARTS admits it (U1 delivery)", async () => {

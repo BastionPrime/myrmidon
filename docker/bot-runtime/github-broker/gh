@@ -1,0 +1,172 @@
+#!/usr/bin/env node
+// docker/bot-runtime/github-broker/gh
+//
+// myrmidon(G1): gh wrapper for run-scoped GitHub credentials
+// (CONTAINER-GITHUB-WRITE). Stands earlier in PATH than the real gh. When the
+// environment of THIS run carries PAPERCLIP_GITHUB_BROKER_TOKEN (the hermes
+// gateway patch exports it, with PAPERCLIP_GITHUB_BROKER_URL as the primary
+// broker URL, into the run's terminal children), the wrapper asks the board's
+// broker (POST /runtime-tools/github/credentials) for the credential and runs
+// the real gh with the returned env applied — and only the allow-listed keys,
+// the same list the board's own launcher applies
+// (packages/adapter-utils/src/myrmidon-github-broker.ts).
+//
+// Broker candidates follow the same walk as the board's launcher client:
+// PAPERCLIP_GITHUB_BROKER_URL → PAPERCLIP_API_URL →
+// PAPERCLIP_RUNTIME_API_URL → items of
+// PAPERCLIP_RUNTIME_API_CANDIDATES_JSON (max 6, deduped, trailing / and /api
+// stripped); a 409 is retried on the same candidate, a dead or unreachable
+// candidate never stops the walk. Diagnostics name candidate URLs and
+// statuses, never the token.
+//
+// Without a capability (or when the broker refuses) the real gh runs with the
+// environment unchanged: the wrapper never breaks gh for a run that has no
+// managed GitHub identity. The capability never appears in argv, in gh's
+// config, or on disk; only this invocation and its children see the resolved
+// token: it is passed as env to the child process, not exported to the shell.
+
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawn } = require("node:child_process");
+
+const HTTP_TIMEOUT_MS = 10_000;
+const TOTAL_TIMEOUT_MS = 60_000;
+const CONFLICT_RETRY_DELAY_MS = 1_000;
+const CONFLICT_MAX_ATTEMPTS = 30;
+const MAX_CANDIDATES = 6;
+
+const directory = path.dirname(fs.realpathSync(process.argv[1]));
+const originalPath = (process.env.PATH || "").split(path.delimiter).filter((p) => {
+  try { return fs.realpathSync(p) !== directory; } catch { return true; }
+});
+const executable = originalPath.map((p) => path.join(p, "gh")).find((p) => {
+  try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch { return false; }
+});
+if (!executable) {
+  process.stderr.write("paperclip: gh is not installed.\n");
+  process.exit(127);
+}
+
+// Same candidate walk as the board's launcher client: env-key precedence,
+// trailing-slash and /api-suffix stripping, dedup, cap at 6 candidates.
+function brokerCandidateUrls(env) {
+  const urls = [];
+  const seen = new Set();
+  const push = (value) => {
+    const trimmed = typeof value === "string" ? value.trim().replace(/\/+$/, "").replace(/\/api$/, "") : "";
+    if (!trimmed || seen.has(trimmed) || urls.length >= MAX_CANDIDATES) return;
+    seen.add(trimmed);
+    urls.push(trimmed);
+  };
+  push(env.PAPERCLIP_GITHUB_BROKER_URL);
+  push(env.PAPERCLIP_API_URL);
+  push(env.PAPERCLIP_RUNTIME_API_URL);
+  let extra = [];
+  try {
+    const parsed = JSON.parse(env.PAPERCLIP_RUNTIME_API_CANDIDATES_JSON || "[]");
+    if (Array.isArray(parsed)) extra = parsed;
+  } catch { /* malformed JSON falls back to the empty list */ }
+  for (const item of extra) push(item);
+  return urls;
+}
+
+// Plain http is the norm inside the bots' docker network (the board is
+// http://paperclip-server-1:3100 there); https is used unchanged.
+function postOnce(base, capability) {
+  const url = new URL("/runtime-tools/github/credentials", base);
+  const lib = url.protocol === "http:" ? require("node:http") : require("node:https");
+  return new Promise((resolve) => {
+    const req = lib.request(url, {
+      method: "POST",
+      timeout: HTTP_TIMEOUT_MS,
+      headers: {
+        "authorization": `Bearer ${capability}`,
+        "x-paperclip-github-capability": capability,
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength("{}"),
+        "user-agent": "paperclip-gh-wrapper/1.0 (contact: itkadr@gmail.com)",
+      },
+    }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => resolve({ status: response.statusCode, body }));
+    });
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", () => resolve(null));
+    req.end("{}");
+  });
+}
+
+// Walk the candidates with 409-retry-on-same-candidate semantics, bounded by
+// a total deadline. Returns { response, tried }: the first 200, else the last
+// HTTP response seen, else null; `tried` names each candidate URL and its
+// outcome for diagnostics (never the token).
+async function requestBrokerCredentials(env, candidateUrls) {
+  const deadline = Date.now() + TOTAL_TIMEOUT_MS;
+  const tried = [];
+  let lastResponse = null;
+  for (const base of candidateUrls) {
+    let response = null;
+    let outcome = "no_response";
+    try {
+      for (let attempt = 0; attempt < CONFLICT_MAX_ATTEMPTS; attempt++) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) { outcome = "budget_exhausted"; break; }
+        response = await postOnce(base, env.PAPERCLIP_GITHUB_BROKER_TOKEN);
+        if (!response) { outcome = "no_response"; break; }
+        outcome = String(response.status);
+        if (response.status !== 409) break;
+        await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(CONFLICT_RETRY_DELAY_MS, deadline - Date.now()))));
+      }
+    } catch {
+      response = null;
+      outcome = "no_response";
+    }
+    if (response && response.status === 200) return { response, tried };
+    if (response) lastResponse = response;
+    tried.push(`${base} -> ${outcome}`);
+    if (Date.now() >= deadline) break;
+  }
+  return { response: lastResponse, tried };
+}
+
+// The same allow-list the board's launcher applies to the broker's `env`.
+const ALLOWED_ENV_KEYS = /^(GH_TOKEN|GITHUB_TOKEN|PAPERCLIP_GIT_TOKEN|GIT_TERMINAL_PROMPT|GIT_AUTHOR_(NAME|EMAIL)|GIT_COMMITTER_(NAME|EMAIL)|GIT_CONFIG_COUNT|GIT_CONFIG_(KEY|VALUE)_\d+)$/;
+
+async function main() {
+  const env = { ...process.env };
+  const capability = (env.PAPERCLIP_GITHUB_BROKER_TOKEN || "").trim();
+  if (capability) {
+    const { response, tried } = await requestBrokerCredentials(env, brokerCandidateUrls(env));
+    if (!response) {
+      process.stderr.write(`paperclip: GitHub broker unreachable (tried: ${tried.join(", ") || "no candidate"}); continuing without managed credentials.\n`);
+    } else if (response.status !== 200) {
+      process.stderr.write(`paperclip: GitHub broker answered HTTP ${response.status} (tried: ${tried.join(", ")}); continuing without managed credentials.\n`);
+    } else {
+      let result;
+      try { result = JSON.parse(response.body); } catch { result = null; }
+      if (result && result.status === "unavailable") {
+        const reason = typeof result.reason === "string"
+          ? result.reason.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 500)
+          : "check the GitHub connection in Paperclip";
+        process.stderr.write(`paperclip: GitHub access unavailable: ${reason}; continuing without managed credentials.\n`);
+      }
+      if (result && result.status === "available" && result.env) {
+        for (const [key, value] of Object.entries(result.env)) {
+          if (ALLOWED_ENV_KEYS.test(key) && typeof value === "string") env[key] = value;
+        }
+      }
+    }
+  } else {
+    process.stderr.write("paperclip: no GitHub broker capability in this environment; continuing without managed credentials.\n");
+  }
+  // Only this invocation and its children inherit the resolved token.
+  env.PATH = originalPath.join(path.delimiter);
+  const child = spawn(executable, process.argv.slice(2), { env, stdio: "inherit" });
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));
+  child.once("error", () => { process.stderr.write("paperclip: gh could not start.\n"); process.exitCode = 1; });
+  child.once("exit", (code, signal) => { process.exitCode = code === null ? 128 : code; });
+}
+
+main().catch(() => { process.stderr.write("paperclip: gh wrapper setup failed.\n"); process.exitCode = 1; });

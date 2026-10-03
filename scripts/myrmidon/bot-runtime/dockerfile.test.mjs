@@ -178,6 +178,9 @@ describe("docker/bot-runtime/Dockerfile", () => {
       "tools.environments.base",
       "tools.environments.base_session_env",
       "gateway.run",
+      "gateway.platforms.api_server_runs",
+      "tools.environments.local",
+      "tools.github_broker_context",
     ]) {
       assert.ok(modules.includes(module), `import smoke must include ${module}`);
     }
@@ -201,6 +204,20 @@ describe("docker/bot-runtime/Dockerfile", () => {
       fs.existsSync(path.join(IMAGE_DIR, "tests", run[1])),
       `docker/bot-runtime/tests/${run[1]} must exist`,
     );
+    // myrmidon(G1): every patch with a behaviour regression gets its own
+    // build-time run; 09-run-scoped-github-broker has
+    // github_broker_run_scope.py (contextvar binding + child-env bridge).
+    const patchTestRuns = [...dockerfileInstructions.matchAll(/^RUN [^\n]*\/tmp\/patch-tests\/(\S+\.py)\s+\/opt\/hermes-src$/gm)].map((m) => m[1]);
+    for (const regression of ["state_db_fd_probe_budget.py", "github_broker_run_scope.py"]) {
+      assert.ok(
+        patchTestRuns.includes(regression),
+        `expected a build-time run of docker/bot-runtime/tests/${regression}`,
+      );
+      assert.ok(
+        fs.existsSync(path.join(IMAGE_DIR, "tests", regression)),
+        `docker/bot-runtime/tests/${regression} must exist`,
+      );
+    }
     assert.match(dockerfile, /^COPY tests\/ \/tmp\/patch-tests\/$/m);
     const syncIdx = dockerfileInstructions.indexOf("uv sync --frozen");
     const runIdx = dockerfileInstructions.indexOf(run[0]);

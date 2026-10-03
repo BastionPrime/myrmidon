@@ -95,6 +95,7 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MAINTENANCE_DRAIN_GRACE_SEC` | DRAIN-INTERRUPT | `300` | Deploy-script setting (`deploy.env`): how long the window drains before it interrupts the remaining runs (the `drainTimeoutSec` of the enter request in interrupt mode) | Ignored with `MAINTENANCE_ON_TIMEOUT=wait`, which uses `MAINTENANCE_DRAIN_TIMEOUT_SEC` |
 | `MYRMIDON_MAINTENANCE_TICK_SEC` | R3 | `5` | How often the mode service recomputes windows: `entering → on`, timeouts, exit completion | From 1 to 3600 |
 | `MYRMIDON_MAINTENANCE_CACHE_TTL_SEC` | R3 | `5` | How many seconds the admission gateway caches maintenance windows and the org structure (department membership) | `0` — no cache, DB read on every check. Transitions made by this process are visible at once |
+| `MYRMIDON_MAINTENANCE_HOOK_TIMEOUT_MS` | R3 | `15000` | Upper bound for one maintenance integration hook call (`onEntered`/`onExited`, the Zabbix client). A hook that exceeds it is abandoned (it keeps running detached) and the window lifecycle continues; the timeout is logged and audited. OPE-3638: a hung `onExited` pinned `leaving` windows until every card change on the agent was blocked | From 1000 to 300000; a value outside the range falls back to the default |
 | `MYRMIDON_ZABBIX_URL` | R3 | unset | Address of the Zabbix API (`…/api_jsonrpc.php`) for the instance maintenance window | Unset — the integration is off, no calls |
 | `MYRMIDON_ZABBIX_TOKEN_REF` | R3 | unset | Reference to the Zabbix API token: `env:<NAME>` (variable) or `file:<path>` (a file, e.g. a Docker secret). The value is not logged | Unset — the integration is off |
 | `MYRMIDON_ZABBIX_HOST_GROUPS` | R3 | unset | Comma-separated names of Zabbix host groups that are put into maintenance when the instance window is entered | Unset — the integration is off |
@@ -153,7 +154,6 @@ A track writes only into its own section. A row is added in the same PR as the s
 |---|---|---|---|---|
 | `MYRMIDON_WORKSPACE_PNPM_STORE_DIR` | WORKSPACE-HYGIENE | unset — `<repository root>/.paperclip/pnpm-store` | Absolute path of the shared pnpm store into which `provision-worktree.sh` installs packages and from which they are imported into the workspace `node_modules` with hard links (`--config.package-import-method=hardlink`): one store for all workspaces of one repository instead of a full copy of packages per branch. The repository root is taken from `PAPERCLIP_WORKSPACE_REPO_ROOT` (then `PAPERCLIP_WORKSPACE_BASE_CWD`) — the default path lies on the same volume as the workspaces, so hardlink import works | A relative path in this variable is resolved from the same anchor. Store and workspace on different filesystems — installation falls back to vendor behavior (pnpm's own default store) with a warning to stderr |
 | `MYRMIDON_WORKSPACE_PNPM_STORE` | WORKSPACE-HYGIENE | `1` (enabled) | Master switch of the shared store: `0`/`false`/`no`/`off` — `provision-worktree.sh` runs `pnpm install` with vendor argv without store flags | Disabling returns the previous disk usage (a full copy of `node_modules` per workspace) |
-
 ## P12 — the deferred addressee-wake sweeper
 
 | Variable | Function | Default | What it does | How to disable / special |
@@ -320,6 +320,34 @@ The bot's tool is `ocr.pdf` (input: `name`, `base64`, optional `origin`, `source
 (`name`, `sizeBytes`, `pages`, `origin`, `sourceId`, `backend`, `chars`, `truncated`) — the text and bytes
 never enter the journal.
 
+## 1.6 — EVALS-A (reference tasks and the LLM judge)
+
+Settings of the module `server/src/myrmidon/evals/` (the 1.6 evals path: a seeded corpus of neutral
+reference tasks for the pilot role, an LLM judge behind the company's LLM gateway, scores stored in
+`myrmidon_eval_runs`, a threshold+repeat regression verdict). Reads are company-scoped; run mutations
+need a board actor. While the contour below is not configured, reads still work and mutations answer
+`503` with the names of the missing settings instead of guessing.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_EVALS_BASE_URL` | EVALS-A | unset (judge disabled) | Address of the company's LLM gateway contour (OpenAI-compatible, e.g. LiteLLM). Together with `MYRMIDON_EVALS_KEY_SECRET` it opens the judge path; without either the evals mutations answer `503` with the reason | Empty/unset — the judge is disabled (reads still work). The address may end with `/v1` (then it is not duplicated) |
+| `MYRMIDON_EVALS_KEY_SECRET` | EVALS-A | unset | **Name** of the company secret holding the gateway key (not the value). The value is read per company on every run; it never appears in the setting, logs or journal | Empty/unset — the judge is disabled |
+| `MYRMIDON_EVALS_MODEL` | EVALS-A | `qwen-plus-free` | The judge model behind the gateway. The 1.6 wave rule applies: a free DashScope model by default; paid models stay a deploy-repo concern | Any value the gateway serves |
+| `MYRMIDON_EVALS_TIMEOUT_SEC` | EVALS-A | `120` | Timeout of one judge chat-completions call (valid range 5 to 600) | Non-numeric, `0`, negative — the default is taken |
+| `MYRMIDON_EVALS_LANGFUSE` | EVALS-A | unset | Master flag for the Langfuse score export: `true` enables exporting run scores to Langfuse when the contour below is configured. Scoring is written locally (eval_runs) regardless of this flag | Empty/unset/anything but `true` — no Langfuse export, local scoring only |
+| `MYRMIDON_EVALS_LANGFUSE_BASE_URL` | EVALS-A | unset | Langfuse ingestion base URL (the `/api/public/ingestion` suffix is appended). Used only when `MYRMIDON_EVALS_LANGFUSE=true` | Empty — the export is a no-op |
+| `MYRMIDON_EVALS_LANGFUSE_KEY` | EVALS-A | unset | Langfuse public ingestion key. Used only when `MYRMIDON_EVALS_LANGFUSE=true` | Empty — the export is a no-op |
+| `MYRMIDON_EVALS_LANGFUSE_TIMEOUT_SEC` | EVALS-A | `30` | Timeout of the Langfuse ingestion request (from 1 to 600) | Non-numeric, `0`, negative — the default is taken |
+
+The board API is `GET/POST /api/myrmidon/companies/:companyId/evals/{tasks,seed,runs,runs/:runId,runs/:runId/confirm,verdict}`.
+The judge never executes code: for `code`-kind reference tasks the CI pass rate arrives as a request
+parameter and is folded into the aggregate as a separate score line.
+
+The operator guide for the whole path — seeding the corpus, running a subject,
+the promote/confirm/regress verdict with its threshold+repeat rule, the
+journal rows and the Langfuse export — is
+[guides/reference-task-evals.md](guides/reference-task-evals.md).
+
 ## EXTCASE-B — browser bridge to the client's extension
 
 Settings of the server module `server/src/myrmidon/browser-bridge/` (the first third-party case: browser
@@ -459,6 +487,11 @@ or above 0.02; `unknown` on probe failure. The evidence fields `deliveryRatio`
 and `legacyRejections` are additive parts of the JSON contract for the part D
 dedup key; fields without a source stay null and never block the computation.
 
+The check has two board surfaces, both reading the same report — see
+[guides/tracing-health.md](guides/tracing-health.md): the "LLM tracing" status
+card in Company settings and the operator attention signal that runs even when
+nobody has the card open.
+
 
 ## 1.6 — WIKI-CORTEX: company regulations in the wiki
 
@@ -475,15 +508,16 @@ Recorded here per the registry rule.
 
 ## TASK-PR-SYNC — a task settles once its pull requests merge
 
-A task whose `work_product` of type `pull_request` merged used to stay busy until
-someone noticed. The scheduler tick now runs a pass that refreshes each PR's
-state through the existing GitHub resolver and closes the task (`done`, one
-comment with the PR refs / merge sha / time, an activity row) when every PR has
-reached a terminal state and at least one merged and no post-deploy gate is still
-open. When none of them merged, the task goes back to its assignee (`in_progress`
-plus a comment) unless a newer comment already answered the closure. The sweep
-reads the same work-products surface the board uses; it adds no token or
-credential.
+A task whose `work_product` of type `pull_request` merged used to stay busy
+until someone noticed. The scheduler tick now runs a pass that refreshes each
+PR's state through the existing GitHub resolver and closes the task (`done`,
+one comment with the PR refs / merge sha / time, an activity row) when every
+PR has reached a terminal state and at least one merged and no post-deploy
+gate is still open. When none of them merged, the task goes back to its
+assignee (`in_progress` plus a comment) unless a newer comment already
+answered the closure. The sweep reads the same work-products surface the
+board uses; it adds no token or credential. Operator guide:
+[guides/task-pr-sync.md](guides/task-pr-sync.md).
 
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
@@ -491,7 +525,6 @@ credential.
 | `MYRMIDON_TASK_PR_SYNC_POLL_SEC` | TASK-PR-SYNC | `60` | Minimum spacing between two passes; the scheduler queue itself ticks more often | Values below 15 or non-numeric or fractional — the default (60) |
 | `MYRMIDON_TASK_PR_SYNC_BATCH_MAX` | TASK-PR-SYNC | `50` | How many candidate tasks one pass inspects at most (each task costs one GitHub resolve per PR) | From 1 to 500; values outside the range or non-numeric — the default |
 | `MYRMIDON_TASK_PR_SYNC_SETTLE_DISABLED` | TASK-PR-SYNC | unset (settling on) | Instance-wide lever to make the sweep read and log but never flip a task to `done` — for a deliberate post-deploy hold on every task at once. A task with its own post-deploy gate is already deferred per task (a pending card, a pending approval, or a monitor scheduled for the future) | `1`/`true`/`on`/`yes` — settling off; anything else — settling on. The per-task gate check cannot be disabled by this switch |
-
 
 ## TASK-PR-SYNC WAKE-GUARD — no run for a task whose pull requests all merged
 
@@ -508,3 +541,75 @@ database hit per wake.
 |---|---|---|---|---|
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_ENABLED` | WAKE-GUARD | `1` (on) | Master switch of the wake guard: on — an event-free wake to a settle-pending task is skipped instead of dispatching a run | `0`/`false`/`off`/`no` — disable (wakes dispatch runs as before). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_TTL_SEC` | WAKE-GUARD | `60` | How long a suppress decision stays cached for one task (matches the sweep's default poll); the cache holds at most 1000 issues, least-recently-used eviction | From 1 to 3600; non-numeric, non-positive or above the cap — the default (60) |
+
+## 1.6 — SKILL-LIFECYCLE: company skill lifecycle
+
+Settings of `server/src/myrmidon/skill-lifecycle/`. A company skill is
+`candidate`, `verified` or `deprecated`; only a verified revision is delivered
+to agents by default, a candidate goes to the pilot agent set, a deprecated
+skill reaches nobody. A skill with no lifecycle row keeps the pre-feature
+behaviour and reaches everyone. Promotion needs an approved approval of type
+`skill_promotion`; a rollback restores the previous verified revision on the
+next compile of every agent that uses the skill. The lifecycle API lives under
+`GET/POST /api/myrmidon/companies/:companyId/skill-lifecycle`.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_SKILL_PILOT_AGENTS` | SKILL-LIFECYCLE | unset (empty set) | Comma-separated agent ids that receive `candidate` skills. Any other agent gets a candidate withheld, with a profile warning; `verified` skills reach everyone regardless | Unset or blank — the pilot set is empty, so a candidate reaches nobody (the safe reading of "no pilot configured"). Only agent ids are matched; whitespace around an entry is trimmed |
+
+## 1.6 — AUTONOMY-MATRIX (Part A: matrix, enforcement, regulations API)
+
+The "Autonomy matrix" module (`server/src/myrmidon/autonomy/`, contract —
+`packages/shared/src/myrmidon-autonomy.ts`). The matrix maps role x action class to
+allowed / approval_required / forbidden; per-role regulations live in the same
+JSON store with draft -> approved revisions. Storage: no new DB table — the whole
+state sits under `instance_settings.general.myrmidonAutonomy` (the instance-settings
+JSON pattern), so vendor writes of `general` must preserve our key
+(`preserveAutonomyGeneralKey`, mounted in `server/src/services/instance-settings.ts`).
+
+API surface (company resolved by the access-hub rule: query `companyId`, else the
+caller's single active membership, 422 on ambiguity; reads company access,
+mutations board):
+
+- `GET /api/myrmidon/autonomy` -> `{ matrix, regulations, changeLog }`
+- `PATCH /api/myrmidon/autonomy/matrix` body `{ expectedVersion?, rules, defaults }` -> `{ matrix }` (409 on version mismatch)
+- `POST /api/myrmidon/autonomy/regulations` `{ role, title, bodyMarkdown }` -> regulation (draft, revision 1)
+- `PATCH /api/myrmidon/autonomy/regulations/:id` `{ title?, bodyMarkdown? }` -> new revision
+- `POST /api/myrmidon/autonomy/regulations/:id/approve` -> draft -> approved
+- `POST /api/myrmidon/autonomy/regulations/:id/revisions/:rev/restore` -> re-promote a past revision
+
+Change log: `activity_log` rows with actions `myrmidon.autonomy.*`, served as a ready
+array in the GET response. Factory default: every cell `allowed` (zero behavior change
+until an operator edits; a conservative preset is a follow-up). Enforcement seam:
+`server/src/myrmidon/autonomy/gate.ts` (`autonomyGate`) consults `resolveAutonomy` at the
+action point — forbidden refuses with a clear error, approval_required maps to the
+existing toolActionRequests + approval-card conveyor, allowed passes. Regulations UI
+(Part B) edits the matrix through this API.
+
+No environment variables, no new secrets. Remove: the autonomy tree, the export line in
+`packages/shared/src/index.ts`, the two marker lines in `app.ts`/`instance-settings.ts`
+and this section.
+## 1.6 — CTO-CHAT B (the board chat planner: owner text -> proposed epic)
+
+The planner behind the CTO chat (the 1.6 CTO-CHAT epic, part B): the owner's free text
+(`POST /api/myrmidon/cto-chat/plan`, body `{ "text": "..." }`, or the same call
+from the Telegram DM bridge) becomes a proposed epic with child tasks and
+per-task acceptance criteria. The proposal is a plan only: it validates against
+the shared zod contract before any card, and nothing is created until the
+owner accepts the `suggest_tasks` card on the standing Agent Chat conversation
+task. Off unless both the address and the key secret are set: with either
+missing the route answers a stable 503 `planner_disabled` with the names of the
+missing settings (names only, never values), and not a single request goes out.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_CTO_CHAT_BASE_URL` | 1.6-CTO-CHAT-B | unset (planner closed) | Address of the OpenAI-compatible LLM gateway (e.g. LiteLLM) the planner calls for one completion. Together with `MYRMIDON_CTO_CHAT_KEY_SECRET` it opens the path; without either the route answers 503 `planner_disabled` naming the missing settings | Empty/unset — the path is closed |
+| `MYRMIDON_CTO_CHAT_KEY_SECRET` | 1.6-CTO-CHAT-B | unset | **Name** of the company secret holding the gateway API key (not the value). The value is read on every call for the calling company; it never appears in the setting, logs, errors or the journal | Empty/unset — the path is closed. The secret is created by the company's operator in the "Secrets" section |
+| `MYRMIDON_CTO_CHAT_MODEL` | 1.6-CTO-CHAT-B | `dashscope-qwen-flash` | The model name sent to the gateway for the planning completion | Empty/unset — the default; an unknown name fails at the gateway and the route answers 400 `backend_failed` |
+| `MYRMIDON_CTO_CHAT_TIMEOUT_SEC` | 1.6-CTO-CHAT-B | `90` | Timeout of the planning request (raised to at least 5, capped at 600) | Non-numeric, `0`, negative or above the cap — the default (90) |
+| `MYRMIDON_CTO_CHAT_MAX_TASKS` | 1.6-CTO-CHAT-B | `8` | Ceiling on child tasks in one proposal (a proposal can never be unbounded work); the hard absolute cap is 20 | Non-numeric, `0`, negative or above 20 — the default (8) |
+
+The flow end to end — how the owner asks from the portal or the Telegram DM,
+what the proposal and the approval card look like, and what acceptance
+creates — is the operator guide
+[guides/cto-chat-planner.md](guides/cto-chat-planner.md).

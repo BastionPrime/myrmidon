@@ -53,11 +53,12 @@ timeout variables are the only knobs.
 `tracing-contract.myrmidon.test.mjs` runs the static assertions in the `checks`
 job on every tier (script exists, executable, `bash -n` clean, every image in
 the compose pinned to an exact `X.Y.Z` tag or a digest, loopback-only ports,
-the OTLP-only callback list, the exact-one-event assertions). The live lane runs
-in the `tracing-contract` job of `.github/workflows/myrmidon-ci.yml` — on main,
-on `workflow_dispatch`, and on a pull request that touches this directory —
-behind `TRACING_CONTRACT_LIVE=1`. Without that variable (or without a docker
-daemon) the live test skips cleanly, like the G4 contract check.
+the OTLP-only callback list, the exact-one-event assertions). The live lane is
+opt-in: it needs `TRACING_CONTRACT_LIVE=1` and a reachable docker daemon, and
+without either it skips cleanly, like the G4 contract check. A dedicated
+`tracing-contract` job in `.github/workflows/myrmidon-ci.yml` is what will run
+it in CI; that job is not in the workflow yet, so the live lane currently runs
+wherever the variable and a docker daemon are provided.
 
 ## Pinning
 

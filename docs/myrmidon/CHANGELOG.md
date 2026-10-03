@@ -8,7 +8,60 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
+## 1.6.0
+
+### CTO chat planner (CTO-CHAT B)
+
+- The board chat planner: one owner message in free text
+  (`POST /api/myrmidon/cto-chat/plan`, or the same planning step entered from
+  the owner's Telegram DM bridge) becomes a proposed epic with child tasks and
+  per-task acceptance criteria. The proposal is shown as the board's existing
+  `suggest_tasks` approval card on the standing conversation task, and
+  accepting the card is what creates the issues — nothing exists before
+  acceptance, no assignee is inferred, and a rejected or expired card creates
+  nothing. The planner is off unless `MYRMIDON_CTO_CHAT_BASE_URL` and
+  `MYRMIDON_CTO_CHAT_KEY_SECRET` are set; the gateway key is a company secret
+  read per call and never logged. The default model is the free
+  `dashscope-qwen-flash`; one proposal is capped at 8 child tasks (hard
+  ceiling 20) and one planning call is never retried. Operator guide:
+  [guides/cto-chat-planner.md](guides/cto-chat-planner.md). The portal chat
+  screen (part A) ships separately and calls the same route.
+
+### Reference-task evals (EVALS-A part A)
+
+- The evals path: a seeded corpus of neutral reference tasks for the pilot
+  role `engineer`, an LLM judge behind the company's LLM gateway (a free
+  DashScope model by default, one chat-completions call per task, strict JSON
+  parsing — an unparseable response scores zero with a `parseError` flag, not
+  invented points), per-task rubric scoring with the CI pass rate folded in
+  for `code` tasks, and a promote/confirm/regress verdict where a drop beyond
+  the threshold is only actionable after a confirmation run repeats it. The
+  judge never executes code. Scores live in `myrmidon_eval_runs`; the optional
+  Langfuse export is off by default and never blocks local scoring. Reads are
+  company-scoped, run mutations need a board actor, and an unconfigured
+  contour answers `503` with the names of the missing settings. The verdict
+  seam for the skill lifecycle (`candidate → verified → deprecated`, with
+  rollback) is exposed as `POST …/evals/verdict`; the merged lifecycle module
+  does not wire it to the board yet. Guide: [guides/reference-task-evals.md](guides/reference-task-evals.md).
+
 ## 1.5.0
+
+### Tracing health (TRACING-HEALTH)
+
+- The "LLM tracing" status card in Company settings and the operator attention
+  signal: the board reads the health report of the LiteLLM → Langfuse v4
+  tracing pipeline (`GET /api/myrmidon/tracing/health`, part C) and surfaces
+  it two ways. The card (below the Server console section) shows the dot and
+  state (`ok` / `ok (idle)` / `red` / `unknown` / `not enabled`), the reason
+  line, one null-aware line per evidence probe and the window span, refreshing
+  once a minute. A periodic sweep (`MYRMIDON_TRACING_SIGNAL_INTERVAL_SEC`,
+  default 300 s, off with the check itself) evaluates the same report for
+  every company and raises ONE attention card on the operator desk —
+  `degraded` is high, `unknown` is medium, `ok`/`idle` raise nothing; the
+  signal goes to the operator role, never the task owner. Dedup is by state:
+  recovery clears the card without dismissal bookkeeping, and the journal gets
+  one activity row per state transition only. Guide:
+  [guides/tracing-health.md](guides/tracing-health.md).
 
 ### Client connectors (the browser bridge)
 
@@ -77,6 +130,21 @@ version file to edit. Base Paperclip version is in the image label
   read the existing dashboard and sidebar-badges aggregates until the
   STATUS-STRIP endpoint exists. i18n keys `ui2.*` ship in en/ru (translated)
   and the other locales (English values until the translation pass).
+
+### Task PR sync
+
+- A task delivered by a pull request settles itself once its PRs merge
+  (#315): a periodic sweep (`server/src/myrmidon/task-pr-sync/`, ships
+  enabled) reads the task's own `pull_request` work products, refreshes each
+  PR's state through the existing GitHub resolver, and closes the task with
+  one neutral comment (PR refs, merge sha, time) when every PR is terminal
+  with at least one merged and no post-deploy gate (a pending card, a pending
+  approval or a future-scheduled monitor) is still open. Closed-without-merge
+  PRs send the task back to its assignee; superseded PR rows are ignored. And
+  the wake guard half (#339, post-1.5.0): an event-free wake to such a
+  settle-pending task is skipped (reason `wake_skipped_pr_settle_pending`)
+  instead of dispatching a run that would only race the settle. Operator
+  guide: [guides/task-pr-sync.md](guides/task-pr-sync.md).
 
 ## 1.4.0
 

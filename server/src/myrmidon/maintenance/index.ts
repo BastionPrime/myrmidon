@@ -37,13 +37,20 @@ export function maintenanceHeartbeatPort(heartbeat: ReturnType<typeof heartbeatS
       await heartbeat.resumeQueuedRuns();
     },
     async interruptRunForMaintenance(runId, windowId) {
-      await heartbeat.cancelRun(runId, "Interrupted by maintenance mode; retried after maintenance ends", {
+      const stopped = await heartbeat.cancelRun(runId, "Interrupted by maintenance mode; retried after maintenance ends", {
         errorCode: MAINTENANCE_INTERRUPT_ERROR_CODE,
         resultJson: { myrmidonMaintenance: { windowId } },
         eventMessage: "run interrupted by maintenance mode",
         // The retry below is the successor path; the admission gate holds it until exit.
         suppressImmediateRecovery: true,
       });
+      // cancelRun hands back the current row without throwing when its status
+      // write loses to a concurrent writer. A run that is still live was not
+      // interrupted: do not schedule a second execution next to it; fail so
+      // the window does not record it and the tick tries it again.
+      if (stopped && (stopped.status === "running" || stopped.status === "queued")) {
+        throw new Error(`run ${runId} is still ${stopped.status} after the maintenance interrupt`);
+      }
       const retry = await heartbeat.scheduleBoundedRetry(runId, {
         retryReason: MAINTENANCE_RETRY_REASON,
         wakeReason: MAINTENANCE_RETRY_WAKE_REASON,

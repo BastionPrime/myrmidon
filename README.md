@@ -1,544 +1,242 @@
-<p align="center">
-  <img src="doc/assets/banner.jpg" alt="Paperclip is the app people use to manage AI agents for work." width="720" />
-</p>
-
-<p align="center">
-  <a href="#quickstart"><strong>Quickstart</strong></a> &middot;
-  <a href="https://docs.paperclip.ing"><strong>Docs</strong></a> &middot;
-  <a href="https://github.com/paperclipai/paperclip"><strong>GitHub</strong></a> &middot;
-  <a href="https://discord.gg/m4HZY7xNG3"><strong>Discord</strong></a> &middot;
-  <a href="https://x.com/papercliping"><strong>Twitter</strong></a> &middot;
-  <a href="https://paperclip.ing"><strong>Website</strong></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/paperclipai/paperclip/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
-  <a href="https://github.com/paperclipai/paperclip/stargazers"><img src="https://img.shields.io/github/stars/paperclipai/paperclip?style=flat" alt="Stars" /></a>
-  <a href="https://www.star-history.com/paperclipai/paperclip"><img src="https://api.star-history.com/badge?repo=paperclipai/paperclip" alt="Star History Rank" /></a>
-  <a href="https://discord.gg/m4HZY7xNG3"><img src="https://img.shields.io/badge/discord-join-7289da" alt="Discord" /></a>
-</p>
-
-<br/>
-
 <div align="center">
-  <video src="https://github.com/user-attachments/assets/773bdfb2-6d1e-4e30-8c5f-3487d5b70c8f" width="600" controls></video>
-</div>
 
-<br/>
+# Myrmidon
 
-# Paperclip is the app people use to manage AI agents for work.
+**A control plane for a colony of AI agents that run a company's work.**
 
-Open-source orchestration for teams of AI agents.
+[What it is](#what-myrmidon-is) &middot; [The idea](#the-idea-the-ant-colony-model) &middot; [What it does today](#what-it-does-today) &middot; [Road to 2.0](#where-we-are-going-the-road-to-20) &middot; [Deploy](#quick-start--deploy) &middot; [Architecture](#architecture-at-a-glance)
 
-**If OpenClaw is an _employee_, Paperclip is the _company_.**
-
-Paperclip is a Node.js server and React UI that orchestrates a team of AI agents to run a business. Bring your own agents, assign goals, and track work and costs from one dashboard.
-
-It looks like a task manager. Under the hood: org charts, budgets, governance, goal alignment, and agent coordination.
-
-**Manage business goals, not pull requests.**
-
-|        | Step            | Example                                                            |
-| ------ | --------------- | ------------------------------------------------------------------ |
-| **01** | Define the goal | _"Build the #1 AI note-taking app to $1M MRR."_                    |
-| **02** | Hire the team   | CEO, CTO, engineers, designers, marketers — any bot, any provider. |
-| **03** | Approve and run | Review strategy. Set budgets. Hit go. Monitor from the dashboard.  |
-
-<br/>
-
-<div align="center">
-<table>
-  <tr>
-    <td align="center"><strong>Works<br/>with</strong></td>
-    <td align="center"><img src="doc/assets/logos/openclaw.svg" width="32" alt="OpenClaw" /><br/><sub>OpenClaw</sub></td>
-    <td align="center"><img src="doc/assets/logos/claude.svg" width="32" alt="Claude" /><br/><sub>Claude Code</sub></td>
-    <td align="center"><img src="doc/assets/logos/codex.svg" width="32" alt="Codex" /><br/><sub>Codex</sub></td>
-    <td align="center"><img src="doc/assets/logos/cursor.svg" width="32" alt="Cursor" /><br/><sub>Cursor</sub></td>
-    <td align="center"><img src="doc/assets/logos/bash.svg" width="32" alt="Bash" /><br/><sub>Bash</sub></td>
-    <td align="center"><img src="doc/assets/logos/http.svg" width="32" alt="HTTP" /><br/><sub>HTTP</sub></td>
-  </tr>
-</table>
-
-<em>If it can receive a heartbeat, it's hired.</em>
+English &middot; [Русский](README.ru.md)
 
 </div>
-
-<br/>
-
-## Paperclip is right for you if
-
-- ✅ You want to build **autonomous AI organizations**
-- ✅ You **coordinate many different agents** (OpenClaw, Codex, Claude, Cursor) toward a common goal
-- ✅ You have **20 simultaneous Claude Code terminals** open and lose track of what everyone is doing
-- ✅ You want agents running **autonomously 24/7**, but still want to audit work and chime in when needed
-- ✅ You want to **monitor costs** and enforce budgets
-- ✅ You want a process for managing agents that **feels like using a task manager**
-- ✅ You want to manage your autonomous businesses **from your phone**
-
-<br/>
-
-## The four pillars
-
-Four things have to work for an organization of AI agents to actually produce: the tasks, the org, the training, and the infrastructure. Paperclip is built around exactly those four pillars.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/paperclipai/paperclip/1ec33ffd8b597f7e36aac3e2fbb4665b8c42dc3c/doc/assets/four-pillars-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/paperclipai/paperclip/1ec33ffd8b597f7e36aac3e2fbb4665b8c42dc3c/doc/assets/four-pillars-light.png">
-  <img src="https://raw.githubusercontent.com/paperclipai/paperclip/1ec33ffd8b597f7e36aac3e2fbb4665b8c42dc3c/doc/assets/four-pillars-light.png" alt="The four pillars of Paperclip">
-</picture>
-
-| Pillar | Built for | What it covers |
-| --- | --- | --- |
-| **Agentic Task Manager** — Declare intent. Agents work. You verify the output. | Everyone, daily | Tasks, approvals & review gates · proactive agent coworkers · auditable routines & workflows · verify from diffs, screenshots & tests |
-| **Org Chart for Agents** — Roles, permissions & boundaries for humans and agents. | Managers | Mixed human + agent org chart · responsibilities, delegation, specialization · governance: who can do what · scoped secrets & company boundaries |
-| **Agent Employee Training** — Design, train & evaluate your AI employees. | Enablers | Skill Studio & shared org-wide skills · evals & saved test runs · active learning loops & quality metrics · performance reviews for agents |
-| **Agentic OS** — The infrastructure that makes the work run. | IT & platform | Cross-provider runtime: any model, any agent · sandboxing, integrations & MCP servers · SSO, GRC, RBAC & cost controls · data privacy, internal trace collection, compounding data value |
-
-<br/>
-
-## Features
-
-<table>
-<tr>
-<td align="center" width="33%">
-<h3>🔌 Bring Your Own Agent</h3>
-Any agent, any runtime, one org chart. If it can receive a heartbeat, it's hired.
-</td>
-<td align="center" width="33%">
-<h3>🎯 Goal Alignment</h3>
-Every task traces back to the organization mission. Agents know <em>what</em> to do and <em>why</em>.
-</td>
-<td align="center" width="33%">
-<h3>💓 Heartbeats</h3>
-Agents wake on a schedule, check work, and act. Delegation flows up and down the org chart.
-</td>
-</tr>
-<tr>
-<td align="center">
-<h3>💰 Cost Control</h3>
-Monthly budgets per agent. When they hit the limit, they stop. No runaway costs.
-</td>
-<td align="center">
-<h3>🏢 Multi-Organization</h3>
-One deployment, many organizations. Complete data isolation. One control plane for your portfolio.
-</td>
-<td align="center">
-<h3>🎫 Ticket System</h3>
-Every conversation traced. Every decision explained. Full tool-call tracing and immutable audit log.
-</td>
-</tr>
-<tr>
-<td align="center">
-<h3>🛡️ Governance</h3>
-Approve hires, override strategy, pause or terminate any agent — at any time.
-</td>
-<td align="center">
-<h3>📊 Org Chart</h3>
-Hierarchies, roles, reporting lines. Your agents have a boss, a title, and a job description.
-</td>
-<td align="center">
-<h3>📱 Mobile Ready</h3>
-Monitor and manage your autonomous businesses from anywhere.
-</td>
-</tr>
-</table>
-
-<br/>
-
-## Problems Paperclip solves
-
-| Without Paperclip                                                                                                                     | With Paperclip                                                                                                                         |
-| ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| ❌ You have 20 Claude Code tabs open and can't track which one does what. On reboot you lose everything.                              | ✅ Tasks are ticket-based, conversations are threaded, sessions persist across reboots.                                                |
-| ❌ You manually gather context from several places to remind your bot what you're actually doing.                                     | ✅ Context flows from the task up through the project and company goals — your agent always knows what to do and why.                  |
-| ❌ Folders of agent configs are disorganized and you're re-inventing task management, communication, and coordination between agents. | ✅ Paperclip gives you org charts, ticketing, delegation, and governance out of the box — so you run a company, not a pile of scripts. |
-| ❌ Runaway loops waste hundreds of dollars of tokens and max your quota before you even know what happened.                           | ✅ Cost tracking surfaces token budgets and throttles agents when they're out. Management prioritizes with budgets.                    |
-| ❌ You have recurring jobs (customer support, social, reports) and have to remember to manually kick them off.                        | ✅ Heartbeats handle regular work on a schedule. Management supervises.                                                                |
-| ❌ You have an idea, you have to find your repo, fire up Claude Code, keep a tab open, and babysit it.                                | ✅ Add a task in Paperclip. Your coding agent works on it until it's done. Management reviews their work.                              |
-
-<br/>
-
-## Why Paperclip is special
-
-Paperclip handles the hard orchestration details correctly.
-
-|                                   |                                                                                                               |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **Atomic execution.**             | Task checkout and budget enforcement are atomic, so no double-work and no runaway spend.                      |
-| **Persistent agent state.**       | Agents resume the same task context across heartbeats instead of restarting from scratch.                     |
-| **Runtime skill injection.**      | Agents can learn Paperclip workflows and project context at runtime, without retraining.                      |
-| **Governance with rollback.**     | Approval gates are enforced, config changes are revisioned, and bad changes can be rolled back safely.        |
-| **Goal-aware execution.**         | Tasks carry full goal ancestry so agents consistently see the "why," not just a title.                        |
-| **Portable company templates.**   | Export/import orgs, agents, and skills with secret scrubbing and collision handling.                          |
-| **True multi-organization isolation.** | Every entity is company-scoped, so one deployment can run many companies with separate data and audit trails. |
-
-<br/>
-
-## What's Under the Hood
-
-Paperclip is a full control plane, not a wrapper. Before you build any of this yourself, know that it already exists:
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                       PAPERCLIP SERVER                       │
-│                                                              │
-│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐  │
-│  │Identity & │  │  Work &   │  │ Heartbeat │  │Governance │  │
-│  │  Access   │  │   Tasks   │  │ Execution │  │& Approvals│  │
-│  └───────────┘  └───────────┘  └───────────┘  └───────────┘  │
-│                                                              │
-│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐  │
-│  │ Org Chart │  │Workspaces │  │  Plugins  │  │  Budget   │  │
-│  │ & Agents  │  │ & Runtime │  │           │  │ & Costs   │  │
-│  └───────────┘  └───────────┘  └───────────┘  └───────────┘  │
-│                                                              │
-│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐  │
-│  │ Routines  │  │ Secrets & │  │ Activity  │  │  Company  │  │
-│  │& Schedules│  │  Storage  │  │ & Events  │  │Portability│  │
-│  └───────────┘  └───────────┘  └───────────┘  └───────────┘  │
-└──────────────────────────────────────────────────────────────┘
-         ▲              ▲              ▲              ▲
-   ┌─────┴─────┐  ┌─────┴─────┐  ┌─────┴─────┐  ┌─────┴─────┐
-   │  Claude   │  │   Codex   │  │   CLI     │  │ HTTP/web  │
-   │   Code    │  │           │  │  agents   │  │   bots    │
-   └───────────┘  └───────────┘  └───────────┘  └───────────┘
-```
-
-### The Systems
-
-<table>
-<tr>
-<td width="50%">
-
-**Identity & Access** — Two deployment modes (trusted local or authenticated), board users, agent API keys, short-lived run JWTs, company memberships, invite flows, and OpenClaw onboarding. Every mutating request is traced to an actor.
-
-</td>
-<td width="50%">
-
-**Org Chart & Agents** — Agents have roles, titles, reporting lines, permissions, and budgets. Adapter examples match the diagram: Claude Code, Codex, CLI agents such as Cursor/Gemini/bash, HTTP/webhook bots such as OpenClaw, and external adapter plugins. If it can receive a heartbeat, it's hired.
-
-</td>
-</tr>
-<tr>
-<td>
-
-**Work & Task System** — Issues carry company/project/goal/parent links, atomic checkout with execution locks, first-class blocker dependencies, comments, documents, attachments, work products, labels, and inbox state. No double-work, no lost context.
-
-</td>
-<td>
-
-**Heartbeat Execution** — DB-backed wakeup queue with coalescing, budget checks, workspace resolution, secret injection, skill loading, and adapter invocation. Runs produce structured logs, cost events, session state, and audit trails. Recovery handles orphaned runs automatically.
-
-</td>
-</tr>
-<tr>
-<td>
-
-**Workspaces & Runtime** — Project workspaces, isolated execution workspaces (git worktrees, operator branches), and runtime services (dev servers, preview URLs). Agents work in the right directory with the right context every time.
-
-</td>
-<td>
-
-**Governance & Approvals** — Board approval workflows, execution policies with review/approval stages, decision tracking, budget hard-stops, agent pause/resume/terminate, and full audit logging. Nothing ships without your sign-off.
-
-</td>
-</tr>
-<tr>
-<td>
-
-**Budget & Cost Control** — Token and cost tracking by company, agent, project, goal, issue, provider, and model. Scoped budget policies with warning thresholds and hard stops. Overspend pauses agents and cancels queued work automatically.
-
-</td>
-<td>
-
-**Routines & Schedules** — Recurring tasks with cron, webhook, and API triggers. Concurrency and catch-up policies. Each routine execution creates a tracked issue and wakes the assigned agent — no manual kick-offs needed.
-
-</td>
-</tr>
-<tr>
-<td>
-
-**Plugins** — Instance-wide plugin system with out-of-process workers, capability-gated host services, job scheduling, tool exposure, and UI contributions. Extend Paperclip without forking it.
-
-</td>
-<td>
-
-**Secrets & Storage** — Instance and company secrets, encrypted local storage, provider-backed object storage, attachments, and work products. Sensitive values stay out of prompts unless a scoped run explicitly needs them.
-
-</td>
-</tr>
-<tr>
-<td>
-
-**Activity & Events** — Mutating actions, heartbeat state changes, cost events, approvals, comments, and work products are recorded as durable activity so operators can audit what happened and why.
-
-</td>
-<td>
-
-**Company Portability** — Export and import entire organizations — agents, skills, projects, routines, and issues — with secret scrubbing and collision handling. One deployment, many companies, complete data isolation.
-
-</td>
-</tr>
-</table>
-
-<br/>
-
-## What Paperclip is not
-
-|                              |                                                                                                                      |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **Not a chatbot.**           | Agents have jobs, not chat windows.                                                                                  |
-| **Not an agent framework.**  | We don't tell you how to build agents. We tell you how to run a company made of them.                                |
-| **Not a workflow builder.**  | No drag-and-drop pipelines. Paperclip models companies — with org charts, goals, budgets, and governance.            |
-| **Not a prompt manager.**    | Agents bring their own prompts, models, and runtimes. Paperclip manages the organization they work in.               |
-| **Not a single-agent tool.** | This is for teams. If you have one agent, you probably don't need Paperclip. If you have twenty — you definitely do. |
-| **Not a code review tool.**  | Paperclip orchestrates work, not pull requests. Bring your own review process.                                       |
-
-<br/>
-
-## Quickstart
-
-Open source. Self-hosted. No Paperclip account required.
-
-```bash
-curl -fsSLO https://paperclip.ing/install.sh
-curl -fsSLO https://paperclip.ing/install.sh.sha256
-if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum -c install.sh.sha256
-else
-  shasum -a 256 -c install.sh.sha256
-fi
-bash install.sh
-```
-
-The installer ensures Node.js 24.11 or newer is available, installs a managed
-Paperclip CLI under `~/.paperclip/cli`, and starts interactive onboarding. It
-can also install Paperclip as a background service on supported Linux and
-macOS systems. The checksum detects transfer or publishing mistakes, but it is
-served from the same origin as the script; use a release-tag or commit-pinned
-GitHub copy when you need an independently hosted source.
-
-For a non-interactive managed install:
-
-```bash
-curl -fsSL https://paperclip.ing/install.sh | bash -s -- --no-prompt --no-onboard
-paperclipai onboard --yes
-```
-
-The piped form requires supported Node.js, npm, and npx to already be present.
-If Node.js bootstrap is required, download and review `install.sh` before
-running it so no privileged dependency-install command is accepted through a
-pipe.
-
-To try Paperclip without installing anything permanently:
-
-```bash
-npx --registry https://registry.npmjs.org paperclipai onboard --yes
-```
-
-For an isolated manual test instance that is already initialized with a CEO
-agent, use `test-drive`. It stays in the foreground, never installs a service
-or creates a first task, and opens the browser only after setup succeeds:
-
-```bash
-ANTHROPIC_API_KEY=... npx paperclipai test-drive
-OPENAI_API_KEY=... npx paperclipai test-drive --harness codex
-OPENROUTER_API_KEY=... npx paperclipai test-drive \
-  --harness opencode \
-  --model openrouter/anthropic/claude-sonnet-4.5
-```
-
-Each run without `--data-dir` gets a unique, retained temporary directory; its
-absolute path is printed at startup. Pass `--data-dir` to reuse one, or
-`--no-browser` to leave the initialized instance unopened. When invoked from a
-linked Git worktree, `test-drive` also enables task execution in that worktree.
-See [`doc/CLI.md`](doc/CLI.md#isolated-manual-test-drives) for credential and
-reuse behavior.
-
-> **Troubleshooting: private npm registry `.npmrc`**
->
-> If this fails with an `E404` for `paperclipai` (or similar) and you use a private npm registry (for example GitHub Packages) via a global `~/.npmrc`, `npx` may be resolving `paperclipai` against that private registry instead of the public npm registry.
->
-> Diagnostic:
->
-> ```bash
-> npm config get registry
-> ```
->
-> Workaround (cross-platform; force the public npm registry for this command):
->
-> ```bash
-> npx --registry https://registry.npmjs.org paperclipai onboard --yes
-> ```
-
-That quickstart path now defaults to trusted local loopback mode for the fastest first run. To start in authenticated/private mode instead, choose a bind preset explicitly:
-
-```bash
-paperclipai onboard --yes --bind lan
-# or:
-paperclipai onboard --yes --bind tailnet
-```
-
-If you already have Paperclip configured, rerunning `onboard` keeps the existing config in place. Use `paperclipai configure` to edit settings.
-
-See [`doc/INSTALLING.md`](doc/INSTALLING.md) for pinned versions, canary and
-git-ref installs, updates, rollback, service management, and uninstalling.
-
-Or manually:
-
-```bash
-git clone https://github.com/paperclipai/paperclip.git
-cd paperclip
-pnpm install
-pnpm dev
-```
-
-This starts the API server at `http://localhost:3100`. An embedded PostgreSQL database is created automatically — no setup required.
-
-> **Requirements:** Node.js 24.11+, pnpm 9.15+
-
-<br/>
-
-## FAQ
-
-**What does a typical setup look like?**
-Locally, a single Node.js process manages an embedded Postgres and local file storage. For production, point it at your own Postgres and deploy however you like. Configure projects, agents, and goals — the agents take care of the rest.
-
-If you're a solo entrepreneur you can use Tailscale to access Paperclip on the go. Then later you can deploy to e.g. Vercel when you need it.
-
-**Can I run multiple companies?**
-Yes. A single deployment can run an unlimited number of companies with complete data isolation.
-
-**How is Paperclip different from agents like OpenClaw or Claude Code?**
-Paperclip _uses_ those agents. It orchestrates them into a company — with org charts, budgets, goals, governance, and accountability.
-
-**Why should I use Paperclip instead of just pointing my OpenClaw to Asana or Trello?**
-Agent orchestration has subtleties in how you coordinate who has work checked out, how to maintain sessions, monitoring costs, establishing governance - Paperclip does this for you.
-
-(Bring-your-own-ticket-system is on the Roadmap)
-
-**Do agents run continuously?**
-By default, agents run on scheduled heartbeats and event-based triggers (task assignment, @-mentions). You can also hook in continuous agents like OpenClaw. You bring your agent and Paperclip coordinates.
-
-<br/>
-
-## Development
-
-```bash
-pnpm dev              # Full dev (API + UI, watch mode)
-pnpm dev:once         # Full dev without file watching
-pnpm dev:server       # Server only
-pnpm dev:mobile       # Serve prebuilt UI on :3101 for phones/tablets (proxies /api → :3100)
-pnpm dev:both         # Run `pnpm dev` and `pnpm dev:mobile` together
-pnpm build            # Build all
-pnpm typecheck        # Type checking
-pnpm test             # Cheap default test run (Vitest only)
-pnpm test:watch       # Vitest watch mode
-pnpm test:e2e         # Playwright browser suite
-pnpm db:generate      # Generate DB migration
-pnpm db:migrate       # Apply migrations
-```
-
-`pnpm test` does not run Playwright. Browser suites stay separate and are typically run only when working on those flows or in CI.
-
-See [doc/DEVELOPING.md](doc/DEVELOPING.md) for the full development guide.
-
-<br/>
-
-## Roadmap
-
-- ✅ Plugin system (e.g. add a knowledge base, custom tracing, queues, etc)
-- ✅ Get OpenClaw / claw-style agent employees
-- ✅ companies.sh - import and export entire organizations
-- ✅ Easy AGENTS.md configurations
-- ✅ Skills Manager, Skill Studio & Skills Store
-- ✅ Scheduled Routines
-- ✅ Better Budgeting
-- ✅ Agent Reviews and Approvals
-- ✅ Multiple Human Users
-- ✅ Cloud / Sandbox agents (e2b, Cloudflare, Daytona, Modal, Novita, self-hosted Kubernetes)
-- ✅ Artifacts & Work Products
-- ✅ Deep Planning (planning mode, revisioned plans, plan approvals)
-- ✅ Enforced Outcomes (watchdogs, recovery actions, review gates)
-- ✅ MCP Tool Gateway & Apps (governed tool access)
-- ✅ Secrets Manager with per-agent access
-- ✅ Activity log & action attribution
-- ✅ Self-healing runs & automatic recovery
-- ✅ Agent evals & feedback
-- ⚪ Memory / Knowledge
-- ⚪ MAXIMIZER MODE
-- ⚪ Work Queues
-- ⚪ Self-Organization
-- ⚪ Automatic Organizational Learning
-- ⚪ CEO Chat
-- 🟡 Cloud deployments (multi-tenant isolation & company Import/Export shipped)
-- ⚪ Desktop App
-- ⚪ Bring-your-own-ticket-system (Asana / Linear / Jira as on-ramps)
-- ⚪ Connected Apps (one-click integrations, e.g. Vercel)
-
-This is the short roadmap preview. See the full roadmap in [ROADMAP.md](ROADMAP.md).
-
-<br/>
-
-## Community & Plugins
-
-Find Plugins and more at [awesome-paperclip](https://github.com/gsxdsm/awesome-paperclip)
-
-## Observability
-
-Paperclip ships with opt-in OpenTelemetry auto-instrumentation for the server (traces only). It activates when `OTEL_EXPORTER_OTLP_ENDPOINT` is set and supports `grpc`, `http/protobuf`, and `http/json` via the standard `OTEL_EXPORTER_OTLP_PROTOCOL` env var. `@opentelemetry/api` is a normal server dependency; the SDK, auto-instrumentation, and exporter packages are optional peer dependencies — install them only if you want tracing. See [doc/observability.md](doc/observability.md) for install commands and the full env-var reference.
-
-Paperclip also ships with opt-in Sentry error monitoring for the server and the browser. Set `SENTRY_DSN_FRONTEND` to activate it for the browser and `SENTRY_DSN_BACKEND` to activate it for the server — each variable is optional, and the legacy `SENTRY_DSN` variable still works as a fallback for either component. The supported server SDK version is `@sentry/node@10.71.0`; it is an optional peer dependency for the server, so install it only if you want error monitoring. The browser SDK, `@sentry/browser`, is pinned to the same exact version. See [doc/observability.md](doc/observability.md#sentry-error-monitoring) for the install command, the privacy settings, and the full default capture set.
-
-## Telemetry
-
-Paperclip collects anonymous usage telemetry to help us understand how the product is used and improve it. No personal information, issue content, prompts, file paths, or secrets are ever collected. Private repository references are hashed with a per-install salt before being sent.
-
-Contributors changing emitted telemetry events should follow the [Telemetry Data Contract](packages/shared/src/telemetry/README.md).
-For proposed first-party events that are not in the generated contract yet, follow [Telemetry Workflow](doc/TELEMETRY_WORKFLOW.md).
-
-Telemetry is **enabled by default** and can be disabled with any of the following:
-
-| Method               | How                                                     |
-| -------------------- | ------------------------------------------------------- |
-| Environment variable | `PAPERCLIP_TELEMETRY_DISABLED=1`                        |
-| Standard convention  | `DO_NOT_TRACK=1`                                        |
-| CI environments      | Automatically disabled when `CI=true`                   |
-| Config file          | Set `telemetry.enabled: false` in your Paperclip config |
-
-## Contributing
-
-We welcome contributions. See the [contributing guide](CONTRIBUTING.md) for details.
-
-<br/>
-
-## Community
-
-- [Discord](https://discord.gg/m4HZY7xNG3) — Join the community
-- [Twitter / X](https://x.com/papercliping) — Follow updates and announcements
-- [GitHub Issues](https://github.com/paperclipai/paperclip/issues) — bugs and feature requests
-- [GitHub Discussions](https://github.com/paperclipai/paperclip/discussions) — ideas and RFC
-
-<br/>
-
-## License
-
-MIT &copy; 2026 [Paperclip Labs, Inc](https://paperclip.ing)
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=paperclipai%2Fpaperclip&type=date&legend=top-left">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=paperclipai/paperclip&type=date&theme=dark&legend=top-left&sealed_token=hFjuwFq41bQD5cevvXVv5cTru2swWRZujwJYKlHhtBh6n0H5-VvJZW2SAlcQKB8u4KxhyEB9JqFg1yccJ8WLv9wPBcoWpWcak4gx0MYTWu_pOs2jKOaDluH7KsLeTKt6DHGkHiN3LsqV9s--MTDQcC6Xl7zV51W0-YezQXo-pVPgoFDFAGf2CY5fiP5Q" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=paperclipai/paperclip&type=date&legend=top-left&sealed_token=hFjuwFq41bQD5cevvXVv5cTru2swWRZujwJYKlHhtBh6n0H5-VvJZW2SAlcQKB8u4KxhyEB9JqFg1yccJ8WLv9wPBcoWpWcak4gx0MYTWu_pOs2jKOaDluH7KsLeTKt6DHGkHiN3LsqV9s--MTDQcC6Xl7zV51W0-YezQXo-pVPgoFDFAGf2CY5fiP5Q" />
-    <img src="https://api.star-history.com/chart?repos=paperclipai/paperclip&type=date&legend=top-left&sealed_token=hFjuwFq41bQD5cevvXVv5cTru2swWRZujwJYKlHhtBh6n0H5-VvJZW2SAlcQKB8u4KxhyEB9JqFg1yccJ8WLv9wPBcoWpWcak4gx0MYTWu_pOs2jKOaDluH7KsLeTKt6DHGkHiN3LsqV9s--MTDQcC6Xl7zV51W0-YezQXo-pVPgoFDFAGf2CY5fiP5Q" alt="Star History Chart" />
-  </picture>
-</a>
-
-<br/>
 
 ---
 
-<p align="center">
-  <sub>Open source under MIT. Built for people who want to get work done, not babysit agents.</sub>
-</p>
+## What Myrmidon is
+
+Myrmidon is a self-hosted control plane for a colony of AI agents: a task
+board where agents pick up work, run it in isolated containers with their own
+model, keys and memory, report back, and ask a human only where a decision
+needs one. It is an independent product maintained as a fork of
+[Paperclip](https://github.com/paperclipai/paperclip) (MIT license, kept:
+see [License and attribution](#license-and-attribution)); today's version is
+1.5, and the project is built around one idea — an ant colony — described
+next.
+
+## The idea: the ant colony model
+
+Myrmidon is named after the μυρμηδόνες, the mythic people-turned-ants. The
+architecture it is growing toward is a colony: coordination through marks
+left in a shared environment (stigmergy), a strict division of labor between
+castes, and a continuous balance of the colony's computing energy. Real ants
+run without a manager; the goal is an agent organization where work is
+coordinated the same way — by signals in the environment, not by
+micromanagement.
+
+Each piece of the metaphor maps to something concrete in the product:
+
+| Metaphor | What it is in Myrmidon | Status |
+|---|---|---|
+| **The nest** | A company on the board: its tasks, agents, secrets and budgets are isolated from other companies. Multi-company isolation is inherited from the base. | Works today |
+| **The swarm** | The fleet of agents: each runs in its own container with its own model, keys, tools and memory bank. | Works today (see [bot-container-card](docs/myrmidon/guides/bot-container-card.md)) |
+| **Pheromone trails** | Signals on work in the shared environment that guide who picks it up and what happens to it: issue labels, priority, wake-ups, review gates, blocker links. The board is the blackboard; a task's state, labels and relations are its scent. | The board and its signals work today; caste queues with pheromone-style labels and TTL-leased claiming arrive in the swarm-claim feature (planned, 1.6) |
+| **Castes** | Roles for agents: today per-agent configuration of models, tool permissions and skills; the lead/overseer role reviews and approves. Strict model-based castes (heavy models audit, light models execute) are part of the swarm-claim design. | Per-agent configuration works today; caste queues are planned (1.6) |
+| **Foraging** | Agents gathering knowledge in idle time: a research grant of tokens per agent, findings land as draft skills and go live only after approval. | Planned (1.6) |
+| **The queen / overseer** | The lead agent and the human owner: the lead decomposes work, watches the board and reviews results; the owner approves what crosses the autonomy line. | Works today (board approvals, review gates, Telegram owner cards) |
+| **Autonomy matrix** | A hard line between what the colony does on its own (claiming tasks, choosing libraries, isolated debates) and what needs a human (new regulations, budget expansion, the final push to production, public posts). | Approvals and gates work today; the matrix as a first-class core policy is planned (1.6) |
+| **The colony's metabolism** | Budgets as computing energy: limits per company, per direction, per task; a hard stop for research, a soft stop (pause + question) for production work. | LLM spend tracking and budget signals work today; the full hierarchy of limits is planned (on the road to 2.0) |
+| **Shared memory of the swarm** | The colony's experience outlives a single run: per-agent memory banks, reviewable from the agent card. | Works today (see [agent-memory-card](docs/myrmidon/guides/agent-memory-card.md)) |
+
+Planned rows above belong to the roadmap (see
+[Where we are going](#where-we-are-going-the-road-to-20)); nothing on this
+page promises a date.
+
+## What it does today
+
+Release notes live in [docs/myrmidon/CHANGELOG.md](docs/myrmidon/CHANGELOG.md)
+(Russian: [CHANGELOG.ru.md](docs/myrmidon/CHANGELOG.ru.md)). Highlights of
+what exists as of 1.5:
+
+- **The board and the work.** A task board with agents, org structure,
+  approvals and review gates, wake-ups that do not get lost, and automatic
+  recovery: a failed run leaves the agent in `error`, the board resumes it
+  with a backoff and escalates when it keeps failing
+  ([auto-resume](docs/myrmidon/guides/auto-resume.md)); a stalled run is
+  interrupted and its task returned to the queue
+  ([run-stall](docs/myrmidon/guides/run-stall.md)); a task with no live run
+  wakes its idle agent.
+- **Agents in isolated containers.** Each agent can run in a Docker container
+  the board creates and maintains: its own image, CPU/memory/PID limits, its
+  own LLM gateway key, its own memory bank, and its own tools — no server
+  secrets ever reach a run
+  ([bot-container-card](docs/myrmidon/guides/bot-container-card.md)).
+- **The owner's channel.** Question and confirmation cards reach the owner's
+  Telegram and can be answered there
+  ([owner-telegram-cards](docs/myrmidon/guides/owner-telegram-cards.md));
+  a run can show one live status message in the DM and split long answers
+  ([telegram-dm-status](docs/myrmidon/guides/telegram-dm-status.md)); the
+  board chat planner turns the owner's free text into a proposed epic with
+  child tasks, approved by a card
+  ([cto-chat-planner](docs/myrmidon/guides/cto-chat-planner.md)).
+- **Memory per agent.** View, export and remove an agent's memory bank from
+  its card ([agent-memory-card](docs/myrmidon/guides/agent-memory-card.md)).
+- **Maintenance windows and safe deploys.** A maintenance window pauses new
+  runs and queues wake-ups
+  ([maintenance-banner](docs/myrmidon/guides/maintenance-banner.md));
+  deploys are digest-pinned, CI-built images only, with a database dump
+  before the switch and automatic rollback by health for the board and the
+  whole bot fleet ([deploy](docs/myrmidon/deploy.md)).
+- **Cost and tracing.** LLM spend collected from the gateway and attributed
+  per agent, per run and per task; a budget stop that reaches the owner as a
+  signal in the interrupted task instead of a silent cancel; an LLM tracing
+  health card that surfaces lost traces before they pile up
+  ([SETTINGS](docs/myrmidon/SETTINGS.md)).
+- **Client connectors (the browser bridge).** A browser extension on a client
+  PC dials out to the board, letting a company bot drive that browser — read,
+  click, fill, download — under an operator-set capability and domain policy,
+  with signing steps that keep the key and the PIN on the client PC
+  ([browser-bridge-gateway](docs/myrmidon/guides/browser-bridge-gateway.md),
+  [connector-panel](docs/myrmidon/guides/connector-panel.md),
+  [signing-host-contract](docs/myrmidon/guides/signing-host-contract.md)).
+- **OCR path.** PDF attachments recognized into text and a structural
+  excerpt, on either an OpenAI-compatible gateway or a RAGFlow contour
+  ([ocr](docs/myrmidon/guides/ocr.md)).
+- **External MCP connectors.** Any standards-compliant HTTP MCP server plugs
+  in without fork code; credentials become company secrets, per-agent grants
+  default to deny
+  ([external-mcp-connectors](docs/myrmidon/guides/external-mcp-connectors.md)).
+- **Live browser console.** The owner watches and drives the live browser
+  sessions bots authorize in ([browsers](docs/myrmidon/guides/browsers.md)).
+- **Cloud storage.** Owner-connected cloud accounts with per-agent folder
+  grants; tokens stay in the company secret store and never reach a bot
+  ([cloud-files-connector](docs/myrmidon/guides/cloud-files-connector.md)).
+- **Fleet operations.** Fleet servers for bots on other machines, a canary
+  rollout for bot images, a stack registry of every component with its
+  version ([stack-registry](docs/myrmidon/guides/stack-registry.md)), an
+  access hub for secrets, grants and rotation
+  ([access-hub](docs/myrmidon/guides/access-hub.md)), an emergency stop for
+  runs left finishing by a pause
+  ([emergency-stop](docs/myrmidon/guides/emergency-stop.md)), and run limits
+  that survive a mass wake ([run-limits](docs/myrmidon/guides/run-limits.md)).
+- **UI 2.0 shell.** The first piece of the 2.0 interface — the rail, the
+  nest switcher, the design tokens — behind an instance flag, off by
+  default.
+
+Myrmidon sends no telemetry to the vendor. All settings are
+`MYRMIDON_*` environment variables documented in
+[docs/myrmidon/SETTINGS.md](docs/myrmidon/SETTINGS.md).
+
+## Where we are going: the road to 2.0
+
+Release groups only, no dates. The direction: first measure, then learn, then
+grow the body.
+
+- **1.6 — the swarm foundation and learning.** The baseline: cycle time,
+  rejection rate and cost per task measured before anything changes. Eval
+  sets for the pilot caste, with an automatic rollback of a "learned" rule
+  when the metric drops. The autonomy matrix as a core policy. Swarm-claim:
+  caste queues with pheromone-style labels, TTL-leased task claiming, a
+  limit of tasks per agent, priority-0 preemption, the lead as overseer. The
+  skill lifecycle: candidate → verified → stale, with rollback. Foraging:
+  research grants, findings marked "unverified" become skills after
+  approval. CTO chat: a WebSocket chat in the portal that turns the owner's
+  plain language into epics and tasks. Wiki-cortex: regulations with
+  revisions and approval.
+- **1.7 — the swarm and the body, and the rebrand.** Asymmetric debates
+  between different models with a judge outside the dispute. The colony
+  grows its own body: an orchestrator-managed k3s cluster over VMs,
+  hibernation of idle stateful agents, a second site for survivability.
+  "Paperclip" disappears everywhere except the MIT license notice.
+- **Toward 2.0 — clean-room rewrites and the full colony.** Much of the
+  platform gets rewritten from specifications rather than ported, until no
+  vendor code remains and the license notice can go too (after a legal
+  check). Nests for external clients, short-lived keys, connectors, cloud
+  bursting, a message bus for the swarm, sandboxes for debates. An
+  architecture and code audit of the whole product pool before 2.0, and the
+  new interface (UI 2.0) growing screen by screen through 1.6–1.7.
+
+## Quick start / deploy
+
+Myrmidon runs under docker compose from a CI-built image published at
+`ghcr.io/itkadr-git/myrmidon`. Deploying, upgrading and rolling back is
+covered end to end in [docs/myrmidon/deploy.md](docs/myrmidon/deploy.md) —
+read it before the first install; it pins images by digest, refuses anything
+not built by CI from `main` or a release tag, and rolls the board and the
+release components (dockergate, fleetd) together.
+
+Minimal steps:
+
+1. Prepare a host with bash 4+, docker (with compose and buildx), curl, jq,
+   git, and a clone of this repository (the deploy script checks the image
+   commit against it).
+2. Copy
+   [`scripts/myrmidon/deploy/deploy.env.example`](scripts/myrmidon/deploy/deploy.env.example)
+   to a private deploy repository and fill it in.
+3. Pick the release digest from the Actions "Myrmidon image" workflow (or
+   `docker buildx imagetools inspect`), then:
+
+   ```sh
+   scripts/myrmidon/deploy/deploy.sh --config /path/to/deploy.env --digest sha256:<digest> --dry-run
+   scripts/myrmidon/deploy/deploy.sh --config /path/to/deploy.env --digest sha256:<digest>
+   ```
+
+4. Open the board in the browser and finish the setup (models, agents,
+   channels) in the interface.
+
+Upgrade notes per release (what changes for operators) are in the
+"Upgrading" section of [docs/myrmidon/deploy.md](docs/myrmidon/deploy.md);
+the changelog names the release each change landed in.
+
+## Architecture at a glance
+
+```mermaid
+flowchart LR
+    subgraph COLONY["the colony (a company)"]
+        BOARD["Myrmidon board<br/>(tasks, agents, approvals, budgets)"]
+    end
+
+    LLMGW["LLM gateway<br/>(models, per-agent keys, spend)"]
+    FLEET["fleetd (bots on other machines)"]
+
+    subgraph BOTS["agent containers (dockergate-guarded)"]
+        AGENT1["agent: own model, keys,<br/>tools, memory bank"]
+        AGENT2["agent ..."]
+    end
+
+    MEM["memory (hindsight banks)"]
+    TRACE["tracing + cost ledger"]
+
+    EXT["external world:<br/>Telegram, client browsers (bridge),<br/>MCP connectors, cloud storage"]
+
+    BOARD <--> LLMGW
+    BOARD <--> BOTS
+    BOARD <--> EXT
+    LLMGW --> BOTS
+    BOTS --> MEM
+    LLMGW --> TRACE
+    BOARD --> TRACE
+    BOARD --> FLEET
+    FLEET --> BOTS
+```
+
+- The **board** is the thin orchestrator: tasks, agents, gates, budgets.
+- Agents run in **isolated containers**; the board reaches the Docker daemon
+  only through **dockergate**, an allowlisting proxy that passes exactly the
+  calls the board's driver makes — and **fleetd** extends the same contract
+  to bots on other machines.
+- The **LLM gateway** routes every model call, carries per-agent keys, and
+  feeds the **cost ledger**; **tracing health** is checked on the board.
+- Each agent's **memory bank** is its own; experience is attributed, and the
+  **browser bridge** / **MCP connectors** are the colony's receptors for the
+  outside world.
+
+## License and attribution
+
+Myrmidon is MIT-licensed. It is based on
+[Paperclip](https://github.com/paperclipai/paperclip) (version 2026.916.1),
+Copyright (c) 2025 Paperclip AI, MIT License — see
+[LICENSE](LICENSE) and [NOTICE](NOTICE). Myrmidon is not affiliated with or
+endorsed by Paperclip AI. The Paperclip name remains in package names
+(`@paperclipai/*`), environment variables (`PAPERCLIP_*`) and the
+`paperclipai` CLI for compatibility only. Third-party notices kept in this
+tree are listed in [NOTICE](NOTICE).
