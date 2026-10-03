@@ -249,7 +249,7 @@ describe("myrmidon(BOT-RUNTIME-TUNING D) sweep", () => {
     const entries = [
       ...Array.from({ length: 15 }, (_, i) => entry({ requestId: `req-a-${i}`, model: "model-primary" })),
       ...Array.from({ length: 10 }, (_, i) => entry({ requestId: `req-a-o-${i}`, model: "model-swapped" })),
-      ...Array.from({ length: 10 }, (_, i) => entry({ requestId: `req-b-o-${i}`, apiKey: gatewayKeyHash(KEY_B), model: "model-swapped" })),
+      ...Array.from({ length: 20 }, (_, i) => entry({ requestId: `req-b-o-${i}`, apiKey: gatewayKeyHash(KEY_B), model: "model-swapped" })),
     ];
     const result = await sweepModelFallbackSignals(deps(entries), SETTINGS);
     expect(result.signals).toBe(2);
