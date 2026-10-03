@@ -26,6 +26,31 @@ version file to edit. Base Paperclip version is in the image label
   process-level signal registry (no new store); cards fade after
   `MYRMIDON_STALE_BLOCK_SIGNAL_TTL_MS` (default 24 h).
 
+### Bot runtime tuning from the profile compiler (BOT-RUNTIME-TUNING part B)
+
+- The bot profile compiler writes three settings into each bot's
+  `hermes/config.yaml` that it never wrote before:
+  `compression.threshold_tokens` (an absolute token cap — Hermes compresses
+  at the lower of its ratio threshold and this count, so a long session on a
+  large-window model no longer grows to half the window before compacting),
+  `model.context_length` (the context window of the card's model, from the
+  card's own `models.contextLength` or the instance's
+  `MYRMIDON_BOT_MODEL_CONTEXT_LENGTH` alias map), and the auxiliary models
+  `auxiliary.title_generation.model` / `auxiliary.compression.model` (the
+  title generator and the compression summarizer stop riding the main,
+  expensive model). Instance settings:
+  `MYRMIDON_BOT_COMPRESSION_THRESHOLD_TOKENS`,
+  `MYRMIDON_BOT_MODEL_CONTEXT_LENGTH`,
+  `MYRMIDON_BOT_AUX_TITLE_MODEL`, `MYRMIDON_BOT_AUX_COMPRESSION_MODEL`.
+  The card's entry always wins over the instance setting; unset stays unset
+  (no compiler-invented defaults). Values are validated in ranges at compile
+  time (10 000–2 000 000 for the token cap, 8 000–10 000 000 for the context
+  window): an out-of-range or non-integer value is dropped with a profile
+  warning in the container activity log — never a compile failure. Settings
+  are read on every profile build, and a change restarts the affected bot
+  containers on the next pass. Settings documentation:
+  [SETTINGS.md](SETTINGS.md) § Bot containers.
+
 ### Board administrators from agents (ADMIN-AGENT part C)
 
 - The UI half of making an agent a board administrator. The agent card's
@@ -236,6 +261,17 @@ version file to edit. Base Paperclip version is in the image label
   gateway adapter; the token reaches only the agents listed in
   `MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST`. Bot-side media scripts ship
   under `tools/media-mcp/bot-scripts`, with a hygiene pass over them.
+- The `dwg_convert` media tool for container bots: DWG/DXF input converted to
+  DXF, SVG or PDF through the media service, restoring the dwg2dxf/dwg2SVG
+  capability the bots had on the host (the bot image stays free of CAD
+  utilities; a separate bot image is forbidden by CONVENTIONS §8). The worker
+  image builds LibreDWG from the pinned GNU release and adds an ezdxf venv for
+  DXF round-trips (version bump R12…R2018 on DXF input) and SVG rendering;
+  PDF output needs LibreOffice in the worker image and the base image refuses
+  it honestly (render SVG instead). The tool is synchronous (300 s timeout)
+  with the same per-bot gating, quotas and output accounting as the other
+  media jobs; the config sample lists it in `tools`. Docs:
+  [media-tools.md](media-tools.md) (#381).
 
 ### Deploy and release
 
