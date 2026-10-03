@@ -113,8 +113,8 @@ version file to edit. Base Paperclip version is in the image label
   presses Confirm in the extension's confirm page: a refusal, the 180-second
   budget expiring — the gateway then sends the `browser.cancel` notification
   and the extension drops the pending step — or a build without the
-  confirmation port is a `confirmationNotGranted` refusal, never a silent
-  execution. The extension declares the `fill` and `download` capabilities and
+  confirmation port is an `internalError` refusal (the step never reaches the
+  confirmation flow), never a silent execution. The extension declares the `fill` and `download` capabilities and
   never `sign`. Site-specific selectors and recorded scenarios are built on
   top of these primitives and live outside the fork. Guide:
   [guides/bridge-extension.md](guides/bridge-extension.md).
