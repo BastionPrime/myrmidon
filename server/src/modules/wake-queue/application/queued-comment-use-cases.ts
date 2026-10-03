@@ -5,6 +5,12 @@ import {
 } from "../domain/policy.js";
 // myrmidon(S5): queued comment edits are stored with secret values masked
 import { maskSecretsInText } from "../../../myrmidon/secret-masking.js";
+// myrmidon(1.6-GRD): prompt-injection flag on untrusted queued text (part B)
+import {
+  guardrailsInjectionEnabled,
+  injectionScoreThreshold,
+  wrapUntrusted,
+} from "../../../myrmidon/guardrails/injection.js";
 import type {
   QueuedCommentActivityPublication,
   QueuedCommentActor,
@@ -115,6 +121,39 @@ export function createEditQueuedComment(deps: { issueLock: QueuedCommentIssueLoc
         await tx.syncCommentExternalObjectsSafely(input.commentId);
 
         const ids = locked.queue.entries.map((candidate) => candidate.comment.id);
+        // myrmidon(1.6-GRD): flag-only prompt-injection layer on the wake
+        // queue payload (part B). When enabled, the external author's text is
+        // wrapped in <untrusted-data> markers inside the wake payload the run
+        // reads (data, not instructions) and the detector's flag travels next
+        // to it. Nothing is blocked and nothing is masked; the stored comment
+        // body and the UI view are untouched. Guard key and body overwrite use
+        // existing payload fields — no queue-format migration.
+        let guardrailsPayload = locked.wake.payload; // myrmidon(1.6-GRD)
+        if (guardrailsInjectionEnabled()) { // myrmidon(1.6-GRD)
+          const { text: wrappedText, scan } = wrapUntrusted( // myrmidon(1.6-GRD)
+            maskedBody,
+            injectionScoreThreshold(),
+          );
+          guardrailsPayload = { // myrmidon(1.6-GRD)
+            ...locked.wake.payload,
+            commentBody: wrappedText,
+            _paperclipGuardrails: {
+              ...((locked.wake.payload["_paperclipGuardrails"] as Record<string, unknown>) ?? {}),
+              injection: {
+                kind: "injection",
+                surface: "wake_queue",
+                commentId: input.commentId,
+                ...scan,
+              },
+            },
+          };
+        }
+        const updatedWake = await tx.updateWakeQueuedCommentIds({ // myrmidon(1.6-GRD)
+          wakeId: locked.wake.id,
+          payload: guardrailsPayload,
+          ids,
+          updatedAt: input.now,
+        });
         const updatedQueueRun = await updateQueueRunCommentIdsGuarded(tx, {
           queueRun: locked.queueRun,
           ids,
@@ -124,7 +163,7 @@ export function createEditQueuedComment(deps: { issueLock: QueuedCommentIssueLoc
         const queue = await tx.buildQueueSnapshot({
           issue: input.issue,
           actor: input.actor,
-          wake: locked.wake,
+          wake: updatedWake, // myrmidon(1.6-GRD): keep the guardrails-bearing wake row
           state: locked.state,
           queueRun: updatedQueueRun ?? locked.queueRun,
           activeRun: locked.activeRun,
