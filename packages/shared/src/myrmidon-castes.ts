@@ -112,7 +112,7 @@ export const MYRMIDON_CASTE_SEED: ReadonlyArray<{
   color: CasteColor;
 }> = AGENT_ROLES.map((key) => {
   const label = AGENT_ROLE_LABELS[key];
-  return { key, nameEn: label, nameRu: label, color: casteSeedColor(key) });
+  return { key, nameEn: label, nameRu: label, color: casteSeedColor(key) };
 });
 
 /** Evenly spread seed colors over the token palette (deterministic). */
