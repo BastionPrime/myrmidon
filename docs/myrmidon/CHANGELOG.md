@@ -8,6 +8,21 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
+## Unreleased
+
+### Telegram notification settings UI (TG-NOTIFY-SETTINGS part F)
+
+- The "Telegram notifications" panel on the System screen of the 2.0 UI: all
+  five sections of the telegramNotify settings are visible and editable
+  (digest, errors, owner messages, escalations, head-bot proactivity), every
+  section off by default, with the settings change log rendered from the
+  document the settings core serves. Saving sends one PATCH with only the
+  changed fields. Depends on the settings core (part A); while that is not
+  merged the UI is covered by tests against the mocked JSON contract.
+- The `rarelyMaxPerDay` range is now single: 1–50, the merged proactivity
+  contract. The settings schema, the stored-document parser and the panel
+  input all enforce it; an out-of-range stored value falls back to the
+  default of 3.
 ## 1.6.1
 
 ### Custom castes, consumers (CUSTOM-CASTES B)
@@ -42,6 +57,21 @@ version file to edit. Base Paperclip version is in the image label
   card for the lead and the operator, computed on the fly from a
   process-level signal registry (no new store); cards fade after
   `MYRMIDON_STALE_BLOCK_SIGNAL_TTL_MS` (default 24 h).
+### Gateway-priced hermes runs (HERMES-USAGE-COST)
+
+- hermes_gateway runs no longer land in the cost ledger as unpriced $0
+  rows: after every LLM-gateway spend collection sweep, a reconcile pass
+  fills each run's `cost_events` row with the gateway's own spend for that
+  run (cost_status=reported) and refreshes the agent/company monthly
+  counters. Only unpriced hermes_gateway rows are touched — adapter-priced
+  rows and other providers are never overwritten, and a run with no
+  collected spend stays unpriced instead of getting an invented price. The
+  first sweep can look back up to 90 days
+  (`MYRMIDON_LITELLM_FIRST_LOOKBACK_DAYS`), and
+  `POST /api/myrmidon/companies/:id/litellm/sweep` accepts a `from` body
+  for one-off month backfills. The UI-2.0 forecast chip shows
+  "spent" only when no monthly budget is configured, ending the
+  "$0 of $0" placeholder.
 
 ### Board administrators from agents (ADMIN-AGENT part C)
 
