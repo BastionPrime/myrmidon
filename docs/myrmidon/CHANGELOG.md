@@ -8,6 +8,26 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
+## 1.6.1
+
+### Board administrators from agents (ADMIN-AGENT part C)
+
+- The UI half of making an agent a board administrator. The agent card's
+  **Permissions / Trust** tab gains a fourth flag, **Board administrator**:
+  flipping it goes through the same permissions PATCH as the three sibling
+  flags, the state comes from the agent detail API
+  (`access.boardAdmin`, falling back to `permissions.boardAdmin`), and both
+  readers are fail-closed — anything but an explicit `true` reads as "not an
+  administrator". Operators see the toggle only with permission-management
+  authority (owner or admin membership, instance admin, local implicit
+  board); a 403 from the API becomes a plain-language note under the toggle.
+  The Company Settings **Members** page names every agent administrator: one
+  table row per non-terminated flagged agent, with a **Board administrator**
+  badge and a link to the agent's Permissions tab. The grant semantics (the
+  permission keys, the grant snapshot, the self-toggle prohibition) are the
+  server half of the feature and merge separately. Operator guide:
+  [guides/agent-board-admin.md](guides/agent-board-admin.md).
+
 ## 1.6.0
 
 ### CTO chat planner (CTO-CHAT B)
