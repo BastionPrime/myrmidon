@@ -50131,7 +50131,7 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": "true"
+          "default": true
         },
         "max_active_tasks": {
           "name": "max_active_tasks",
@@ -50144,7 +50144,7 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": "false"
+          "default": false
         },
         "created_at": {
           "name": "created_at",
