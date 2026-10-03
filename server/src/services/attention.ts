@@ -69,6 +69,13 @@ import { buildStackAttentionCards } from "../myrmidon/stack-registry/attention.j
 import { readStackDocument } from "../myrmidon/stack-registry/store.js";
 // myrmidon(TRACING-HEALTH): the "LLM tracing" red state raises one operator card (part D)
 import { readTracingHealthAttentionSignal } from "../myrmidon/tracing-health/attention.js";
+// myrmidon(STALE-BLOCK): the lifted-block operator signal registry.
+import {
+  readStaleBlockSignals,
+  staleBlockSignalDedupKey,
+  staleBlockSignalSeverity,
+  staleBlockSignalWhyNow,
+} from "../myrmidon/stale-block/attention.js";
 // myrmidon(1.6.1-WIP-LIMIT-A): the WIP limit cards and the settings read.
 import { buildWipLimitAttentionCards } from "../myrmidon/wip-limit/attention.js";
 import { buildWipLimitStatus } from "../myrmidon/wip-limit/status.js";
@@ -107,6 +114,8 @@ const ATTENTION_SOURCE_KINDS: AttentionSourceKind[] = [
   "budget_alert",
   "agent_error_alert",
   "stack_update",
+  // myrmidon(STALE-BLOCK): one card per block the watchdog lifted.
+  "stale_block",
   // myrmidon(1.6.1-WIP-LIMIT-A): the per-agent work-in-progress over-limit signal.
   "wip_limit",
 ];
@@ -131,9 +140,10 @@ const SOURCE_RANK: Record<AttentionSourceKind, number> = {
   productivity_review: 9,
   join_request: 10,
   stack_update: 11,
+  stale_block: 12,
   // myrmidon(1.6.1-WIP-LIMIT-A): a workload-oversignal sits below every
   // blocking kind but above nothing else — it is advice, not a stop.
-  wip_limit: 12,
+  wip_limit: 13,
 };
 
 const PENDING_INTERACTION_STATUSES = ["pending"] as const;
@@ -1918,23 +1928,6 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       // the stack cache; a component that lags behind upstream (or got a new
       // release) surfaces here. The feed recomputes on every list, so the data
       // stays in the registry cache and never in an attention table.
-      // myrmidon(1.6.1-WIP-LIMIT-A): the WIP limit card needs the settings
-      // (a missing limit means "count only", so the block emits nothing) and
-      // the agent names for the card titles.
-      const wipSettingsRow = await db
-        .select({ general: instanceSettings.general })
-        .from(instanceSettings)
-        .limit(1)
-        .then((rows) => rows[0] ?? null);
-      const wipSettings = normalizeWipLimitSettings(wipSettingsRow?.general?.[WIP_LIMIT_SETTINGS_KEY]);
-      const wipAgentNameById = new Map(
-        await db
-          .select({ id: agents.id, name: agents.name })
-          .from(agents)
-          .where(eq(agents.companyId, companyId))
-          .then((rows) => rows.map((row) => [row.id, row.name] as const)),
-      );
-
       const stackDocument = await readStackDocument(db);
       for (const card of buildStackAttentionCards(stackDocument)) {
         add(createItem({
@@ -1967,6 +1960,50 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           detail: {
             kind: "generic",
             summaryExcerpt: card.summaryExcerpt,
+            images: [],
+          },
+        }));
+      }
+
+      // myrmidon(STALE-BLOCK): one card per block the stale-block watchdog
+      // lifted. The sweep records the signal into a process-level registry
+      // (myrmidon/stale-block/attention.ts) — the feed computes the items on
+      // the fly, no notification store. Dedup is stable per task and lift;
+      // the card disappears when the TTL expires or the operator dismisses.
+      for (const signal of readStaleBlockSignals(companyId)) {
+        add(createItem({
+          companyId,
+          sourceKind: "stale_block",
+          subject: {
+            kind: "issue",
+            id: signal.issueId,
+            companyId,
+            title: signal.title ?? "Task",
+            identifier: signal.identifier,
+            status: "in_progress",
+            href: signal.identifier ? `/${prefix}/issues/${signal.identifier}` : null,
+            metadata: {
+              liftedAt: signal.liftedAt,
+              reasonTexts: signal.reasonTexts,
+            },
+          },
+          whyNow: staleBlockSignalWhyNow(signal),
+          decisionVerbs: decisionVerbs(
+            { id: "inspect", label: "Inspect", description: "Open the task and check the unblock." },
+            { id: "dismiss", label: "Dismiss", description: "Dismiss this notice." },
+          ),
+          inlineResolvable: true,
+          entryRule: "the stale-block watchdog lifted the task's dead block",
+          exitRule: "The TTL expires or the row is dismissed.",
+          dedupKey: staleBlockSignalDedupKey(signal),
+          severity: staleBlockSignalSeverity(),
+          activityAt: signal.liftedAt,
+          createdAt: signal.liftedAt,
+          updatedAt: signal.liftedAt,
+          relatedIssue: null,
+          detail: {
+            kind: "generic",
+            summaryExcerpt: excerpt(signal.reasonTexts.join("; ")),
             images: [],
           },
         }));
@@ -2025,8 +2062,22 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       // card; a lead holding implementation work raises the same card with
       // the lead wording (the implementation limit of a lead is 0). The feed
       // recomputes on every list, so the card lives exactly as long as the
-      // over-limit state does — nothing is persisted for it.
+      // over-limit state does — nothing is persisted for it. A missing limit
+      // means "count only", so the block emits nothing.
+      const wipSettingsRow = await db
+        .select({ general: instanceSettings.general })
+        .from(instanceSettings)
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      const wipSettings = normalizeWipLimitSettings(wipSettingsRow?.general?.[WIP_LIMIT_SETTINGS_KEY]);
       const wipStatuses = await buildWipLimitStatus(db, companyId, wipSettings);
+      const wipAgentNameById = new Map(
+        await db
+          .select({ id: agents.id, name: agents.name })
+          .from(agents)
+          .where(eq(agents.companyId, companyId))
+          .then((rows) => rows.map((row) => [row.id, row.name] as const)),
+      );
       for (const card of buildWipLimitAttentionCards(wipStatuses, wipAgentNameById)) {
         add(createItem({
           companyId,
