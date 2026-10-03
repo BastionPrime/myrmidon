@@ -1,4 +1,4 @@
-import { AGENT_ROLE_LABELS, type AgentRole } from "@paperclipai/shared";
+import { AGENT_ROLE_LABELS } from "@paperclipai/shared";
 
 /**
  * The name the wizard offers before the customer picks a role. It is a job
@@ -38,11 +38,11 @@ const WIZARD_SUPPLIED_NAMES: ReadonlySet<string> = new Set([
  */
 export function nextAgentNameForRole(params: {
   currentName: string;
-  nextRole: AgentRole;
+  nextRole: string;
 }): string {
   const current = params.currentName.trim();
   if (current === "" || WIZARD_SUPPLIED_NAMES.has(current)) {
-    return AGENT_ROLE_LABELS[params.nextRole];
+    return AGENT_ROLE_LABELS[params.nextRole as keyof typeof AGENT_ROLE_LABELS] ?? params.nextRole;
   }
   return params.currentName;
 }
