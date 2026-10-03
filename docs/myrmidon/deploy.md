@@ -130,8 +130,8 @@ What changes for operators:
   the private deployment repository (`connectors/alibaba-image/`), not as part
   of the board image: it runs on port `8083` with its own compose fragment,
   mounts the DashScope key read-only and the shared agent workspace root, and
-  is registered as an external MCP server with grants to the design agents,
-  the work designer and the SMM bot. The bring-up and connect runbook —
+  is registered as an external MCP server with grants to the work designer,
+  the bbq SMM and the designer agents. The bring-up and connect runbook —
   mounts, health check, per-family live smoke:
   [guides/alibaba-image-connector.md](guides/alibaba-image-connector.md).
 
