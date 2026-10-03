@@ -184,6 +184,17 @@ version file to edit. Base Paperclip version is in the image label
   gateway adapter; the token reaches only the agents listed in
   `MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST`. Bot-side media scripts ship
   under `tools/media-mcp/bot-scripts`, with a hygiene pass over them.
+- The `dwg_convert` media tool for container bots: DWG/DXF input converted to
+  DXF, SVG or PDF through the media service, restoring the dwg2dxf/dwg2SVG
+  capability the bots had on the host (the bot image stays free of CAD
+  utilities; a separate bot image is forbidden by CONVENTIONS §8). The worker
+  image builds LibreDWG from the pinned GNU release and adds an ezdxf venv for
+  DXF round-trips (version bump R12…R2018 on DXF input) and SVG rendering;
+  PDF output needs LibreOffice in the worker image and the base image refuses
+  it honestly (render SVG instead). The tool is synchronous (300 s timeout)
+  with the same per-bot gating, quotas and output accounting as the other
+  media jobs; the config sample lists it in `tools`. Docs:
+  [media-tools.md](media-tools.md) (#381).
 
 ### Deploy and release
 
