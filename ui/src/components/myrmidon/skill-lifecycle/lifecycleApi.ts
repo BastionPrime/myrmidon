@@ -78,20 +78,55 @@ export function stateBadge(state: SkillLifecycleState, implicit: boolean): { lab
   }
 }
 
+// myrmidon(UI-RU): translate a stateBadge label through the fork catalog,
+// keeping the raw label as the fallback for unknown states.
+export function stateBadgeLabel(
+  badge: { label: string },
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const keyMap: Record<string, string> = {
+    "verified (unmanaged)": "skillLifecycle.states.verifiedUnmanaged",
+    verified: "skillLifecycle.states.verified",
+    candidate: "skillLifecycle.states.candidate",
+    deprecated: "skillLifecycle.states.deprecated",
+  };
+  const key = keyMap[badge.label];
+  return key ? t(key, { defaultValue: badge.label }) : badge.label;
+}
+
 /** "revision 3" or a dash when the skill has none yet. */
-export function revisionLabel(revisionNumber: number | null): string {
-  return revisionNumber === null ? "—" : `revision ${revisionNumber}`;
+export function revisionLabel(
+  revisionNumber: number | null,
+  t?: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  return revisionNumber === null
+    ? "—"
+    : t
+      ? t("skillLifecycle.revision", { count: revisionNumber, defaultValue: `revision ${revisionNumber}` })
+      : `revision ${revisionNumber}`;
 }
 
 /** Who approved, with the time; the panel shows this next to the state. */
-export function approverLabel(view: SkillLifecycleView): string {
-  if (!view.approvedBy) return view.implicit ? "no approval needed (unmanaged)" : "not approved";
-  const when = view.approvedAt ? new Date(view.approvedAt).toLocaleString() : "unknown time";
+export function approverLabel(
+  view: SkillLifecycleView,
+  t?: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  if (!view.approvedBy) {
+    return view.implicit
+      ? (t?.("skillLifecycle.approver.unmanaged", { defaultValue: "no approval needed (unmanaged)" }) ?? "no approval needed (unmanaged)")
+      : (t?.("skillLifecycle.approver.notApproved", { defaultValue: "not approved" }) ?? "not approved");
+  }
+  const when = view.approvedAt
+    ? new Date(view.approvedAt).toLocaleString()
+    : (t?.("skillLifecycle.approver.unknownTime", { defaultValue: "unknown time" }) ?? "unknown time");
   return `${view.approvedBy} · ${when}`;
 }
 
 /** One history line, human readable. */
-export function historyLine(event: SkillLifecycleEvent): string {
+export function historyLine(
+  event: SkillLifecycleEvent,
+  t?: (key: string, options?: Record<string, unknown>) => string,
+): string {
   const from = event.fromState ?? "new";
   const actor = event.actorId ?? event.actorType;
   const reason = event.reason ? ` — ${event.reason}` : "";

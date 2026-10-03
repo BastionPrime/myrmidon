@@ -1,3 +1,4 @@
+import { useTranslation } from "@/i18n";
 import { PageTabBar } from "@/components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import { useCloudInstance } from "@/hooks/useCloudInstance";
@@ -126,7 +127,28 @@ export function getCompanySettingsTab(pathname: string): CompanySettingsTab {
   return "general";
 }
 
+// myrmidon(UI-RU): settings tab labels run through the fork i18n catalog.
+const SETTINGS_TAB_LABEL_KEYS: Record<CompanySettingsTab, string> = {
+  general: "settingsNav.general",
+  export: "settingsNav.export",
+  import: "settingsNav.import",
+  members: "settingsNav.members",
+  secrets: "settingsNav.secrets",
+  "instance-profile": "settingsNav.profile",
+  "instance-environments": "settingsNav.environments",
+  "instance-access": "settingsNav.access",
+  "instance-board-api-keys": "settingsNav.boardApiKeys",
+  "instance-experimental": "settingsNav.experimental",
+  "instance-plugins": "settingsNav.plugins",
+  "instance-adapters": "settingsNav.adapters",
+  browsers: "settingsNav.browsers",
+  clouds: "settingsNav.clouds",
+  autonomy: "settingsNav.autonomy",
+  castes: "settingsNav.castes",
+};
+
 export function CompanySettingsNav() {
+  const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const { hidden: hiddenSettings } = useHiddenSettings();
@@ -149,7 +171,10 @@ export function CompanySettingsNav() {
   return (
     <Tabs value={activeTab} onValueChange={handleTabChange}>
       <PageTabBar
-        items={visibleItems.map(({ value, label }) => ({ value, label }))}
+        items={visibleItems.map(({ value, label }) => ({
+          value,
+          label: t(SETTINGS_TAB_LABEL_KEYS[value], { defaultValue: label }),
+        }))}
         value={activeTab}
         onValueChange={handleTabChange}
         align="start"
