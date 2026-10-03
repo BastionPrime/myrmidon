@@ -11,7 +11,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AutonomyMatrixScreenView } from "./AutonomyMatrixScreen";
-import { resolveAutonomy, type AutonomyMatrix, type AutonomySnapshot as AutonomyView } from "@paperclipai/shared";
+import { resolveAutonomy, AGENT_ROLES, type AutonomyMatrix, type AutonomySnapshot as AutonomyView } from "@paperclipai/shared";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -419,5 +419,34 @@ describe("myrmidon(1.6) autonomy matrix view", () => {
     expect(resolveAutonomy("engineer", "deploy", withAgent, "agent-9")).toBe("allowed");
     expect(resolveAutonomy("engineer", "deploy", withAgent)).toBe("forbidden");
     expect(resolveAutonomy("cto", "change_instructions", matrix)).toBe("forbidden");
+  });
+});
+
+
+// myrmidon(1.6.1 CUSTOM-CASTES C): the role rows come from the caste
+// directory when roleOptions is passed; the built-in twelve are the
+// fallback when it is not.
+describe("myrmidon(1.6.1 CUSTOM-CASTES C) directory role rows", () => {
+  it("renders one row per caste directory entry with its label", () => {
+    render({
+      roleOptions: [
+        { key: "engineer", label: "Инженер" },
+        { key: "data-steward", label: "Хранитель данных" },
+      ],
+    });
+    expect(container.querySelector("[data-testid=myrmidon-autonomy-row-engineer]")).not.toBeNull();
+    expect(container.querySelector("[data-testid=myrmidon-autonomy-row-data-steward]")).not.toBeNull();
+    expect(container.textContent).toContain("Хранитель данных");
+    // A non-directory role (ceo) no longer renders a row.
+    expect(container.querySelector("[data-testid=myrmidon-autonomy-row-ceo]")).toBeNull();
+    // The directory row still resolves rules against the stored matrix.
+    expect(cell("engineer", "deploy").textContent).toContain("autonomy.verdict.forbidden");
+  });
+
+  it("without roleOptions the built-in twelve render (fallback contract)", () => {
+    render();
+    for (const role of AGENT_ROLES) {
+      expect(container.querySelector(`[data-testid=myrmidon-autonomy-row-${role}]`)).not.toBeNull();
+    }
   });
 });

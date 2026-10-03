@@ -1,4 +1,7 @@
 import { AGENT_ROLE_LABELS, type AgentRole } from "@paperclipai/shared";
+// myrmidon(CUSTOM-CASTES): the label lookup accepts a caste-directory
+// override; the built-in AGENT_ROLE_LABELS stay the fallback when the
+// directory is empty or unavailable.
 
 /**
  * The name the wizard offers before the customer picks a role. It is a job
@@ -35,14 +38,21 @@ const WIZARD_SUPPLIED_NAMES: ReadonlySet<string> = new Set([
 /**
  * The name to show after a role change — the new role's label when the field
  * still holds something the wizard supplied, otherwise the customer's own text.
+ *
+ * myrmidon(CUSTOM-CASTES): `labels` may carry the company's caste directory
+ * entries (key → display name); a role missing there falls back to the
+ * built-in AGENT_ROLE_LABELS entry, so the arc keeps working when the
+ * directory is unavailable.
  */
 export function nextAgentNameForRole(params: {
   currentName: string;
   nextRole: AgentRole;
+  labels?: Record<string, string>;
 }): string {
+  const labels = { ...AGENT_ROLE_LABELS, ...params.labels } as Record<string, string>;
   const current = params.currentName.trim();
-  if (current === "" || WIZARD_SUPPLIED_NAMES.has(current)) {
-    return AGENT_ROLE_LABELS[params.nextRole];
+  if (current === "" || WIZARD_SUPPLIED_NAMES.has(current) || Object.values(params.labels ?? {}).includes(current)) {
+    return labels[params.nextRole] ?? params.nextRole;
   }
   return params.currentName;
 }

@@ -17,7 +17,8 @@ import type {
   Environment,
   InstanceSettings,
 } from "@paperclipai/shared";
-import { AGENT_ROLES, AGENT_ROLE_LABELS, ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
+import { AGENT_ROLE_LABELS, ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
+import { useCasteOptionsForCompany, casteLabelFor } from "./myrmidon/castes/useCasteOptions"; // myrmidon(1.6.1 CUSTOM-CASTES C)
 import { AdapterLoginPanel } from "./AgentConfigForm";
 import {
   CONNECT_SOURCE_NAMES,
@@ -481,6 +482,11 @@ function OnboardingWizardInner({
   } = useDialog();
   const { companies, setSelectedCompanyId, loading: companiesLoading } = useCompany();
   const queryClient = useQueryClient();
+  // myrmidon(1.6.1 CUSTOM-CASTES C): the wizard's hire path names an agent
+  // after its caste when the customer typed no name — the label comes from
+  // the caste directory, with the built-in labels as the fallback.
+  const { selectedCompanyId: casteCompanyId } = useCompany();
+  const { options: casteOptions } = useCasteOptionsForCompany(casteCompanyId ?? undefined);
   const navigate = useNavigate();
   const location = useLocation();
   const { companyPrefix: matchedCompanyPrefix } = useParams<{ companyPrefix?: string }>();
@@ -2138,7 +2144,10 @@ function OnboardingWizardInner({
       // path that clears the role must not reach a hire that silently no-ops.
       if (!agentRole || !isCurrent()) return;
 
-      const hireName = agentName.trim() || AGENT_ROLE_LABELS[agentRole];
+      // myrmidon(1.6.1 CUSTOM-CASTES C): the fallback name prefers the caste
+      // directory's label for the role; the built-in label is the fallback
+      // when the directory is unavailable.
+      const hireName = agentName.trim() || casteLabelFor(agentRole, casteOptions) || AGENT_ROLE_LABELS[agentRole];
 
       // The company may already hold this agent. A wizard that reopens on the
       // agent step after the hire — the dashboard's agentless offer on a stale
