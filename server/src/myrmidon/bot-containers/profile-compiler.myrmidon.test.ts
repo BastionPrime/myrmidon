@@ -971,6 +971,98 @@ describe("myrmidon(G2) compileHermesProfile — instance defaults", () => {
   });
 });
 
+describe("myrmidon(PARALLEL-HELPERS) compileHermesProfile — delegation section", () => {
+  it("writes delegation from the resolved card block: limit, model, provider, budget", () => {
+    const yaml = fileByPath(
+      compileHermesProfile(
+        baseInput({
+          parallelHelpers: { enabled: true, maxConcurrent: 4, model: "dashscope/qwen3-flash", childTurnBudget: 40 },
+        }),
+      ).files,
+      "hermes/config.yaml",
+    ).content;
+    expect(yaml).toContain("delegation:");
+    expect(yaml).toContain("max_concurrent_children: 4");
+    expect(yaml).toContain("max_iterations: 40");
+    // "provider/model" splits on the FIRST slash: provider + bare model.
+    expect(yaml).toContain('model: "qwen3-flash"');
+    expect(yaml).toContain('provider: "dashscope"');
+  });
+
+  it("keeps a provider-less model intact (the child inherits the parent's credentials)", () => {
+    const yaml = fileByPath(
+      compileHermesProfile(
+        baseInput({ parallelHelpers: { enabled: true, maxConcurrent: 2, model: "qwen3-flash" } }),
+      ).files,
+      "hermes/config.yaml",
+    ).content;
+    expect(yaml).toContain('model: "qwen3-flash"');
+    // Only the delegation section is inspected: `memory.provider` is always
+    // present and would false-positive a whole-document "provider:" check.
+    const delegation = yaml.slice(yaml.indexOf("delegation:"), yaml.indexOf("gateway:"));
+    expect(delegation).not.toContain("provider:");
+  });
+
+  it("splits a multi-slash model id on the first slash only", () => {
+    const yaml = fileByPath(
+      compileHermesProfile(
+        baseInput({
+          parallelHelpers: { enabled: true, maxConcurrent: 2, model: "openrouter/google/gemini-3-flash" },
+        }),
+      ).files,
+      "hermes/config.yaml",
+    ).content;
+    expect(yaml).toContain('model: "google/gemini-3-flash"');
+    expect(yaml).toContain('provider: "openrouter"');
+  });
+
+  it("omits max_iterations when the card sets no budget (Hermes' own default stays)", () => {
+    const yaml = fileByPath(
+      compileHermesProfile(baseInput({ parallelHelpers: { enabled: true, maxConcurrent: 2, model: "" } })).files,
+      "hermes/config.yaml",
+    ).content;
+    expect(yaml).toContain("delegation:");
+    expect(yaml).not.toContain("max_iterations");
+    // An empty model means inherit; neither model nor provider is written.
+    expect(yaml).not.toContain('model: "');
+  });
+
+  it("omits the delegation section when helpers are off, but writes the toolset disable", () => {
+    const off = fileByPath(
+      compileHermesProfile(
+        baseInput({ parallelHelpers: { enabled: false, maxConcurrent: 4, model: "dashscope/x" } }),
+      ).files,
+      "hermes/config.yaml",
+    ).content;
+    expect(off).not.toContain("delegation:");
+    // Block sequence nested under agent:, at the nested key's column.
+    expect(off).toContain('agent:\n  disabled_toolsets:\n  - "delegation"');
+  });
+
+  it("writes neither delegation nor disabled_toolsets when the card never mentioned helpers", () => {
+    const absent = fileByPath(compileHermesProfile(baseInput()).files, "hermes/config.yaml").content;
+    expect(absent).not.toContain("delegation:");
+    expect(absent).not.toContain("disabled_toolsets");
+  });
+
+  it("removes the delegation toolset when helpers are off", () => {
+    const yaml = fileByPath(
+      compileHermesProfile(baseInput({ parallelHelpers: { enabled: false, maxConcurrent: 4, model: "" } })).files,
+      "hermes/config.yaml",
+    ).content;
+    // Nested under agent:, sequence at the nested key's column (deterministic-yaml).
+    expect(yaml).toContain('agent:\n  disabled_toolsets:\n  - "delegation"');
+  });
+
+  it("never disables the toolset when helpers are on", () => {
+    const yaml = fileByPath(
+      compileHermesProfile(baseInput({ parallelHelpers: { enabled: true, maxConcurrent: 2, model: "" } })).files,
+      "hermes/config.yaml",
+    ).content;
+    expect(yaml).not.toContain("disabled_toolsets");
+  });
+});
+
 describe("myrmidon(G2) classifyProfileChange integration", () => {
   it("reports \"restart\" on first apply (no applied hashes yet)", () => {
     const profile = compileHermesProfile(baseInput());

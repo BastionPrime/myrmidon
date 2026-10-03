@@ -21,6 +21,10 @@ export interface AgentPermissions extends Record<string, unknown> {
   canCreateSkills?: boolean;
   trustPreset?: TrustPreset;
   authorizationPolicy?: TrustAuthorizationPolicy;
+  // myrmidon(ADMIN-AGENT): board administrator state of the agent. Optional on
+  // the wire until the server part lands; read through the access summary when
+  // present.
+  boardAdmin?: boolean;
 }
 
 export type AgentRuntimeConfig = Record<string, unknown> & {
@@ -64,6 +68,10 @@ export interface AgentAccessState {
   taskAssignSource: "simple_default" | "explicit_grant" | "agent_creator" | "ceo_role" | "none";
   membership: CompanyMembership | null;
   grants: PrincipalPermissionGrant[];
+  // myrmidon(ADMIN-AGENT): whether this agent is a board administrator. The
+  // authoritative field of the GET /agents/:id contract; `permissions.boardAdmin`
+  // is the persisted echo.
+  boardAdmin?: boolean;
 }
 
 export interface AgentChainOfCommandEntry {
