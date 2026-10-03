@@ -68,6 +68,7 @@
       "group": {
         "observe": "Observe",
         "decide": "Decide & talk",
+        "work": "Work",
         "manage": "Manage"
       },
       "center": "Command center",
@@ -78,6 +79,8 @@
       "waiting": "Wait for me",
       "commander": "Commander",
       "settings": "Settings",
+      "issues": "Tasks",
+      "projects": "Projects",
       "more": "More",
       "badge": {
         "attention": "{{count}} waiting"
@@ -115,7 +118,17 @@
       "language": "Language",
       "placeholderTitle": "Not in this wave yet",
       "placeholderBody": "This screen is part of the UI 2.0 rollout plan and lands with its wave. The current data lives on the existing screen; this placeholder exists so the 2.0 frame and routing are real from day one.",
-      "placeholderLegacyLink": "Continue to the current screen"
+      "placeholderLegacyLink": "Continue to the current screen",
+      "fleet": {
+        "soonTitle": "Server fleet",
+        "soonBody": "The fleet screen arrives with its wave (1.7). Today the stack, versions, deploys and maintenance live in Settings → System.",
+        "systemLink": "Open Settings → System"
+      },
+      "notInWave": {
+        "title": "Not in this wave yet",
+        "body": "This section has no screen in the current wave; it arrives with its own release. The working settings stay on the sections listed in the panel.",
+        "link": "Back to settings"
+      }
     },
     "settings": {
       "navLabel": "Settings navigation",
@@ -127,8 +140,8 @@
       "budgets": "Budgets",
       "autonomy": "Autonomy",
       "guards": "Guardrails",
-      "castes": "Castes and models",
-      "system": "System"
+      "system": "System",
+      "language": "Language"
     }
   },
   "connectorPanel": {

@@ -15,16 +15,20 @@ function PhoneTab({
   label,
   active,
   badge,
+  ariaCurrent,
 }: {
   to: string;
   icon: typeof GaugeIcon;
   label: string;
   active: boolean;
   badge?: number;
+  /** myrmidon(UI-2.0-WAVE-A): "page" on the active tab, absent otherwise. */
+  ariaCurrent?: "page";
 }) {
   return (
     <Link
       to={to}
+      aria-current={ariaCurrent}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -134,15 +138,19 @@ export function Ui2PhoneTabBar() {
       aria-label={t("ui2.nav.railLabel", { defaultValue: "Main navigation" })}
     >
       {UI2_PHONE_TABS.map((tab) => {
-        const segment = tab.to.replace(/^\//, "").split("/")[0];
+        // myrmidon(UI-2.0-WAVE-A, П5): match by the tab's route root (the
+        // "More" tab declares a synthetic root it never matches); exactly
+        // one tab can be active at a time.
+        const root = (tab.root ?? tab.to.replace(/^\//, "").split("/")[0])?.toLowerCase();
         return (
           <PhoneTab
             key={tab.labelKey}
             to={tab.to}
-            icon={tab.icon}
+            icon={tab.icon as typeof GaugeIcon}
             label={t(tab.labelKey)}
-            active={segment === activeSegment}
+            active={root === activeSegment}
             badge={tab.badge === "attention" ? (attentionCount ?? undefined) : undefined}
+            ariaCurrent={root === activeSegment ? "page" : undefined}
           />
         );
       })}

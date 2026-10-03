@@ -76,12 +76,14 @@ describe("ui2 integration contracts (UI-0b / UI-0c)", () => {
     // myrmidon(1.6-CTO-CHAT-A): importing routes.tsx now also pulls in the
     // real Commander chat screen (api client, react-query, auth) — give the
     // module graph more than the default 5s to load.
+    // myrmidon(UI-2.0-WAVE-A): the fleet "soon" screen joined the table.
     const { UI2_ROUTE_TABLE } = await import("./routes");
     expect(UI2_ROUTE_TABLE.map((e) => e.key).sort()).toEqual([
       "agent-overview",
       "commander-chat",
       "costs",
       "decisions",
+      "fleet",
       "settings-language",
       "settings-runs-queue",
       "settings-system",

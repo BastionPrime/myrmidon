@@ -148,4 +148,16 @@ describe("company routes", () => {
     // Already-prefixed paths are returned untouched.
     expect(applyCompanyPrefix("/PAP/artifacts", "PAP")).toBe("/PAP/artifacts");
   });
+
+  // myrmidon(UI-2.0-WAVE-A, П2): the ui2 shell route roots are registered
+  // board roots — none of them may be parsed as a company prefix (the
+  // OPE-3922 "COMMANDER-CHAT organization not found" defect).
+  it("treats the ui2 shell route roots as board routes, never company prefixes", () => {
+    for (const root of ["commander", "commander-chat", "fleet", "quality"]) {
+      expect(isBoardPathWithoutPrefix(`/${root}`), root).toBe(true);
+      expect(extractCompanyPrefixFromPath(`/${root}`), root).toBeNull();
+      expect(applyCompanyPrefix(`/${root}`, "PAP"), root).toBe(`/PAP/${root}`);
+      expect(toCompanyRelativePath(`/PAP/${root}`), root).toBe(`/${root}`);
+    }
+  });
 });

@@ -13,12 +13,14 @@ import { UI2_ROUTE_TABLE } from "../routes";
 import { isUi2RouteElementAPlaceholder } from "../routes";
 
 describe("myrmidon(UI2) route table integration", () => {
-  it("ships exactly the six contract entries plus the commander chat", () => {
+  // myrmidon(UI-2.0-WAVE-A): the fleet "soon" screen joined the table.
+  it("ships the contract entries plus the commander chat and fleet soon screens", () => {
     expect(UI2_ROUTE_TABLE.map((entry) => entry.key).sort()).toEqual([
       "agent-overview",
       "commander-chat",
       "costs",
       "decisions",
+      "fleet",
       "settings-language",
       "settings-runs-queue",
       "settings-system",
@@ -39,6 +41,10 @@ describe("myrmidon(UI2) route table integration", () => {
     expect(byKey.get("settings-runs-queue")?.path).toBe("company/settings/runs-queue");
     expect(byKey.get("settings-system")?.path).toBe("company/settings/system");
     expect(byKey.get("settings-language")?.path).toBe("company/settings/language");
+    // myrmidon(UI-2.0-WAVE-A): commander moved to its own root; the fleet
+    // "soon" screen rides its own root too.
+    expect(byKey.get("commander-chat")?.path).toBe("commander");
+    expect(byKey.get("fleet")?.path).toBe("fleet");
     expect(byKey.get("decisions")?.legacyPath).toBe("/decisions");
     expect(byKey.get("costs")?.legacyPath).toBe("/activity/costs");
     expect(byKey.get("agent-overview")?.legacyPath).toBe("/agents/:agentId");

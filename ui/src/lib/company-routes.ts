@@ -31,6 +31,25 @@ const BOARD_ROUTE_ROOTS = new Set([
   "search",
   "settings",
   "timeline",
+  // myrmidon(UI-2.0-WAVE-A, П2): the ui2 shell route roots. Every root of
+  // every UI2_ROUTE_TABLE entry must be listed here (the ui2 guard test
+  // walks the table and asserts each root resolves to a null prefix) so
+  // `extractCompanyPrefixFromPath('/commander')` never invents a
+  // "COMMANDER" company again (OPE-3922 defect 1).
+  "commander-chat",
+  "commander",
+  "fleet",
+  "quality",
+  // Vendor board roots that have routes but historically missed this set.
+  "onboarding",
+  "review-queue",
+  "learnings",
+  "cases",
+  "status",
+  "status-cards",
+  "pipelines",
+  "swarm-claim",
+  "foraging",
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set(["auth", "invite", "board-claim", "cli-auth", "docs", "instance"]);

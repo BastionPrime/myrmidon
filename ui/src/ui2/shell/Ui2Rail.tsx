@@ -8,7 +8,7 @@ import { useTranslation } from "@/i18n";
 import { useCompany } from "@/context/CompanyContext";
 import { Link, useLocation } from "@/lib/router";
 import { MyrmidonLockup } from "@/components/myrmidon/MyrmidonLockup"; // myrmidon(B1a)
-import { UI2_NAV_GROUPS, type Ui2NavItem } from "../navModel";
+import { UI2_NAV_GROUPS, ui2NavRouteRoot, type Ui2NavItem } from "../navModel";
 import { useUi2AttentionCount } from "../useUi2Status";
 
 function RailItem({ item, active, badge }: { item: Ui2NavItem; active: boolean; badge?: number }) {
@@ -64,18 +64,19 @@ function RailItem({ item, active, badge }: { item: Ui2NavItem; active: boolean; 
 
 function RailItemSlot({ item, attentionCount }: { item: Ui2NavItem; attentionCount: number | null }) {
   const location = useLocation();
-  const segment = item.to.replace(/^\//, "").split("/")[0];
-  const active = location.pathname
-    .split("/")
-    .filter(Boolean)
-    .slice(1)
-    .some((p) => p === segment);
+  // myrmidon(UI-2.0-WAVE-A, П5): the active item is matched by the item's
+  // route ROOT against the path after the company prefix — never by a
+  // shared first segment, so exactly ONE item can light up at a time
+  // (the 03.10 double-highlight defect).
+  const activeRoot = location.pathname.split("/").filter(Boolean).slice(1)[0]?.toLowerCase();
+  const active = activeRoot != null && activeRoot === ui2NavRouteRoot(item).toLowerCase();
   const badge = item.badge === "attention" ? (attentionCount ?? undefined) : undefined;
   return (
     <Link
       to={item.to}
       className="myr-ui2__rail-link"
       style={{ display: "block", textDecoration: "none" }}
+      aria-current={active ? "page" : undefined}
     >
       <RailItem item={item} active={active} badge={badge} />
     </Link>

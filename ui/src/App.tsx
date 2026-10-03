@@ -820,6 +820,14 @@ export function App() {
           <Route path="instance/settings" element={<LegacySettingsRedirect />} />
           <Route path="instance/settings/*" element={<LegacySettingsRedirect />} />
           <Route path="companies" element={<UnprefixedBoardRedirect />} />
+          {/* myrmidon(UI-2.0-WAVE-A, П2): the ui2 shell route roots get
+              unprefixed→prefixed redirects so a bare /commander, /fleet or
+              /quality link never turns into a bogus "company" via
+              extractCompanyPrefixFromPath (OPE-3922 defect 1). */}
+          <Route path="commander" element={<UnprefixedBoardRedirect />} />
+          <Route path="commander-chat" element={<UnprefixedBoardRedirect />} />
+          <Route path="fleet" element={<UnprefixedBoardRedirect />} />
+          <Route path="quality" element={<UnprefixedBoardRedirect />} />
           <Route path="issues" element={<UnprefixedBoardRedirect />} />
           <Route path="tasks" element={<UnprefixedBoardRedirect />} />
           <Route path="issues/:issueId" element={<UnprefixedBoardRedirect />} />

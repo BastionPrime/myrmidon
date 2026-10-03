@@ -1,23 +1,41 @@
-// myrmidon(UI-0a): the settings side panel — a 10-section skeleton keyed to
-// the screen-map §3.1 spec ("Settings: internal side panel of 10 sections").
-// Sections land as real screens with their waves (UI-0c re-skins the ones
-// that already have data; the rest stay skeleton rows). Rendered inside the
-// ui2 shell for any /company/settings/* route under the flag.
+// myrmidon(UI-0a/UI-2.0-WAVE-A): the settings side panel, keyed to the
+// owner-approved settings tree (ia-v2 §2.3/§2.5). Wave-A routing rules:
+//   - a section appears in the panel ONLY when it has a working screen
+//     (ia-v2 §7 item 8); sections without a function this wave
+//     (Guardrails, Forage, Castes, Channels, Personal bot) stay hidden —
+//     their direct URLs render the "not in this wave" card (routes.tsx);
+//   - every section owns exactly one unique path and `general` matches
+//     with `end` so exactly one section is active at a time (П5, the
+//     03.10 all-subpaths-highlighted defect).
 import { NavLink } from "@/lib/router";
 import { useTranslation } from "@/i18n";
 
-export const UI2_SETTINGS_SECTIONS = [
-  { key: "general", path: "/company/settings" },
+export interface Ui2SettingsSection {
+  key: string;
+  /** Company-relative path (the shell's NavLink applies the prefix, П1). */
+  path: string;
+  /**
+   * True when the section's path must match exactly (the "general"
+   * overview at the settings root must NOT highlight on subpaths).
+   */
+  end?: boolean;
+}
+
+/**
+ * The visible settings sections (ia-v2 §2.5): only the ones with a
+ * working screen this wave. Adding a section here requires a working
+ * screen and a unique path — the guard test pins uniqueness.
+ */
+export const UI2_SETTINGS_SECTIONS: Ui2SettingsSection[] = [
+  { key: "general", path: "/company/settings", end: true },
   { key: "members", path: "/company/settings/members" },
-  { key: "access", path: "/company/settings/access-hub" },
+  { key: "access", path: "/company/settings/access" },
   { key: "secrets", path: "/company/settings/secrets" },
-  { key: "runs", path: "/company/settings/runs-queue" },
-  { key: "budgets", path: "/company/settings/budgets" },
   { key: "autonomy", path: "/company/settings/autonomy" },
-  { key: "guards", path: "/company/settings/guards" },
-  { key: "castes", path: "/company/settings/castes" },
+  { key: "runs", path: "/company/settings/runs-queue" },
   { key: "system", path: "/company/settings/system" },
-] as const;
+  { key: "language", path: "/company/settings/language" },
+];
 
 export function Ui2SettingsSidebar() {
   const { t } = useTranslation();
@@ -40,6 +58,7 @@ export function Ui2SettingsSidebar() {
         <NavLink
           key={section.key}
           to={section.path}
+          end={section.end}
           style={({ isActive }) => ({
             display: "flex",
             alignItems: "center",
