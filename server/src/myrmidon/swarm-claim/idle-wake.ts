@@ -50,6 +50,12 @@ export interface SwarmIdleWakeOptions {
   batchLimit: number;
   /** Time the pass runs at; lease liveness is judged against it. */
   now: Date;
+  /**
+   * myrmidon(1.6.1 SWARM-SETTINGS-UI): the P0 preemption setting. The idle
+   * pass binds agents to the top task in the SAME order the claim path takes
+   * it; with preemption off the queue is strictly oldest-first.
+   */
+  p0Preemption: boolean;
 }
 
 /** The number of wakes the pair "queue + free agents" needs right now. */
@@ -84,9 +90,9 @@ export function idleWakeTargetsForRole(
       .filter((claim) => claim.releasedAt === null || claim.releasedAt === undefined)
       .map((claim) => claim.issueId),
   );
-  const ordered = orderSwarmQueueCandidates(input.queue).filter(
-    (candidate) => !claimed.has(candidate.issueId),
-  );
+  const ordered = orderSwarmQueueCandidates(input.queue, {
+    p0Preemption: options.p0Preemption,
+  }).filter((candidate) => !claimed.has(candidate.issueId));
   const free = freeAgentsOfRole(input);
   const targets: SwarmIdleWakeTarget[] = [];
   for (let index = 0; index < free.length && index < ordered.length; index += 1) {

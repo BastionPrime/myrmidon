@@ -78,7 +78,7 @@ function roleInput(overrides: Partial<SwarmRoleIdleInput> = {}): SwarmRoleIdleIn
 
 describe("myrmidon(1.6.1 SWARM-IDLE-WAKE) idle verdict matrix", () => {
   it("a free agent at a non-empty queue is the wake target, bound to the top task", () => {
-    const targets = idleWakeTargetsForRole(roleInput(), { batchLimit: 5, now: NOW });
+    const targets = idleWakeTargetsForRole(roleInput(), { batchLimit: 5, now: NOW, p0Preemption: true });
     expect(targets).toHaveLength(1);
     expect(targets[0]).toMatchObject({
       agentId: "agent-a",
@@ -97,7 +97,7 @@ describe("myrmidon(1.6.1 SWARM-IDLE-WAKE) idle verdict matrix", () => {
         { id: "agent-free", activeClaims: 2, maxActiveTasks: 3, status: "idle", hasLiveRun: false },
       ],
     });
-    const targets = idleWakeTargetsForRole(input, { batchLimit: 5, now: NOW });
+    const targets = idleWakeTargetsForRole(input, { batchLimit: 5, now: NOW, p0Preemption: true });
     expect(targets.map((target) => target.agentId)).toEqual(["agent-free"]);
   });
 
@@ -107,7 +107,7 @@ describe("myrmidon(1.6.1 SWARM-IDLE-WAKE) idle verdict matrix", () => {
         { id: "agent-many", activeClaims: 9, maxActiveTasks: null, status: "idle", hasLiveRun: false },
       ],
     });
-    const targets = idleWakeTargetsForRole(input, { batchLimit: 5, now: NOW });
+    const targets = idleWakeTargetsForRole(input, { batchLimit: 5, now: NOW, p0Preemption: true });
     expect(targets).toHaveLength(1);
   });
 
@@ -116,14 +116,14 @@ describe("myrmidon(1.6.1 SWARM-IDLE-WAKE) idle verdict matrix", () => {
       queue: [candidate({ issueId: "claimed-issue" }), candidate({ issueId: "other-issue", identifier: "ISSUE-2" })],
       liveClaims: [lease({ issueId: "claimed-issue" })],
     });
-    const targets = idleWakeTargetsForRole(input, { batchLimit: 5, now: NOW });
+    const targets = idleWakeTargetsForRole(input, { batchLimit: 5, now: NOW, p0Preemption: true });
     // The first task is covered, so the free agent binds to the next one.
     expect(targets).toHaveLength(1);
     expect(targets[0]!.issueId).toBe("other-issue");
   });
 
   it("an empty queue wakes nobody even with free agents", () => {
-    const targets = idleWakeTargetsForRole(roleInput({ queue: [] }), { batchLimit: 5, now: NOW });
+    const targets = idleWakeTargetsForRole(roleInput({ queue: [] }), { batchLimit: 5, now: NOW, p0Preemption: true });
     expect(targets).toEqual([]);
   });
 });
@@ -140,7 +140,7 @@ describe("myrmidon(1.6.1 SWARM-IDLE-WAKE) P0 first and one agent per task", () =
         { id: "agent-b", activeClaims: 0, maxActiveTasks: 3, status: "idle", hasLiveRun: false },
       ],
     });
-    const targets = idleWakeTargetsForRole(input, { batchLimit: 5, now: NOW });
+    const targets = idleWakeTargetsForRole(input, { batchLimit: 5, now: NOW, p0Preemption: true });
     expect(targets[0]).toMatchObject({ agentId: "agent-a", issueId: "new-critical" });
     expect(targets[1]).toMatchObject({ agentId: "agent-b", issueId: "old-medium" });
   });
@@ -167,7 +167,7 @@ describe("myrmidon(1.6.1 SWARM-IDLE-WAKE) batch cap", () => {
         hasLiveRun: false,
       })),
     });
-    const targets = idleWakeTargetsForRole(input, { batchLimit: 5, now: NOW });
+    const targets = idleWakeTargetsForRole(input, { batchLimit: 5, now: NOW, p0Preemption: true });
     expect(targets).toHaveLength(5);
   });
 });
@@ -229,6 +229,13 @@ function fakeDb(companies: string[] = ["company-a"]) {
 function fakeSweepPorts(input: {
   enabled?: boolean;
   companies?: string[];
+  pilotRoles?: string[];
+  castes?: (companyId: string) => Promise<readonly {
+    key: string;
+    label: string;
+    swarmEligible: boolean;
+    maxActiveTasks: number | null;
+  }[]>;
   enqueueWakeup?: (agentId: string, opts: Record<string, unknown>) => Promise<unknown>;
 }): Omit<SwarmClaimSweeperDeps, "intervalMs"> {
   return {
@@ -238,12 +245,14 @@ function fakeSweepPorts(input: {
         ({
           swarmClaim: {
             enabled: input.enabled ?? true,
+            enabledRoles: input.pilotRoles ?? [],
             leaseTtlSec: DEFAULT_SWARM_LEASE_TTL_SEC,
             maxActiveTasks: DEFAULT_SWARM_MAX_ACTIVE_TASKS,
             sweepIntervalSec: DEFAULT_SWARM_CLAIM_SWEEP_INTERVAL_SEC,
           },
         }) as never,
     },
+    castes: input.castes,
     enqueueWakeup: (input.enqueueWakeup ??
       (async () => ({ id: "wake-1" }))) as SwarmClaimSweeperDeps["enqueueWakeup"],
     env: {} as Record<string, string | undefined>,
@@ -306,6 +315,89 @@ describe("myrmidon(1.6.1 SWARM-IDLE-WAKE) sweep pass", () => {
     expect(result.idleWoken).toBe(0);
     expect(wakes).toHaveLength(0);
     expect(mockListIdleRolePairs).not.toHaveBeenCalled();
+  });
+
+  it("myrmidon(1.6.1 SWARM-IDLE-WAKE): a role outside the pilot set never gets a wake", async () => {
+    // Blocker 1 of the review: an unassigned task fans out to every role with
+    // agents, but the pilot gate must keep the wake away from non-pilot roles
+    // (a reviewer would claim `disabled`, end with nothing, and the next tick
+    // would wake it again — the endless loop the ticket forbids).
+    const wakes: Array<{ agentId: string; opts: Record<string, unknown> }> = [];
+    mockListIdleRolePairs.mockResolvedValue([
+      {
+        role: "reviewer",
+        companyId: "company-a",
+        queue: [candidate()],
+        agents: [{ id: "agent-reviewer", status: "idle", activeClaims: 0, hasLiveRun: false }],
+      },
+      {
+        role: "engineer",
+        companyId: "company-a",
+        queue: [candidate()],
+        agents: [{ id: "agent-eng", status: "idle", activeClaims: 0, hasLiveRun: false }],
+      },
+    ]);
+    mockLiveClaimCountsByAgent.mockResolvedValue(new Map());
+
+    const sweeper = createSwarmClaimSweeper({
+      ...fakeSweepPorts({
+        pilotRoles: ["engineer"],
+        enqueueWakeup: async (agentId: string, opts: Record<string, unknown>) => {
+          wakes.push({ agentId, opts });
+          return { id: `wake-${wakes.length}` };
+        },
+      }),
+      intervalMs: 0,
+    });
+    sweeper.resetForTest();
+    const result = await sweeper.sweep(NOW);
+    // The engineer is woken, the reviewer is not.
+    expect(result.idleWoken).toBe(1);
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]!.agentId).toBe("agent-eng");
+  });
+
+  it("myrmidon(1.6.1 CUSTOM-CASTES B): a caste-excluded role is never woken, a caste ceiling applies", async () => {
+    const wakes: Array<{ agentId: string }> = [];
+    mockListIdleRolePairs.mockResolvedValue([
+      {
+        role: "engineer",
+        companyId: "company-a",
+        queue: [candidate()],
+        agents: [
+          // 2 live claims, global ceiling 3 — free under the global ceiling,
+          // but the caste ceiling of 2 caps this agent out.
+          { id: "agent-caste-capped", status: "idle", activeClaims: 0, hasLiveRun: false },
+        ],
+      },
+      {
+        role: "lead",
+        companyId: "company-a",
+        queue: [candidate()],
+        agents: [{ id: "agent-lead", status: "idle", activeClaims: 0, hasLiveRun: false }],
+      },
+    ]);
+    mockLiveClaimCountsByAgent.mockResolvedValue(new Map([["agent-caste-capped", 2]]));
+
+    const sweeper = createSwarmClaimSweeper({
+      ...fakeSweepPorts({
+        castes: async () => [
+          { key: "engineer", label: "engineer", swarmEligible: true, maxActiveTasks: 2 },
+          { key: "lead", label: "lead", swarmEligible: false, maxActiveTasks: null },
+        ],
+        enqueueWakeup: async (agentId: string) => {
+          wakes.push({ agentId });
+          return { id: `wake-${wakes.length}` };
+        },
+      }),
+      intervalMs: 0,
+    });
+    sweeper.resetForTest();
+    const result = await sweeper.sweep(NOW);
+    // The lead caste is swarmEligible=false — no wake. The engineer is
+    // capped out by the caste ceiling (2 live claims, ceiling 2) — no wake.
+    expect(result.idleWoken).toBe(0);
+    expect(wakes).toHaveLength(0);
   });
 
   it("the acceptance window: the sweep interval defaults far below the lease TTL", () => {

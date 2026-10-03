@@ -101,6 +101,11 @@ function fakePort(input: {
     async settingSources() {
       return (input as { sources?: Record<string, string> }).sources ?? {};
     },
+    // myrmidon(1.6.1 SWARM-IDLE-WAKE): the fake answers the resolved pilot
+    // role set; empty means "every role".
+    async pilotRoles() {
+      return (input as { pilotRoles?: string[] }).pilotRoles ?? [];
+    },
     async listClaimRows() {
       return (input.claims ?? []) as unknown as FakeClaim[];
     },

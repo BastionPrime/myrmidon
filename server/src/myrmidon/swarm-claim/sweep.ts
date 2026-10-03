@@ -39,7 +39,10 @@ import {
   SWARM_CLAIM_RELEASED_ACTION,
   SWARM_CLAIM_WAKE_REASON,
   isSwarmLeaseExpired,
+  isSwarmClaimEnabledFor,
   resolveSwarmClaimSettings,
+  type CompanyCaste,
+  type SwarmClaimSettings,
 } from "@paperclipai/shared";
 import { logger } from "../../middleware/logger.js";
 import { wakeNextAgentForIssueRole, type SwarmClaimServicePorts } from "./service.js";
@@ -313,7 +316,18 @@ export async function listActiveCompanies(db: Db, limit = 50): Promise<string[]>
 
 async function sweepIdleWakes(
   deps: SwarmClaimServicePorts & { db: Db },
-  input: { settings: { maxActiveTasks: number | null }; now: Date; result: SwarmClaimSweepResult },
+  input: {
+    settings: Pick<
+      SwarmClaimSettings,
+      | "enabled"
+      | "enabledCompanyIds"
+      | "enabledRoles"
+      | "maxActiveTasks"
+      | "p0Preemption"
+    >;
+    now: Date;
+    result: SwarmClaimSweepResult;
+  },
 ): Promise<SwarmClaimSweepResult> {
   const { result } = input;
   const env = (deps as { env?: Record<string, string | undefined> }).env ?? process.env;
@@ -329,7 +343,25 @@ async function sweepIdleWakes(
 
   for (const companyId of companyIds) {
     const pairs = await listIdleRolePairs(deps.db, companyId);
-    for (const pair of pairs) {
+    // myrmidon(1.6.1 SWARM-IDLE-WAKE): the pilot gate. A role outside the
+    // pilot set (or a company outside the pilot company list) must not be
+    // woken: its claim answers `disabled`, the run ends with nothing, and the
+    // next tick would wake it again — an endless wake loop the ticket forbids
+    // ("лид и ревьюеры в очередь разработки не входят").
+    const pilotPairs = pairs.filter((pair) =>
+      isSwarmClaimEnabledFor(input.settings, { companyId, role: pair.role }),
+    );
+    // myrmidon(1.6.1 CUSTOM-CASTES B): the same caste directory the claim gate
+    // reads. `swarmEligible=false` castes never enter the idle pool; a
+    // caste-set ceiling overrides the global one for that agent only.
+    const casteByRole = deps.castes
+      ? new Map((await deps.castes(companyId)).map((entry) => [entry.key, entry]))
+      : new Map<string, CompanyCaste>();
+    for (const pair of pilotPairs) {
+      const caste = casteByRole.get(pair.role);
+      if (caste && !caste.swarmEligible) continue;
+      const effectiveMaxActiveTasks =
+        caste?.maxActiveTasks != null ? caste.maxActiveTasks : input.settings.maxActiveTasks;
       const roleInput: SwarmRoleIdleInput = {
         role: pair.role,
         queue: pair.queue,
@@ -337,12 +369,16 @@ async function sweepIdleWakes(
         agents: pair.agents.map((agent) => ({
           id: agent.id,
           activeClaims: claimCounts.get(agent.id) ?? 0,
-          maxActiveTasks: input.settings.maxActiveTasks,
+          maxActiveTasks: effectiveMaxActiveTasks,
           status: agent.status,
           hasLiveRun: agent.hasLiveRun,
         })),
       };
-      const targets = idleWakeTargetsForRole(roleInput, { batchLimit: batch, now: input.now });
+      const targets = idleWakeTargetsForRole(roleInput, {
+        batchLimit: batch,
+        now: input.now,
+        p0Preemption: input.settings.p0Preemption,
+      });
       result.idleRoles += 1;
       result.idleFreeAgents += targets.length;
       for (const target of targets) {
