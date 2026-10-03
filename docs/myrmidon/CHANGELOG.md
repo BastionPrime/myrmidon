@@ -162,6 +162,14 @@ version file to edit. Base Paperclip version is in the image label
   STATUS-STRIP endpoint exists. i18n keys `ui2.*` ship in en/ru (translated)
   and the other locales (English values until the translation pass). Operator
   guide: [guides/ui2-shell.md](guides/ui2-shell.md).
+- The six re-skinned screens behind the same flag (Decisions, Costs, Agent
+  overview, Runs and queue, System, Language) now render real data through
+  the existing APIs — no new server endpoints. Each screen ships the full
+  state set (skeleton, error with/without cache, empty, denied): a `403`
+  answer renders the lock alone, never partial data. Decisions decide with
+  option, inputs and an idempotency key; there is no client-side undo timer
+  (the server-side hold is a later wave). Screen-by-screen details:
+  [guides/ui2-shell.md](guides/ui2-shell.md).
 
 ### Task PR sync
 
