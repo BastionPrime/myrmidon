@@ -707,3 +707,21 @@ them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
+
+## 1.6.1 — WIP-LIMIT: the WIP limit screen and badge (part B, UI)
+
+The UI half of the WIP-LIMIT feature: the "WIP limit" screen in Company
+Settings (`/company/settings/wip-limit`) edits the contract of part A —
+`GET/PUT /api/myrmidon/companies/:companyId/wip-limit/settings`
+(`{ defaultLimit, perAgent }`, empty default = no limit) — and the agents
+list shows each agent's live `wip/limit` badge from
+`GET .../wip-limit/status` (red when `overLimit`). No environment variables,
+no new secrets: the values live in part A's store. While part A is unmerged
+the routes answer nothing — the screen shows its error state and the roster
+shows no badge, both harmless. Remove: the `ui/src/components/myrmidon/wip-limit/`
+tree, `AgentWipBadge.tsx`, the nav item, the route, the `Agents.tsx` status
+query/badge and the `wipLimit` i18n namespace.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| — | 1.6.1-WIP-LIMIT-B | — (always on) | The settings screen writes the row through part A's PUT; the badge on an agent row reads the status endpoint | Not configurable: no deployment-specific values in the UI half |
