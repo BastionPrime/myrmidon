@@ -193,7 +193,11 @@ import {
 import { buildIssueChanges } from "./issue-change-receipt.js";
 import { projectSafeChatPublication } from "./chat-publication-projection.js";
 // myrmidon(X8g): absolute board links in the copy of an agent reply that reaches Telegram
-import { absolutizedTextByTelegramEndpoint } from "../myrmidon/agent-chat-bridge/links.js";
+// myrmidon(X9b): display-name prefix for an @<alias>-addressed agent's reply
+import {
+  absolutizedTextByTelegramEndpoint,
+  addressedReplyPrefixByTelegramEndpoint,
+} from "../myrmidon/agent-chat-bridge/links.js";
 import { stageChannelTaskCompletionPublication } from "../myrmidon/channel-task-control-completion.js";
 import { issueThreadInteractionAttentionAgentAllowed } from "./issue-thread-interaction-resolution.js";
 
@@ -627,7 +631,13 @@ async function resolvePublishedInteractionPromptBindings(
           eq(chatPublications.issueId, issueId),
           eq(chatPublications.state, "published"),
           eq(chatConversations.issueId, issueId),
-          eq(chatEndpoints.assignedAgentId, agentId),
+          // myrmidon(X9b): an @<alias>-addressed conversation's agent is its
+          // own conversationAgentId, not the endpoint's assigned agent; the
+          // conversation row is pinned to this issue, so accept either.
+          or(
+            eq(chatEndpoints.assignedAgentId, agentId),
+            sql`exists (select 1 from issues conv where conv.company_id = ${chatConversations.companyId} and conv.id = ${chatConversations.issueId} and conv.conversation_agent_id = ${agentId})`,
+          ),
           eq(
             sql<string>`${chatPublications.payload}->>'interactionId'`,
             interactionId,
@@ -886,7 +896,15 @@ async function freshChatSourceAfterPublishedControl(
       and(
         eq(chatEndpoints.id, chatConversations.endpointId),
         eq(chatEndpoints.companyId, companyId),
-        eq(chatEndpoints.assignedAgentId, run.agentId),
+        // myrmidon(X9b): an @<alias>-addressed conversation's agent is its
+        // own conversationAgentId, not the endpoint's assigned agent; the
+        // joined conversation row and issue are already pinned to this issue,
+        // so accept either the assigned agent or the conversation's own
+        // agent being the run's agent.
+        or(
+          eq(chatEndpoints.assignedAgentId, run.agentId),
+          sql`exists (select 1 from issues conv where conv.company_id = ${companyId} and conv.id = ${issueId} and conv.conversation_agent_id = ${run.agentId})`,
+        ),
       ),
     )
     .innerJoin(
@@ -1479,7 +1497,16 @@ export async function resolveChatOriginPublicationBindings(
           eq(chatMessageLinks.direction, "inbound"),
           inArray(chatMessageLinks.commentId, wakeCommentIds),
           eq(chatConversations.issueId, issueId),
-          eq(chatEndpoints.assignedAgentId, lineageAgentId),
+          // myrmidon(X9b): an @<alias>-addressed conversation's agent is the
+          // conversation's own agent, not the endpoint's assigned one; the
+          // conversation row is already pinned to `issueId` (whose assignee
+          // is the lineage agent), so this predicate accepts either the
+          // endpoint's assigned agent being the lineage agent, or the
+          // conversation issue's own conversationAgentId being it.
+          or(
+            eq(chatEndpoints.assignedAgentId, lineageAgentId),
+            sql`exists (select 1 from issues conv where conv.company_id = ${chatConversations.companyId} and conv.id = ${chatConversations.issueId} and conv.conversation_agent_id = ${lineageAgentId})`,
+          ),
           ...(originEndpointId
             ? [eq(chatConversations.endpointId, originEndpointId)]
             : []),
@@ -12557,7 +12584,21 @@ export function issueService(db: Db) {
           bindings.map((binding) => binding.endpointId),
           redactedBody,
         );
+        // myrmidon(X9b): an @<alias>-addressed conversation's reply carries
+        // the addressed agent's display-name prefix in the Telegram chat it
+        // was mentioned in; the board comment above stays unprefixed. X8g's
+        // absolutization composes: the prefix is prepended to the (possibly
+        // absolutized) text this endpoint already gets.
+        const addressedReplyPrefixByEndpoint = await addressedReplyPrefixByTelegramEndpoint(
+          dbOrTx,
+          {
+            companyId: issue.companyId,
+            conversationAgentId: issue.conversationAgentId ?? null,
+            endpointIds: bindings.map((binding) => binding.endpointId),
+          },
+        );
         for (const binding of bindings) {
+          const addressedPrefix = addressedReplyPrefixByEndpoint.get(binding.endpointId);
           await dbOrTx
             .insert(chatPublications)
             .values({
@@ -12570,9 +12611,9 @@ export function issueService(db: Db) {
               payload: projectSafeChatPublication({
                 classification: "external",
                 source: "agent_comment",
-                text:
-                  boardLinkTextByEndpoint.get(binding.endpointId) ??
-                  redactedBody,
+                text: addressedPrefix
+                  ? `${addressedPrefix}${boardLinkTextByEndpoint.get(binding.endpointId) ?? redactedBody}`
+                  : boardLinkTextByEndpoint.get(binding.endpointId) ?? redactedBody,
               }),
               state: "pending",
               createdAt: publicationCreatedAt,

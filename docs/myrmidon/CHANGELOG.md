@@ -10,30 +10,21 @@ version file to edit. Base Paperclip version is in the image label
 
 ## 1.6.1
 
-### Bot runtime tuning from the profile compiler (BOT-RUNTIME-TUNING part B)
+### Stale-block watchdog (STALE-BLOCK part B)
 
-- The bot profile compiler writes three settings into each bot's
-  `hermes/config.yaml` that it never wrote before:
-  `compression.threshold_tokens` (an absolute token cap — Hermes compresses
-  at the lower of its ratio threshold and this count, so a long session on a
-  large-window model no longer grows to half the window before compacting),
-  `model.context_length` (the context window of the card's model, from the
-  card's own `models.contextLength` or the instance's
-  `MYRMIDON_BOT_MODEL_CONTEXT_LENGTH` alias map), and the auxiliary models
-  `auxiliary.title_generation.model` / `auxiliary.compression.model` (the
-  title generator and the compression summarizer stop riding the main,
-  expensive model). Instance settings:
-  `MYRMIDON_BOT_COMPRESSION_THRESHOLD_TOKENS`,
-  `MYRMIDON_BOT_MODEL_CONTEXT_LENGTH`,
-  `MYRMIDON_BOT_AUX_TITLE_MODEL`, `MYRMIDON_BOT_AUX_COMPRESSION_MODEL`.
-  The card's entry always wins over the instance setting; unset stays unset
-  (no compiler-invented defaults). Values are validated in ranges at compile
-  time (10 000–2 000 000 for the token cap, 8 000–10 000 000 for the context
-  window): an out-of-range or non-integer value is dropped with a profile
-  warning in the container activity log — never a compile failure. Settings
-  are read on every profile build, and a change restarts the affected bot
-  containers on the next pass. Settings documentation:
-  [SETTINGS.md](SETTINGS.md) § Bot containers.
+- Periodic module `myrmidon/stale-block`: every
+  `MYRMIDON_STALE_BLOCK_INTERVAL_SEC` (default 300 s) it inspects blocked
+  tasks and lifts a block whose every reason is dead — a blocker task that
+  is done or cancelled (cancelled blockers never fire the
+  blockers-resolved path), a passed `reasonRef.dueAt` date, or a cleared
+  gate/event. Dead blocked-by edges are removed through the ordinary issue
+  update path, the task returns to `in_progress`, and one system comment
+  names the cause. A task with a live reason is untouched. Opt-in via
+  `MYRMIDON_STALE_BLOCK_ENABLED` (default 0).
+- One new attention source kind `stale_block`: a lifted block raises one
+  card for the lead and the operator, computed on the fly from a
+  process-level signal registry (no new store); cards fade after
+  `MYRMIDON_STALE_BLOCK_SIGNAL_TTL_MS` (default 24 h).
 
 ### Board administrators from agents (ADMIN-AGENT part C)
 
@@ -467,6 +458,7 @@ dockergate and fleetd images together (see [deploy.md](deploy.md#deploy-the-boar
   is snapshotted into the append-only `agent_instructions_revisions` history, and any
   earlier revision can be restored through the API — the restore itself becomes a new
   revision. Guide: [guides/agent-instructions-revisions.md](guides/agent-instructions-revisions.md) (#273, #299).
+
 ### Deploy and reliability
 
 - Automatic rollback by health for the board and the bot fleet (R5-C). A failed

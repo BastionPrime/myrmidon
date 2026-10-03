@@ -674,9 +674,11 @@ import {
 // immediate operator escalation
 import { shouldRetryOriginalExecutorForInfraInterrupt } from "../myrmidon/infra-interrupts.js";
 // myrmidon(X8d): quote the same person's other conversation (web <-> Telegram)
+// myrmidon(X9b): quoted context of the Telegram chat an @<alias> mention arrived in
 import {
   appendCrossChannelDelta,
   buildCrossChannelContext,
+  buildMentionedChatContext,
 } from "../myrmidon/agent-chat-bridge/cross-channel.js";
 
 // myrmidon(M3): owner signal on a budget hard-stop (see budget-signal.ts)
@@ -7153,7 +7155,15 @@ export async function resolveExternalChatWakeProvider(input: {
         eq(chatConversations.issueId, input.issueId),
         inArray(chatConversations.state, ["active", "waiting"]),
         eq(chatEndpoints.provider, provider),
-        eq(chatEndpoints.assignedAgentId, input.agentId),
+        // myrmidon(X9b): an @<alias>-addressed turn's conversation agent is
+        // not the endpoint's assigned agent; the conversation is already
+        // pinned to this issue (whose conversationAgentId is the run's
+        // agent), so accept either the assigned agent matching or the
+        // conversation issue's own agent matching.
+        or(
+          eq(chatEndpoints.assignedAgentId, input.agentId),
+          sql`exists (select 1 from issues conv where conv.company_id = ${chatConversations.companyId} and conv.id = ${chatConversations.issueId} and conv.conversation_agent_id = ${input.agentId})`,
+        ),
         inArray(chatEndpoints.status, ["active", "verifying"]),
       ),
     );
@@ -20596,6 +20606,21 @@ export function heartbeatService(
             })
           : null;
       if (x8CrossChannel?.full) taskMarkdown += `\n\n${x8CrossChannel.full}`;
+      // myrmidon(X9b): quote the Telegram chat an @<alias> mention arrived in
+      // into the addressed agent's turn (the mention chat is another agent's
+      // conversation on the same native thread, which X8d's sibling lookup
+      // cannot express). Applied for every turn of a conversation whose agent
+      // can differ from the endpoint's assigned one; for the endpoint agent's
+      // own conversation the wake comment's link is its own conversation, so
+      // the helper finds no other chat and returns "".
+      if (isConversation(issueContext) && issueId) {
+        const x9MentionChat = await buildMentionedChatContext(db, {
+          companyId: agent.companyId,
+          issueId,
+          wakeCommentId,
+        });
+        if (x9MentionChat) taskMarkdown += `\n\n${x9MentionChat}`;
+      }
       const taskMarkdownCompact = appendCrossChannelDelta(
         buildPaperclipTaskMarkdown({
           ...taskMarkdownInput,
