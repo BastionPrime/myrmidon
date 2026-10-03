@@ -568,6 +568,21 @@ database hit per wake.
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_ENABLED` | WAKE-GUARD | `1` (on) | Master switch of the wake guard: on — an event-free wake to a settle-pending task is skipped instead of dispatching a run | `0`/`false`/`off`/`no` — disable (wakes dispatch runs as before). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_TTL_SEC` | WAKE-GUARD | `60` | How long a suppress decision stays cached for one task (matches the sweep's default poll); the cache holds at most 1000 issues, least-recently-used eviction | From 1 to 3600; non-numeric, non-positive or above the cap — the default (60) |
 
+## 1.6 — BASELINE: frozen metric snapshots
+
+The server part of BASELINE computes, for an arbitrary window and per project
+and per agent role, the cycle time, the time in review, the return rate, the
+blocked time with its top causes, the runs per task and the LLM cost per task
+from the board's own history
+(`GET /api/myrmidon/companies/:companyId/baseline/metrics?from&to`). The
+periodic job below freezes the last 14 days into `baseline_metric_snapshots`,
+so a pilot after the autonomy changes can be compared against the number the
+board produced before them.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_BASELINE_INTERVAL_SEC` | 1.6-BASELINE | unset (off) | Period (sec) of the snapshot job: every tick recomputes the last 14 days per company and appends one frozen row to `baseline_metric_snapshots` | Unset or empty — no timer, no query. Set to an integer from 60 to 604800; an unreadable or out-of-range value keeps the job on with the daily default (86400) |
+
 ## 1.6 — SKILL-LIFECYCLE: company skill lifecycle
 
 Settings of `server/src/myrmidon/skill-lifecycle/`. A company skill is
