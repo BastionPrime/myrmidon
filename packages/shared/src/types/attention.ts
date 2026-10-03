@@ -21,6 +21,9 @@ export const ATTENTION_SOURCE_KINDS = [
   // myrmidon(SUB): an upstream release of a tracked stack component is newer
   // than the running version, or appeared since the previous release check.
   "stack_update",
+  // myrmidon(BOT-RUNTIME-TUNING D): a bot's gateway calls were served by a
+  // model outside its card more than the configured share of the window.
+  "model_fallback_alert",
 ] as const;
 
 export type AttentionSourceKind = (typeof ATTENTION_SOURCE_KINDS)[number];

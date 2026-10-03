@@ -692,3 +692,23 @@ outside: an operator turns it on together with `MYRMIDON_FORAGING_KEY_SECRET` wh
 sources need a token. Findings are recorded `unverified` until the skill lifecycle accepts
 them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand.
 
+
+## 1.6.1 — BOT-RUNTIME-TUNING D: model fallback attention signal
+
+Settings of `server/src/myrmidon/litellm-fallback-signal/`. The signal is off
+by default: without `MYRMIDON_MODEL_FALLBACK_ENABLED=1` no timer is armed and
+the attention feed never sees a fallback card. When on, the sweep reads the
+gateway spend log (the same client and master-key secret as M2-A
+litellm-costs), attributes rows to agents by the sha256 of each bot's virtual
+key, and raises ONE medium-severity attention card per agent whose fallback
+share — calls served by a model outside the agent's card model set — is at or
+above the threshold over the window. The card disappears when the share drops
+below half the threshold (hysteresis) or the window empties below min calls.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_MODEL_FALLBACK_ENABLED` | BOT-RUNTIME-TUNING D | unset (off) | Master switch of the fallback signal sweep: computes each agent's share of gateway calls served outside its card model set and records the attention signals the feed turns into cards | Only the exact values `1` or `true` enable it; unset, `0`, `false` or a typo — off, no timer, no card. Needs `MYRMIDON_LITELLM_*` (M2-A) to read the spend log; without them the sweep logs one warn per tick and stays idle |
+| `MYRMIDON_MODEL_FALLBACK_THRESHOLD_PCT` | BOT-RUNTIME-TUNING D | `20` | Fallback share (percent of attributed calls in the window) at which an agent gets the card. Exit is half of this (hysteresis: a share hovering at the threshold must not blink) | Integer from 1 to 100; non-integer or out of bounds — `20` |
+| `MYRMIDON_MODEL_FALLBACK_MIN_CALLS` | BOT-RUNTIME-TUNING D | `20` | Minimum attributed calls in the window before the agent is evaluated at all — two calls must not raise a signal | Integer from 1; non-integer or below — `20` |
+| `MYRMIDON_MODEL_FALLBACK_WINDOW_SEC` | BOT-RUNTIME-TUNING D | `3600` (1 h) | Length of the rolling window the share is computed over | Integer from 300 to 86400; non-integer or out of bounds — `3600` |
+| `MYRMIDON_MODEL_FALLBACK_INTERVAL_SEC` | BOT-RUNTIME-TUNING D | `300` | Sweep period, in seconds. A tick whose previous sweep is still running is skipped, not queued | Integer from 60 to 86400; non-integer or out of bounds — `300` |
