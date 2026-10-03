@@ -706,6 +706,9 @@ outside: an operator turns it on together with `MYRMIDON_FORAGING_KEY_SECRET` wh
 sources need a token. Findings are recorded `unverified` until the skill lifecycle accepts
 them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand.
 
+The flow end to end — the registry, how a pass works, the screen and the API — is
+the operator guide [guides/foraging.md](guides/foraging.md).
+
 
 ## 1.6.1 — BOT-RUNTIME-TUNING D: model fallback attention signal
 
