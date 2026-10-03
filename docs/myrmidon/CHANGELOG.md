@@ -8,6 +8,26 @@ version file to edit. Base Paperclip version is in the image label
 `io.github.itkadr-git.myrmidon.base.paperclip-version`. Details of the release procedure:
 [ci.md](ci.md) and [deploy.md](deploy.md).
 
+## 1.6.1
+
+### Board administrators from agents (ADMIN-AGENT part C)
+
+- The UI half of making an agent a board administrator. The agent card's
+  **Permissions / Trust** tab gains a fourth flag, **Board administrator**:
+  flipping it goes through the same permissions PATCH as the three sibling
+  flags, the state comes from the agent detail API
+  (`access.boardAdmin`, falling back to `permissions.boardAdmin`), and both
+  readers are fail-closed — anything but an explicit `true` reads as "not an
+  administrator". Operators see the toggle only with permission-management
+  authority (owner or admin membership, instance admin, local implicit
+  board); a 403 from the API becomes a plain-language note under the toggle.
+  The Company Settings **Members** page names every agent administrator: one
+  table row per non-terminated flagged agent, with a **Board administrator**
+  badge and a link to the agent's Permissions tab. The grant semantics (the
+  permission keys, the grant snapshot, the self-toggle prohibition) are the
+  server half of the feature and merge separately. Operator guide:
+  [guides/agent-board-admin.md](guides/agent-board-admin.md).
+
 ## 1.6.0
 
 ### CTO chat planner (CTO-CHAT B)
@@ -89,6 +109,158 @@ version file to edit. Base Paperclip version is in the image label
   an external MCP server and granting it to the design agents, the work
   designer and the SMM bot, plus the per-family live smoke:
   [guides/alibaba-image-connector.md](guides/alibaba-image-connector.md).
+### Stack update cycle documentation (STACK-UPDATES part D)
+
+- The stack-updates overview document (EN + RU) for the whole release-watch
+  cycle: where «ours» comes from per probe (health-commit, docker-image,
+  container-labels, env, manual, none) and where «latest» comes from (the
+  anonymous GitHub releases/tags read), how the lag is counted and why an
+  unmatched local version reads `unknown`, the notable-lines excerpt rules,
+  the patch-closed verdict (closed/open/unknown per carried delta through the
+  compare API, with the aggregate), the daily sweep behind
+  `MYRMIDON_STACK_CHECK_INTERVAL_SEC` and the manual check, the
+  `stack_update` attention card with its dedup key, the unassigned backlog
+  draft the planner creates, both settings and the network-down behavior
+  (transport failure → 503 with the previous cache intact; a per-source HTTP
+  error → a per-component unknown). The screen-by-column screen guide is
+  referenced, not duplicated. Document: [stack-updates.md](stack-updates.md).
+
+### Company regulations in the wiki (WIKI-CORTEX)
+
+- Regulation pages with a draft → approved lifecycle, revisions and rollback:
+  an edit of a draft or of an approved regulation appends a new DRAFT revision
+  and the resolver keeps serving the newest APPROVED one, so writing text
+  never changes what the fleet reads without an explicit board approval; a
+  rollback is one more revision that copies an earlier one (append-only
+  history, the restore is itself restorable). Draft writes are open to any
+  actor with access to the company — the wiki maintainer agent writes drafts —
+  while approve and rollback are board-only. The approved regulations that
+  apply to a role reach the agents through the compiled bot profile: one
+  deterministic workspace `REGULATIONS.md` beside the agent's own instruction
+  files, where the profile hash decides whether a bot restarts (same approved
+  revisions — same bytes — no restart; the file never shadows a
+  `REGULATIONS.md` the agent's own bundle ships). Roles are plain role keys
+  with `*` meaning every role. Operator guide — the API, the delivery
+  mechanics and the wiki-maintainer runbook:
+  [guides/wiki-regulations.md](guides/wiki-regulations.md).
+
+### Autonomy matrix
+
+- Role-by-action-class verdicts that say what an agent of a role may do on its
+  own and what needs the board: the matrix is stored as company regulations
+  with revisions and is served through a REST API. The «Autonomy matrix»
+  settings screen shows and edits the matrix; every change is a new revision,
+  so the previous verdicts stay readable and restorable.
+
+### Swarm claims (SWARM-CLAIM)
+
+- Part A, per-role task queues with leased claims: an agent takes the top task
+  of its own role's queue behind a lease (TTL plus heartbeat) recorded in the
+  new `issue_claims` table. The run's checkout writes the claim and a finishing
+  run releases it; a sweep returns expired leases, and leases of tasks that
+  left the queue, to the queue and wakes the next agent of the role. A
+  per-agent active-task limit keeps one agent from taking the whole queue, and
+  a P0 (critical) task preempts the normal queue order. The claim path is off
+  until `MYRMIDON_SWARM_CLAIM_ENABLED` is turned on; the lease TTL, the active
+  task ceiling and the sweep interval are `MYRMIDON_SWARM_LEASE_TTL_SEC`,
+  `MYRMIDON_SWARM_MAX_ACTIVE_TASKS` and
+  `MYRMIDON_SWARM_CLAIM_SWEEP_INTERVAL_SEC`.
+- Part B, the supervisor view and the pilot report over claims and leases: the
+  queue and lease state per role, and a window comparison against the frozen
+  baseline snapshot. The release fallback now also writes the release reason.
+  The supervisor settings (`MYRMIDON_SWARM_SUPERVISOR_TASK_MAX`,
+  `MYRMIDON_SWARM_PILOT_BASELINE_DOC`) are documented in
+  [SETTINGS.md](SETTINGS.md).
+
+### Skill lifecycle (SKILL-LIFECYCLE)
+
+- The company skill lifecycle `candidate → verified → deprecated`, with
+  approval-gated promotion and rollback. A `candidate` skill reaches only the
+  agents listed in `MYRMIDON_SKILL_PILOT_AGENTS`; a `verified` skill reaches
+  everyone. With the variable unset the pilot set is empty, so a candidate
+  reaches nobody.
+
+### Foraging (FORAGING)
+
+- A source registry per company, snapshot comparison of the sources, skill
+  candidates drafted from what changed, a per-pass cost budget and a screen.
+  Foraging ships DISABLED: no timer is armed and no source is read unless
+  `MYRMIDON_FORAGING_ENABLED=1` is set; any other value keeps it off, so a
+  typo cannot turn it on.
+
+### Baseline metrics (BASELINE part A)
+
+- Six board metrics computed from the task history over any window, by
+  project and by executor role: cycle time (todo → done, mean, median, p90),
+  time in review, return rate (in review → in progress), time blocked with the
+  top reasons, runs per task and LLM cost per task. They are served by
+  `GET /api/myrmidon/companies/:companyId/baseline/metrics?from&to`. A periodic
+  job, off unless `MYRMIDON_BASELINE_INTERVAL_SEC` is set, recomputes the last
+  14 days per company and freezes one snapshot per pass in the additive
+  `baseline_metric_snapshots` table, so a pilot can be compared with the
+  measured «before». A failure of one company does not stop the others.
+
+### Parallel helpers (PARALLEL-HELPERS)
+
+- Agents can run parallel helper subagents. The agent card gets a «Parallel
+  helpers» block: on/off, the maximum number of concurrent helpers within a
+  company ceiling, and the helper model from the allow-list; a company default
+  and a capacity hint sit beside it. The profile compiler writes the matching
+  delegation section for bot containers. When neither the card nor the stored
+  settings name a model, helpers run on `MYRMIDON_BOT_HELPER_MODEL`, or on the
+  parent agent's model if that is unset.
+
+### Quality and stack
+
+- The Quality page: window metrics by project and by role, built on the
+  baseline metrics above.
+- The Stack screen's release lag, patch status and update planner (described
+  in «Stack update screen» above) are documented in the stack guide, together
+  with the LLM tracing card and the operator signal guide.
+
+### Myrmidon 2.0 UI (behind `enableMyrmidonUi2`, off by default)
+
+- The 2.0 shell and six re-skinned data screens, shown only when the
+  `enableMyrmidonUi2` experimental flag is on; the denied lock fails closed
+  and there is no client-side undo timer. A per-user board UI language (RU/EN)
+  with catalogs and guards, an operator guide for the shell, and a fix of the
+  i18n guard so that it accepts the flat re-skin catalog.
+
+### Bot containers
+
+- The run-bound GitHub broker capability is delivered to container runs of the
+  gateway adapter; the token reaches only the agents listed in
+  `MYRMIDON_BOT_CONTAINER_GITHUB_ENV_ALLOWLIST`. Bot-side media scripts ship
+  under `tools/media-mcp/bot-scripts`, with a hygiene pass over them.
+
+### Deploy and release
+
+- `rollback.sh --local` rolls back to a local image without pulling.
+- The GitHub Release is now published by CI from the `myr-v*` tag, using this
+  file's section for the tag's version.
+
+### Fixes
+
+- The Telegram DM status is one edited message with live progress steps
+  instead of repeated «working…» messages.
+- Maintenance: leaving windows always retire, the tick isolates windows from
+  each other, and the owner chat never waits on it.
+- Closing a channel-bound task by its assigned agent notifies the bound chat.
+- No run is dispatched for a task whose delivering PRs all merged (the wake
+  guard); its settings are `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_*`, and the
+  settle sweep and the guard have an operator guide.
+- The gateway adapter joins the idempotency-keyed adapters for infra-interrupt
+  relief.
+- Secrets are masked in comment edits, issue descriptions and documents.
+- CI: five flaky tests were made deterministic, two real races behind them
+  were fixed, and three tests that blocked unrelated PRs were deflaked.
+
+### Upgrade notes
+
+- Additive migrations 0289–0295 (among them 0294, the baseline metric
+  snapshots, and 0295, the issue claims); no vendor table is modified.
+- Every new setting is off or closed by default; see [SETTINGS.md](SETTINGS.md)
+  before enabling any of them.
 
 ## 1.5.0
 

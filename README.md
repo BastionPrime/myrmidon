@@ -43,6 +43,7 @@ Each piece of the metaphor maps to something concrete in the product:
 | **Castes** | Roles for agents: today per-agent configuration of models, tool permissions and skills; the lead/overseer role reviews and approves. Strict model-based castes (heavy models audit, light models execute) are part of the swarm-claim design. | Per-agent configuration works today; caste queues are planned (1.6) |
 | **Foraging** | Agents gathering knowledge in idle time: a research grant of tokens per agent, findings land as draft skills and go live only after approval. | Planned (1.6) |
 | **The queen / overseer** | The lead agent and the human owner: the lead decomposes work, watches the board and reviews results; the owner approves what crosses the autonomy line. | Works today (board approvals, review gates, Telegram owner cards) |
+| **Agent board administrators** | An agent the organization trusts with board administration: a **Board administrator** toggle in the agent card's Permissions tab, and a badge row naming every agent administrator on the Members page. | Works today, UI half (see [agent-board-admin](docs/myrmidon/guides/agent-board-admin.md)); the grant semantics land with the server half |
 | **Autonomy matrix** | A hard line between what the colony does on its own (claiming tasks, choosing libraries, isolated debates) and what needs a human (new regulations, budget expansion, the final push to production, public posts). | Approvals and gates work today; the matrix as a first-class core policy is planned (1.6) |
 | **The colony's metabolism** | Budgets as computing energy: limits per company, per direction, per task; a hard stop for research, a soft stop (pause + question) for production work. | LLM spend tracking and budget signals work today; the full hierarchy of limits is planned (on the road to 2.0) |
 | **Shared memory of the swarm** | The colony's experience outlives a single run: per-agent memory banks, reviewable from the agent card. | Works today (see [agent-memory-card](docs/myrmidon/guides/agent-memory-card.md)) |
@@ -81,6 +82,11 @@ what exists as of 1.5:
   Commander chat of the 2.0 shell gives the same planning flow a screen —
   free-text entry with the proposed epic rendered read-only
   ([commander-chat](docs/myrmidon/guides/commander-chat.md)).
+- **Company regulations in the wiki.** The rules agents follow are wiki pages
+  with an audience of roles: an edit appends a draft revision and never
+  changes what the fleet reads, the board approves or rolls back, and the
+  approved text of the agent's role rides the compiled bot profile as
+  `REGULATIONS.md` ([wiki-regulations](docs/myrmidon/guides/wiki-regulations.md)).
 - **Memory per agent.** View, export and remove an agent's memory bank from
   its card ([agent-memory-card](docs/myrmidon/guides/agent-memory-card.md)).
 - **Maintenance windows and safe deploys.** A maintenance window pauses new

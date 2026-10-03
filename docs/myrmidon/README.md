@@ -57,6 +57,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [DIVERGENCE.md](DIVERGENCE.md) | Реестр наших отличий от вендора |
 | [SETTINGS.md](SETTINGS.md) | Наши настройки (переменные `MYRMIDON_*`) и их значения по умолчанию |
 | [board-key-rotation.md](board-key-rotation.md) | Runbook оператора: ротация и отзыв ключей доски / PAT по ролям (ROLE-SCOPED-TOKENS) |
+| [stack-updates.md](stack-updates.md) | Цикл обновлений стека: откуда «наше» и «у автора», отставание, вердикт «патч закрыт», плановая сверка и карточка `stack_update` (STACK-UPDATES часть D) |
 | [tracks/](tracks/) | Задания шести треков V1.0 |
 | [SESSION-PROMPTS.md](SESSION-PROMPTS.md) | Промпты для запуска сессий по трекам |
 
@@ -92,6 +93,8 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/task-pr-sync.md](guides/task-pr-sync.md) | Закрытие задачи по слитым PR: проход по рабочим продуктам `pull_request`, возврат исполнителю без слияния, гейты после выката, сторож побудок |
 | [guides/commander-chat.md](guides/commander-chat.md) | Экран «Чат с Полководцем» в интерфейсе 2.0 (CTO-CHAT A): входы (рейка, телефон, палитра с подсказкой `Ctrl K`), запрос свободным текстом, предложенный план, карточка согласования, тот же поток из Telegram-лички |
 | [guides/alibaba-image-connector.md](guides/alibaba-image-connector.md) | Коннектор alibaba-image (1.6): бесплатные генерация и правка картинок для агентов — инструменты и модели реестра, запуск контейнера в окне выката (порт 8083, ключ :ro, общий workspace), подключение ботам через external-MCP и гранты, смоук |
+| [guides/wiki-regulations.md](guides/wiki-regulations.md) | Регламенты компании в вики (1.6 WIKI-CORTEX): жизненный цикл «черновик → одобрено», ревизии и откат, роли и ключ `*`, доставка `REGULATIONS.md` в профиль бота, агент-википедист |
+| [guides/agent-board-admin.md](guides/agent-board-admin.md) | Администратор доски из агентов (1.6.1 ADMIN-AGENT C): переключатель «Board administrator» на вкладке Permissions карточки агента, кто его видит, страница Members с бейджем админа-агента, fail-closed чтение флага |
 
 ## Сборка и запуск
 
