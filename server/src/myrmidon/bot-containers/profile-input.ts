@@ -15,6 +15,9 @@
 // message is safe to show in the reconcile activity log.
 
 import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS } from "@paperclipai/shared";
+// myrmidon(PARALLEL-HELPERS): card + company ceiling -> the values the compiler writes
+// into config.yaml's `delegation` section (and the toolset switch).
+import { PARALLEL_HELPERS_DEFAULT_MODEL_ENV, readParallelHelpersCard, resolveParallelHelpers, type ParallelHelpersSettings } from "@paperclipai/shared";
 import { BOT_BOARD_GATEWAY_SERVER_NAME } from "./board-gateway.js";
 import type {
   HermesProfileAdapterConfig,
@@ -48,6 +51,17 @@ export const BOT_BOARD_URL_ENV = "MYRMIDON_BOT_BOARD_URL";
 export const BOT_RUNTIME_MCP_URL_BASE_ENV = "MYRMIDON_HERMES_RUNTIME_MCP_URL_BASE";
 /** Instance-wide MCP servers every bot gets (ragflow and the like): a JSON array, see `parseBotMcpServers`. */
 export const BOT_MCP_SERVERS_ENV = "MYRMIDON_BOT_MCP_SERVERS";
+// myrmidon(BOT-RUNTIME-TUNING-B): instance-wide compression token cap —
+// absolute number of tokens; Hermes compresses at the lower of the ratio
+// threshold and this count. Default 100_000: the ticket's fleet default, set
+// by the instance, not the compiler (unset would mean Hermes's own 256K).
+export const BOT_COMPRESSION_THRESHOLD_TOKENS_ENV = "MYRMIDON_BOT_COMPRESSION_THRESHOLD_TOKENS";
+/** myrmidon(BOT-RUNTIME-TUNING-B): default per-alias map, "alias=tokens,alias=tokens". */
+export const BOT_MODEL_CONTEXT_LENGTH_ENV = "MYRMIDON_BOT_MODEL_CONTEXT_LENGTH";
+/** myrmidon(BOT-RUNTIME-TUNING-B): instance default for auxiliary.title_generation.model (a gateway model alias). */
+export const BOT_AUX_TITLE_MODEL_ENV = "MYRMIDON_BOT_AUX_TITLE_MODEL";
+/** myrmidon(BOT-RUNTIME-TUNING-B): instance default for auxiliary.compression.model (a gateway model alias). */
+export const BOT_AUX_COMPRESSION_MODEL_ENV = "MYRMIDON_BOT_AUX_COMPRESSION_MODEL";
 
 /**
  * One instance-wide MCP server. The token is never in the setting: `tokenSecret`
@@ -103,10 +117,53 @@ export interface BotProfileSettings {
   /** Why MYRMIDON_BOT_MCP_SERVERS could not be used; null when it is unset or valid.
    *  `assertBotProfileSettings` throws it: a broken declaration must not silently mean "no MCP". */
   mcpServersError: string | null;
+  /**
+   * myrmidon(BOT-RUNTIME-TUNING-B): MYRMIDON_BOT_COMPRESSION_THRESHOLD_TOKENS,
+   * an absolute token cap written to `compression.threshold_tokens` whenever
+   * set (the compiler adds no default of its own; Hermes's own default is
+   * 256_000). Invalid values are reported per entry, not thrown: a bad
+   * threshold must not stop a bot's profile from compiling. Optional in the
+   * type so preexisting hand-built settings objects (older callers, part C's
+   * card-env tests) keep compiling; `readBotProfileSettings` always fills it.
+   */
+  compressionThresholdTokens?: number | null;
+  /** Why MYRMIDON_BOT_COMPRESSION_THRESHOLD_TOKENS could not be used; null when unset or valid. */
+  compressionThresholdTokensError?: string | null;
+  /**
+   * myrmidon(BOT-RUNTIME-TUNING-B): MYRMIDON_BOT_MODEL_CONTEXT_LENGTH,
+   * "alias=tokens,alias=tokens"; written to `model.context_length` for a card
+   * whose model matches an alias (the card's own `models.contextLength` wins).
+   */
+  modelContextLengths?: Record<string, number> | null;
+  /** Why MYRMIDON_BOT_MODEL_CONTEXT_LENGTH could not be used; null when unset or fully valid. */
+  modelContextLengthsError?: string | null;
+  /**
+   * myrmidon(BOT-RUNTIME-TUNING-B): MYRMIDON_BOT_AUX_TITLE_MODEL — the gateway
+   * model alias written to `auxiliary.title_generation.model` when a card sets
+   * none. No default: the operator names a model the gateway actually knows
+   * (a hard-coded "free" model would silently break bots).
+   */
+  auxiliaryTitleModel?: string | null;
+  /**
+   * myrmidon(BOT-RUNTIME-TUNING-B): MYRMIDON_BOT_AUX_COMPRESSION_MODEL — same
+   * for `auxiliary.compression.model`.
+   */
+  auxiliaryCompressionModel?: string | null;
 }
 
 function readSetting(env: NodeJS.ProcessEnv, name: string): string | null {
   const value = env[name]?.trim();
+  return value ? value : null;
+}
+
+/**
+ * myrmidon(PARALLEL-HELPERS): `readSetting` over the card's resolved env (a
+ * plain record of `HermesProfileEnvEntry`), for the instance-level default
+ * helper model. Instance-level values always win over the card here only when
+ * the card's own block names no model — the normal precedence for defaults.
+ */
+function readSettingFromRecord(env: Record<string, HermesProfileEnvEntry>, name: string): string | null {
+  const value = env[name]?.value?.trim();
   return value ? value : null;
 }
 
@@ -206,9 +263,63 @@ export function parseBotHindsightAllowedBanks(raw: string | null): string[] | nu
   return banks.length > 0 ? banks : null;
 }
 
+/**
+ * myrmidon(BOT-RUNTIME-TUNING-B): MYRMIDON_BOT_COMPRESSION_THRESHOLD_TOKENS —
+ * an integer token count. Not a hard fail: a value that is not an integer
+ * (or an empty string) is reported in `error` and dropped, because a bad
+ * threshold must not stop a bot's profile from compiling — the warning
+ * surface (the reconcile activity log) is where an operator sees it.
+ */
+export function parseBotCompressionThresholdTokens(raw: string | null): { value: number | null; error: string | null } {
+  if (raw === null) return { value: null, error: null };
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed)) {
+    return { value: null, error: `${BOT_COMPRESSION_THRESHOLD_TOKENS_ENV}: "${raw}" is not an integer` };
+  }
+  return { value: parsed, error: null };
+}
+
+/**
+ * myrmidon(BOT-RUNTIME-TUNING-B): MYRMIDON_BOT_MODEL_CONTEXT_LENGTH —
+ * "alias=tokens,alias=tokens". Duplicates: the last one wins. Entries without
+ * "=" or with a non-integer token count are reported in `error` and skipped;
+ * a valid prefix still applies (the map is best-effort, an alias the compiler
+ * validates again by range before writing it).
+ */
+export function parseBotModelContextLengths(raw: string | null): { map: Record<string, number> | null; error: string | null } {
+  if (raw === null) return { map: null, error: null };
+  const errors: string[] = [];
+  const map: Record<string, number> = {};
+  for (const item of raw.split(",")) {
+    const entry = item.trim();
+    if (!entry) continue;
+    const eq = entry.indexOf("=");
+    if (eq <= 0) {
+      errors.push(`"${entry}" has no "="`);
+      continue;
+    }
+    const alias = entry.slice(0, eq).trim();
+    const tokens = Number(entry.slice(eq + 1).trim());
+    if (!alias || !Number.isInteger(tokens)) {
+      errors.push(`"${entry}" is not "alias=tokens"`);
+      continue;
+    }
+    map[alias] = tokens;
+  }
+  if (Object.keys(map).length === 0) {
+    return { map: null, error: errors.length > 0 ? `${BOT_MODEL_CONTEXT_LENGTH_ENV}: ${errors.join("; ")}` : null };
+  }
+  return { map, error: errors.length > 0 ? `${BOT_MODEL_CONTEXT_LENGTH_ENV}: ${errors.join("; ")} (skipped)` : null };
+}
+
 export function readBotProfileSettings(env: NodeJS.ProcessEnv = process.env): BotProfileSettings {
   const llmApiKeyEnv = readSetting(env, BOT_LLM_API_KEY_ENV_ENV);
   const mcp = parseBotMcpServers(readSetting(env, BOT_MCP_SERVERS_ENV));
+  // myrmidon(BOT-RUNTIME-TUNING-B): the instance defaults the profile compiler
+  // writes into config.yaml — read here so a corrected variable takes effect
+  // on the next compile tick, like the rest of this settings object.
+  const compressionTokens = parseBotCompressionThresholdTokens(readSetting(env, BOT_COMPRESSION_THRESHOLD_TOKENS_ENV));
+  const contextLengths = parseBotModelContextLengths(readSetting(env, BOT_MODEL_CONTEXT_LENGTH_ENV));
   return {
     hindsightApiUrl: readSetting(env, BOT_HINDSIGHT_API_URL_ENV),
     hindsightBank: readSetting(env, BOT_HINDSIGHT_BANK_ENV),
@@ -220,6 +331,12 @@ export function readBotProfileSettings(env: NodeJS.ProcessEnv = process.env): Bo
     runtimeMcpUrlBase: readSetting(env, BOT_RUNTIME_MCP_URL_BASE_ENV)?.replace(/\/+$/, "") ?? null,
     mcpServers: mcp.servers,
     mcpServersError: mcp.error,
+    compressionThresholdTokens: compressionTokens.value,
+    compressionThresholdTokensError: compressionTokens.error,
+    modelContextLengths: contextLengths.map,
+    modelContextLengthsError: contextLengths.error,
+    auxiliaryTitleModel: readSetting(env, BOT_AUX_TITLE_MODEL_ENV),
+    auxiliaryCompressionModel: readSetting(env, BOT_AUX_COMPRESSION_MODEL_ENV),
   };
 }
 
@@ -373,6 +490,14 @@ export interface BotProfileSource {
   paperclipApiKey: string;
   mcpServers: readonly BotMcpSource[];
   instanceDefaults?: HermesProfileInstanceDefaults;
+  /**
+   * myrmidon(PARALLEL-HELPERS): the company ceiling/default for helpers, from
+   * instance settings (`general.parallelHelpers`), as the ports read it.
+   * Optional: absent = module defaults. The RESOLUTION against the card happens
+   * here (not in the compiler) so that the pure compiler keeps no settings
+   * knowledge; `resolveParallelHelpers` also normalizes the model fallback.
+   */
+  parallelHelpersSettings?: ParallelHelpersSettings;
 }
 
 export interface BuiltBotProfileInput {
@@ -420,9 +545,24 @@ function readAdapterConfig(card: Record<string, unknown>): HermesProfileAdapterC
       stt: asTrimmedString(models.stt),
       tts: asTrimmedString(models.tts),
       fallbacks: asStringList(models.fallbacks),
+      // myrmidon(BOT-RUNTIME-TUNING-B): context window and auxiliary models from
+      // the card's "Additional models" block; validated by the compiler.
+      contextLength: asTrimmedPositiveInt(models.contextLength),
+      titleGeneration: asTrimmedString(models.titleGeneration),
+      compressionSummary: asTrimmedString(models.compressionSummary),
     },
+    // myrmidon(PARALLEL-HELPERS): the raw card block; resolved against the company
+    // ceiling in buildHermesProfileInput (the ceiling is instance settings).
+    parallelHelpers: readParallelHelpersCard(card),
     toolsets,
   };
+}
+
+/** A positive integer read from user-edited card JSON; anything else is undefined (a card is never trusted). */
+function asTrimmedPositiveInt(value: unknown): number | undefined {
+  const trimmed = typeof value === "string" ? value.trim() : value;
+  if (typeof trimmed !== "number" || !Number.isInteger(trimmed)) return undefined;
+  return trimmed > 0 ? trimmed : undefined;
 }
 
 const RECALL_BUDGETS = ["low", "mid", "high"] as const;
@@ -635,6 +775,31 @@ export function buildHermesProfileInput(source: BotProfileSource, settings: BotP
   const mcp = buildMcpServers(source.mcpServers, effectiveMcpUrlBase(card, settings), warnings);
   Object.assign(env, mcp.env);
 
+  // myrmidon(BOT-RUNTIME-TUNING-B): the instance defaults for compression,
+  // per-model context windows and auxiliary models. A source that already
+  // carries instanceDefaults (a caller with its own map) wins per-field where
+  // it sets something; the settings-derived values fill the rest, so a card's
+  // explicit values keep winning over both.
+  const settingsInstanceDefaults: HermesProfileInstanceDefaults = {
+    compression: {
+      ...(source.instanceDefaults?.compression ?? {}),
+      ...(settings.compressionThresholdTokens !== null
+        ? { thresholdTokens: settings.compressionThresholdTokens }
+        : {}),
+    },
+    sessionsRetentionDays: source.instanceDefaults?.sessionsRetentionDays,
+    modelContextLengths: settings.modelContextLengths ?? source.instanceDefaults?.modelContextLengths,
+    auxiliary: {
+      ...(source.instanceDefaults?.auxiliary ?? {}),
+      ...(settings.auxiliaryTitleModel ? { titleGenerationModel: settings.auxiliaryTitleModel } : {}),
+      ...(settings.auxiliaryCompressionModel ? { compressionModel: settings.auxiliaryCompressionModel } : {}),
+    },
+  };
+  const instanceDefaultsWarnings: string[] = [];
+  if (settings.compressionThresholdTokensError) instanceDefaultsWarnings.push(settings.compressionThresholdTokensError);
+  if (settings.modelContextLengthsError) instanceDefaultsWarnings.push(settings.modelContextLengthsError);
+  warnings.push(...instanceDefaultsWarnings);
+
   const input: HermesProfileInput = {
     botKey: source.botKey,
     adapterConfig: readAdapterConfig(card),
@@ -651,7 +816,17 @@ export function buildHermesProfileInput(source: BotProfileSource, settings: BotP
       : {},
     mcpServers: mcp.servers,
     maxConcurrentRuns: readMaxConcurrentRuns(source.runtimeConfig),
-    instanceDefaults: source.instanceDefaults ?? {},
+    // myrmidon(PARALLEL-HELPERS): card block + company ceiling -> delegation
+    // config (see resolveParallelHelpers). The default helper model comes from
+    // MYRMIDON_BOT_HELPER_MODEL on the card's env — an instance value, not a
+    // literal in code, so no model name is baked into the product. The card's
+    // env is a plain record here, so index it directly rather than casting.
+    parallelHelpers: resolveParallelHelpers(
+      card,
+      source.parallelHelpersSettings,
+      readSettingFromRecord(env, PARALLEL_HELPERS_DEFAULT_MODEL_ENV) ?? "",
+    ),
+    instanceDefaults: settingsInstanceDefaults,
     apiServerKey: source.apiServerKey,
     // settings.boardUrl is non-null here: assertBotProfileSettings threw otherwise.
     paperclipApiUrl: settings.boardUrl as string,
