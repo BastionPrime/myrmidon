@@ -20,6 +20,8 @@ import type {
 } from "@paperclipai/shared";
 import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, supportedEnvironmentDriversForAdapter, isValidBrowserCode, ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
 import type { AdapterModel } from "../api/agents";
+import { ENABLED_MODELS_POLL_MS, sortModelsFreeFirst } from "../hooks/useEnabledAdapterModels";
+import { useTranslation } from "@/i18n";
 import { agentsApi } from "../api/agents";
 import { ApiError } from "../api/client";
 import { environmentsApi } from "../api/environments";
@@ -925,6 +927,13 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       provider: modelProvider,
     }),
     enabled: Boolean(selectedCompanyId),
+    // MODEL-PROVIDERS D (1.6.1): the enabled model list lives in the board DB;
+    // a model enabled in the settings shows up in this picker without a page
+    // reload, so the entry is never served long-stale and is polled while the
+    // card is open.
+    staleTime: 0,
+    refetchInterval: ENABLED_MODELS_POLL_MS,
+    refetchOnWindowFocus: true,
   });
   const [refreshModelsError, setRefreshModelsError] = useState<string | null>(null);
   const [refreshingModels, setRefreshingModels] = useState(false);
@@ -3786,6 +3795,7 @@ export function ModelDropdown({
   emptyDetectHint?: string;
   defaultLabel?: string;
 }) {
+  const { t } = useTranslation();
   const [modelSearch, setModelSearch] = useState("");
   const [detectingModel, setDetectingModel] = useState(false);
   const selected = models.find((m) => m.id === value);
@@ -3823,7 +3833,8 @@ export function ModelDropdown({
       return [
         {
           provider: "models",
-          entries: [...filteredModels].sort((a, b) => a.id.localeCompare(b.id)),
+          // MODEL-PROVIDERS D (1.6.1): free models first, then alphabetical.
+          entries: sortModelsFreeFirst(filteredModels),
         },
       ];
     }
@@ -3838,7 +3849,7 @@ export function ModelDropdown({
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([provider, entries]) => ({
         provider,
-        entries: [...entries].sort((a, b) => a.id.localeCompare(b.id)),
+        entries: sortModelsFreeFirst(entries),
       }));
   }, [filteredModels, groupByProvider]);
 
@@ -4037,7 +4048,7 @@ export function ModelDropdown({
                     type="button"
                     key={m.id}
                     className={cn(
-                      "flex items-center w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
+                      "flex items-center gap-2 w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
                       m.id === value && "bg-accent",
                     )}
                     onClick={() => {
@@ -4045,9 +4056,23 @@ export function ModelDropdown({
                       onOpenChange(false);
                     }}
                   >
-                    <span className="block w-full text-left truncate" title={m.id}>
+                    <span className="block min-w-0 flex-1 text-left truncate" title={m.id}>
                       {groupByProvider ? extractModelName(m.id) : m.label}
                     </span>
+                    {m.pricing === "free" || m.pricing === "paid" ? (
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "ml-auto shrink-0 text-(length:--text-nano) px-1.5",
+                          m.pricing === "free"
+                            ? "bg-green-500/15 text-green-400 border-green-500/20"
+                            : "bg-amber-500/15 text-amber-400 border-amber-500/20",
+                        )}
+                        data-model-pricing={m.pricing}
+                      >
+                        {t(m.pricing === "free" ? "cardModels.free" : "cardModels.paid")}
+                      </Badge>
+                    ) : null}
                   </button>
                 ))}
               </div>
