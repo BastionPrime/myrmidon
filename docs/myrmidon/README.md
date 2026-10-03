@@ -94,6 +94,7 @@ Myrmidon не отправляет телеметрию вендору. В ко�
 | [guides/commander-chat.md](guides/commander-chat.md) | Экран «Чат с Полководцем» в интерфейсе 2.0 (CTO-CHAT A): входы (рейка, телефон, палитра с подсказкой `Ctrl K`), запрос свободным текстом, предложенный план, карточка согласования, тот же поток из Telegram-лички |
 | [guides/wiki-regulations.md](guides/wiki-regulations.md) | Регламенты компании в вики (1.6 WIKI-CORTEX): жизненный цикл «черновик → одобрено», ревизии и откат, роли и ключ `*`, доставка `REGULATIONS.md` в профиль бота, агент-википедист |
 | [guides/agent-board-admin.md](guides/agent-board-admin.md) | Администратор доски из агентов (1.6.1 ADMIN-AGENT C): переключатель «Board administrator» на вкладке Permissions карточки агента, кто его видит, страница Members с бейджем админа-агента, fail-closed чтение флага |
+| [guides/actor-grant-routes.md](guides/actor-grant-routes.md) | Грантовые проверки актора (1.6.1 ADMIN-AGENT часть B): какие маршруты окружений и tool-подключений пускают агента с грантом, ключи прав по маршрутам, выдача грантов, атрибуция агента в журнале активности |
 
 ## Сборка и запуск
 

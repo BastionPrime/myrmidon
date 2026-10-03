@@ -10,6 +10,25 @@ version file to edit. Base Paperclip version is in the image label
 
 ## 1.6.1
 
+### Grant-based actor permission checks (ADMIN-AGENT part B)
+
+- Board-only actor-type checks on the company environments and
+  tool-connections routes now follow the company permission grant: an agent
+  actor passes when the company grants it the matching permission key —
+  `environments:manage` for the environments routes (including reading the
+  shared instance environment catalog), `tools:admin` for stdio command
+  templates and tool gateway management, `tools:manage_connections` (or
+  `tools:use` on the connection test routes) for connection testing,
+  `tools:manage_runtime` for runtime slot control, and `tools:view_audit` for
+  the raw gateway audit read. Board actors keep the exact previous semantics
+  (instance admins and the local implicit board pass; signed-in members pass
+  with the grant; viewers stay read-only), and an agent without a grant gets
+  the same 403 as before the change, so enabling nothing changes nothing.
+  Tool mutation activity-log rows now record the real acting principal — an
+  agent-actor mutation writes `actorType: "agent"` with the agent and run ids
+  instead of the old hardcoded board-user placeholder. Operator guide:
+  [guides/actor-grant-routes.md](guides/actor-grant-routes.md).
+
 ### Board administrators from agents (ADMIN-AGENT part C)
 
 - The UI half of making an agent a board administrator. The agent card's
@@ -27,6 +46,7 @@ version file to edit. Base Paperclip version is in the image label
   permission keys, the grant snapshot, the self-toggle prohibition) are the
   server half of the feature and merge separately. Operator guide:
   [guides/agent-board-admin.md](guides/agent-board-admin.md).
+ 2b511513d (docs(admin-agent): grant-based actor permission checks on environments and tool-connections routes (ADMIN-AGENT part B))
 
 ## 1.6.0
 
