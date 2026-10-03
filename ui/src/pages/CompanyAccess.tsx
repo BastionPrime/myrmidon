@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AGENT_ROLE_LABELS,
   HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS,
   hidesCompanyPage,
+  readAgentBoardAdmin,
   type Agent,
 } from "@paperclipai/shared";
 import { Shield, ShieldCheck, Trash2 } from "lucide-react";
@@ -21,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { agentDetailHref } from "@/pages/agent-detail-navigation";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
 import { useToast } from "@/context/ToastContext";
@@ -259,6 +262,13 @@ export function CompanyAccess() {
   );
   const activeReassignmentAgents = (agentsQuery.data ?? []).filter(isAssignableAgent);
   const assignedIssues = assignedIssuesQuery.data ?? [];
+  // myrmidon(ADMIN-AGENT): agents that hold the board administrator flag, shown
+  // in the members table so the rights page names every board administrator.
+  // Fail-closed reader: only an explicit true flags an administrator, and
+  // terminated agents stay out of the listing.
+  const boardAdminAgents = (agentsQuery.data ?? [])
+    .filter((agent) => agent.status !== "terminated")
+    .filter((agent) => readAgentBoardAdmin({ permissions: agent.permissions }));
 
   return (
     <div className="max-w-6xl space-y-8">
@@ -344,13 +354,43 @@ export function CompanyAccess() {
               </tr>
             </thead>
             <tbody>
-              {members.length === 0 ? (
+              {members.length === 0 && boardAdminAgents.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-3 py-8 text-muted-foreground">
                     No user memberships found for this organization yet.
                   </td>
                 </tr>
-              ) : members.map((member) => {
+              ) : null}
+              {boardAdminAgents.map((agent) => (
+                <tr key={`agent-${agent.id}`} className="border-b border-border" data-testid="board-admin-agent-row">
+                  <td className="px-3 py-3">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <Avatar size="sm">
+                        <AvatarFallback>{agent.name.slice(0, 2).toUpperCase()}</AvatarFallback>
+                      </Avatar>
+                      <Link to={agentDetailHref(agent.urlKey, "permissions")} className="truncate font-medium">
+                        {agent.name}
+                      </Link>
+                    </div>
+                  </td>
+                  <td className="px-3 py-3 text-muted-foreground">—</td>
+                  <td className="px-3 py-3">
+                    <div className="flex items-center gap-2">
+                      <span>{AGENT_ROLE_LABELS[agent.role] ?? agent.role}</span>
+                      <Badge variant="outline" data-testid="board-admin-agent-badge">Board administrator</Badge>
+                    </div>
+                  </td>
+                  <td className="px-3 py-3">
+                    <Badge variant={agent.status === "active" ? "secondary" : "outline"}>
+                      {agent.status.replace("_", " ")}
+                    </Badge>
+                  </td>
+                  <td className="px-3 py-3 text-right text-muted-foreground">
+                    <Link to={agentDetailHref(agent.urlKey, "permissions")}>Permissions</Link>
+                  </td>
+                </tr>
+              ))}
+              {members.map((member) => {
                 const removalReason = member.removal?.reason ?? null;
                 const canArchive = member.removal?.canArchive ?? true;
                 const displayName = memberDisplayName(member);
