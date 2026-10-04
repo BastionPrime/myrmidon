@@ -10,6 +10,23 @@ version file to edit. Base Paperclip version is in the image label
 
 ## Unreleased
 
+### Automatic rollback by health: operator guide (AUTO-UPDATE-SETTINGS A)
+
+- Docs only: the existing R5-C behavior (a failed post-deploy health check rolls
+  the board back to the remembered previous image, `auto_rolled_back` /
+  `failed_rollback`) gets its operator guide,
+  [guides/deploy-auto-rollback.md](guides/deploy-auto-rollback.md)
+  ([RU](guides/deploy-auto-rollback.ru.md)): when the rollback fires, the job
+  and report phases, where the failure reason is recorded (job steps, activity
+  log, the executor log), what the owner sees when a rollback fails (the
+  maintenance banner, the Board update panel, the Telegram digest), and the
+  settings of both halves of the switch. The `MYRMIDON_DEPLOY_AUTO_ROLLBACK`
+  row of [SETTINGS.md](SETTINGS.md) links the guide. No code change; the
+  acceptance test of the behavior is the R5-C block of
+  `server/src/myrmidon/deploy-jobs/service.myrmidon.test.ts` and
+  `scripts/myrmidon/deploy/deploy-from-job.test.mjs` (a deliberately broken
+  image against the fake driver).
+
 ### Maintenance: asynchronous exit and the post-deploy fleet check (EXIT-ASYNC + POST-DEPLOY-CHECK)
 
 - Leaving maintenance mode is asynchronous (#268): the `exit` call returns as

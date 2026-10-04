@@ -462,6 +462,9 @@ which command to run.
 The board can start its own deploy: the instance settings ("Board update") verify a digest,
 open a maintenance window, hand the switch to a host executor and follow it to health. The
 rules are the script's rules, not a second policy:
+The automatic rollback on a failed health check is the operator guide
+[guides/deploy-auto-rollback.md](guides/deploy-auto-rollback.md).
+
 
 - the same CI-image check (reference, registry, labels, commit on main or a myr-v* tag) runs
   BEFORE the maintenance window opens — a refused image changes nothing, not even run
