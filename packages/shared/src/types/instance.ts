@@ -96,6 +96,14 @@ export interface InstanceGeneralSettings {
    */
   swarmClaim?: SwarmClaimSettings;
   /**
+   * myrmidon(1.6.1 SWARM-SETTINGS-UI): the change journal of the swarm-claim
+   * pilot settings — who changed what, and when, newest first. Written by the
+   * swarm-claim settings service on every PATCH, read by
+   * GET /api/myrmidon/swarm-claim. Kept in sync with the validator of the
+   * same field (packages/shared/src/validators/instance.ts).
+   */
+  swarmClaimJournal?: unknown[];
+  /**
    * myrmidon(1.6.1-WIP-LIMIT-A): per-agent WIP limits, changed from
    * `GET`/`PUT /api/myrmidon/companies/:companyId/wip-limit/settings`. Absent
    * means "count only, never signal". Kept in sync with the validator of the

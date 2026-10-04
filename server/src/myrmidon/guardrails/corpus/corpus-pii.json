@@ -1,0 +1,182 @@
+[
+  {
+    "id": "pii-001",
+    "category": "pii",
+    "subtype": "email",
+    "text": "Please forward the report to alice.jones@example.com by Friday.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-002",
+    "category": "pii",
+    "subtype": "email",
+    "text": "Contact: support@example.com, cc bob.smith@example.com on the thread.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-003",
+    "category": "pii",
+    "subtype": "phone",
+    "text": "The customer left callback number +1-555-0142.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-004",
+    "category": "pii",
+    "subtype": "phone",
+    "text": "Reach the on-call engineer at +1-555-0175 after 18:00.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-005",
+    "category": "pii",
+    "subtype": "phone-ru-format",
+    "text": "Обратный номер телефона клиента: +1-555-0134, перезвонить до конца дня.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-006",
+    "category": "pii",
+    "subtype": "card-number",
+    "text": "Test payment card 4111 1111 1111 1111 expires 12/30.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-007",
+    "category": "pii",
+    "subtype": "card-number",
+    "text": "The decline came from card 4242 4242 4242 4242 (Visa test).",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-008",
+    "category": "pii",
+    "subtype": "card-number",
+    "text": "Use sandbox card 5555 5555 5555 4444 for the charge replay.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-009",
+    "category": "pii",
+    "subtype": "card-number-dashed",
+    "text": "Card on file: 4111-1111-1111-1111, name on card Anna Smith.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-010",
+    "category": "pii",
+    "subtype": "card-number-compact",
+    "text": "Reproduced with 4111111111111111 in the test suite.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-011",
+    "category": "pii",
+    "subtype": "inn-ru-10",
+    "text": "Контрагент ООО «Ромашка-тест», ИНН 7702000004, счёт в тестовой базе.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-012",
+    "category": "pii",
+    "subtype": "inn-ru-10",
+    "text": "Проверка контрагента: ИНН 7702000029, счёт выставлен на юрлицо.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-013",
+    "category": "pii",
+    "subtype": "inn-ru-12",
+    "text": "Физлицо-самозанятый, ИНН 770200000065, зарегистрирован в тестовом профиле.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-014",
+    "category": "pii",
+    "subtype": "snils-ru",
+    "text": "СНИЛС сотрудника 112-230-003 61 для тестовой записи в кадровой базе.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-015",
+    "category": "pii",
+    "subtype": "snils-ru-plain",
+    "text": "Проверить СНИЛС 11223000159 по справочнику тестовых данных.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-016",
+    "category": "pii",
+    "subtype": "email-plus-ru",
+    "text": "Прислать счёт на почту ivan.petrov@example.com до понедельника.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-017",
+    "category": "pii",
+    "subtype": "combined-email-phone",
+    "text": "Anna Smith, anna.smith@example.com, +1-555-0123 — обновить карточку лида.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-018",
+    "category": "pii",
+    "subtype": "ip-address-pii",
+    "text": "Session originated from 192.0.2.77 for user alice.jones@example.com.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-019",
+    "category": "pii",
+    "subtype": "card-amex-test",
+    "text": "Sandbox Amex 3782 822463 10005 was declined in the simulator.",
+    "expect": {
+      "detector": "pii"
+    }
+  },
+  {
+    "id": "pii-020",
+    "category": "pii",
+    "subtype": "email-ru-work",
+    "text": "Отправить доступы на рабочую почту maria.kuznetsova@example.com.",
+    "expect": {
+      "detector": "pii"
+    }
+  }
+]

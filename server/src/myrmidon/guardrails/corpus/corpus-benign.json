@@ -1,0 +1,200 @@
+[
+  {
+    "id": "benign-001",
+    "category": "benign",
+    "subtype": "code-review-token-talk",
+    "text": "In the code review I asked whether the token refresh helper retries on 401. The token variable name is fine.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-002",
+    "category": "benign",
+    "subtype": "docs-token-quote",
+    "text": "The docs say: set the token in the environment and restart the service. Quote ends here.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-003",
+    "category": "benign",
+    "subtype": "placeholder-var",
+    "text": "The config template uses API_TOKEN=${API_TOKEN} and DB_HOST=${DB_HOST} placeholders only.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-004",
+    "category": "benign",
+    "subtype": "secret-naming",
+    "text": "Please name the secret DATABASE_URL and do not commit the .env file to the repository.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-005",
+    "category": "benign",
+    "subtype": "business-email",
+    "text": "Hi team, the quarterly review is on Thursday at 10:00. Agenda attached. Best regards.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-006",
+    "category": "benign",
+    "subtype": "business-ru",
+    "text": "Добрый день! Отчёт по спринту готов, высылаю до обеда. Вопросов по задачам нет.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-007",
+    "category": "benign",
+    "subtype": "docs-benign",
+    "text": "OAuth 2.0 uses access tokens and refresh tokens. Access tokens are short-lived credentials.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-008",
+    "category": "benign",
+    "subtype": "security-discussion",
+    "text": "We should rotate credentials every 90 days and enable 2FA for all service accounts.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-009",
+    "category": "benign",
+    "subtype": "tech-neutral",
+    "text": "The webhook handler validates the signature before processing the payload body.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-010",
+    "category": "benign",
+    "subtype": "code-snippet-benign",
+    "text": "const token = req.headers.authorization?.split(' ')[1]; if (!token) return res.status(401).end();",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-011",
+    "category": "benign",
+    "subtype": "docs-pattern",
+    "text": "Secrets are stored in the vault, never in the repository or the CI log.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-012",
+    "category": "benign",
+    "subtype": "email-doc",
+    "text": "Send the summary to the team list. Use plain text, not HTML, for the archive copy.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-013",
+    "category": "benign",
+    "subtype": "release-notes",
+    "text": "Version 1.2.0: login flow now supports passkeys; token expiry raised to 15 minutes.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-014",
+    "category": "benign",
+    "subtype": "code-review-ru",
+    "text": "В ревью: вынести проверку токена в middleware, дублируется в трёх роутах.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-015",
+    "category": "benign",
+    "subtype": "docs-ci",
+    "text": "CI masks variables marked as secrets in the job log output automatically.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-016",
+    "category": "benign",
+    "subtype": "meeting-notes",
+    "text": "Minutes: the login timeout, the retry budget and the log format were approved without changes.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-017",
+    "category": "benign",
+    "subtype": "onboarding-doc",
+    "text": "New engineers get a password manager account and a hardware key on day one.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-018",
+    "category": "benign",
+    "subtype": "docs-keys-length",
+    "text": "Ed25519 keys are 32 bytes. ECDSA P-256 signatures are 64 bytes long.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-019",
+    "category": "benign",
+    "subtype": "error-msg",
+    "text": "Request failed with status 401 Unauthorized: token expired. Retry after refresh.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-020",
+    "category": "benign",
+    "subtype": "business-escalation",
+    "text": "The invoice is two weeks overdue, please confirm the payment date with accounting.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-021",
+    "category": "benign",
+    "subtype": "docs-injection-benign",
+    "text": "Prompt injection is a class of attacks where untrusted input tries to change model instructions.",
+    "expect": {
+      "detector": null
+    }
+  },
+  {
+    "id": "benign-022",
+    "category": "benign",
+    "subtype": "code-review-env",
+    "text": "Remove the hardcoded fallback value; read it from the environment instead.",
+    "expect": {
+      "detector": null
+    }
+  }
+]

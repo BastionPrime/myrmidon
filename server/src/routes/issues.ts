@@ -317,7 +317,7 @@ import {
 } from "../services/trust-preset-resolver.js";
 import { externalObjectService } from "../services/external-objects.js";
 import { getExternalChannelBindingSummary } from "../services/chat-channel-binding.js";
-import { deliverAgentUnblockNotification } from "../services/routable-blocked.js";
+import { deliverAgentUnblockNotification, isStaleBlockGuardedTransition } from "../services/routable-blocked.js";
 import {
   assertIssueReviewVerdictActorAllowed,
   isIssueReviewVerdictInteraction,
@@ -358,7 +358,10 @@ import {
 } from "../services/issue-queued-comment-queue.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
-const updateIssueRouteSchema = updateIssueSchema.extend({
+// myrmidon(STALE-BLOCK): updateIssueSchema now carries a superRefine; zod
+// requires .safeExtend() on refined objects. interrupt was already optional
+// in the shared schema, so the refine is preserved via superRefine here.
+const updateIssueRouteSchema = updateIssueSchema.safeExtend({
   interrupt: z.boolean().optional(),
 });
 const queuedCommentMutationTargetSchema = z.object({
@@ -13364,6 +13367,30 @@ export function issueRoutes(
           res.status(422).json({
             error:
               "Entering blocked requires unresolved blockers, a pending interaction/approval, or unblockDescriptor",
+          });
+          return;
+        }
+        // myrmidon(STALE-BLOCK): transitions into blocked after the rollout
+        // moment must carry a reason reference — a non-empty blockedByIssueIds
+        // list or an unblockDescriptor.reasonRef. Pre-rollout records are not
+        // retro-invalidated.
+        if (
+          isStaleBlockGuardedTransition({
+            status: "blocked",
+            blockedTransitionAt: new Date(),
+          }) &&
+          !(
+            (Array.isArray(req.body.blockedByIssueIds) &&
+              (req.body.blockedByIssueIds as string[]).length > 0) ||
+            (descriptor != null &&
+              descriptor.reasonRef != null &&
+              typeof descriptor.reasonRef === "object" &&
+              descriptor.reasonRef.kind !== undefined)
+          )
+        ) {
+          res.status(422).json({
+            error:
+              "Entering blocked requires a reason reference: non-empty blockedByIssueIds or unblockDescriptor.reasonRef",
           });
           return;
         }

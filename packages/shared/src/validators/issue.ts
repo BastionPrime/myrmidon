@@ -691,6 +691,42 @@ const createIssueBaseSchema = z.object({
         z.literal("board"),
       ]),
       action: multilineTextSchema.pipe(z.string().trim().min(1).max(2_000)),
+      // myrmidon(STALE-BLOCK): optional reason reference (issue | event | date)
+      // required on transitions into blocked once the route guard is rolled out.
+      reasonRef: z
+        .object({
+          kind: z.enum(["issue", "event", "date"]),
+          issueId: z.string().guid().optional(),
+          eventKey: z.string().trim().min(1).max(500).optional(),
+          dueAt: z.string().datetime().optional(),
+        })
+        .strict()
+        .superRefine((ref, ctx) => {
+          // Each kind must carry its identifying payload so the liveness
+          // sweep (part B) can actually resolve the reference.
+          if (ref.kind === "issue" && !ref.issueId) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "reasonRef kind=issue requires issueId",
+              path: ["issueId"],
+            });
+          }
+          if (ref.kind === "event" && !ref.eventKey) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "reasonRef kind=event requires eventKey",
+              path: ["eventKey"],
+            });
+          }
+          if (ref.kind === "date" && !ref.dueAt) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "reasonRef kind=date requires dueAt",
+              path: ["dueAt"],
+            });
+          }
+        })
+        .optional(),
     })
     .strict()
     .optional()
@@ -753,6 +789,36 @@ function requireBlockedStatusForUnblockDescriptor(
       code: z.ZodIssueCode.custom,
       message: "unblockDescriptor requires blocked status",
       path: ["unblockDescriptor"],
+    });
+  }
+}
+
+// myrmidon(STALE-BLOCK): a PATCH that transitions an issue into blocked is
+// valid only if it carries a reason reference — a non-empty blockedByIssueIds
+// list or an unblockDescriptor with a reasonRef. The field itself stays
+// optional so pre-rollout blocked records remain valid.
+function requireReasonRefForBlockedTransition(
+  value: {
+    status?: unknown;
+    blockedByIssueIds?: unknown;
+    unblockDescriptor?: { reasonRef?: unknown } | null;
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (value.status !== "blocked") return;
+  const hasBlockers =
+    Array.isArray(value.blockedByIssueIds) &&
+    value.blockedByIssueIds.length > 0;
+  const reasonRef = value.unblockDescriptor?.reasonRef;
+  const hasReasonRef =
+    reasonRef != null && typeof reasonRef === "object" &&
+    (reasonRef as { kind?: unknown }).kind !== undefined;
+  if (!hasBlockers && !hasReasonRef) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "Entering blocked requires a reason reference: non-empty blockedByIssueIds or unblockDescriptor.reasonRef",
+      path: ["status"],
     });
   }
 }
@@ -843,6 +909,34 @@ const issueCommentAttachmentIdsSchema = z
     message: "Attachment ids must be unique",
   });
 
+// myrmidon(STALE-BLOCK): same object as updateIssueSchema without the
+// blocked-reason superRefine — exported so openapi can .partial() the shape
+// (zod forbids .partial() on refined objects). Runtime validation uses
+// updateIssueSchema with the refine.
+export const updateIssueShapeSchema = objectWithoutDefaults(
+  createIssueBaseSchema.omit({
+    createdByUserId: true,
+    responsibleUserId: true,
+    watchdog: true,
+  }),
+)
+  .partial()
+  .extend({
+    requestDepth: issueRequestDepthInputSchema.optional(),
+    assigneeAgentId: z.string().trim().min(1).optional().nullable(),
+    comment: multilineTextSchema.pipe(z.string().min(1)).optional(),
+    commentClientRequestId: z.string().uuid().optional(),
+    attachmentIds: issueCommentAttachmentIdsSchema.optional(),
+    onBehalfOfUserId: z.string().trim().min(1).optional().nullable(),
+    reviewInteractionId: z.string().guid().optional(),
+    reviewRequest: issueReviewRequestSchema.optional().nullable(),
+    reopen: z.boolean().optional(),
+    resume: z.boolean().optional(),
+    interrupt: z.boolean().optional(),
+    deferWakeForGoal: z.boolean().optional(),
+    hiddenAt: z.string().datetime().nullable().optional(),
+  });
+
 export const updateIssueSchema = objectWithoutDefaults(
   createIssueBaseSchema.omit({
     createdByUserId: true,
@@ -867,7 +961,10 @@ export const updateIssueSchema = objectWithoutDefaults(
     /** Assignment-only handoff; the following structured goal action owns the wake. */
     deferWakeForGoal: z.boolean().optional(),
     hiddenAt: z.string().datetime().nullable().optional(),
-  });
+    // myrmidon(STALE-BLOCK): blocked transitions need a reason reference
+    // (issue | event | date) — enforced on PATCH via the refine below.
+  })
+  .superRefine(requireReasonRefForBlockedTransition);
 
 export type UpdateIssue = z.infer<typeof updateIssueSchema>;
 export type IssueExecutionWorkspaceSettings = z.infer<

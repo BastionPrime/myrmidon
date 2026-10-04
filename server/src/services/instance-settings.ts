@@ -51,6 +51,8 @@ import { preserveAutonomyGeneralKey } from "../myrmidon/autonomy/store.js";
 import { preserveTelegramNotifyGeneralKey } from "../myrmidon/telegram-notify/proactivity-policy.js";
 // myrmidon(1.6.1-WIP-LIMIT-A): keep the stored WIP limits across vendor writes of `general`
 import { preserveWipLimitGeneralKey } from "../myrmidon/wip-limit/settings.js";
+// myrmidon(1.6.1 VOICE-STT A1): keep the per-company STT runtime settings across vendor writes of `general`
+import { preserveSttGeneralKey } from "../myrmidon/stt/store.js";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
 
@@ -236,6 +238,16 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       // myrmidon(PARALLEL-HELPERS): the stored helper ceiling/default survive
       // every general write (they are edited on their own settings page).
       ...(parsed.data.parallelHelpers ? { parallelHelpers: parsed.data.parallelHelpers } : {}),
+      // myrmidon(1.6-SWARM): the stored swarm-claim pilot settings survive
+      // every general write (they are edited on their own settings page).
+      // 1.6.1: without this line the vendor write path silently dropped the
+      // key, so the stored value never roundtripped and the pilot could only
+      // ever come from the environment.
+      ...(parsed.data.swarmClaim ? { swarmClaim: parsed.data.swarmClaim } : {}),
+      // myrmidon(1.6.1 SWARM-SETTINGS-UI): the change journal of the swarm-claim
+      // pilot settings survives every general write (one atomic write carries the
+      // settings and the journal entry together).
+      ...(parsed.data.swarmClaimJournal ? { swarmClaimJournal: parsed.data.swarmClaimJournal } : {}),
       // myrmidon(EXTCASE-B): the stored browser-bridge allowlist survives every general write
       ...(parsed.data.browserBridge ? { browserBridge: parsed.data.browserBridge } : {}),
       // myrmidon(1.6.1-WIP-LIMIT-A): the stored WIP limits survive every general write
@@ -587,6 +599,7 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
             ...preserveAutonomyGeneralKey(current.general), // myrmidon(1.6-AUTONOMY)
             ...preserveTelegramNotifyGeneralKey(current.general), // myrmidon(1.6-TG-PROACTIVITY-E)
             ...preserveWipLimitGeneralKey(current.general), // myrmidon(1.6.1-WIP-LIMIT-A)
+            ...preserveSttGeneralKey(current.general), // myrmidon(1.6.1 VOICE-STT A1)
           },
           updatedAt: now,
         })
