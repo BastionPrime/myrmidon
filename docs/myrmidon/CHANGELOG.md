@@ -251,6 +251,19 @@ version file to edit. Base Paperclip version is in the image label
   the registry API are documented in the same guide. Guide:
   [guides/stack-registry.md](guides/stack-registry.md).
 
+### alibaba-image connector (1.6 deployment)
+
+- Free image generation and editing for agents through the company's DashScope
+  key: the `alibaba-image` connector container from the private deployment
+  repository (tools `generate_image` and `edit_image`, registry-checked
+  qwen-image/wan/z-image models, async submit-then-poll, results into the
+  calling agent's workspace with a JSON sidecar, audit of argument
+  sizes only). Operator guide — bringing the container up in the deploy window
+  (port 8083, read-only key mount, shared workspace root), registering it as
+  an external MCP server and granting it to the work designer, the bbq SMM and
+  the designer agents, plus the per-family live smoke:
+  [guides/alibaba-image-connector.md](guides/alibaba-image-connector.md).
+
 ### Stack update cycle documentation (STACK-UPDATES part D)
 
 - The stack-updates overview document (EN + RU) for the whole release-watch
