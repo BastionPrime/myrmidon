@@ -962,3 +962,15 @@ configured token the endpoint answers 401 for everyone — it never falls open.
 | `MYRMIDON_METRICS_TOKEN` | 1.7-METRICS | unset | The scraper bearer token read from the environment, used when no secret name is configured | Unset together with the secret name — 401 for every request |
 | `MYRMIDON_METRICS_ERROR_WINDOW_SEC` | 1.7-METRICS | `3600` | Window (seconds) of the error families (failed runs, gateway spend). A request may override it per scrape with `?window=<sec>` | From 60 to 86400; below 60 — 60, above 86400 — 86400, non-numeric — the default |
 | `MYRMIDON_METRICS_LATENCY_WINDOW_SEC` | 1.7-METRICS | `21600` | Window (seconds) of the latency family: p50/p95 of finished run durations (finishedAt − startedAt). A request may override it with `?latency_window=<sec>` | From 300 to 86400; below 300 — 300, above 86400 — 86400, non-numeric — the default |
+
+
+## 1.6.2 - Autonomy Matrix Settings
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_AUTONOMY_TOOL_MAPPING` | 1.6.2-AUTONOMY-MATRIX | - | Custom mapping of tools to autonomy action classes (overrides defaults) | Leave unset to use default mapping |
+| `MYRMIDON_AUTONOMY_ACTION_CLASSES` | 1.6.2-AUTONOMY-MATRIX | - | Configurable list of action classes for the autonomy matrix | Leave unset to use default classes |
+
+
+| Variable | Function | Default | What it does | How to disable / special |
+| `MYRMIDON_VENDOR_SHARE_SCRIPT` | VENDOR-SHARE-METRIC | `1` (enabled) | Enables the vendor share metric script that calculates the percentage of files derived from the vendor base commit | `0`/`false`/`off`/`no` — disable the script functionality |
