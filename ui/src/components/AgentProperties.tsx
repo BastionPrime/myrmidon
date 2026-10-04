@@ -9,6 +9,8 @@ import { AgentStatusBadge } from "./StatusBadge";
 import { Identity } from "./Identity";
 import { formatDate, agentUrl } from "../lib/utils";
 import { Separator } from "@/components/ui/separator";
+// myrmidon(1.6.1 CUSTOM-CASTES C): the role label prefers the caste directory
+import { casteLabelFor, useCasteOptions } from "./myrmidon/castes/useCasteOptions";
 
 interface AgentPropertiesProps {
   agent: Agent;
@@ -29,6 +31,10 @@ function PropertyRow({ label, children }: { label: string; children: React.React
 export function AgentProperties({ agent, runtimeState }: AgentPropertiesProps) {
   const { selectedCompanyId } = useCompany();
   const lastErrorIsActive = agent.status === "error";
+  // myrmidon(1.6.1 CUSTOM-CASTES C): the role label comes from the caste
+  // directory; the built-in labels are the fallback when it is unavailable.
+  const { options: casteOptions } = useCasteOptions();
+  const roleLabel = casteLabelFor(agent.role, casteOptions) || roleLabels[agent.role] || agent.role;
 
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
@@ -52,7 +58,7 @@ export function AgentProperties({ agent, runtimeState }: AgentPropertiesProps) {
           </PropertyRow>
         )}
         <PropertyRow label="Role">
-          <span className="text-sm">{roleLabels[agent.role] ?? agent.role}</span>
+          <span className="text-sm" data-testid="agent-role-label">{roleLabel}</span>
         </PropertyRow>
         {agent.title && (
           <PropertyRow label="Title">

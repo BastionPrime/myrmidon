@@ -1,0 +1,5 @@
+d554c4789ed3930f8a53ac9fdf6503b3187097da
+
+Base vendor commit for Myrmidon fork.
+Found as the tag v2026.916.1 which is the latest vendor tag reachable from main.
+This represents the vendor codebase before Myrmidon-specific modifications.

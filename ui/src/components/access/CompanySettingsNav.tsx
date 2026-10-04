@@ -28,6 +28,8 @@ const items = [
   { value: "wip-limit", label: "WIP limit", href: "/company/settings/wip-limit" },
   // myrmidon(1.6.1 MODEL-PROVIDERS C): the ui2 "Castes and models" section
   { value: "castes", label: "Castes & models", href: "/company/settings/castes" },
+  // myrmidon(1.6.1 CUSTOM-CASTES C): the company caste directory
+  { value: "caste-directory", label: "Agent castes", href: "/company/settings/caste-directory" },
 ] as const;
 
 type CompanySettingsTab = (typeof items)[number]["value"];
@@ -119,6 +121,13 @@ export function getCompanySettingsTab(pathname: string): CompanySettingsTab {
   // myrmidon(1.6 AUTONOMY-MATRIX B): the Autonomy matrix settings section
   if (pathname.includes("/company/settings/autonomy")) {
     return "autonomy";
+  }
+
+  // myrmidon(1.6.1 CUSTOM-CASTES C): the caste directory settings section.
+  // Must run before the /company/settings/castes prefix check below — that
+  // prefix would otherwise swallow the longer /caste-directory path.
+  if (pathname.includes("/company/settings/caste-directory")) {
+    return "caste-directory";
   }
 
   // myrmidon(1.6.1 WIP-LIMIT B): the WIP limit settings section

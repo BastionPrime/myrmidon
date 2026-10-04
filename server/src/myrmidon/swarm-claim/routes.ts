@@ -105,7 +105,8 @@ export function swarmClaimRoutes(
 
   router.get("/myrmidon/swarm-claim", async (req, res) => {
     assertBoardOrgAccess(req);
-    res.json(await settingsService.read());
+    const [resolved, journal] = await Promise.all([settingsService.read(), settingsService.journal()]);
+    res.json({ ...resolved, journal });
   });
 
   router.patch(
@@ -114,14 +115,63 @@ export function swarmClaimRoutes(
     async (req, res) => {
       assertInstanceAdmin(req);
       const actor = getActorInfo(req);
-      res.json(
-        await settingsService.update(req.body as SwarmClaimSettingsPatch, {
-          actorType: actor.actorType,
-          actorId: actor.actorId,
-        }),
-      );
+      const patch = req.body as SwarmClaimSettingsPatch;
+      const resolved = await settingsService.update(patch, {
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+      });
+      // 1.6.1 (SWARM-SETTINGS-UI): a switch-off frees the live leases now, not
+      // at the next sweep tick — the acceptance criterion is "выключение
+      // действует сразу". Best-effort: a failure here leaves the release to
+      // the sweep's disable pass, so it never fails the request itself.
+      let releasedClaims = 0;
+      if (resolved.settings.enabled === false) {
+        try {
+          releasedClaims = await releaseAllLiveClaimRows(db, new Date());
+        } catch {
+          releasedClaims = 0;
+        }
+      }
+      res.json({ ...resolved, releasedClaims });
     },
   );
 
   return router;
+}
+
+/**
+ * 1.6.1 (SWARM-SETTINGS-UI): the disable path of PATCH — release every live
+ * claim with the reason recorded, bounded to one page per call. Exported from
+ * the sweep module's reason constant; the sweep repeats this on its next pass
+ * for anything the request missed (a table that did not exist yet, a failure).
+ */
+async function releaseAllLiveClaimRows(db: Db, now: Date): Promise<number> {
+  const { swarmClaimTableReady, listAllLiveClaims, releaseClaim } = await import("./store.js");
+  const { logActivity } = await import("../../services/activity-log.js");
+  const { SWARM_CLAIM_RELEASE_REASON_DISABLED } = await import("./sweep.js");
+  const { SWARM_CLAIM_RELEASED_ACTION } = await import("@paperclipai/shared");
+  if (!(await swarmClaimTableReady(db))) return 0;
+  const rows = await listAllLiveClaims(db, 200);
+  let released = 0;
+  for (const row of rows) {
+    const ok = await releaseClaim(db, {
+      claimId: row.id,
+      reason: SWARM_CLAIM_RELEASE_REASON_DISABLED,
+      now,
+    });
+    if (!ok) continue;
+    released += 1;
+    await logActivity(db, {
+      companyId: row.companyId,
+      actorType: "system",
+      actorId: "swarm_claim_settings",
+      agentId: row.agentId,
+      runId: row.runId,
+      action: SWARM_CLAIM_RELEASED_ACTION,
+      entityType: "issue",
+      entityId: row.issueId,
+      details: { reason: SWARM_CLAIM_RELEASE_REASON_DISABLED, claimId: row.id },
+    }).catch(() => undefined);
+  }
+  return released;
 }

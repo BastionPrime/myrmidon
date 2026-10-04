@@ -93,6 +93,7 @@ import { AutonomyMatrixScreen } from "./components/myrmidon/autonomy/AutonomyMat
 import { WipLimitScreen } from "./components/myrmidon/wip-limit/WipLimitScreenContainer"; // myrmidon(1.6.1 WIP-LIMIT B)
 
 import { ModelProvidersScreen } from "./components/myrmidon/model-providers/ModelProvidersContainer"; // myrmidon(1.6.1 MODEL-PROVIDERS C)
+import { CastesScreen } from "./components/myrmidon/castes/CastesContainer"; // myrmidon(1.6.1 CUSTOM-CASTES C)
 import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
@@ -221,6 +222,7 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
       <Route path="company/settings/wip-limit" element={<WipLimitScreen />} /> {/* myrmidon(1.6.1 WIP-LIMIT B) */}
 
       <Route path="company/settings/castes" element={<ModelProvidersScreen />} /> {/* myrmidon(1.6.1 MODEL-PROVIDERS C): the ui2 "Castes and models" section route */}
+      <Route path="company/settings/caste-directory" element={<CastesScreen />} /> {/* myrmidon(1.6.1 CUSTOM-CASTES C): the caste directory settings screen route */}
       <Route path="company/settings/clouds" element={<CloudsSettingsPage />} /> {/* myrmidon(CLOUD-CONNECTOR) */}
       <Route path="company/settings/tools" element={<LegacyToolsSettingsRedirect />} />
       <Route path="company/settings/tools/:tab" element={<LegacyToolsSettingsRedirect />} />

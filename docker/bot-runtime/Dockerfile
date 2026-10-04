@@ -236,6 +236,10 @@ RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python /tmp/patch-tests/
 # (contextvars), bridge into terminal child envs, and never touch the process
 # env shared by concurrent runs.
 RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python /tmp/patch-tests/github_broker_run_scope.py /opt/hermes-src
+# myrmidon(G1): names imported inside functions of the patched modules resolve too
+# (the import smoke above runs only top-level imports; a missing lazily imported name
+# broke every run of the 1.6.0 dev image while the build passed).
+RUN PYTHONDONTWRITEBYTECODE=1 /opt/hermes-src/.venv/bin/python /tmp/patch-tests/lazy_imports_resolve.py /opt/hermes-src hermes_state tools.environments.base tools.environments.base_session_env gateway.run gateway.platforms.api_server_runs tools.environments.local tools.github_broker_context
 
 # The provider itself, through hermes' OWN discovery path (the same one the gateway uses at
 # start): a staging home gets the same symlink the entrypoint will make at run time, and
