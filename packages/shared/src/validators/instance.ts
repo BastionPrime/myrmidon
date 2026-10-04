@@ -18,6 +18,8 @@ import { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema } fro
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in the same general settings row
 import { browserBridgeSettingsSchema } from "../myrmidon-browser-bridge.js";
 import { swarmClaimSettingsSchema } from "../myrmidon-swarm-claim.js";
+// myrmidon(1.6.1-BOT-DISK-D): shared mount settings stored in the same general settings row
+import { sharedMountSettingsSchema } from "../myrmidon-shared-mount.js";
 
 // myrmidon(PARALLEL-HELPERS): re-exported for the barrel so the settings page and the
 // /api/myrmidon/parallel-helpers route validate with the exact schema stored here.
@@ -67,6 +69,9 @@ export const instanceGeneralSettingsSchema = z.object({
   // /api/myrmidon/swarm-claim; absent means "use the environment variable, then
   // the default (the pilot is off)".
   swarmClaim: swarmClaimSettingsSchema.optional(),
+  // myrmidon(1.6.1-BOT-DISK-D): shared mount settings changed from the instance
+  // settings API; absent means "the shared mount is disabled" (deny by default).
+  sharedMount: sharedMountSettingsSchema.optional(),
 }).strict();
 
 export const patchInstanceGeneralSettingsSchema = z

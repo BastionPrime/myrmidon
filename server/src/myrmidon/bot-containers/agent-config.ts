@@ -49,6 +49,7 @@ export function readBotContainerAgentConfig(
   adapterType: string,
   adapterConfig: Record<string, unknown>,
   instanceSharedMountSettings?: SharedMountSettings,
+  agentId?: string,
 ): BotContainerAgentConfigResult {
   if (adapterType !== HERMES_GATEWAY_ADAPTER_TYPE) {
     return { ok: false, reason: `adapter type "${adapterType}" is not ${HERMES_GATEWAY_ADAPTER_TYPE}` };
@@ -77,16 +78,17 @@ export function readBotContainerAgentConfig(
   const extraMounts = readExtraMounts(c.extraMounts);
   if (!extraMounts.ok) return { ok: false, reason: extraMounts.reason };
   
-  // Read shared mount access setting (defaults to false if not specified)
-  // If instance settings are provided, use them to determine access; otherwise default to false
-  const hasSharedMountAccess = instanceSharedMountSettings 
+  // Read shared mount access: only when the instance enables it and the bot is
+  // allowlisted (an empty/absent allowlist means "every bot", matching
+  // isBotAllowedSharedAccess in shared-mount.ts).
+  const hasSharedMountAccess = instanceSharedMountSettings
     ? instanceSharedMountSettings.enabled && (
-        !instanceSharedMountSettings.allowedBots || 
-        instanceSharedMountSettings.allowedBots.length === 0 || 
-        instanceSharedMountSettings.allowedBots.includes(adapterConfig.id as string)
+        !instanceSharedMountSettings.allowedBots ||
+        instanceSharedMountSettings.allowedBots.length === 0 ||
+        (agentId !== undefined && instanceSharedMountSettings.allowedBots.includes(agentId))
       )
     : false;
-  
+
   return { ok: true, config: { image, memoryMb, cpus, pidsLimit, extraMounts: extraMounts.mounts, hasSharedMountAccess } };
 }
 

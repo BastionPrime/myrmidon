@@ -179,7 +179,7 @@ export async function applyBotContainerNow(
   if (!isBotContainersEnabled(opts.env)) {
     return { kind: "not_applicable", reason: `${BOT_CONTAINERS_ENV} is not enabled` };
   }
-  const parsed = readBotContainerAgentConfig(agent.adapterType, agent.adapterConfig, deps.instanceSharedMountSettings);
+  const parsed = readBotContainerAgentConfig(agent.adapterType, agent.adapterConfig, deps.instanceSharedMountSettings, agent.agentId);
   if (!parsed.ok) return { kind: "not_applicable", reason: parsed.reason };
   const botKey = botKeyForAgent(agent.agentId);
   if (!botKey) return { kind: "not_applicable", reason: `agent id "${agent.agentId}" cannot be used as a bot key` };
@@ -239,7 +239,7 @@ type FreshAgentResult =
      if (!fresh) return { ok: false, outcome: { kind: "not_applicable", reason: `agent ${agent.agentId} no longer exists` } };
      current = fresh;
    }
-   const parsed = readBotContainerAgentConfig(current.adapterType, current.adapterConfig, deps.instanceSharedMountSettings);
+   const parsed = readBotContainerAgentConfig(current.adapterType, current.adapterConfig, deps.instanceSharedMountSettings, current.agentId);
    if (!parsed.ok) return { ok: false, outcome: { kind: "not_applicable", reason: parsed.reason } };
    return { ok: true, config: parsed.config };
  }
@@ -296,7 +296,7 @@ async function releaseStrayGatewaysOfSweep(
   if (!deps.releaseStrayGateways) return;
   const keep = new Set<string>();
   for (const agent of agents) {
-    if (readBotContainerAgentConfig(agent.adapterType, agent.adapterConfig, deps.instanceSharedMountSettings).ok && botKeyForAgent(agent.agentId)) {
+    if (readBotContainerAgentConfig(agent.adapterType, agent.adapterConfig, deps.instanceSharedMountSettings, agent.agentId).ok && botKeyForAgent(agent.agentId)) {
       keep.add(agent.agentId);
     }
   }

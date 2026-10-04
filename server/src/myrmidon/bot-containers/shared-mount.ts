@@ -1,7 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import { BotCard } from "@paperclipai/core/card";
-import type { SharedMountSettings } from "../../../../packages/shared/src/myrmidon-shared-mount.js";
+import type { SharedMountSettings } from "@paperclipai/shared";
 
 /**
  * Default shared mount settings
