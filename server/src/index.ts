@@ -142,6 +142,8 @@ import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/in
 // myrmidon(BOT-DISK E): measures the host disk and signals when it crosses the threshold
 import { createHostDiskScheduler } from "./myrmidon/host-disk/index.js"; // myrmidon(BOT-DISK E)
 import { createRunStallSweepFromHeartbeat } from "./myrmidon/run-stall/index.js"; // myrmidon(RUN-STALL)
+// myrmidon(HERMES-RUN-REATTACH): reattach live gateway runs after a board restart
+import { sweepGatewayRunReattach } from "./myrmidon/gateway-run-reattach.js";
 import { createTaskPrSyncScheduler } from "./myrmidon/task-pr-sync/index.js"; // myrmidon(TASK-PR-SYNC)
 import { createStaleBlockScheduler } from "./myrmidon/stale-block/index.js"; // myrmidon(STALE-BLOCK)
 import { buildWipLimitSweeper } from "./myrmidon/wip-limit/index.js"; // myrmidon(1.6.1-WIP-LIMIT-A)
@@ -1645,6 +1647,30 @@ async function startServerWithDatabaseTeardown(
           logger.error(
             { err },
             "startup hot-restart adoption reconciliation failed - orphan reaper will serve as degraded backstop",
+          );
+        }
+
+        // myrmidon(HERMES-RUN-REATTACH): before the orphan reaper fails every
+        // untracked running run, reattach the hermes_gateway runs whose
+        // gateway run id was persisted on the row: the bot's gateway kept
+        // executing them through the restart, and a reattach execution keeps
+        // supervision (and the result) on the board. Runs without an id or
+        // whose dispatch fails fall through to the reaper unchanged.
+        try {
+          const reattached = await sweepGatewayRunReattach(
+            db as any,
+            heartbeat,
+          );
+          if (reattached.reattached > 0 || reattached.failed > 0) {
+            logger.warn(
+              reattached,
+              "startup gateway run reattach complete",
+            );
+          }
+        } catch (err) {
+          logger.error(
+            { err },
+            "startup gateway run reattach failed - orphan reaper will serve as degraded backstop",
           );
         }
 

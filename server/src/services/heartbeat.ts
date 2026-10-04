@@ -263,7 +263,7 @@ import {
   providerTraceStore,
   PROVIDER_TRACE_MAX_BYTES,
 } from "./provider-trace-store.js";
-import { getServerAdapter, runningProcesses } from "../adapters/index.js";
+import { getServerAdapter, requireServerAdapter, runningProcesses } from "../adapters/index.js";
 import type {
   AdapterExecutionResult,
   AdapterInvocationMeta,
@@ -843,6 +843,17 @@ export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = [
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_JITTER_RATIO = 0;
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON = "transient_failure";
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_WAKE_REASON = "transient_failure_retry";
+// myrmidon(HERMES-RUN-REATTACH): budget for a transient retry whose failure
+// carried the gateway's own Retry-After hint (a 429 "busy" answer). A busy
+// 2-slot gateway can hold a third run off for a whole agent turn, so the
+// fixed 30s pair would exhaust in a minute and drop the task; this budget
+// keeps re-asking while the gateway keeps answering with a hint.
+const GATEWAY_BUSY_TRANSIENT_RETRY_MAX_ATTEMPTS = 8;
+// myrmidon(HERMES-RUN-REATTACH): single-wait ceiling for the same path. A
+// Retry-After longer than an hour is a stalled gateway, not a busy one: the
+// retry goes out after at most this long so a stuck hint cannot park the
+// task forever.
+const GATEWAY_BUSY_TRANSIENT_RETRY_MAX_DELAY_MS = 60 * 60 * 1000;
 function isTransientWorkspaceGitScanCode(code: string | null | undefined): boolean {
   return code === WORKSPACE_GIT_SCAN_ERROR_CODES.timeout || code === WORKSPACE_GIT_SCAN_ERROR_CODES.saturated;
 }
@@ -14945,10 +14956,24 @@ export function heartbeatService(
       opts?.retryReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON;
     const wakeReason =
       opts?.wakeReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_WAKE_REASON;
+    // myrmidon(HERMES-RUN-REATTACH): the gateway answered 429 "busy" with a
+    // Retry-After. That is a resource wait like ai_connection_busy, not a
+    // provider failure: the wait follows the gateway's own hint (retryNotBefore,
+    // clamped) and the budget is per-hint rather than the fixed 30s pair, so a
+    // busy 2-slot gateway holding a third run for the length of a turn (tens of
+    // minutes) does not burn the whole retry budget in a minute and drop the
+    // task. Only transient_upstream runs with a persisted retry hint qualify.
+    const transientRetryNotBeforeHint =
+      retryReason === BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON
+        ? readTransientRetryNotBeforeFromRun(run)
+        : null;
     const maxAttempts = Math.max(
       0,
       Math.floor(
-        opts?.maxAttempts ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_MAX_ATTEMPTS,
+        opts?.maxAttempts ??
+          (transientRetryNotBeforeHint
+            ? GATEWAY_BUSY_TRANSIENT_RETRY_MAX_ATTEMPTS
+            : BOUNDED_TRANSIENT_HEARTBEAT_RETRY_MAX_ATTEMPTS),
       ),
     );
     const nextAttempt =
@@ -14957,15 +14982,35 @@ export function heartbeatService(
       retryReason === MAX_TURN_CONTINUATION_RETRY_REASON
         ? (run.scheduledRetryAttempt ?? 0)
         : executionFailureRetryCount(run)) + 1;
+    // myrmidon(HERMES-RUN-REATTACH): with a gateway Retry-After hint, the
+    // schedule's base delay is the hint itself (clamped to a sane ceiling)
+    // instead of the fixed 30s array, and the attempt ceiling is the
+    // gateway-busy budget above; the array would run out after two attempts.
+    const hintDelayMs = transientRetryNotBeforeHint
+      ? Math.min(
+          Math.max(
+            0,
+            transientRetryNotBeforeHint.getTime() - now.getTime(),
+          ),
+          GATEWAY_BUSY_TRANSIENT_RETRY_MAX_DELAY_MS,
+        )
+      : null;
     const computedBaseSchedule =
-      opts?.delayMs != null
+      opts?.delayMs != null || hintDelayMs != null
         ? nextAttempt <= maxAttempts
           ? {
               attempt: nextAttempt,
-              baseDelayMs: Math.max(0, Math.floor(opts.delayMs)),
-              delayMs: Math.max(0, Math.floor(opts.delayMs)),
+              baseDelayMs: Math.max(
+                0,
+                Math.floor(opts?.delayMs ?? hintDelayMs ?? 0),
+              ),
+              delayMs: Math.max(
+                0,
+                Math.floor(opts?.delayMs ?? hintDelayMs ?? 0),
+              ),
               dueAt: new Date(
-                now.getTime() + Math.max(0, Math.floor(opts.delayMs)),
+                now.getTime() +
+                  Math.max(0, Math.floor(opts?.delayMs ?? hintDelayMs ?? 0)),
               ),
               maxAttempts,
             }
@@ -19707,6 +19752,11 @@ export function heartbeatService(
     runOptions: {
       nativeLeaseOwner?: string;
       nativeRestartRecovery?: NativeRestartRecoveryClaim;
+      /** myrmidon(HERMES-RUN-REATTACH): gateway run id to reattach to after a
+       * board restart; flows into the adapter context as
+       * reattachGatewayRunId, and the hermes_gateway adapter attaches to that
+       * run instead of creating a second one. */
+      gatewayRunReattach?: string;
     } = {},
   ) {
     const attemptStartedAtMs = Date.now();
@@ -23984,6 +24034,12 @@ export function heartbeatService(
             // heartbeat run snapshot.
             const adapterContext: Record<string, unknown> = {
               ...context,
+              // myrmidon(HERMES-RUN-REATTACH): the gateway run id this run
+              // attached to before the restart; the hermes_gateway adapter
+              // reattaches to it instead of creating a second run.
+              ...(runOptions.gatewayRunReattach
+                ? { reattachGatewayRunId: runOptions.gatewayRunReattach }
+                : {}),
               ...(legacyQuestionResponse
                 ? {
                     [PAPERCLIP_WAKE_PAYLOAD_KEY]: {
@@ -24122,6 +24178,21 @@ export function heartbeatService(
                             : null,
                         startedAt: meta.startedAt,
                       });
+                    },
+                    // myrmidon(HERMES-RUN-REATTACH): remote adapters report the
+                    // provider-side run id the moment the provider admits the
+                    // run; persist it on the run row so a board restart can
+                    // reattach instead of losing the run.
+                    onExternalRunId: async (externalRunId) => {
+                      await db
+                        .update(heartbeatRuns)
+                        .set({ externalRunId, updatedAt: new Date() })
+                        .where(
+                          and(
+                            eq(heartbeatRuns.id, run.id),
+                            eq(heartbeatRuns.status, "running"),
+                          ),
+                        );
                     },
                     authToken: authToken ?? undefined,
                   });
@@ -25031,6 +25102,13 @@ export function heartbeatService(
             ((finalizedRun
               ? readHeartbeatRunErrorFamily(finalizedRun) === "provider_quota"
               : runErrorCode === "provider_quota") ||
+              // myrmidon(HERMES-RUN-REATTACH): a transient upstream failure
+              // (a gateway 429 "busy", a rolling gateway restart) is a
+              // resource wait, not an agent health problem: the bounded retry
+              // is already scheduled, so the agent stays idle instead of
+              // going to error while its own runs are simply queued out.
+              readHeartbeatRunErrorFamily(finalizedRun ?? run) ===
+                "transient_upstream" ||
               isWorkspaceSyncConflictFailure(adapterResult.errorMessage)),
           wasFirstHeartbeat: timerClaimWasFirstHeartbeat(run),
         });
@@ -28674,6 +28752,38 @@ export function heartbeatService(
         ? captureAdapterStopOwnership(run.id)
         : undefined;
     const control = stopOwnership?.control;
+    // myrmidon(HERMES-RUN-REATTACH): a hermes_gateway run nobody is actively
+    // supervising (no live adapter execution to carry the abort signal to the
+    // gateway) still holds a slot on the bot's gateway. Stop it directly with
+    // the persisted gateway run id so the slot frees immediately; best-effort
+    // and logged, a failed stop never blocks the board-side cancellation.
+    if (!control && !running && run.externalRunId && agent?.adapterType === "hermes_gateway") {
+      try {
+        const adapterConfig = parseObject(agent.adapterConfig);
+        const baseUrl = readNonEmptyString(adapterConfig.apiBaseUrl) ?? readNonEmptyString(adapterConfig.baseUrl);
+        const apiKey = readNonEmptyString(adapterConfig.apiKey) ?? readNonEmptyString(adapterConfig.token);
+        if (baseUrl && apiKey) {
+          const stopGatewayRunForBoard = requireServerAdapter("hermes_gateway")
+            .stopGatewayRunForBoard;
+          if (stopGatewayRunForBoard) {
+            const stopped = await stopGatewayRunForBoard({
+              baseUrl,
+              apiKey,
+              gatewayRunId: run.externalRunId,
+            });
+            logger.info(
+              { runId: run.id, externalRunId: run.externalRunId, stopped: stopped.stopped },
+              "gateway run stop requested from the board cancellation path",
+            );
+          }
+        }
+      } catch (err) {
+        logger.warn(
+          { err, runId: run.id, externalRunId: run.externalRunId },
+          "gateway run board-side stop failed; continuing with the cancellation",
+        );
+      }
+    }
     // Capture the existing adapter owner before waiting on the run lock. Then
     // atomically fence preparation and refresh the selected runtime, so Stop
     // cannot miss a native handoff that won after its first read.
@@ -29593,6 +29703,24 @@ export function heartbeatService(
 
     cancelRun: (runId: string, reason?: string, options?: CancelRunOptions) =>
       cancelRunInternal(runId, reason, options),
+
+    // myrmidon(HERMES-RUN-REATTACH): the startup reattach sweep dispatches a
+    // still-running gateway run with its persisted gateway run id; see
+    // myrmidon/gateway-run-reattach.ts.
+    executeRunForGatewayReattach: async (runId: string, gatewayRunId: string) => {
+      const execution = executeRun(runId, {
+        gatewayRunReattach: gatewayRunId,
+      }).catch((error) => {
+        logger.error(
+          { err: error, runId, gatewayRunId },
+          "gateway run reattach execution failed",
+        );
+      });
+      activeRunExecutionPromises.add(execution);
+      void execution.finally(() => {
+        activeRunExecutionPromises.delete(execution);
+      });
+    },
 
     /**
      * Pause-only. Emits errorCode "agent_paused" unconditionally; its sole caller is the

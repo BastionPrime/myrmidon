@@ -1205,6 +1205,37 @@ async function stopRun(input: {
   }
 }
 
+/**
+ * myrmidon(HERMES-RUN-REATTACH): board-side stop for a gateway run the board
+ * is not actively supervising (no live adapter execution): the heartbeat
+ * cancellation path calls this with the run's persisted externalRunId so the
+ * gateway slot frees immediately instead of staying occupied until the
+ * gateway's own timeout sweeps it. Best-effort and bounded: a failed stop is
+ * logged by the caller and never blocks the cancellation itself.
+ */
+export async function stopGatewayRunForBoard(input: {
+  baseUrl: string;
+  apiKey: string;
+  gatewayRunId: string;
+}): Promise<{ stopped: boolean }> {
+  const baseUrl = normalizeBaseUrl(input.baseUrl);
+  if (!baseUrl) return { stopped: false };
+  try {
+    await fetchJson(apiUrl(baseUrl, `/v1/runs/${encodeURIComponent(input.gatewayRunId)}/stop`), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${input.apiKey}` },
+      signal: AbortSignal.timeout(STOP_REQUEST_TIMEOUT_MS),
+    });
+    return { stopped: true };
+  } catch {
+    // 404 means the gateway already forgot the run; anything else (network,
+    // auth) is the operator's signal to check the gateway. Either way the
+    // board-side cancellation proceeds.
+    return { stopped: false };
+  }
+}
+
+
 async function fetchFinalStatus(input: {
   baseUrl: URL;
   headers: Record<string, string>;
@@ -1250,6 +1281,59 @@ function readPredecessorRunId(ctx: AdapterExecutionContext): string | null {
   if (!params || typeof params !== "object") return null;
   const value = (params as Record<string, unknown>).hermesRunId;
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+/**
+ * myrmidon(HERMES-RUN-REATTACH): the gateway run id the heartbeat service
+ * persisted on THIS run's row (externalRunId) before the board restarted, and
+ * re-injected into the context (context.reattachGatewayRunId) when it
+ * re-dispatches the same run after startup. Distinct from the predecessor
+ * guard: the reattach id is the same logical attempt resuming supervision of
+ * the very run it created, not a previous turn that must be stopped.
+ */
+export function readReattachGatewayRunId(ctx: AdapterExecutionContext): string | null {
+  const value = ctx.context?.reattachGatewayRunId;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+/** Test alias for readReattachGatewayRunId. */
+export const readReattachGatewayRunIdForTest = readReattachGatewayRunId;
+
+/**
+ * myrmidon(HERMES-RUN-REATTACH): decide whether the run can be reattached.
+ * A single bounded GET /v1/runs/{id} (same request bound as the stop path):
+ * - a live (non-terminal) status → attach and keep supervising;
+ * - a terminal status → attach too: consumeEvents/pollStatus will resolve the
+ *   terminal state and the run's result lands on the board as if it never
+ *   restarted (the result is read back from the gateway, not replayed);
+ * - unknown (404) or unreachable → do not attach; the caller falls back to the
+ *   ordinary create path with this attempt's own Idempotency-Key.
+ */
+async function probeReattachRun(input: {
+  ctx: AdapterExecutionContext;
+  baseUrl: URL;
+  headers: Record<string, string>;
+  runId: string;
+  redactText: TextRedactor;
+}): Promise<{ attached: boolean; status: string | null }> {
+  try {
+    const observed = await fetchJson(apiUrl(input.baseUrl, `/v1/runs/${encodeURIComponent(input.runId)}`), {
+      method: "GET",
+      headers: input.headers,
+      signal: AbortSignal.timeout(STOP_REQUEST_TIMEOUT_MS),
+    });
+    const status = extractStatus(observed);
+    // A readable status (live or terminal) proves the gateway still owns the
+    // run; reattach either way. No status shape we can parse → treat as
+    // unknown and fall back to create.
+    return { attached: status !== null, status };
+  } catch (err) {
+    await input.ctx.onLog(
+      "stderr",
+      `[hermes-gateway] reattach probe for run ${input.runId} failed (${redactErrorMessage(err, input.redactText)}); creating a fresh run instead\n`,
+    );
+    return { attached: false, status: null };
+  }
 }
 
 /**
@@ -1570,8 +1654,35 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   }
 
+  // myrmidon(HERMES-RUN-REATTACH): after a board restart, the reattach sweep
+  // re-dispatches the SAME heartbeat run (still status=running) with the
+  // gateway run id it persisted when the run was created. The adapter then
+  // attaches to the provider run instead of creating a second one: consumeEvents
+  // and pollStatus below key off the run id either way, so attachment is just
+  // "skip the create and use this id". A gateway that no longer knows the run
+  // (404) or answers unreachable falls back to the ordinary create path — the
+  // idempotency key of this attempt is unchanged, so no duplicate turn can
+  // happen either way.
+  const reattachRunId = readReattachGatewayRunId(ctx);
   let runId: string | null = null;
   let replayed = false;
+  if (reattachRunId) {
+    const reattached = await probeReattachRun({
+      ctx,
+      baseUrl,
+      headers: eventHeaders,
+      runId: reattachRunId,
+      redactText,
+    });
+    if (reattached.attached) {
+      runId = reattachRunId;
+      await ctx.onExternalRunId?.(reattachRunId);
+      await ctx.onLog(
+        "stdout",
+        `[hermes-gateway] reattached to gateway run ${reattachRunId} (${reattached.status ?? "unknown status"}) after board restart; no new run created\n`,
+      );
+    }
+  }
   // myrmidon(RECOVERY-HERMES-GATEWAY): never start a second turn over a live
   // predecessor. The task session carries the previous attempt's gateway run
   // id, so a resumed/re-woken task whose earlier turn is still running on the
@@ -1622,6 +1733,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     AbortSignal.timeout(createTimeoutMs),
     delayedAbortSignal(ctx.signal, CREATE_CANCEL_GRACE_MS),
   ]);
+  // myrmidon(HERMES-RUN-REATTACH): an attached reattach (or a replayed create)
+  // already has its gateway run id — the create request is skipped entirely.
+  // Reuse the existing run's idempotency header shape for consistency.
+  if (!runId) {
   try {
     // This adapter has no local child process, so crossing into the first
     // remote create request is its dispatch boundary. Report it before the
@@ -1645,6 +1760,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         errorMeta: { response: redactForLog(created, [], 0, redactText) as Record<string, unknown> },
       };
     }
+    // myrmidon(HERMES-RUN-REATTACH): report the provider run id to the host the
+    // moment the provider admits the run, so the heartbeat run row carries it
+    // for a restart reattach even if this process dies before the result.
+    await ctx.onExternalRunId?.(runId);
   } catch (err) {
     if (createSignal.aborted) {
       // myrmidon(G4): the create request was cut off by our own guard, not
@@ -1710,6 +1829,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
     return errorResult(err, redactText);
   }
+  }
 
   // myrmidon(G4): a replayed create attaches to the run Hermes already
   // admitted for this Idempotency-Key; consumeEvents/pollStatus below key off
@@ -1718,7 +1838,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     "stdout",
     replayed
       ? `[hermes-gateway] idempotent replay: attaching to existing run ${runId} instead of starting a new one\n`
-      : `[hermes-gateway] run created: ${runId}\n`,
+      : reattachRunId && runId === reattachRunId
+        ? `[hermes-gateway] supervising reattached gateway run ${runId}\n`
+        : `[hermes-gateway] run created: ${runId}\n`,
   );
 
   const state = createExecutionState(runId);
