@@ -100,12 +100,11 @@ export async function migrateHardlinkCopies(
   const stat = await fs.lstat(botSharedPath);
   if (!stat.isSymbolicLink()) {
     // This is an old hardlink copy, we need to migrate it to the shared directory
+    // The shared directory always exists after a migration (first enablement)
+    await ensureSharedDirectory(settings);
     const botSharedContents = await fs.readdir(botSharedPath);
     
     if (botSharedContents.length > 0) {
-      // Ensure the shared directory exists
-      await ensureSharedDirectory(settings);
-      
       // Move contents to the shared directory
       for (const item of botSharedContents) {
         const sourcePath = path.join(botSharedPath, item);
