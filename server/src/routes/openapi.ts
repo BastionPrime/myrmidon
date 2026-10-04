@@ -40,6 +40,8 @@ import {
   // Issue
   createIssueSchema,
   updateIssueSchema,
+  // myrmidon(STALE-BLOCK): unrefined shape for the openapi partial view
+  updateIssueShapeSchema,
   stalledReviewDecisionSchema,
   createIssueLabelSchema,
   addIssueCommentSchema,
@@ -3640,7 +3642,10 @@ registry.registerPath({
     "When posting a comment, attachmentIds selects up to 20 unique uploaded attachments from this exact task and company. The comment, attachment binding, and issue update commit atomically. attachmentIds without a comment is rejected; Markdown links alone do not bind uploads.",
   request: {
     params: z.object({ id: z.string() }),
-    body: jsonBody(updateIssueSchema.partial()),
+    // myrmidon(STALE-BLOCK): updateIssueSchema now carries a superRefine and
+    // zod forbids .partial() on refined objects — use the exported unrefined
+    // shape for the spec view; runtime validation keeps the refine.
+    body: jsonBody(updateIssueShapeSchema.partial()),
   },
   responses: {
     200: r.ok(),

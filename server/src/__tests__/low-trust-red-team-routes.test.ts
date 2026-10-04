@@ -1018,7 +1018,9 @@ describeEmbeddedPostgres(
 
       const checkedOutPeerUpdate = await request(standardApp)
         .patch(`/api/issues/${fixture.issues.reviewRoot.id}`)
-        .send({ status: "blocked" });
+        // myrmidon(STALE-BLOCK): reason ref keeps blocked-transition validation
+        // out of the way; the run lock conflict is what is under test.
+        .send({ status: "blocked", unblockDescriptor: { owner: "board", action: "Peer probe", reasonRef: { kind: "date", dueAt: "2026-10-10T00:00:00.000Z" } } });
       expect(
         checkedOutPeerUpdate.status,
         JSON.stringify(checkedOutPeerUpdate.body),
@@ -1101,9 +1103,11 @@ describeEmbeddedPostgres(
     it("relays blocked and cancelled stops once without laundering child prose", async () => {
       const fixture = await seedLowTrustFixture(db);
       const app = createApp(db, boardActor(fixture));
+      // myrmidon(STALE-BLOCK): entering blocked needs a reason reference.
       const unblockDescriptor = {
         owner: "board",
         action: "Review the low-trust stop",
+        reasonRef: { kind: "date", dueAt: "2026-10-10T00:00:00.000Z" },
       } as const;
 
       await db

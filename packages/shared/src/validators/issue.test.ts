@@ -143,16 +143,19 @@ describe("issue validators", () => {
 
   it("validates structured unblock descriptors", () => {
     expect(
+      // myrmidon(STALE-BLOCK): blocked updates need a reasonRef in the descriptor.
       updateIssueSchema.parse({
         status: "blocked",
         unblockDescriptor: {
           owner: { agentId: "00000000-0000-4000-8000-000000000001" },
           action: "Review the finding",
+          reasonRef: { kind: "issue", issueId: "00000000-0000-4000-8000-000000000003" },
         },
       }).unblockDescriptor,
     ).toEqual({
       owner: { agentId: "00000000-0000-4000-8000-000000000001" },
       action: "Review the finding",
+      reasonRef: { kind: "issue", issueId: "00000000-0000-4000-8000-000000000003" },
     });
     expect(
       updateIssueSchema.safeParse({
@@ -174,6 +177,112 @@ describe("issue validators", () => {
         title: "Invalid descriptor status",
         status: "todo",
         unblockDescriptor: { owner: "board", action: "Review" },
+      }).success,
+    ).toBe(false);
+  });
+
+  // myrmidon(STALE-BLOCK): blocked transitions require a reason reference.
+  it("requires a reason reference when transitioning into blocked", () => {
+    // no blockers, no descriptor — rejected
+    expect(
+      updateIssueSchema.safeParse({ status: "blocked" }).success,
+    ).toBe(false);
+    // empty blocker list — still rejected
+    expect(
+      updateIssueSchema.safeParse({
+        status: "blocked",
+        blockedByIssueIds: [],
+      }).success,
+    ).toBe(false);
+    // non-empty blocker list — accepted
+    expect(
+      updateIssueSchema.safeParse({
+        status: "blocked",
+        blockedByIssueIds: ["00000000-0000-4000-8000-000000000009"],
+      }).success,
+    ).toBe(true);
+    // descriptor without reasonRef — rejected
+    expect(
+      updateIssueSchema.safeParse({
+        status: "blocked",
+        unblockDescriptor: {
+          owner: "board",
+          action: "Review the finding",
+        },
+      }).success,
+    ).toBe(false);
+    // descriptor with reasonRef kind=date/dueAt — accepted
+    expect(
+      updateIssueSchema.safeParse({
+        status: "blocked",
+        unblockDescriptor: {
+          owner: "board",
+          action: "Review the finding",
+          reasonRef: { kind: "date", dueAt: "2026-10-10T00:00:00.000Z" },
+        },
+      }).success,
+    ).toBe(true);
+    // descriptor with reasonRef kind=issue — accepted and preserved
+    expect(
+      updateIssueSchema.parse({
+        status: "blocked",
+        unblockDescriptor: {
+          owner: "board",
+          action: "Review the finding",
+          reasonRef: {
+            kind: "issue",
+            issueId: "00000000-0000-4000-8000-000000000010",
+          },
+        },
+      }).unblockDescriptor?.reasonRef,
+    ).toEqual({
+      kind: "issue",
+      issueId: "00000000-0000-4000-8000-000000000010",
+    });
+    // reasonRef kind=event with eventKey — accepted
+    expect(
+      updateIssueSchema.safeParse({
+        status: "blocked",
+        unblockDescriptor: {
+          owner: "board",
+          action: "Review the finding",
+          reasonRef: { kind: "event", eventKey: "release-1.6" },
+        },
+      }).success,
+    ).toBe(true);
+    // invalid reasonRef shape — rejected
+    expect(
+      updateIssueSchema.safeParse({
+        status: "blocked",
+        unblockDescriptor: {
+          owner: "board",
+          action: "Review the finding",
+          reasonRef: { kind: "date", dueAt: "not-a-date" },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      updateIssueSchema.safeParse({
+        status: "blocked",
+        unblockDescriptor: {
+          owner: "board",
+          action: "Review the finding",
+          reasonRef: { kind: "surprise" },
+        },
+      }).success,
+    ).toBe(false);
+    // non-blocked statuses are not affected
+    expect(
+      updateIssueSchema.safeParse({ status: "todo" }).success,
+    ).toBe(true);
+    expect(
+      updateIssueSchema.safeParse({
+        status: "blocked",
+        unblockDescriptor: {
+          owner: "board",
+          action: "Review the finding",
+          reasonRef: { kind: "date" },
+        },
       }).success,
     ).toBe(false);
   });

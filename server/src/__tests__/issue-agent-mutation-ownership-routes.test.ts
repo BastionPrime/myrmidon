@@ -1805,9 +1805,11 @@ describe("agent issue mutation checkout ownership", () => {
   ])("rejects an agent naming %s as unblock owner", async (_label, unblockOwner) => {
     mockIssueService.getById.mockResolvedValue(makeIssue({ status: "in_progress" }));
 
+    // myrmidon(STALE-BLOCK): entering blocked needs a reason reference, so the descriptor carries one;
+    // the ownership rule under test is still the owner field.
     const res = await request(await createApp(ownerActor())).patch(`/api/issues/${issueId}`).send({
       status: "blocked",
-      unblockDescriptor: { owner: unblockOwner, action: "Review the blocker" },
+      unblockDescriptor: { owner: unblockOwner, action: "Review the blocker", reasonRef: { kind: "issue", issueId } },
     });
 
     expect(res.status, JSON.stringify(res.body)).toBe(403);
@@ -1837,9 +1839,10 @@ describe("agent issue mutation checkout ownership", () => {
       ...patch,
     }));
 
+    // myrmidon(STALE-BLOCK): entering blocked needs a reason reference.
     const res = await request(await createApp(boardActor())).patch(`/api/issues/${issueId}`).send({
       status: "blocked",
-      unblockDescriptor: { owner: "board", action: "Review the blocker" },
+      unblockDescriptor: { owner: "board", action: "Review the blocker", reasonRef: { kind: "issue", issueId } },
     });
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
@@ -1847,7 +1850,8 @@ describe("agent issue mutation checkout ownership", () => {
       issueId,
       expect.objectContaining({
         status: "blocked",
-        unblockDescriptor: { owner: "board", action: "Review the blocker" },
+        // myrmidon(STALE-BLOCK): the request now carries a reasonRef (see send above).
+        unblockDescriptor: { owner: "board", action: "Review the blocker", reasonRef: { kind: "issue", issueId } },
       }),
     );
   });
@@ -2748,8 +2752,13 @@ describe("agent issue mutation checkout ownership", () => {
         ...patch,
       }));
 
+      // myrmidon(STALE-BLOCK): entering blocked needs a reason reference; the
+      // watchdog (peer) agent must name itself as the unblock owner.
+      const blockedReasonRef = { status: "blocked", unblockDescriptor: { owner: { agentId: peerAgentId }, action: "Watchdog blocked the issue", reasonRef: { kind: "issue", issueId } } };
       const app = await createApp(watchdogActor(), createWatchdogDb());
-      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status });
+      const res = await request(app).patch(`/api/issues/${issueId}`).send(
+        status === "blocked" ? blockedReasonRef : { status },
+      );
 
       expect(res.status, JSON.stringify(res.body)).toBe(200);
       expect(mockIssueService.update).toHaveBeenCalledWith(issueId, expect.objectContaining({ status }));
@@ -2788,7 +2797,7 @@ describe("agent issue mutation checkout ownership", () => {
       });
 
       const app = await createApp(watchdogActor(), createWatchdogDb());
-      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status: "blocked" });
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status: "blocked", unblockDescriptor: { owner: { agentId: peerAgentId }, action: "Watchdog boundary probe", reasonRef: { kind: "issue", issueId } } }) /* myrmidon(STALE-BLOCK): reason ref keeps blocked-transition validation out of the way */;
 
       expect(res.status, JSON.stringify(res.body)).toBe(409);
       expect(res.body.error).toContain("Task-watchdog review is stale");
@@ -2951,7 +2960,7 @@ describe("agent issue mutation checkout ownership", () => {
         watchdogActor(),
         createWatchdogDb({ watchedIssueId: outsideWatched, ancestryParentId: null }),
       );
-      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status: "blocked" });
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status: "blocked", unblockDescriptor: { owner: { agentId: peerAgentId }, action: "Watchdog boundary probe", reasonRef: { kind: "issue", issueId } } }) /* myrmidon(STALE-BLOCK): reason ref keeps blocked-transition validation out of the way */;
 
       expect(res.status, JSON.stringify(res.body)).toBe(403);
       expect(res.body.error).toBe("Task-watchdog runs can only mutate the watched issue subtree.");
@@ -2995,7 +3004,7 @@ describe("agent issue mutation checkout ownership", () => {
       );
       mockIssueService.getById.mockResolvedValue(makeIssue({ assigneeAgentId: peerAgentId }));
 
-      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status: "blocked" });
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status: "blocked", unblockDescriptor: { owner: { agentId: peerAgentId }, action: "Watchdog boundary probe", reasonRef: { kind: "issue", issueId } } }) /* myrmidon(STALE-BLOCK): reason ref keeps blocked-transition validation out of the way */;
 
       expect(res.status, JSON.stringify(res.body)).toBe(403);
       expect(res.body.error).toBe("Task-watchdog run context is not backed by an active persisted watchdog.");

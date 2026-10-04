@@ -532,9 +532,19 @@ export interface IssueBlockedInboxAttention {
 
 export type IssueUnblockOwner = { agentId: string } | { userId: string } | "board";
 
+// myrmidon(STALE-BLOCK): reason reference for blocked issues — the liveness
+// sweep (part B) reads it to decide whether a blocked reason is still alive.
+export type IssueUnblockReasonRef = {
+  kind: "issue" | "event" | "date";
+  issueId?: string;
+  eventKey?: string;
+  dueAt?: string; // ISO 8601
+};
+
 export interface IssueUnblockDescriptor {
   owner: IssueUnblockOwner;
   action: string;
+  reasonRef?: IssueUnblockReasonRef;
 }
 
 export interface IssueRecoveryAction {

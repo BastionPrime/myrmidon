@@ -1953,6 +1953,7 @@ export {
   issueBlockedInboxSeveritySchema,
   issueBlockedInboxStateSchema,
   updateIssueSchema,
+  updateIssueShapeSchema,
   stalledReviewDecisionSchema,
   issueExecutionPolicySchema,
   issueExecutionStateSchema,
