@@ -14,12 +14,15 @@
 # Fail-closed and idempotent:
 #   1. Resolve the tag's commit (annotated tags dereferenced).
 #   2. GATE: require a successful "Myrmidon CI" run and a successful
-#      "Myrmidon image" (board) run for THIS commit; a failed run exits 1
-#      BEFORE anything is published. Dockergate and fleetd are paths-filtered
-#      workflows, so their tag run may legitimately be absent — but their
-#      digests must exist in the registry (step 3) or the publish is refused
-#      (fail-closed, the RELEASE-GATE contract). Runs still in progress are
-#      waited for (the image workflows start alongside this workflow on a
+#      "Myrmidon image" (board) run for THIS tag (runs are matched by
+#      head_branch == the tag — the same commit's main-branch runs build
+#      different image tags and must not satisfy the gate, OPE-4271); a
+#      failed run exits 1 BEFORE anything is published. Dockergate and
+#      fleetd are paths-filtered workflows, so their tag run may
+#      legitimately be absent — but their digests must exist in the registry
+#      (step 3) or the publish is refused (fail-closed, the RELEASE-GATE
+#      contract). Runs still in progress are waited for (the image
+#      workflows start alongside this workflow on a
 #      tag push).
 #   3. Build the body with scripts/myrmidon/release/release-body.mjs: the
 #      `## X.Y.Z` section of docs/myrmidon/CHANGELOG.md (missing = a release
@@ -79,13 +82,21 @@ fi
 log "tag $tag -> commit $sha"
 
 # ------------------------------------------------------------- 2. CI gate ----
-# Completed-run verdict of one workflow for this commit: prints "missing"
+# Completed-run verdict of one workflow for THIS tag: prints "missing"
 # when no completed run exists, else the unique conclusion, else "mixed"
 # (at least two different conclusions — a failed attempt exists, fail closed).
+#
+# OPE-4271: runs are selected by head_branch == the tag, not just by head_sha.
+# The release commit normally lands on main BEFORE the tag is pushed, so the
+# API also answers with the main-branch runs of the same commit; those build
+# the `main`/`sha-<short>` image tags, not the `myr-vX.Y.Z` version tag this
+# release publishes. Matching them made the publish skip the wait (1.6.1:
+# the main image run was green, the tag image run was still building, and
+# the digest probe then failed with "component image digests missing").
 run_verdict() {
   local workflow_file="$1" verdict
   verdict="$(gh api --paginate "repos/$repo/actions/runs?head_sha=$sha&per_page=100" \
-    --jq "[.workflow_runs[]? | select(.path == \"$workflow_file\")]
+    --jq "[.workflow_runs[]? | select(.path == \"$workflow_file\" and .head_branch == \"$tag\")]
           | map(select(.status == \"completed\"))
           | if length == 0 then \"missing\"
              else (map(.conclusion) | unique)
@@ -95,11 +106,11 @@ run_verdict() {
   printf '%s\n' "${verdict//\"/}"
 }
 
-# Status of the newest run (any state) of one workflow for this commit.
+# Status of the newest run (any state) of one workflow for THIS tag.
 run_status() {
   local workflow_file="$1" status
   status="$(gh api --paginate "repos/$repo/actions/runs?head_sha=$sha&per_page=100" \
-    --jq "[.workflow_runs[]? | select(.path == \"$workflow_file\")][0].status // \"missing\"" \
+    --jq "[.workflow_runs[]? | select(.path == \"$workflow_file\" and .head_branch == \"$tag\")][0].status // \"missing\"" \
     2>/dev/null)" \
     || status="missing"
   printf '%s\n' "${status//\"/}"

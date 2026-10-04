@@ -23,7 +23,7 @@ permissions: {}
 
 concurrency:
   # One publish per tag: a re-run must never race the original run.
-  group: myrmidon-release-${{ github.ref_name || inputs.tag }}
+  group: myrmidon-release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -39,15 +39,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # the release tag (push) or the tag input (workflow_dispatch)
-          ref: ${{ github.ref_name || inputs.tag }}
+          # the release tag (push) or the tag input (workflow_dispatch).
+          # OPE-4271: the input wins over ref_name — a workflow_dispatch from
+          # a branch sets ref_name to that branch (e.g. "main"), which used
+          # to override the typed tag and fail the publish with
+          # "tag must look like myr-vX.Y.Z (got: main)".
+          ref: ${{ inputs.tag || github.ref_name }}
           persist-credentials: false
 
       - name: Publish the GitHub Release for the tag
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          TAG: ${{ github.ref_name || inputs.tag }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           ./scripts/myrmidon/release/publish-github-release.sh --tag "$TAG"

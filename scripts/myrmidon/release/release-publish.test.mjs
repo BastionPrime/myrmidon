@@ -75,7 +75,25 @@ case "$sub" in
     case "$url" in
       *"/git/ref/tags/"*) body="$(cat "$SANDBOX/ref-tag.json")" ;;
       *"/git/tags/"*)     body="$(cat "$SANDBOX/tag-object.json")" ;;
-      *"actions/runs?head_sha="*) body="$(cat "$SANDBOX/runs.json")" ;;
+      *"actions/runs?head_sha="*)
+        # OPE-4271: scripted progression — when $SANDBOX/runs-after.json
+        # exists, the first GH_RUNS_SWITCH_AFTER reads answer "before" (the
+        # state runs.json holds), the rest answer "after". Lets a test watch
+        # the publish WAIT while the tag's image run is still building, then
+        # succeed when it completes. GH_RUNS_SWITCH_AFTER is always exported
+        # by the test harness (0 = switch on the first read).
+        if [ -f "$SANDBOX/runs-after.json" ]; then
+          count_file="$SANDBOX/runs-reads.count"
+          reads=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+          echo "$reads" > "$count_file"
+          if [ "$reads" -gt "$GH_RUNS_SWITCH_AFTER" ]; then
+            body="$(cat "$SANDBOX/runs-after.json")"
+          else
+            body="$(cat "$SANDBOX/runs.json")"
+          fi
+        else
+          body="$(cat "$SANDBOX/runs.json")"
+        fi ;;
       *) body="{}" ;;
     esac
     if [ -n "$jq_filter" ]; then
@@ -166,8 +184,11 @@ function sandbox({ runs = [], releases = {}, changelog = CHANGELOG } = {}) {
   return { dir, bin };
 }
 
-const run = (sha, pathOfWf, conclusion, status = "completed") => ({
-  head_sha: sha, path: pathOfWf, status, conclusion,
+// head_branch mirrors the GitHub API: for a push of tag myr-vX.Y.Z the runs
+// started by that push report head_branch = the tag; runs of the same commit
+// pushed to main earlier report head_branch = "main".
+const run = (sha, pathOfWf, conclusion, status = "completed", headBranch = "myr-v1.6.0") => ({
+  head_sha: sha, path: pathOfWf, status, conclusion, head_branch: headBranch,
 });
 
 function runScript(sb, tag, { extraEnv = {} } = {}) {
@@ -183,6 +204,9 @@ function runScript(sb, tag, { extraEnv = {} } = {}) {
       MYRMIDON_RELEASE_REGISTRY_STATE: path.join(sb.dir, "registry-state.json"),
       MYRMIDON_RELEASE_POLL_SECONDS: "0",
       MYRMIDON_RELEASE_POLL_MAX: "4",
+      // OPE-4271: the fake gh's runs-state switch (absent fixtures never read
+      // it; 0 = the first runs read already answers "after")
+      GH_RUNS_SWITCH_AFTER: "0",
       ...extraEnv,
     },
     encoding: "utf8",
@@ -269,6 +293,67 @@ describe("publish-github-release.sh: the CI gate", () => {
     assert.match(out, /Myrmidon CI did not succeed.*mixed/);
     assert.equal(mutations(sb), "");
   });
+
+  // ---- OPE-4271: the gate must wait for the TAG's runs, not the commit's ----
+
+  it("waits for the board image run of the tag while it is still building, then publishes (the 1.6.1 incident)", () => {
+    // The exact shape of 2026-10-04 04:40: the release commit was on main
+    // (its CI + image runs completed green by 04:31, but those are
+    // head_branch=main runs that build the `main`/`sha-` tags), the tag push
+    // at 04:40 started the tag's own image run (head_branch=myr-v1.6.1),
+    // which was still in progress. The old gate matched by head_sha only,
+    // saw the green main run, skipped the wait and the digest probe failed.
+    const before = [
+      run(COMMIT, ".github/workflows/myrmidon-ci.yml", "success", "completed", "main"),
+      run(COMMIT, ".github/workflows/myrmidon-image.yml", "success", "completed", "main"),
+      // the tag's own CI run completed with the push; the image run builds
+      run(COMMIT, ".github/workflows/myrmidon-ci.yml", "success"),
+      run(COMMIT, ".github/workflows/myrmidon-image.yml", null, "in_progress"),
+    ];
+    const after = [
+      ...before.slice(0, 3),
+      run(COMMIT, ".github/workflows/myrmidon-image.yml", "success"),
+    ];
+    const sb = sandbox({ runs: before });
+    fs.writeFileSync(path.join(sb.dir, "runs-after.json"),
+      JSON.stringify({ total_count: after.length, workflow_runs: after }));
+    const { code, out } = runScript(sb, "myr-v1.6.0", { extraEnv: { GH_RUNS_SWITCH_AFTER: "2" } });
+    assert.equal(code, 0, out);
+    // the wait actually happened: the gate polled before the switch
+    assert.match(out, /gate: Myrmidon image \(board\) success/);
+    assert.match(mutations(sb), /create tag=myr-v1\.6\.0/);
+  });
+
+  it("refuses with the tag's failure when the main-branch run of the same commit is green", () => {
+    // Same layout, but the TAG's image run completed with a failure: the
+    // refusal must name the tag run, not be masked by the green main run.
+    const sb = sandbox({ runs: [
+      run(COMMIT, ".github/workflows/myrmidon-ci.yml", "success", "completed", "main"),
+      run(COMMIT, ".github/workflows/myrmidon-image.yml", "success", "completed", "main"),
+      run(COMMIT, ".github/workflows/myrmidon-ci.yml", "success"),
+      run(COMMIT, ".github/workflows/myrmidon-image.yml", "failure"),
+    ] });
+    const { code, out } = runScript(sb, "myr-v1.6.0");
+    assert.notEqual(code, 0, out);
+    assert.match(out, /Myrmidon image \(board\) did not succeed for commit/);
+    assert.match(out, /NOT publishing/);
+    assert.equal(mutations(sb), "");
+  });
+
+  it("still refuses when NO run of a required workflow exists for the tag (only main runs of the same commit)", () => {
+    // Only main-branch runs exist (the tag push started the publish but no
+    // image workflow of its own yet — e.g. an old-format push). The gate must
+    // not treat the green main runs as the tag's image run.
+    const sb = sandbox({ runs: [
+      run(COMMIT, ".github/workflows/myrmidon-ci.yml", "success", "completed", "main"),
+      run(COMMIT, ".github/workflows/myrmidon-image.yml", "success", "completed", "main"),
+    ] });
+    const { code, out } = runScript(sb, "myr-v1.6.0");
+    // The CI wait_for is "must": no run of CI for the tag -> timed out refusal
+    assert.notEqual(code, 0, out);
+    assert.match(out, /no run of Myrmidon CI found|timed out waiting for Myrmidon CI/);
+    assert.equal(mutations(sb), "");
+  });
 });
 
 describe("publish-github-release.sh: the release body and mutations", () => {
@@ -308,6 +393,34 @@ describe("publish-github-release.sh: the release body and mutations", () => {
     assert.doesNotMatch(mut, /create tag=/);
     // previous already carries the marker: the edit for 1.5.0 must NOT appear
     assert.doesNotMatch(mut, /edit target=myr-v1\.5\.0/);
+  });
+});
+
+// OPE-4271: the workflow must prefer the typed tag input over ref_name. A
+// workflow_dispatch from a branch sets github.ref_name to that branch
+// (e.g. "main"); with "ref_name || inputs.tag" the typed tag was overridden
+// and the publish died with "tag must look like myr-vX.Y.Z (got: main)".
+describe("myrmidon-release.yml: the tag input wins over ref_name", () => {
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const WORKFLOW = path.join(HERE, "..", "..", "..", ".github", "workflows", "myrmidon-release.yml");
+  const workflow = fs.readFileSync(WORKFLOW, "utf8");
+
+  it("every tag reference resolves the workflow_dispatch input first", () => {
+    const tagRefs = [...workflow.matchAll(/\$\{\{ ([^}]+) \}\}/g)]
+      .map((m) => m[1])
+      .filter((expr) => expr.includes("inputs.tag") || expr.includes("github.ref_name"));
+    assert.ok(tagRefs.length >= 3, "checkout ref, TAG env and the concurrency group all use the tag");
+    for (const expr of tagRefs) {
+      assert.equal(
+        expr, "inputs.tag || github.ref_name",
+        `the tag expression must be "inputs.tag || github.ref_name" (got: "${expr}") — a workflow_dispatch from a branch must not override the typed tag`,
+      );
+    }
+    assert.doesNotMatch(workflow, /github\.ref_name \|\| inputs\.tag/);
+  });
+
+  it("declares the tag input as required", () => {
+    assert.match(workflow, /tag:\s*\n\s+description:[^\n]+\n\s+required: true/);
   });
 });
 

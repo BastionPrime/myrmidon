@@ -10,6 +10,23 @@ version file to edit. Base Paperclip version is in the image label
 
 ## Unreleased
 
+### Release publish waits for the tag's own image runs (OPE-4271, RELEASE-PUBLISH-WAIT)
+
+- Pushing the `myr-v1.6.1` tag failed to publish the Release on the first
+  try: the publish gate matched workflow runs by the tag commit's
+  `head_sha` only, so it saw the already-green `main`-branch run of the
+  same commit (which builds the `main`/`sha-` image tags) instead of
+  waiting for the tag's own board image run, and then the digest probe
+  failed with "component image digests missing … board". The gate now
+  also filters runs by `head_branch == the tag`, so the publish waits for
+  every required image workflow of the same tag (up to ~40 minutes) and
+  a failed tag run still refuses the publish with the workflow's name.
+- A manual re-run from the `main` branch no longer overrides the typed
+  tag: `myrmidon-release.yml` resolves the tag as
+  `inputs.tag || github.ref_name` (checkout `ref`, `TAG` env and the
+  concurrency group), so `gh workflow run myrmidon-release.yml -f tag=…`
+  from `main` publishes the given tag without `--ref`.
+
 ### Maintenance: asynchronous exit and the post-deploy fleet check (EXIT-ASYNC + POST-DEPLOY-CHECK)
 
 - Leaving maintenance mode is asynchronous (#268): the `exit` call returns as
