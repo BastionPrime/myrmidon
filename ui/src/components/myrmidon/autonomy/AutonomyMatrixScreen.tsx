@@ -28,6 +28,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  AGENT_ROLES,
+  AGENT_ROLE_LABELS,
   AUTONOMY_ACTION_CLASSES,
   AUTONOMY_VERDICTS,
   resolveAutonomy,
@@ -37,7 +39,9 @@ import {
   type AutonomyVerdict,
   type AutonomySnapshot as AutonomyView,
 } from "@paperclipai/shared";
-import { AGENT_ROLES, AGENT_ROLE_LABELS } from "@paperclipai/shared";
+// myrmidon(1.6.1 CUSTOM-CASTES C): the role rows come from the caste
+// directory (with the built-in fallback), not the hardcoded 12-role const.
+import type { CasteOption } from "@/components/myrmidon/castes/useCasteOptions";
 
 function formatTime(value: string): string {
   const date = new Date(value);
@@ -57,9 +61,31 @@ function verdictClass(verdict: AutonomyVerdict): string {
   }
 }
 
+/**
+ * A role row/option: a caste directory entry or a built-in fallback.
+ * The label is resolved from the directory when present.
+ */
+export interface AutonomyRoleOption {
+  key: string;
+  label: string;
+}
+
+/** Convert the shared caste options into the screen's role rows. */
+export function autonomyRoleOptions(casteOptions: CasteOption[]): AutonomyRoleOption[] {
+  return casteOptions.map((option) => ({ key: option.key, label: option.label }));
+}
+
+/**
+ * The default role list when no directory options were passed: the built-in
+ * twelve, labelled from the shared constants — the fallback contract.
+ */
+export const AUTONOMY_ROLE_FALLBACK: AutonomyRoleOption[] = autonomyRoleOptions(
+  AGENT_ROLES.map((role) => ({ key: role, label: AGENT_ROLE_LABELS[role] })),
+);
+
 /** A role label, robust to a role stored in the matrix that the catalog lacks. */
-export function roleLabel(role: string): string {
-  return AGENT_ROLE_LABELS[role as keyof typeof AGENT_ROLE_LABELS] ?? role;
+export function roleLabel(role: string, roles: AutonomyRoleOption[] = AUTONOMY_ROLE_FALLBACK): string {
+  return roles.find((option) => option.key === role)?.label ?? role;
 }
 
 export interface RegulationDraft {
@@ -78,6 +104,7 @@ export function AutonomyMatrixScreenView({
   view,
   matrix,
   matrixDirty,
+  roleOptions,
   onCellClick,
   onDefaultChange,
   onSaveMatrix,
@@ -94,6 +121,9 @@ export function AutonomyMatrixScreenView({
   /** The working copy — starts as the loaded matrix, diverges on edits. */
   matrix: AutonomyMatrix;
   matrixDirty: boolean;
+  /** myrmidon(1.6.1 CUSTOM-CASTES C): role rows from the caste directory;
+   * defaults to the built-in twelve when not provided (fallback contract). */
+  roleOptions?: AutonomyRoleOption[];
   onCellClick: (role: string, actionClass: AutonomyActionClass) => void;
   onDefaultChange: (actionClass: AutonomyActionClass, verdict: AutonomyVerdict) => void;
   onSaveMatrix: () => void;
@@ -107,6 +137,7 @@ export function AutonomyMatrixScreenView({
   onRestoreRevision: (id: string, revision: number) => void;
 }) {
   const { t } = useTranslation();
+  const roles = roleOptions ?? AUTONOMY_ROLE_FALLBACK;
   const [newRegulation, setNewRegulation] = useState<RegulationDraft>(EMPTY_REGULATION_DRAFT);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [draftEdits, setDraftEdits] = useState<Record<string, { title: string; bodyMarkdown: string }>>({});
@@ -153,27 +184,27 @@ export function AutonomyMatrixScreenView({
               </tr>
             </thead>
             <tbody>
-              {AGENT_ROLES.map((role) => (
-                <tr key={role} data-testid={`myrmidon-autonomy-row-${role}`}>
+              {roles.map((role) => (
+                <tr key={role.key} data-testid={`myrmidon-autonomy-row-${role.key}`}>
                   <th scope="row" className="text-left text-sm font-medium">
-                    {roleLabel(role)}
+                    {role.label}
                   </th>
                   {AUTONOMY_ACTION_CLASSES.map((actionClass) => {
-                    const effective = resolveAutonomy(role, actionClass, matrix);
+                    const effective = resolveAutonomy(role.key, actionClass, matrix);
                     // A pinned cell carries its own rule; an inherited cell
                     // follows the action-class default (marked with *).
                     const explicit = matrix.rules.some(
-                      (r) => r.role === role && r.actionClass === actionClass && r.agentId === undefined,
+                      (r) => r.role === role.key && r.actionClass === actionClass && r.agentId === undefined,
                     );
                     return (
                       <td key={actionClass} className="px-2 py-1">
                         <button
                           type="button"
                           className={`rounded-md border border-border px-2 py-1 text-xs font-medium ${verdictClass(effective)}`}
-                          data-testid={`myrmidon-autonomy-cell-${role}-${actionClass}`}
-                          aria-label={`${roleLabel(role)} ${actionClass}: ${t(`autonomy.verdict.${effective}`)}`}
+                          data-testid={`myrmidon-autonomy-cell-${role.key}-${actionClass}`}
+                          aria-label={`${role.label} ${actionClass}: ${t(`autonomy.verdict.${effective}`)}`}
                           title={t("autonomy.matrix.cycleHint")}
-                          onClick={() => onCellClick(role, actionClass)}
+                          onClick={() => onCellClick(role.key, actionClass)}
                         >
                           {t(`autonomy.verdict.${effective}`)}
                           {explicit ? null : <span className="text-muted-foreground"> *</span>}
@@ -273,7 +304,7 @@ export function AutonomyMatrixScreenView({
                     >
                       {regulation.title}
                       <span className="ml-2 text-xs text-muted-foreground">
-                        {roleLabel(regulation.role)} ·{" "}
+                        {roleLabel(regulation.role, roles)} ·{" "}
                         {t(`autonomy.regulationStatus.${regulation.status}`)} ·{" "}
                         {t("autonomy.regulations.revision", { count: regulation.revision })}
                       </span>
@@ -391,9 +422,9 @@ export function AutonomyMatrixScreenView({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {AGENT_ROLES.map((role) => (
-                    <SelectItem key={role} value={role}>
-                      {roleLabel(role)}
+                  {roles.map((role) => (
+                    <SelectItem key={role.key} value={role.key}>
+                      {role.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

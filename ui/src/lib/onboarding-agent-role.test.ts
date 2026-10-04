@@ -36,3 +36,43 @@ describe("nextAgentNameForRole", () => {
     expect(nextAgentNameForRole({ currentName: "   ", nextRole: "qa" })).toBe(AGENT_ROLE_LABELS.qa);
   });
 });
+
+// myrmidon(CUSTOM-CASTES): the label lookup accepts the caste directory's
+// labels; the built-ins remain the fallback for a role the directory lacks.
+describe("nextAgentNameForRole with caste directory labels", () => {
+  it("fills the name from the directory label when the field is empty", () => {
+    expect(
+      nextAgentNameForRole({
+        currentName: "",
+        nextRole: "general",
+        labels: { general: "Начальник штаба" },
+      }),
+    ).toBe("Начальник штаба");
+  });
+
+  it("replaces a name the directory itself supplied", () => {
+    expect(
+      nextAgentNameForRole({
+        currentName: "Начальник штаба",
+        nextRole: "engineer",
+        labels: { general: "Начальник штаба", engineer: "Инженер" },
+      }),
+    ).toBe("Инженер");
+  });
+
+  it("falls back to the built-in label for a role the directory lacks", () => {
+    expect(
+      nextAgentNameForRole({ currentName: "", nextRole: "qa", labels: {} }),
+    ).toBe(AGENT_ROLE_LABELS.qa);
+  });
+
+  it("keeps a name the customer typed, whatever the directory says", () => {
+    expect(
+      nextAgentNameForRole({
+        currentName: "Ada",
+        nextRole: "general",
+        labels: { general: "Начальник штаба" },
+      }),
+    ).toBe("Ada");
+  });
+});

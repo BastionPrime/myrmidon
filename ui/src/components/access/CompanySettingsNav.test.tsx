@@ -87,6 +87,11 @@ describe("CompanySettingsNav", () => {
     expect(getCompanySettingsTab("/company/settings/instance/experimental")).toBe("instance-experimental");
     expect(getCompanySettingsTab("/PAP/company/settings/instance/plugins/example")).toBe("instance-plugins");
     expect(getCompanySettingsTab("/company/settings/instance/adapters")).toBe("instance-adapters");
+    // myrmidon(1.6.1 CUSTOM-CASTES C): the directory tab resolves before the
+    // /castes prefix check can swallow the longer path.
+    expect(getCompanySettingsTab("/company/settings/caste-directory")).toBe("caste-directory");
+    expect(getCompanySettingsTab("/PAP/company/settings/caste-directory")).toBe("caste-directory");
+    expect(getCompanySettingsTab("/company/settings/castes")).toBe("castes");
   });
 
   function renderNav(
@@ -139,6 +144,7 @@ describe("CompanySettingsNav", () => {
           { value: "wip-limit", label: "WIP limit" }, // myrmidon(1.6.1 WIP-LIMIT B)
 
           { value: "castes", label: "Castes & models" }, // myrmidon(1.6.1 MODEL-PROVIDERS C)
+          { value: "caste-directory", label: "Agent castes" }, // myrmidon(1.6.1 CUSTOM-CASTES C)
         ],
       }),
     );
@@ -187,6 +193,7 @@ describe("CompanySettingsNav", () => {
       "wip-limit", // myrmidon(1.6.1 WIP-LIMIT B)
 
       "castes", // myrmidon(1.6.1 MODEL-PROVIDERS C)
+      "caste-directory", // myrmidon(1.6.1 CUSTOM-CASTES C)
     ]);
 
     await act(async () => {
