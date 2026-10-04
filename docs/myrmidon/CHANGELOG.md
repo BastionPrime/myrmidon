@@ -81,7 +81,8 @@ version file to edit. Base Paperclip version is in the image label
   gate/event. Dead blocked-by edges are removed through the ordinary issue
   update path, the task returns to `in_progress`, and one system comment
   names the cause. A task with a live reason is untouched. Opt-in via
-  `MYRMIDON_STALE_BLOCK_ENABLED` (default 0).
+  `MYRMIDON_STALE_BLOCK_ENABLED` (default 0). Guide:
+  [guides/stale-block.md](guides/stale-block.md).
 - One new attention source kind `stale_block`: a lifted block raises one
   card for the lead and the operator, computed on the fly from a
   process-level signal registry (no new store); cards fade after
