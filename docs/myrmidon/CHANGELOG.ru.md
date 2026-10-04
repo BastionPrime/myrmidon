@@ -59,6 +59,25 @@
   который отдаёт ядро настроек. Сохранение отправляет один PATCH только с
   изменёнными полями. Зависит от ядра настроек (часть A); пока оно не влито,
   UI покрыт тестами по замоканному JSON-контракту.
+
+### Распознавание голоса, серверное ядро (VOICE-STT, часть A)
+
+- Серверное ядро распознавания речи (#418): `server/src/myrmidon/stt/` с
+  бэкендами `dashscope` (multipart `POST /v1/audio/transcriptions` на общем
+  шлюзе LiteLLM) и `deepgram`, нарезкой длинных записей чистым TypeScript
+  (границы страниц OGG / фреймов MPEG, без ffmpeg) со слиянием по офсетам
+  таймкодов и перенумерацией спикеров в масштабе записи, и контрактом
+  `transcribeAudio({companyId, bytes, mimeType, durationSec?})` со стабильными
+  кодами ошибок `stt_disabled`, `stt_unconfigured`, `audio_too_long`,
+  `audio_too_large`, `stt_timeout`, `stt_upstream_error`. По умолчанию
+  выключено: без `MYRMIDON_STT_ENABLED` путь не делает исходящих запросов.
+  Ключи бэкендов — секреты компании, адресуемые только по имени (читаются на
+  вызов, не кэшируются, не логируются). Runtime-переопределения на компанию
+  хранятся в `instance_settings.general.myrmidonSttCompanies[companyId]` и
+  управляются через `GET`/`PATCH /api/myrmidon/companies/:companyId/voice-stt`
+  (GET — доступ компании, PATCH — только доска; каждое сохранение
+  журналируется как `myrmidon.stt.settings_saved`). См.
+  [SETTINGS.ru.md](SETTINGS.ru.md), секция VOICE-STT.
 ## 1.6.1
 
 ### Очереди ролей как настройки инстанса (SWARM-SETTINGS-UI)

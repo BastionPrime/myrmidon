@@ -998,3 +998,17 @@ managed through `GET`/`PATCH /api/myrmidon/companies/:companyId/voice-stt` (GET 
 company access, PATCH is board only). The environment values are the defaults the
 overrides start from; a stored `enabled: true` cannot resurrect a path whose contour
 (address, key secret, model) is unnamed.
+
+The PATCH accepts only `enabled`, `backend`, `model`, `language`, `diarization` and
+`maxDurationSec` (a strict schema, an unknown field answers 400); `model: null`
+clears the stored model back to the environment default. Every successful PATCH is
+journaled as `myrmidon.stt.settings_saved`. The GET answers the effective settings
+with the key secret's **name**, never its value, plus a `problem` object naming the
+stable reason the path cannot serve yet; `problem` is `null` when the path is
+ready.
+
+The stable `transcribeAudio` error codes: `stt_disabled` (the path is off),
+`stt_unconfigured` (the contour — address, key secret, model — is unnamed),
+`audio_too_long` / `audio_too_large` (a limit answered before any outbound
+request), `stt_timeout` (the backend call timed out), `stt_upstream_error`
+(any other backend failure).

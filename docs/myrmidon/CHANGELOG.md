@@ -59,6 +59,25 @@ version file to edit. Base Paperclip version is in the image label
   document the settings core serves. Saving sends one PATCH with only the
   changed fields. Depends on the settings core (part A); while that is not
   merged the UI is covered by tests against the mocked JSON contract.
+
+### Voice STT, server core (VOICE-STT part A)
+
+- The server-side speech-to-text core (#418): `server/src/myrmidon/stt/` with
+  the `dashscope` (multipart `POST /v1/audio/transcriptions` on the shared
+  LiteLLM gateway) and `deepgram` backends, a pure-TypeScript long-recording
+  split (OGG page / MPEG frame boundaries, no ffmpeg) with timecode-offset
+  merge and record-scale speaker renumbering, and the
+  `transcribeAudio({companyId, bytes, mimeType, durationSec?})` contract with
+  the stable error codes `stt_disabled`, `stt_unconfigured`, `audio_too_long`,
+  `audio_too_large`, `stt_timeout`, `stt_upstream_error`. Off by default:
+  without `MYRMIDON_STT_ENABLED` the path makes no outbound request. Backend
+  keys are company secrets referenced by name only (read per call, never
+  cached, never logged). Per-company runtime overrides live under
+  `instance_settings.general.myrmidonSttCompanies[companyId]` and are managed
+  through `GET`/`PATCH /api/myrmidon/companies/:companyId/voice-stt` (GET is
+  company access, PATCH is board only; every save is journaled as
+  `myrmidon.stt.settings_saved`). See [SETTINGS.md](SETTINGS.md), the VOICE-STT
+  section.
 ## 1.6.1
 
 ### Role queues as instance settings (SWARM-SETTINGS-UI)
