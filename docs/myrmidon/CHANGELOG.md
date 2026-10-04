@@ -38,7 +38,8 @@ version file to edit. Base Paperclip version is in the image label
   are unchanged — the caste key is the role string, the CEO checks stay
   byte-identical, and custom roles keep working through explicit grants.
   Regression tests pin all of the above, including "moving an agent to a
-  caste changes no autonomy verdict".
+  caste changes no autonomy verdict". The behavior contract is documented
+  in [SETTINGS.md](SETTINGS.md) (section "CUSTOM-CASTES B").
 
 ### Stale-block watchdog (STALE-BLOCK part B)
 
