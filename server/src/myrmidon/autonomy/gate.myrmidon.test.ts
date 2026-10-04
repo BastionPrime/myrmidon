@@ -36,8 +36,7 @@ describe("autonomyGate.holdOrAssert", () => {
 
     // Mock request object
     const mockReq = {
-      actor: { type: "agent", agentId: "test-agent-id" },
-      companyId: "test-company-id",
+      actor: { type: "agent", agentId: "test-agent-id", companyId: "test-company-id" },
     } as any;
 
     const result = await gate.holdOrAssert(mockReq, "pause_wake_agents", {
@@ -79,8 +78,7 @@ describe("autonomyGate.holdOrAssert", () => {
 
     // Mock request object
     const mockReq = {
-      actor: { type: "agent", agentId: "test-agent-id" },
-      companyId: "test-company-id",
+      actor: { type: "agent", agentId: "test-agent-id", companyId: "test-company-id" },
     } as any;
 
     const result = await gate.holdOrAssert(mockReq, "pause_wake_agents", {

@@ -10,12 +10,11 @@ import {
   toolActionRequests,
   toolInvocations,
   agents,
-  type ToolActionRequests,
-  type ToolInvocations,
+  type ToolActionRequest,
+  type ToolInvocation,
 } from "@paperclipai/db";
-import { agentService } from "../services/agents.js";
-import { heartbeatService } from "../services/heartbeat.js";
-import { dbAutonomyStore, agentRoleFromDb } from "./gate.js";
+import { agentService } from "../../services/agents.js";
+import { heartbeatService } from "../../services/heartbeat.js";
 
 export interface ExecuteHeldAutonomyActionInput {
   db: Db;

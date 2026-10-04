@@ -25,8 +25,8 @@ import { and, eq } from "drizzle-orm";
 import {
   toolActionRequests,
   toolInvocations,
-  type ToolActionRequests,
-  type ToolInvocations,
+  type ToolActionRequest,
+  type ToolInvocation,
 } from "@paperclipai/db";
 
 /** Stable error code the UI and tests match on. */
@@ -130,7 +130,7 @@ export function autonomyGate(deps: AutonomyGateDeps) {
       
       // Insert a tool invocation representing the held autonomy action
       const [invocation] = await deps.db.insert(toolInvocations).values({
-        companyId: req.companyId as string,
+        companyId: req.actor.companyId,
         actorType: "agent",
         actorId: agentId,
         agentId,
@@ -163,10 +163,10 @@ export function autonomyGate(deps: AutonomyGateDeps) {
         createdAt: now,
         updatedAt: now,
       }).returning();
-      
+
       // Create a corresponding tool action request to hold the action
       const [actionRequest] = await deps.db.insert(toolActionRequests).values({
-        companyId: req.companyId as string,
+        companyId: req.actor.companyId,
         invocationId: invocation.id,
         issueId: null, // No issue context for autonomy actions
         status: "pending",
