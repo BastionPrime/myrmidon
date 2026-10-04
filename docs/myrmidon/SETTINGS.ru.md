@@ -2,6 +2,9 @@
 
 > English version: [SETTINGS.md](SETTINGS.md)
 
+> Это неполный перевод [SETTINGS.md](SETTINGS.md) — источник истины по настройкам.
+> This is a partial translation of [SETTINGS.md](SETTINGS.md) — the source of truth for settings.
+
 Наши настройки — переменные окружения `MYRMIDON_<ОБЛАСТЬ>_<ИМЯ>`. Вендорские `PAPERCLIP_*`
 остаются как есть и здесь не описываются, кроме случаев, когда мы меняем их смысл или значение
 по умолчанию.
