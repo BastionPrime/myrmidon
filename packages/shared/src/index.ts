@@ -2774,6 +2774,9 @@ export * from "./announcements.js";
 // myrmidon(WORKSPACE-HYGIENE): workspace quota values and the measurement record shared by the
 // server, the sweep and the settings validator.
 export * from "./myrmidon-workspace-hygiene.js";
+// myrmidon(BOT-DISK E): host disk usage threshold, samples and growth shared by the server, the
+// UI and the settings validator.
+export * from "./myrmidon-host-disk.js";
 // myrmidon(C0): live run-admission limits shared by the server, the UI and the settings validator.
 export * from "./myrmidon-runtime-limits.js";
 // myrmidon(PARALLEL-HELPERS): the card -> Hermes `delegation` contract shared by the profile

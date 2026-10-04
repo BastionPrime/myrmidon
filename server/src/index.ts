@@ -139,6 +139,8 @@ import { startStackCheckSweep } from "./myrmidon/stack-registry/index.js"; // my
 import { startTelegramNotifyJobs } from "./myrmidon/telegram-notify/index.js";
 import { interactionContinuationOutboxService } from "./myrmidon/interaction-continuation-outbox.js"; // myrmidon(O1)
 import { createWorkspaceHygieneScheduler } from "./myrmidon/workspace-hygiene/index.js"; // myrmidon(WORKSPACE-HYGIENE)
+// myrmidon(BOT-DISK E): measures the host disk and signals when it crosses the threshold
+import { createHostDiskScheduler } from "./myrmidon/host-disk/index.js"; // myrmidon(BOT-DISK E)
 import { createRunStallSweepFromHeartbeat } from "./myrmidon/run-stall/index.js"; // myrmidon(RUN-STALL)
 import { createTaskPrSyncScheduler } from "./myrmidon/task-pr-sync/index.js"; // myrmidon(TASK-PR-SYNC)
 import { createStaleBlockScheduler } from "./myrmidon/stale-block/index.js"; // myrmidon(STALE-BLOCK)
@@ -1499,6 +1501,15 @@ async function startServerWithDatabaseTeardown(
       track: trackHeartbeatSchedulerWork,
     });
 
+    // myrmidon(BOT-DISK E): measures the host disk every tick and signals when
+    // the fill level crosses the threshold saved in the instance settings
+    // (GET/PATCH /api/myrmidon/host-disk), so the board shows it before the
+    // disk is full.
+    const scheduleHostDiskSweep = createHostDiskScheduler({
+      db: db as any,
+      track: trackHeartbeatSchedulerWork,
+    });
+
     // The restart-safe cleanup backstop for adapter login sessions. The
     // in-process five-minute timer stays the primary control. This reaper runs
     // on startup and on the scheduler interval. It deletes the login sandbox for
@@ -1818,6 +1829,7 @@ async function startServerWithDatabaseTeardown(
         scheduleGitHubConnectionContinuitySweep();
         scheduleTerminalWorkspaceSweep();
         scheduleWorkspaceHygieneSweep(); // myrmidon(WORKSPACE-HYGIENE)
+        scheduleHostDiskSweep(); // myrmidon(BOT-DISK E)
         scheduleAdapterLoginReaperSweep();
         scheduleSetupTokenReaperSweep();
         scheduleEnvironmentLeaseCleanupSweep();

@@ -158,6 +158,15 @@ A track writes only into its own section. A row is added in the same PR as the s
 |---|---|---|---|---|
 | `MYRMIDON_WORKSPACE_PNPM_STORE_DIR` | WORKSPACE-HYGIENE | unset — `<repository root>/.paperclip/pnpm-store` | Absolute path of the shared pnpm store into which `provision-worktree.sh` installs packages and from which they are imported into the workspace `node_modules` with hard links (`--config.package-import-method=hardlink`): one store for all workspaces of one repository instead of a full copy of packages per branch. The repository root is taken from `PAPERCLIP_WORKSPACE_REPO_ROOT` (then `PAPERCLIP_WORKSPACE_BASE_CWD`) — the default path lies on the same volume as the workspaces, so hardlink import works | A relative path in this variable is resolved from the same anchor. Store and workspace on different filesystems — installation falls back to vendor behavior (pnpm's own default store) with a warning to stderr |
 | `MYRMIDON_WORKSPACE_PNPM_STORE` | WORKSPACE-HYGIENE | `1` (enabled) | Master switch of the shared store: `0`/`false`/`no`/`off` — `provision-worktree.sh` runs `pnpm install` with vendor argv without store flags | Disabling returns the previous disk usage (a full copy of `node_modules` per workspace) |
+## BOT-DISK E — host disk usage signal
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_HOST_DISK_USAGE_THRESHOLD_PERCENT` | BOT-DISK E | `85` | The fill level of the host disk that raises the attention signal. The sweep measures the disk of the server data root (`MYRMIDON_HOST_DISK_DATA_ROOT`) on every scheduler tick, keeps a sample ring for the growth rate per hour, and when usage crosses this level the attention queue gets one row with the numbers and the biggest consumers. The value is the default at FIRST start only; the effective threshold lives in the instance settings (`instance_settings.general.hostDisk`) and changes live on the Instance → General page («Host disk») or through `GET`/`PATCH /api/myrmidon/host-disk` — the sweep re-reads it on every measurement, no restart | A non-integer or a value outside 1–99 — the default (85). A stored row that does not validate is ignored as a whole |
+| `MYRMIDON_HOST_DISK_DATA_ROOT` | BOT-DISK E | `/data` | Directory whose filesystem usage is measured: `statfs` of this path reports the disk the board's database, workspaces and container volumes live on | Must exist and be readable by the server process; unreadable — the sweep logs one error per tick and no signal is raised |
+| `MYRMIDON_HOST_DISK_CONSUMER_PATHS` | BOT-DISK E | the data root | Comma-separated directories ranked as «biggest consumers» in the signal: each is walked with a bounded depth/entry/time cap, biggest first | Unset — the data root itself is the one consumer listed |
+
+
 ## P12 — the deferred addressee-wake sweeper
 
 | Variable | Function | Default | What it does | How to disable / special |
@@ -404,6 +413,7 @@ a human under `mode: types`). The one-button emergency off is
 | Field | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `permissions.toolAccess` | S6 | `{ "mode": "all" }`, written into the agent record explicitly | The agent's permission for tools and connections. `mode: "listed"` — only tools from `tools` and connections from `connections` are allowed, other calls are rejected (403, `deny_agent_permission`, a line in the call log). Set by the operator in the agent card (Permissions tab, "Tool and connection access" section) or `PATCH /api/agents/:id/permissions` with the `toolAccess` field | `{ "mode": "all" }` — previous behavior. An agent without the field and a record with an unreadable value are read as `all` |
+| `permissions.boardAdmin` | ADMIN-AGENT (1.6.1) | flag absent — reads as `false` | The board administrator flag on the agent record. Enabling through `PATCH /api/agents/:id/permissions` with the `boardAdmin` field (or the "Board administrator" toggle on the agent card's Permissions tab) grants the fixed 17-key operator set (`BOARD_ADMIN_PERMISSION_KEYS`) and snapshots the pre-existing set keys into `permissions.boardAdminSavedGrantKeys`; disabling revokes only the keys the switch added. Flipping needs the company `users:manage_permissions` right (board actors) or the same grant (agent actors); an agent cannot grant board admin to itself (403). `GET /api/agents/:id` resolves `access.boardAdmin` for the CEO, the stored flag, or a pre-existing full set (read-time migration). Details: [guides/agent-board-admin.md](guides/agent-board-admin.md) | Clear the flag with the same PATCH and `boardAdmin: false` — keys outside the set and keys in the snapshot are untouched; both readers are fail-closed — an unreadable value reads as `false` |
 
 ## SC1 — server console (SERVER-CONSOLE, 1.4)
 
@@ -829,6 +839,42 @@ query/badge and the `wipLimit` i18n namespace.
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | — | 1.6.1-WIP-LIMIT-B | — (always on) | The settings screen writes the row through part A's PUT; the badge on an agent row reads the status endpoint | Not configurable: no deployment-specific values in the UI half |
+
+## 1.6.1 — CUSTOM-CASTES B: caste-directory consumers (role validator, swarm gate)
+
+No environment variables and no new settings documents: this part wires the
+consumers of the company caste directory (the directory itself is part A).
+Both consumers read the directory through an injectable port, so until part A
+lands the port is absent and every behavior below is a no-op that matches the
+pre-directory release exactly.
+
+Agent role validation (`packages/shared/src/validators/agent.ts`,
+`server/src/services/agents.ts`): the `role` field of the agent create/update
+payload is a caste key — latin letters, digits and hyphens, 1–60 characters —
+and no longer one of the fixed twelve role names. When the directory port is
+wired, create and update refuse a key that is not a caste of the company with
+a 400 (`code` `role_not_company_caste`, the refused key in `role`); create the
+caste first, then assign it. The board UI falls back to displaying the raw key
+for any role the built-in label map does not know.
+
+Swarm claim gate (`server/src/myrmidon/swarm-claim/service.ts`): when the
+directory port is wired, the gate looks up the claiming agent's caste before
+taking a task. A caste with `swarmEligible=false` never enters the claim pool
+— the claim endpoint answers `caste_excluded` instead of taking a task (a
+supervision caste such as a lead or an on-call reviewer stays out of the pool
+the swarm draws from). A caste-set `maxActiveTasks` overrides the global
+`MYRMIDON_SWARM_MAX_ACTIVE_TASKS` ceiling for agents of that caste only;
+`null` keeps the global ceiling. A role with no directory entry behaves
+exactly as before.
+
+Unchanged: the autonomy matrix resolves the caste key as the role string with
+no schema change (moving an agent between castes changes no verdict), the
+`ceo` built-in checks stay byte-identical, custom roles keep working through
+explicit grants, and the cloud-connector caste grants are untouched.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| — | 1.6.1-CUSTOM-CASTES-B | — | This part adds no tunables of its own; the directory rows (`swarmEligible`, `maxActiveTasks`) come from part A's store, the swarm globals stay under `MYRMIDON_SWARM_*` | Until part A's directory is wired the consumers are no-ops; nothing to disable |
 
 ## 1.6.1 — WIP-LIMIT: per-agent work-in-progress limit
 
