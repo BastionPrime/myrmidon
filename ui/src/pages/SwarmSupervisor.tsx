@@ -48,6 +48,26 @@ import {
 
 const NO_COMPANY = "__none__";
 
+/**
+ * myrmidon(1.6.1 SWARM-SETTINGS-UI): the human label of a setting source —
+ * where the effective value came from (the settings UI, the environment
+ * override, or the built-in default). The supervisor meta strip shows it
+ * next to each value so the operator can tell at a glance which side is
+ * in charge.
+ */
+function swarmSourceLabel(source: string | undefined): string {
+  switch (source) {
+    case "settings":
+      return "from settings UI";
+    case "env":
+      return "from environment override";
+    case "default":
+      return "default";
+    default:
+      return "unknown";
+  }
+}
+
 /** Roles tab vs the pilot-vs-baseline section. */
 type SwarmSection = "roles" | "pilot";
 
@@ -658,11 +678,31 @@ export function SwarmSupervisor({ embedded = false }: SwarmSupervisorProps = {})
             <span className="flex items-center gap-1.5">
               <RotateCw className="h-4 w-4" />
               {data.leaseTtlSec === null ? "—" : t("swarm.leaseTtl", { seconds: `${formatNumber(data.leaseTtlSec)} s` })}
+              {/* myrmidon(1.6.1 SWARM-SETTINGS-UI): where the value came from */}
+              <span
+                className="text-muted-foreground/80"
+                data-testid="swarm-supervisor-source-leaseTtlSec"
+              >
+                ({swarmSourceLabel(data.settingSources?.leaseTtlSec)})
+              </span>
             </span>
             <span className="flex items-center gap-1.5">
               <ShieldCheck className="h-4 w-4" />
               {t("swarm.maxActive")}{" "}
               {data.maxActiveTasksPerAgent === null ? "—" : formatNumber(data.maxActiveTasksPerAgent)}
+              <span
+                className="text-muted-foreground/80"
+                data-testid="swarm-supervisor-source-maxActiveTasks"
+              >
+                ({swarmSourceLabel(data.settingSources?.maxActiveTasks)})
+              </span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <ShieldCheck className="h-4 w-4" />
+              Pilot switch:{" "}
+              <span data-testid="swarm-supervisor-source-enabled">
+                {swarmSourceLabel(data.settingSources?.enabled)}
+              </span>
             </span>
           </div>
         ) : null}

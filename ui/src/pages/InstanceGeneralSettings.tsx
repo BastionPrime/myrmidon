@@ -21,6 +21,7 @@ import { MaintenanceSettingsPanel } from "@/components/myrmidon/MaintenanceSetti
 import { RuntimeLimitsSettingsPanel } from "@/components/myrmidon/RuntimeLimitsSettingsPanel"; // myrmidon(C0)
 import { HostDiskSettingsPanel } from "@/components/myrmidon/HostDiskSettingsPanel"; // myrmidon(BOT-DISK E)
 import { ParallelHelpersSettingsPanel } from "@/components/myrmidon/ParallelHelpersSettingsPanel"; // myrmidon(PARALLEL-HELPERS)
+import { SwarmClaimSettingsPanel } from "@/components/myrmidon/SwarmClaimSettingsPanel"; // myrmidon(1.6.1 SWARM-SETTINGS-UI)
 import { AboutSettingsPanel } from "@/components/myrmidon/AboutSettingsPanel"; // myrmidon(ABOUT)
 import { DeployJobsPanel } from "@/components/myrmidon/DeployJobsPanel"; // myrmidon(R5-A)
 import { PRODUCT_NAME, UPSTREAM_ATTRIBUTION } from "@/lib/myrmidon-product"; // myrmidon(B1a)
@@ -135,6 +136,7 @@ export function InstanceGeneralSettings({ embedded = false }: { embedded?: boole
       <RuntimeLimitsSettingsPanel /> {/* myrmidon(C0) */}
       <HostDiskSettingsPanel /> {/* myrmidon(BOT-DISK E) */}
       <ParallelHelpersSettingsPanel /> {/* myrmidon(PARALLEL-HELPERS) */}
+      <SwarmClaimSettingsPanel /> {/* myrmidon(1.6.1 SWARM-SETTINGS-UI) */}
       <DeployJobsPanel /> {/* myrmidon(R5-A) */}
 
       {showDeploymentStatus && (

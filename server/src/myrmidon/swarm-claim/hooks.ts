@@ -14,6 +14,7 @@ import { heartbeatRuns, type Db } from "@paperclipai/db";
 import {
   SWARM_CLAIM_RELEASED_ACTION,
   SWARM_CLAIM_RELEASE_REASON_RUN_FINISHED,
+  isSwarmClaimEnabledFor,
   resolveSwarmClaimSettings,
 } from "@paperclipai/shared";
 import { planClaim } from "./domain.js";
@@ -52,6 +53,17 @@ export async function recordSwarmClaimOnCheckoutImpl(
 ): Promise<boolean> {
   const { settings } = await resolved(deps)();
   if (!settings.enabled) return false;
+  // 1.6.1 (SWARM-SETTINGS-UI): the checkout hook obeys the same pilot set the
+  // claim service does — an agent outside the pilot keeps vendor checkout
+  // behavior (no claim row, nothing to release).
+  if (
+    !isSwarmClaimEnabledFor(settings, {
+      companyId: input.run.companyId,
+      role: input.agent.role,
+    })
+  ) {
+    return false;
+  }
 
   const existing = await findLiveClaimForIssue(deps.db, input.issueId);
   if (existing) {

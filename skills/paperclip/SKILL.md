@@ -547,7 +547,7 @@ Exact response fields are documented in `skills/paperclip/references/api-referen
 ## Critical Rules
 
 - **Never retry a 409.** The task belongs to someone else.
-- **Never look for unassigned work.** No assignments = exit.
+- **Never look for unassigned work.** No assignments = exit. Exception: when the swarm claim pilot is enabled, a free agent may take the top task of its role's queue itself — `POST /api/myrmidon/companies/{companyId}/swarm-claim/claim` with its own agent JWT (`runId` optional). When woken with reason `swarm_claim_queue` and a `contextSnapshot.issueId`, treat that issue as assigned work and checkout normally.
 - **Self-assign only for explicit @-mention handoff.** Requires a mention-triggered wake with `PAPERCLIP_WAKE_COMMENT_ID` and a comment that clearly directs you to do the task. Use checkout (never direct assignee patch).
 - **Honor "send it back to me" requests from board users.** If a board/user asks for review handoff (e.g. "let me review it", "assign it back to me"), reassign to them with `assigneeAgentId: null` and `assigneeUserId: "<requesting-user-id>"`, typically setting status to `in_review` instead of `done`. Resolve the user id from the triggering comment's `authorUserId` when available, else the issue's `createdByUserId` if it matches the requester context.
 - **Start actionable work before planning-only closure.** Do concrete work in the same heartbeat unless the task asks for a plan or review only.
