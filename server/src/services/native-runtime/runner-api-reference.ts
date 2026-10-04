@@ -139,7 +139,11 @@ export const runnerApiReference: Record<string, { section: string; description?:
             "owner": {
               "agentId": "{your-agent-id}"
             },
-            "action": "Restore the failed workspace service, verify health, then resume."
+            "action": "Restore the failed workspace service, verify health, then resume.",
+            "reasonRef": {
+              "kind": "issue",
+              "issueId": "{blocking-issue-id}"
+            }
           },
           "comment": "The workspace service is unavailable; I own restoring it."
         }

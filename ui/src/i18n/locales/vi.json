@@ -378,6 +378,62 @@
       "empty": "No provider changes recorded yet."
     }
   },
+  "castes": {
+    "title": "Agent castes",
+    "breadcrumb": "Agent castes",
+    "intro": "The company's caste directory: the roles agents hold. The first read seeds the twelve built-in castes; add your own, edit names, colors, icons, the default model and the swarm rules. A caste in use by live agents cannot be deleted.",
+    "loading": "Loading the caste directory...",
+    "noCompany": "Select a company to manage its castes.",
+    "add": {
+      "title": "Add caste",
+      "open": "Add caste",
+      "cancel": "Cancel",
+      "key": "Key",
+      "keyHint": "Stable identifier that matches the agent's role. Latin letters and hyphen, 1–60; cannot change after creation.",
+      "nameEn": "Name (EN)",
+      "nameRu": "Name (RU)",
+      "description": "Description",
+      "color": "Color",
+      "icon": "Icon",
+      "defaultModel": "Default model",
+      "swarmEligible": "Eligible for the swarm",
+      "maxActiveTasks": "Max active tasks",
+      "maxActiveTasksHint": "Empty = the global swarm limit",
+      "save": "Save caste",
+      "saving": "Saving..."
+    },
+    "list": {
+      "title": "Castes",
+      "empty": "The directory is empty. The first read seeds the built-in castes; add one if it stays empty.",
+      "key": "Key",
+      "names": "Names",
+      "color": "Color",
+      "icon": "Icon",
+      "defaultModel": "Default model",
+      "swarm": "Swarm",
+      "swarmYes": "Eligible",
+      "swarmNo": "Excluded",
+      "maxActiveTasks": "Task limit",
+      "globalLimit": "global",
+      "builtIn": "built-in",
+      "actions": "Actions"
+    },
+    "edit": {
+      "open": "Edit",
+      "save": "Save",
+      "saving": "Saving...",
+      "cancel": "Cancel"
+    },
+    "remove": {
+      "open": "Remove",
+      "confirm": "Confirm remove",
+      "removing": "Removing...",
+      "cancel": "Cancel",
+      "inUse": "This caste is in use: agents still hold this role. Pick the caste to move them to, then confirm the removal.",
+      "reassignTo": "Reassign the agents on this caste to...",
+      "reassignPlaceholder": "Select a target caste"
+    }
+  },
   "cardModels": {
     "free": "Free",
     "paid": "Paid",

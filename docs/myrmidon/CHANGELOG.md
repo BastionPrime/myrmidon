@@ -10,6 +10,26 @@ version file to edit. Base Paperclip version is in the image label
 
 ## Unreleased
 
+### Maintenance: asynchronous exit and the post-deploy fleet check (EXIT-ASYNC + POST-DEPLOY-CHECK)
+
+- Leaving maintenance mode is asynchronous (#268): the `exit` call returns as
+  soon as the window is marked `leaving`, and the leave tail (resuming the
+  queued wake backlog, the exit hook, retiring the window) runs on the
+  maintenance tick (`MYRMIDON_MAINTENANCE_TICK_SEC`, default 5 s). `leaving`
+  already reopens admission, so the fleet keeps working while the tail runs.
+- The deploy waits on the state, not on the HTTP call: after the exit POST,
+  `deploy.sh` polls the maintenance state until the instance window is `off`,
+  bounded by `MAINTENANCE_EXIT_WAIT_SEC` (default 120 s). A timeout is logged
+  loudly and does not fail an already switched and healthy deploy; a failed
+  exit request still aborts it.
+- The deploy ends with a read-only post-deploy fleet check (step 9,
+  `post_deploy_fleet_check`): with `BOARD_API_URL` and `BOARD_COMPANY_ID` set
+  it asks the board for issues that are `blocked` with an update since the
+  deploy started and re-reads the maintenance state. A hit, an unreadable
+  board or a window that did not retire prints `degraded: ...` and the run
+  ends with `DEPLOY DEGRADED` — the verdict does not fail a switched and
+  healthy deploy. Without the two settings the check is skipped.
+
 ### WIP limit (WIP-LIMIT parts A + B)
 
 - The per-agent work-in-progress limit: a company-wide default and
@@ -29,6 +49,7 @@ version file to edit. Base Paperclip version is in the image label
   limit of 0 — any task it holds in flight is over the limit by
   definition. See [wip-limit](guides/wip-limit.md).
 
+
 ### Telegram notification settings UI (TG-NOTIFY-SETTINGS part F)
 
 - The "Telegram notifications" panel on the System screen of the 2.0 UI: all
@@ -40,7 +61,37 @@ version file to edit. Base Paperclip version is in the image label
   merged the UI is covered by tests against the mocked JSON contract.
 ## 1.6.1
 
+### Role queues as instance settings (SWARM-SETTINGS-UI)
 
+- The pilot of the per-role task queues is set in the interface, without a
+  restart: the "Role queues (SWARM-CLAIM)" section of Instance → General
+  (`GET`/`PATCH /api/myrmidon/swarm-claim`, board reads, instance-admin
+  writes) holds the master switch, the pilot role set (the pilot on the dev
+  team: comma-separated roles, e.g. `engineer`), the pilot company set, the
+  lease TTL, the per-agent task ceiling, the sweep interval and the P0
+  preemption. The server re-resolves the row on every claim, checkout, sweep
+  tick and supervisor read: turning a role on takes effect within a minute,
+  and turning the pilot off releases the live leases at once — the PATCH does
+  it synchronously (the response reports the count) and the sweep repeats it
+  on its next pass with the release reason `pilot_disabled`. The `MYRMIDON_SWARM_*`
+  environment variables are now documented forced overrides: a set variable
+  beats the stored value for its key only, and every key of the GET answer
+  carries its source (`settings`, `env` or `default`) — both the settings
+  screen and the Swarm supervisor screen render where each value came from.
+  Every change appends a journal entry (who, what, when — newest first, kept
+  under `general.swarmClaimJournal`) plus the `instance.swarm_claim.updated`
+  activity row. The P0 preemption became a setting: off demotes the priority
+  rank to a tie-break, the queue is strictly oldest-first. Under the hood the
+  stored settings never survived the vendor general-settings write cycle (the
+  key was dropped on every write, so the pilot could in practice only be
+  enabled from the environment) — fixed together with the journal key.
+  See [SETTINGS.md](SETTINGS.md).
+
+
+
+### SWARM-IDLE-WAKE: Free agents wake when their role queue is not empty
+
+- Third pass of the swarm supervisor (`sweep.ts`, after the release and free passes): on each tick, for each pair of "role + ready queue + free agents", wakes the missing number of agents, in batches ≤5 (`MYRMIDON_SWARM_IDLE_WAKE_BATCH`, default 5, clamp 1–25), each wake bound to the top task of the queue (P0 first — `orderSwarmQueueCandidates`). Pure modules: `idle-wake.ts` (policy: no live lease, under task ceiling, not paused/error, no live run, idempotency key) and `idle-queue.ts` (DB reads: role-queue pairs, live claim counts, coverage check). Assigned tasks go to the role of their executor; tasks without an executor are offered to every role with agents. The active task limit is respected, castes remain a gate on the claim side (`caste_excluded`, CUSTOM-CASTES B) — the point of control; the caste ceiling is respected. Supervisor metric: new total `freeAgentsWithQueue` — "free agents when queue is not empty" — which the pass should keep at 0 (unassigned tasks are now visible to roles with agents). Wakes go only through the existing `enqueueWakeup` (pause, maintenance, limits, budget — all gates preserved); the capture happens on checkout of the awakened run. The "one TTL + sweep interval" criterion is covered by a test (interval ≤ TTL/3). Docs: `MYRMIDON_SWARM_IDLE_WAKE_BATCH` in SETTINGS.md/SETTINGS.ru.md; skill `skills/paperclip/SKILL.md` supplemented with self-capture fallback (`POST /api/myrmidon/companies/{companyId}/swarm-claim/claim`).
 
 ### Custom castes, consumers (CUSTOM-CASTES B)
 
@@ -70,7 +121,8 @@ version file to edit. Base Paperclip version is in the image label
   gate/event. Dead blocked-by edges are removed through the ordinary issue
   update path, the task returns to `in_progress`, and one system comment
   names the cause. A task with a live reason is untouched. Opt-in via
-  `MYRMIDON_STALE_BLOCK_ENABLED` (default 0).
+  `MYRMIDON_STALE_BLOCK_ENABLED` (default 0). Guide:
+  [guides/stale-block.md](guides/stale-block.md).
 - One new attention source kind `stale_block`: a lifted block raises one
   card for the lead and the operator, computed on the fly from a
   process-level signal registry (no new store); cards fade after
@@ -92,6 +144,7 @@ version file to edit. Base Paperclip version is in the image label
   for one-off month backfills. The UI-2.0 forecast chip shows
   "spent" only when no monthly budget is configured, ending the
   "$0 of $0" placeholder.
+
 
 ### Board administrators from agents (ADMIN-AGENT part C)
 

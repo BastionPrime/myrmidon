@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { agentWakeupRequests, agents, companies, heartbeatRuns, issues, type Db } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 
@@ -261,6 +261,11 @@ export async function idlePickupForAgent(
   const env = deps.env ?? process.env;
   if (!readIdlePickupEnabled(env)) return emptyIdlePickupResult();
 
+  // Succeeded runs matter only inside the recent-success window (see below), so
+  // read just those: an unbounded read pulled every succeeded run of the agent
+  // with its full context snapshot on every pickup pass (thousands of rows).
+  const recentSuccessWindowMs = readIdlePickupRecentSuccessWindowMs(env);
+  const recentSuccessCutoff = new Date(Date.now() - recentSuccessWindowMs);
   const [candidates, liveRuns] = await Promise.all([
     idlePickupCandidateRows(deps.db, agent.companyId, agent.id),
     deps.db
@@ -276,10 +281,15 @@ export async function idlePickupForAgent(
         and(
           eq(heartbeatRuns.companyId, agent.companyId),
           eq(heartbeatRuns.agentId, agent.id),
-          inArray(heartbeatRuns.status, [
-            ...LIVE_HEARTBEAT_RUN_STATUSES,
-            "succeeded",
-          ]),
+          recentSuccessWindowMs > 0
+            ? or(
+                inArray(heartbeatRuns.status, [...LIVE_HEARTBEAT_RUN_STATUSES]),
+                and(
+                  eq(heartbeatRuns.status, "succeeded"),
+                  sql`coalesce(${heartbeatRuns.finishedAt}, ${heartbeatRuns.startedAt}, ${heartbeatRuns.createdAt}) >= ${recentSuccessCutoff.toISOString()}::timestamptz`,
+                ),
+              )
+            : inArray(heartbeatRuns.status, [...LIVE_HEARTBEAT_RUN_STATUSES]),
         ),
       ),
   ]);
@@ -299,7 +309,6 @@ export async function idlePickupForAgent(
   // step for exactly that shape (a disposition is missing, and those paths send
   // the instructive wake). Waking it again here only races them — and in tests
   // it turns one background run into a chain that leaks into the next suite.
-  const recentSuccessWindowMs = readIdlePickupRecentSuccessWindowMs(env);
   const recentlySucceededIssueIds = new Set(
     liveRuns
       .filter((run) => run.status === "succeeded")

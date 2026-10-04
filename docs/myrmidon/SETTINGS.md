@@ -62,6 +62,9 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MYRMIDON_STALE_BLOCK_INTERVAL_SEC` | STALE-BLOCK | `300` (5 min) | Minimum spacing between two stale-block sweep passes; the scheduler queue itself ticks more often, the sweep keeps its own throttle | From 15 to 86400; values below 15, non-numeric or fractional — the default |
 | `MYRMIDON_STALE_BLOCK_SIGNAL_TTL_MS` | STALE-BLOCK | `86400000` (24 h) | How long the attention-feed card "stale block lifted" stays on the desk after the watchdog unblocked a task: the card fades after the TTL, the task's system comment stays as the durable audit trail. The feed is computed on the fly from a process-local registry, so a server restart also clears the cards | `0` — the card is not shown at all. Non-numeric or negative — the default |
 
+Behavior guide: [guides/stale-block.md](guides/stale-block.md) — what the
+sweep inspects, what unblocking does, and the attention-feed card.
+
 ## Track 3 — tool gateway and Hermes adapter
 
 | Variable | Function | Default | What it does | How to disable / special |
@@ -98,6 +101,8 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MAINTENANCE_ON_TIMEOUT` | DRAIN-INTERRUPT | `interrupt_and_retry` | Deploy-script setting (`deploy.env`): what the maintenance window does at the drain deadline. `interrupt_and_retry` drains for `MAINTENANCE_DRAIN_GRACE_SEC` and then interrupts the runs still going; each is retried when the window closes, so a planned deploy does not wait for long runs. Read by `scripts/myrmidon/deploy/{lib,deploy}.sh`, not by the server | `wait` — keep admission closed and wait out `MAINTENANCE_DRAIN_TIMEOUT_SEC` (the behaviour before drain-interrupt). Any other value — the deploy refuses before it touches anything |
 | `MAINTENANCE_DRAIN_GRACE_SEC` | DRAIN-INTERRUPT | `300` | Deploy-script setting (`deploy.env`): how long the window drains before it interrupts the remaining runs (the `drainTimeoutSec` of the enter request in interrupt mode) | Ignored with `MAINTENANCE_ON_TIMEOUT=wait`, which uses `MAINTENANCE_DRAIN_TIMEOUT_SEC` |
 | `MYRMIDON_MAINTENANCE_TICK_SEC` | R3 | `5` | How often the mode service recomputes windows: `entering → on`, timeouts, exit completion | From 1 to 3600 |
+| `MAINTENANCE_EXIT_WAIT_SEC` | EXIT-ASYNC | `120` | Deploy-script setting (`deploy.env`): how long `deploy.sh` waits for the instance maintenance window to retire (state `off`) after the exit POST. The exit itself is asynchronous — it returns as soon as the window is marked `leaving`, and the maintenance tick (`MYRMIDON_MAINTENANCE_TICK_SEC`) completes the leave tail — so the wait is on the state, not on the HTTP call. Read by `scripts/myrmidon/deploy/{lib,deploy}.sh`, not by the server | A timeout is logged loudly and does not fail an already switched and healthy deploy (`leaving` already reopens admission); a failed exit request still aborts |
+| `BOARD_COMPANY_ID` | POST-DEPLOY-CHECK | unset | Deploy-script setting (`deploy.env`): UUID of the company whose issues the post-deploy fleet check (step 9 of `deploy.sh`) reads — `GET $BOARD_API_URL/companies/$BOARD_COMPANY_ID/issues?status=blocked&updatedSince=<deploy start>`, then a re-read of the maintenance state. A blocked issue in the deploy window, an unreadable board or a window that did not retire prints `degraded: ...` and the run ends with `DEPLOY DEGRADED`; the verdict does not fail a switched and healthy deploy. The same company the post-deploy smoke's `MYRMIDON_DEPLOY_SMOKE_COMPANY` names | Unset (or `BOARD_API_URL` unset) — the check is skipped with a log line, a standalone install stays deployable. For a release deploy set both |
 | `MYRMIDON_MAINTENANCE_CACHE_TTL_SEC` | R3 | `5` | How many seconds the admission gateway caches maintenance windows and the org structure (department membership) | `0` — no cache, DB read on every check. Transitions made by this process are visible at once |
 | `MYRMIDON_MAINTENANCE_HOOK_TIMEOUT_MS` | R3 | `15000` | Upper bound for one maintenance integration hook call (`onEntered`/`onExited`, the Zabbix client). A hook that exceeds it is abandoned (it keeps running detached) and the window lifecycle continues; the timeout is logged and audited. OPE-3638: a hung `onExited` pinned `leaving` windows until every card change on the agent was blocked | From 1000 to 300000; a value outside the range falls back to the default |
 | `MYRMIDON_ZABBIX_URL` | R3 | unset | Address of the Zabbix API (`…/api_jsonrpc.php`) for the instance maintenance window | Unset — the integration is off, no calls |
@@ -586,10 +591,35 @@ database hit per wake.
 |---|---|---|---|---|
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_ENABLED` | WAKE-GUARD | `1` (on) | Master switch of the wake guard: on — an event-free wake to a settle-pending task is skipped instead of dispatching a run | `0`/`false`/`off`/`no` — disable (wakes dispatch runs as before). Unset or unrecognized — enabled: a typo does not silently extinguish the fix |
 | `MYRMIDON_TASK_PR_SYNC_WAKE_GUARD_TTL_SEC` | WAKE-GUARD | `60` | How long a suppress decision stays cached for one task (matches the sweep's default poll); the cache holds at most 1000 issues, least-recently-used eviction | From 1 to 3600; non-numeric, non-positive or above the cap — the default (60) |
-| `MYRMIDON_SWARM_CLAIM_ENABLED` | 1.6-SWARM | `0` (off) | Master switch of the per-role task queues: on — an agent claims the top task of its own role's queue behind a lease (TTL + heartbeat), an expired lease returns the task to the queue and the sweep wakes the next agent of the role; the checkout writes the run's claim, the finishing run releases it. Off — no claim is written and the sweep is a no-op (vendor behavior) | `1`/`true`/`on`/`yes` — enable (the pilot). Unset or unrecognized — off: the pilot must be turned on deliberately |
-| `MYRMIDON_SWARM_LEASE_TTL_SEC` | 1.6-SWARM | `900` | How long (sec) a claim's lease stays valid without a heartbeat; the run refreshes it on every checkout pass. The acceptance window (idle agent with a non-empty queue of its role) is one TTL plus one sweep interval | From 60 to 86400; below 60 — 60, above 86400 — 86400. Non-numeric, `0`, negative or fractional — the default |
-| `MYRMIDON_SWARM_MAX_ACTIVE_TASKS` | 1.6-SWARM | `3` | The per-agent ceiling of live claims; a capped agent is not handed new work until a lease finishes, expires or is released. `none` — no ceiling (all queue work claimable) | From 1 to 100; `none`/`0` — no ceiling. Non-numeric or fractional — the default |
-| `MYRMIDON_SWARM_CLAIM_SWEEP_INTERVAL_SEC` | 1.6-SWARM | `30` | How often (sec) the expired-claim sweep runs on the scheduler tick: it releases expired leases, releases claims whose task left the queue, and wakes the next agent of the released task's role | From 5 to 3600; below 5 — 5. Non-numeric, `0`, negative or fractional — the default |
+## 1.6.1 — SWARM-SETTINGS-UI: queues of roles as instance settings
+
+The pilot of the per-role queues is set in the interface, without a restart:
+Instance → General → "Role queues (SWARM-CLAIM)" writes
+`instance_settings.general.swarmClaim` (`GET`/`PATCH /api/myrmidon/swarm-claim`,
+board reads, instance-admin writes). The server re-resolves the row on every
+claim, checkout, sweep tick and supervisor read, so enabling a role takes
+effect within a minute, and switching the pilot off releases the live leases
+at once (the PATCH response reports how many). Every change appends a journal
+entry — who changed what, and when — rendered by the settings screen and kept
+under `general.swarmClaimJournal` (activity log stays the audit trail).
+
+The environment variables below are now **forced overrides**, not the primary
+source: a variable set in the process environment beats the stored value for
+that key only, so an operator can pin a contour without touching the database.
+Each key of the `GET` answer carries its source — `settings` (the UI value),
+`env` (the override) or `default` — and both the settings screen and the
+Swarm supervisor screen render that origin.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_SWARM_CLAIM_ENABLED` | 1.6-SWARM | `0` (off) | Override of the master switch of the per-role task queues: on — an agent claims the top task of its own role's queue behind a lease (TTL + heartbeat), an expired lease returns the task to the queue and the sweep wakes the next agent of the role; the checkout writes the run's claim, the finishing run releases it. Off — no claim is written; a disable also releases the live leases (reason `pilot_disabled`) | `1`/`true`/`on`/`yes` — force on. `0`/`false`/`off`/`no` — force off. Unset — the UI value applies; nothing stored — off, the pilot must be turned on deliberately |
+| `MYRMIDON_SWARM_CLAIM_ENABLED_ROLES` | 1.6.1-SWARM-SETTINGS-UI | unset (no restriction) | Override of the pilot role set: comma-separated role names (e.g. `engineer`). Only agents of the listed roles claim; an empty value means every role. The UI field holds the same list | Unset — the UI value applies. Empty — no restriction. Whitespace around an entry is trimmed |
+| `MYRMIDON_SWARM_CLAIM_ENABLED_COMPANY_IDS` | 1.6.1-SWARM-SETTINGS-UI | unset (no restriction) | Override of the pilot company set: comma-separated company ids. Only the listed companies claim; an empty value means every company | Unset — the UI value applies. Empty — no restriction |
+| `MYRMIDON_SWARM_LEASE_TTL_SEC` | 1.6-SWARM | `900` | Override of the lease TTL (sec): how long a claim's lease stays valid without a heartbeat; the run refreshes it on every checkout pass. The acceptance window (idle agent with a non-empty queue of its role) is one TTL plus one sweep interval | From 60 to 86400. Unset or unreadable — the UI value applies; nothing stored — 900 |
+| `MYRMIDON_SWARM_MAX_ACTIVE_TASKS` | 1.6-SWARM | `3` | Override of the per-agent ceiling of live claims; a capped agent is not handed new work until a lease finishes, expires or is released | From 1 to 100; `none`/`0` — no ceiling. Unset or unreadable — the UI value applies; nothing stored — 3 |
+| `MYRMIDON_SWARM_CLAIM_SWEEP_INTERVAL_SEC` | 1.6-SWARM | `30` | Override of the sweep interval (sec): how often the expired-claim sweep runs on the scheduler tick. Read live — a stored change spreads the passes without a restart; the constructed interval stays the floor | From 5. Unset or unreadable — the UI value applies; nothing stored — 30 |
+| `MYRMIDON_SWARM_CLAIM_P0_PREEMPTION` | 1.6.1-SWARM-SETTINGS-UI | `1` (on) | Override of the P0 preemption: on — a `critical` task is the top of the queue; off — the queue is strictly oldest-first | `1`/`true`/`on`/`yes` — on. `0`/`false`/`off`/`no` — off. Unset — the UI value applies |
+| `MYRMIDON_SWARM_IDLE_WAKE_BATCH` | 1.6.1 SWARM-IDLE-WAKE | `5` | Upper bound of agents one idle-wake pass of the swarm sweep may wake: for every role with a non-empty ready queue and free agents (no live claim, under the ceiling, not paused, no live run) the pass wakes the missing number, each wake bound to the top queue task (critical first) | From 1 to 25; out of range or non-numeric — clamped/falls back to the default |
 
 
 ## 1.6 — BASELINE: frozen metric snapshots
@@ -765,6 +795,29 @@ The jobs are wired maintenance-style: `server/src/index.ts` has one marked call,
 |---|---|---|---|---|
 | `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
 
+## 1.6.1 — GUARDRAILS (untrusted-input flagging layer)
+
+Settings of `server/src/myrmidon/guardrails/` (the 1.6.1 flag-only layer). The whole layer is off
+by default: without `MYRMIDON_GUARDRAILS_INJECTION_ENABLED` the wake queue stores exactly what it
+stored before — no markers, no flag, no event — and the run starts as usual.
+
+### INJECTION (part B: prompt-injection flag on the wake queue)
+
+When enabled, an externally authored queued comment's text is wrapped in
+`<untrusted-data>…</untrusted-data>` markers inside the wake payload the run reads (the board UI
+view of the comment is unchanged), and a heuristic detector (RU+EN) scores the text for
+instruction-override patterns. Flag-only mode: nothing is blocked, nothing is masked, the run
+starts exactly as before; the flag travels in the payload next to the wrapped text. The event
+journal (`recordGuardrailEvent`) is owned by part A; this part publishes the flag through the
+payload only.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_GUARDRAILS_INJECTION_ENABLED` | GUARDRAILS-B | unset (off) | Master switch of the injection flag on the wake queue. Only the exact values `1`, `true`, `yes`, `on` turn it on | Any other value (or unset/empty) — the layer is off and the wake queue is byte-identical to the vendor path; a typo does not silently enable it |
+| `MYRMIDON_GUARDRAILS_INJECTION_SCORE` | GUARDRAILS-B | `0.6` | Score threshold at which the heuristic scan sets `flagged: true`. `0` flags everything, `1` flags nothing | Unset, empty, non-numeric or outside 0..1 — the default `0.6` |
+
+
+
 
 
 ## 1.6.1 — TG-NOTIFY-SETTINGS part F: the board UI for the Telegram notification settings
@@ -914,3 +967,32 @@ configured token the endpoint answers 401 for everyone — it never falls open.
 | `MYRMIDON_METRICS_TOKEN` | 1.7-METRICS | unset | The scraper bearer token read from the environment, used when no secret name is configured | Unset together with the secret name — 401 for every request |
 | `MYRMIDON_METRICS_ERROR_WINDOW_SEC` | 1.7-METRICS | `3600` | Window (seconds) of the error families (failed runs, gateway spend). A request may override it per scrape with `?window=<sec>` | From 60 to 86400; below 60 — 60, above 86400 — 86400, non-numeric — the default |
 | `MYRMIDON_METRICS_LATENCY_WINDOW_SEC` | 1.7-METRICS | `21600` | Window (seconds) of the latency family: p50/p95 of finished run durations (finishedAt − startedAt). A request may override it with `?latency_window=<sec>` | From 300 to 86400; below 300 — 300, above 86400 — 86400, non-numeric — the default |
+## 1.6.1 — VOICE-STT (server-side speech-to-text core, part A)
+
+Settings of `server/src/myrmidon/stt/` (the 1.6.1 voice track). The path is off by default:
+without `MYRMIDON_STT_ENABLED=1` every `transcribeAudio` call answers the stable
+`stt_disabled` code and no outbound request is made. The default backend is a speech model
+behind the shared LiteLLM gateway (`dashscope`); `deepgram` is the optional second backend.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_STT_ENABLED` | VOICE-STT | unset (off) | Master switch of the STT path. The exact values `1`/`true`/`yes`/`on` enable it; everything else keeps it off | Unset, empty or `0`/`false`/`no`/`off` — `stt_disabled`, zero outbound requests |
+| `MYRMIDON_STT_BACKEND` | VOICE-STT | `dashscope` | Which backend transcribes: `dashscope` (multipart `/v1/audio/transcriptions` on the gateway) or `deepgram` (direct Deepgram call) | An unknown value falls back to `dashscope` (a typo does not switch the backend) |
+| `MYRMIDON_STT_BASE_URL` | VOICE-STT | unset | Address of the gateway (DashScope path) or of Deepgram. A base ending in `/v1` is not doubled | Unset — `stt_unconfigured`, zero outbound requests |
+| `MYRMIDON_STT_KEY_SECRET` | VOICE-STT | unset | **Name** of the company secret holding the gateway key for the `dashscope` path. The value is read per call, is never cached and never appears in logs, journals or error messages | Unset — `stt_unconfigured` |
+| `MYRMIDON_STT_DEEPGRAM_KEY_SECRET` | VOICE-STT | unset | **Name** of the company secret holding the Deepgram key for the `deepgram` backend | Unset — `stt_unconfigured` |
+| `MYRMIDON_STT_MODEL` | VOICE-STT | unset | Model name on the gateway for the `dashscope` path. Until an operator registers the model on the gateway, a call degrades to the stable `stt_unconfigured` (the gateway's "Invalid model name" answer is recognized) | Unset — `stt_unconfigured` |
+| `MYRMIDON_STT_LANGUAGE` | VOICE-STT | `auto` | Recognition language hint: `auto` or `ru`. `auto` sends no language field to the DashScope path | An unknown value falls back to `auto` |
+| `MYRMIDON_STT_DIARIZATION` | VOICE-STT | unset (off) | Turns on speaker diarization where the backend supports it (Deepgram `diarize`). Speakers are never invented: a backend that returns none gets no speaker labels | Exact `0`/`false`/`no`/`off` — off |
+| `MYRMIDON_STT_MAX_DURATION_SEC` | VOICE-STT | `1800` | Duration limit: a longer recording answers the stable `audio_too_long` before any outbound request | Non-integer or non-positive — the default |
+| `MYRMIDON_STT_MAX_BYTES` | VOICE-STT | `26214400` (25 MB) | Size limit: a larger recording answers `audio_too_large` before any outbound request | Non-integer or non-positive — the default |
+| `MYRMIDON_STT_TIMEOUT_SEC` | VOICE-STT | `120` | Per-request timeout of one backend call. A timed-out call answers the stable `stt_timeout` | Clamped to 5–600 s; out of bounds — the default |
+| `MYRMIDON_STT_CHUNK_SEC` | VOICE-STT | `60` | Target duration of one chunk in the pure-TS long-recording split (OGG page / MPEG frame boundaries; no ffmpeg). Chunks are merged back with timecode offsets | Clamped to 5–300 s; out of bounds — the default |
+
+Runtime-mutable per-company overrides (enabled, backend, model, language, diarization,
+duration limit) live under `instance_settings.general.myrmidonSttCompanies[companyId]`
+(no new migration — the same JSON-column pattern the autonomy matrix uses) and are
+managed through `GET`/`PATCH /api/myrmidon/companies/:companyId/voice-stt` (GET is
+company access, PATCH is board only). The environment values are the defaults the
+overrides start from; a stored `enabled: true` cannot resurrect a path whose contour
+(address, key secret, model) is unnamed.

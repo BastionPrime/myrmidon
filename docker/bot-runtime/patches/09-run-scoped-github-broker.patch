@@ -54,7 +54,7 @@ index fc389b3..ae87615 100644
      from tools.approval import register_gateway_notify, unregister_gateway_notify
      from tools.approval_context import reset_current_session_key, set_current_session_key
 +    # myrmidon(G1): run-scoped GitHub broker capability (CONTAINER-GITHUB-WRITE).
-+    from tools.github_broker_context import reset_github_broker_vars, set_github_broker_vars
++    from tools.github_broker_context import set_github_broker_vars
      session_id = run.session_id
      effective_task_id = session_id or run.run_id
      # (token, reset) pairs unwound in the finally block; bound only once each step succeeds.

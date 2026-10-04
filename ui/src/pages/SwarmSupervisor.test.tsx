@@ -113,6 +113,12 @@ function overview(overrides: Partial<SwarmSupervisorOverview> = {}): SwarmSuperv
     generatedAt: "2026-10-02T12:05:00.000Z",
     leaseTtlSec: 900,
     maxActiveTasksPerAgent: 2,
+    settingSources: {
+      enabled: "settings",
+      leaseTtlSec: "settings",
+      maxActiveTasks: "env",
+      sweepIntervalSec: "default",
+    },
     totals: {
       queued: 1,
       activeClaims: 1,
