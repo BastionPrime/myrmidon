@@ -996,3 +996,7 @@ managed through `GET`/`PATCH /api/myrmidon/companies/:companyId/voice-stt` (GET 
 company access, PATCH is board only). The environment values are the defaults the
 overrides start from; a stored `enabled: true` cannot resurrect a path whose contour
 (address, key secret, model) is unnamed.
+
+The container-bot side of the track — the media-mcp tools `audio_split` /
+`stt_transcribe` and their `MEDIA_STT_*` service settings — is documented in
+[media-tools.md](media-tools.md) («Speech-to-text»).

@@ -22,6 +22,8 @@ bot ──MCP/HTTP──▶ media-mcp (facade) ──▶ media-worker  (ffmpeg, 
 | `media_probe` | ffprobe: duration, streams, codecs |
 | `audio_loudness` | EBU R128 loudness (LUFS, LRA, peak) |
 | `ffmpeg_submit`, `job_status`, `job_cancel` | editing and transcoding via a queue; a spec with allowlists, not raw argv |
+| `audio_split` | splits a long recording into 16 kHz mono wav chunks with `startMs` offsets (a queued job, like ffmpeg) |
+| `stt_transcribe` | speech → text + segments through the STT gateway, synchronous |
 | `image_transform` | scale, crop, rotate, format (jpg/png/webp) |
 | `pdf_to_images` | PDF pages to png/jpeg (poppler), up to 40 per call |
 | `office_to_pdf` | docx/xlsx/pptx/odt/… to PDF (Gotenberg, LibreOffice) |
@@ -76,6 +78,47 @@ or `.dxf`, output is DXF, SVG or PDF:
 Post-deploy check: convert a test DWG to DXF and SVG, round-trip DXF→DXF with a version
 change.
 
+## Speech-to-text (audio_split, stt_transcribe)
+
+Two tools serve meeting recordings. `audio_split` is a queued job (kind `audio_split`,
+same queue as ffmpeg): it runs the ffmpeg segment muxer over the input and writes
+16 kHz mono `pcm_s16le` wav chunks (`chunk_%06d.wav`); `chunk_sec` is 5..1800 s
+(default 300), and the job's `-t` cap bounds the run by `chunk_sec × max_parts`
+(600 parts at most) and by the bot's remaining quota. When the job is done,
+`job_status` lists every chunk as a file in the bot's store with a `startMs` offset
+into the source recording. `stt_transcribe` is synchronous: it POSTs the file as
+multipart to `${MEDIA_STT_BASE_URL}/v1/audio/transcriptions` with the model (and an
+optional `language` like `ru` or `en-US`) and normalizes the answer to
+`{text, segments: [{speaker, startMs, endMs}]}` — seconds- or milliseconds-shaped
+answers and duration-only segments are tolerated, segments beyond 4000 are dropped,
+and speakers are never invented. The `start_ms` argument shifts a chunk's segment
+times back into the source recording, so the pairing is: `audio_split` → one
+`stt_transcribe` per chunk with its `startMs` as `start_ms`.
+
+Settings (service env, like the rest of this section): `MEDIA_STT_BASE_URL`
+(default `http://stt-gateway:8000`), `MEDIA_STT_API_KEY` /
+`MEDIA_STT_API_KEY_FILE` (docker secret; the key goes only into the
+`Authorization` header, never into answers or logs), `MEDIA_STT_DEFAULT_MODEL`
+(default `whisper-large-v3`), `MEDIA_STT_MAX_MULTIPART_BYTES` (default 32 MiB —
+a larger file is refused with a pointer to `audio_split`),
+`MEDIA_STT_MAX_RESPONSE_BYTES` (default 64 MiB). These are fixed at service
+start; there is no per-company runtime override — that side lives in the
+server's VOICE-STT core (`MYRMIDON_STT_*`, see SETTINGS.md).
+
+With the feature switched off: the tools stay registered but refuse the call
+cleanly — a bot whose `tools` list lacks them gets the standard allowlist
+refusal, and with no `MEDIA_STT_API_KEY` the call is sent without an
+`Authorization` header and the gateway's own answer comes back as the error.
+The stable error answers a bot sees:
+`model <name> is not registered on the transcription gateway` (HTTP 404 from the
+gateway), `transcription gateway refused the request (HTTP <code>)`,
+`transcription gateway unavailable (<error class>)` on network failure,
+`audio larger than <N> MiB for transcription; split it first (audio_split)`,
+`transcription response larger than <N> MiB`,
+`transcription gateway returned a non-JSON answer`,
+`chunk_sec must be in [5.0, 1800.0] seconds`,
+`too many active jobs (limit 3); wait or job_cancel`.
+
 ## Bot authentication
 
 `config/bots.json` (the sample is `tools/media-mcp/config.example.json`), key = bot name:
@@ -108,6 +151,8 @@ change.
    auto-run macro leaves no traces; bot B cannot open bot A's file; one request beyond
    `rate_per_min` gets 429.
    For `dwg_convert`: a test DWG → DXF and → SVG from a bot with the tool in `tools`.
+   For STT: `audio_split` on a long recording, then `stt_transcribe` on one chunk — the
+   answer has the `{text, segments}` shape.
 5. Add `{"name":"media","url":"http://media-mcp:8080/mcp","noAuth":true}` to
    `MYRMIDON_BOT_MCP_SERVERS` (it restarts the bot containers).
 
@@ -147,8 +192,8 @@ Service (not board server) environment variables: `MEDIA_BOTS_FILE`, `MEDIA_DATA
 `MEDIA_WORKER_TOKEN`/`MEDIA_WORKER_TOKEN_FILE`, `MEDIA_GOTENBERG_URL`, `MEDIA_TIKA_URL`,
 `MEDIA_WORKER_URL`, `MEDIA_MAX_REQUEST_BYTES`, `MEDIA_MAX_INLINE_RESULT_BYTES`,
 `MEDIA_MAX_FILE_BYTES`, `MEDIA_BOT_QUOTA_BYTES`, `MEDIA_SPOOL_MAX_BYTES`,
-`MEDIA_SPOOL_MIN_FREE_BYTES`, `MEDIA_MAX_CONVERT_BYTES`, `MEDIA_MAX_PDF_BYTES`,
-`MEDIA_ALLOWED_HOSTS`, `MEDIA_FILE_TTL_HOURS`, `MEDIA_MAX_ACTIVE_JOBS_PER_BOT`,
-`MEDIA_RATE_PER_MIN`, `MEDIA_MAX_TEXT_CHARS`, `MEDIA_BACKEND_TIMEOUT_S`,
-`WORKER_CONCURRENCY`. Vendor code is untouched, so there are no lines in `SETTINGS.md` and
-`DIVERGENCE.md`.
+`MEDIA_SPOOL_MIN_FREE_BYTES`, `MEDIA_MAX_CONVERT_BYTES`, `MEDIA_MAX_PDF_BYTES`, `MEDIA_ALLOWED_HOSTS`, `MEDIA_FILE_TTL_HOURS`,
+`MEDIA_MAX_ACTIVE_JOBS_PER_BOT`, `MEDIA_RATE_PER_MIN`, `MEDIA_MAX_TEXT_CHARS`,
+`MEDIA_BACKEND_TIMEOUT_S`, `WORKER_CONCURRENCY`. The STT block (`MEDIA_STT_*`) is described
+in the «Speech-to-text» section above. Vendor code is untouched, so there are no lines in
+`SETTINGS.md` and `DIVERGENCE.md`.

@@ -21,6 +21,8 @@
 | `media_probe` | ffprobe: длительность, потоки, кодеки |
 | `audio_loudness` | громкость EBU R128 (LUFS, LRA, пик) |
 | `ffmpeg_submit`, `job_status`, `job_cancel` | монтаж и перекодирование очередью; спек с белыми списками, не сырые аргументы |
+| `audio_split` | режет длинную запись на куски wav 16 кГц моно со смещениями `startMs` (задание в очереди, как ffmpeg) |
+| `stt_transcribe` | речь → текст + сегменты через STT-шлюз, синхронно |
 | `image_transform` | масштаб, обрезка, поворот, формат (jpg/png/webp) |
 | `pdf_to_images` | страницы PDF в png/jpeg (poppler), до 40 за вызов |
 | `office_to_pdf` | docx/xlsx/pptx/odt/… в PDF (Gotenberg, LibreOffice) |
@@ -68,6 +70,47 @@
 
 Проверка после выкладки: конвертация тестового DWG в DXF и SVG, округление DXF→DXF со сменой версии.
 
+## Распознавание речи (audio_split, stt_transcribe)
+
+Два инструмента обслуживают записи встреч. `audio_split` — задание в очереди (kind
+`audio_split`, та же очередь, что у ffmpeg): ffmpeg segment muxer режет вход на куски
+wav 16 кГц моно `pcm_s16le` (`chunk_%06d.wav`); `chunk_sec` — 5..1800 с
+(по умолчанию 300), а обязательный предел `-t` ограничивает прогон величиной
+`chunk_sec × max_parts` (не больше 600 частей) и остатком квоты бота. Когда задание
+завершено, `job_status` перечисляет каждый кусок как файл в хранилище бота со
+смещением `startMs` от начала исходной записи. `stt_transcribe` синхронный: шлёт
+файл multipart-запросом на `${MEDIA_STT_BASE_URL}/v1/audio/transcriptions` с моделью
+(и необязательным `language` вида `ru` или `en-US`) и нормализует ответ к
+`{text, segments: [{speaker, startMs, endMs}]}` — ответы в секундах и
+миллисекундах и сегменты только с длительностью допускаются, сегменты сверх 4000
+отбрасываются, говорящие не выдумываются. Аргумент `start_ms` сдвигает таймкоды
+сегментов куска обратно в исходную запись, поэтому связка такая: `audio_split` →
+один `stt_transcribe` на кусок с его `startMs` как `start_ms`.
+
+Настройки (переменные окружения сервиса, как остальные в этом разделе):
+`MEDIA_STT_BASE_URL` (по умолчанию `http://stt-gateway:8000`), `MEDIA_STT_API_KEY` /
+`MEDIA_STT_API_KEY_FILE` (docker-секрет; ключ попадает только в заголовок
+`Authorization`, никогда — в ответы или логи), `MEDIA_STT_DEFAULT_MODEL`
+(по умолчанию `whisper-large-v3`), `MEDIA_STT_MAX_MULTIPART_BYTES`
+(по умолчанию 32 МиБ — файл больше отклоняется с указанием на `audio_split`),
+`MEDIA_STT_MAX_RESPONSE_BYTES` (по умолчанию 64 МиБ). Задаются при старте сервиса;
+runtime-переопределения на компанию нет — та сторона живёт в серверном ядре
+VOICE-STT (`MYRMIDON_STT_*`, см. SETTINGS.md).
+
+При выключенной функции: инструменты остаются зарегистрированными, но вызов
+отказывается чисто — бот, у которого их нет в списке `tools`, получает обычный
+отказ белого списка, а без `MEDIA_STT_API_KEY` вызов уходит без заголовка
+`Authorization`, и ответ шлюза возвращается как ошибка. Стабильные ответы об
+ошибках, которые видит бот:
+`model <name> is not registered on the transcription gateway` (HTTP 404 от шлюза),
+`transcription gateway refused the request (HTTP <code>)`,
+`transcription gateway unavailable (<error class>)` при сбое сети,
+`audio larger than <N> MiB for transcription; split it first (audio_split)`,
+`transcription response larger than <N> MiB`,
+`transcription gateway returned a non-JSON answer`,
+`chunk_sec must be in [5.0, 1800.0] seconds`,
+`too many active jobs (limit 3); wait or job_cancel`.
+
 ## Аутентификация бота
 
 `config/bots.json` (образец — `tools/media-mcp/config.example.json`), ключ — имя бота:
@@ -97,6 +140,8 @@
    скане с русским текстом; `office_to_pdf` на docx; `.xlsm` с автозапуском макроса не оставляет
    следов; бот B не открывает файл бота A; лишний запрос выше `rate_per_min` получает 429.
    Для `dwg_convert`: тестовый DWG → DXF и → SVG от имени бота с инструментом в `tools`.
+   Для STT: `audio_split` длинной записи, затем `stt_transcribe` одного куска — ответ вида
+   `{text, segments}`.
 5. Добавить `{"name":"media","url":"http://media-mcp:8080/mcp","noAuth":true}` в
    `MYRMIDON_BOT_MCP_SERVERS` (перезапустит контейнеры ботов).
 
@@ -136,5 +181,6 @@ drop-in слой `media_shim.py` (контракты `video_info`/`CompletedProc
 `MEDIA_MAX_FILE_BYTES`, `MEDIA_BOT_QUOTA_BYTES`, `MEDIA_SPOOL_MAX_BYTES`, `MEDIA_SPOOL_MIN_FREE_BYTES`,
 `MEDIA_MAX_CONVERT_BYTES`, `MEDIA_MAX_PDF_BYTES`, `MEDIA_ALLOWED_HOSTS`, `MEDIA_FILE_TTL_HOURS`,
 `MEDIA_MAX_ACTIVE_JOBS_PER_BOT`, `MEDIA_RATE_PER_MIN`, `MEDIA_MAX_TEXT_CHARS`,
-`MEDIA_BACKEND_TIMEOUT_S`, `WORKER_CONCURRENCY`. Код вендора не затрагивается, поэтому строк в
+`MEDIA_BACKEND_TIMEOUT_S`, `WORKER_CONCURRENCY`. Блок STT (`MEDIA_STT_*`) описан
+в разделе «Распознавание речи» выше. Код вендора не затрагивается, поэтому строк в
 `SETTINGS.md` и `DIVERGENCE.md` нет.
