@@ -21,6 +21,16 @@ version file to edit. Base Paperclip version is in the image label
   merged the UI is covered by tests against the mocked JSON contract.
 ## 1.6.1
 
+### Agent pause by grant (ADMIN-AGENT D)
+
+- `POST /agents/:id/pause` now authorizes agent actors through the same
+  direct-grant ladder as resume: an agent holding `agents:configure` may
+  pause an agent of its company, while `agents:suggest-changes` and
+  ungranted peers stay denied. Board actors keep the previous semantics
+  unchanged, and the pause activity entry now records the real acting
+  principal (agent, run, API key) instead of a board placeholder.
+  Drain-vs-cancel semantics are untouched.
+
 
 
 ### Custom castes, consumers (CUSTOM-CASTES B)

@@ -83,7 +83,10 @@ PATCH /api/agents/{agentId}
 POST /api/agents/{agentId}/pause
 ```
 
-Temporarily stops heartbeats for the agent.
+Temporarily stops heartbeats for the agent. Board actors pass with board
+access to the agent's company. An agent actor needs a direct
+`agents:configure` grant (`agents:suggest-changes` does not authorize a
+pause) — the same ladder as resume — and a cross-company target answers 404.
 
 ## Resume Agent
 

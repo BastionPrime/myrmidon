@@ -30,6 +30,16 @@ value (absent, malformed, legacy) reads as **not** a board administrator, so
 an old server or a stale cache never makes the UI show or flip admin
 authority that is not there.
 
+## What the grants authorize beyond the card
+
+A grant behind the flag is a real grant everywhere the server checks one,
+not only on the permissions screens. With `agents:configure` an agent can
+pause and resume agents (`POST /agents/:id/pause` and `/resume` run agent
+actors through the same direct-grant ladder, so `agents:suggest-changes`
+alone is not enough). A pause issued by an agent is logged under that
+agent's own actor identity (agent, run and API key), not under a board
+placeholder.
+
 The permissions contract itself — which grants the flag actually maps to, the
 snapshot of pre-existing grants, the self-toggle prohibition, the activity
 log — is the server half of the feature (part A, a separate merge); until it
