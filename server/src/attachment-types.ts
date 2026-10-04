@@ -156,13 +156,21 @@ export function isAllowedContentType(contentType: string): boolean {
   return matchesContentType(contentType, allowedPatterns);
 }
 
-/**
+import { getEffectiveChannelSettings } from './myrmidon/channel-settings/settings.js';
+
+/** 
  * The one attachment size ceiling for this deployment. Every upload path —
  * assets, task attachments, cases, and company import — bounds itself by this
  * value, so an operator raises or lowers the limit in exactly one place.
  */
-export const MAX_ATTACHMENT_BYTES =
-  Number(process.env.PAPERCLIP_ATTACHMENT_MAX_BYTES) || 10 * 1024 * 1024;
+export function getMaxAttachmentBytes(
+  instanceSettings: any = null, 
+  companySettings: any = null,
+  env: Record<string, string | undefined> = process.env
+): number {
+  const settings = getEffectiveChannelSettings(instanceSettings, companySettings, env);
+  return settings.paperclipAttachmentMaxBytes.value;
+}
 
 const ATTACHMENT_SIZE_UNITS: readonly string[] = ["KB", "MB", "GB"];
 

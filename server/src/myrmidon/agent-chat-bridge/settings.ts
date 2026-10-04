@@ -7,54 +7,51 @@
  * to the default rather than being clamped or rejected.
  */
 
-export const TELEGRAM_DM_CONVERSATIONS_ENV = "MYRMIDON_TELEGRAM_DM_CONVERSATIONS";
+import { getEffectiveChannelSettings } from '../channel-settings/settings.js';
 
-/**
- * Whether the standing-conversation bridge applies to a given Telegram
- * endpoint. `MYRMIDON_TELEGRAM_DM_CONVERSATIONS` is a comma-separated list
- * of endpoint ids, or `*` for every endpoint. List entries are trimmed and
- * empty entries are dropped, so `"a, ,b"` behaves like `"a,b"`. Unset or
- * blank means off for every endpoint.
- */
 export function telegramDmConversationsEnabled(
   endpointId: string,
+  instanceSettings: any = null,
+  companySettings: any = null,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const entries = telegramDmConversationsEntries(env);
+  const settings = getEffectiveChannelSettings(instanceSettings, companySettings, env);
+  const raw = settings.telegramDmConversations.value;
+  
+  if (!raw) return false;
+  
+  const entries = raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+    
   return entries.includes("*") || entries.includes(endpointId);
 }
 
 /**
- * Whether `MYRMIDON_TELEGRAM_DM_CONVERSATIONS` is configured at all: at least
+ * Whether the telegram DM conversations setting is configured at all: at least
  * one non-empty list entry. Unset, blank, or a list of only separators
- * (`",, ,"`) is "not configured", and every bridge-owned side effect that
+ * (",, ,") is "not configured", and every bridge-owned side effect that
  * would otherwise touch the vendor's Telegram service path (X8e's command
  * menu calls) must stay off, so the vendor path is unchanged byte for byte.
  */
 export function telegramDmConversationsConfigured(
+  instanceSettings: any = null,
+  companySettings: any = null,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return telegramDmConversationsEntries(env).length > 0;
-}
-
-function telegramDmConversationsEntries(env: NodeJS.ProcessEnv): string[] {
-  const raw = env[TELEGRAM_DM_CONVERSATIONS_ENV]?.trim();
-  if (!raw) return [];
-  return raw
+  const settings = getEffectiveChannelSettings(instanceSettings, companySettings, env);
+  const raw = settings.telegramDmConversations.value;
+  
+  if (!raw) return false;
+  
+  const entries = raw
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+    
+  return entries.length > 0;
 }
-
-export const CROSS_CHANNEL_MESSAGES_ENV = "MYRMIDON_CHAT_CROSS_CHANNEL_MESSAGES";
-export const CROSS_CHANNEL_MESSAGE_CHARS_ENV = "MYRMIDON_CHAT_CROSS_CHANNEL_MESSAGE_CHARS";
-export const CROSS_CHANNEL_TOTAL_CHARS_ENV = "MYRMIDON_CHAT_CROSS_CHANNEL_TOTAL_CHARS";
-export const CROSS_CHANNEL_LOOKBACK_HOURS_ENV = "MYRMIDON_CHAT_CROSS_CHANNEL_LOOKBACK_HOURS";
-
-export const DEFAULT_CROSS_CHANNEL_MESSAGES = 12;
-export const DEFAULT_CROSS_CHANNEL_MESSAGE_CHARS = 600;
-export const DEFAULT_CROSS_CHANNEL_TOTAL_CHARS = 4000;
-export const DEFAULT_CROSS_CHANNEL_LOOKBACK_HOURS = 168;
 
 export interface CrossChannelSettings {
   messages: number;
@@ -63,38 +60,22 @@ export interface CrossChannelSettings {
   lookbackHours: number;
 }
 
-function readNonNegativeInt(
-  env: NodeJS.ProcessEnv,
-  name: string,
-  fallback: number,
-): number {
-  const raw = env[name]?.trim();
-  if (!raw) return fallback;
-  if (!/^\d+$/.test(raw)) return fallback;
-  const value = Number(raw);
-  return Number.isSafeInteger(value) ? value : fallback;
-}
-
 /**
  * Non-numeric or negative values fall back to the default; `messages: 0`
  * disables cross-channel awareness (the other three still parse, they are
  * just unused by a caller that checks `messages` first).
  */
 export function readCrossChannelSettings(
+  instanceSettings: any = null,
+  companySettings: any = null,
   env: NodeJS.ProcessEnv = process.env,
 ): CrossChannelSettings {
+  const settings = getEffectiveChannelSettings(instanceSettings, companySettings, env);
+  
   return {
-    messages: readNonNegativeInt(env, CROSS_CHANNEL_MESSAGES_ENV, DEFAULT_CROSS_CHANNEL_MESSAGES),
-    messageChars: readNonNegativeInt(
-      env,
-      CROSS_CHANNEL_MESSAGE_CHARS_ENV,
-      DEFAULT_CROSS_CHANNEL_MESSAGE_CHARS,
-    ),
-    totalChars: readNonNegativeInt(env, CROSS_CHANNEL_TOTAL_CHARS_ENV, DEFAULT_CROSS_CHANNEL_TOTAL_CHARS),
-    lookbackHours: readNonNegativeInt(
-      env,
-      CROSS_CHANNEL_LOOKBACK_HOURS_ENV,
-      DEFAULT_CROSS_CHANNEL_LOOKBACK_HOURS,
-    ),
+    messages: settings.chatCrossChannelMessages.value,
+    messageChars: settings.chatCrossChannelMessageChars.value,
+    totalChars: settings.chatCrossChannelTotalChars.value,
+    lookbackHours: settings.chatCrossChannelLookbackHours.value,
   };
 }

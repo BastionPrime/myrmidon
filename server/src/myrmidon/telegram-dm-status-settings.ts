@@ -9,9 +9,7 @@
 // unset or blank falls back to the default; anything that is not a
 // non-negative integer also falls back to the default.
 
-export const TELEGRAM_DM_STATUS_ENV = "MYRMIDON_TELEGRAM_DM_STATUS";
-export const TELEGRAM_SPLIT_MAX_PARTS_ENV =
-  "MYRMIDON_TELEGRAM_SPLIT_MAX_PARTS";
+import { getEffectiveChannelSettings } from './channel-settings/settings.js';
 
 /**
  * Whether the bridged Telegram DM gets an editable "working on it" status
@@ -20,11 +18,12 @@ export const TELEGRAM_SPLIT_MAX_PARTS_ENV =
  * placeholders). Off by default: deployment value, the operator enables it.
  */
 export function telegramDmStatusEnabled(
+  instanceSettings: any = null,
+  companySettings: any = null,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const raw = env[TELEGRAM_DM_STATUS_ENV]?.trim().toLowerCase();
-  if (!raw) return false;
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  const settings = getEffectiveChannelSettings(instanceSettings, companySettings, env);
+  return settings.telegramDmStatus.value;
 }
 
 /**
@@ -34,11 +33,10 @@ export function telegramDmStatusEnabled(
  * enables inline splitting for readability.
  */
 export function telegramSplitMaxParts(
+  instanceSettings: any = null,
+  companySettings: any = null,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const raw = env[TELEGRAM_SPLIT_MAX_PARTS_ENV]?.trim();
-  if (!raw) return 0;
-  if (!/^\d+$/.test(raw)) return 0;
-  const value = Number(raw);
-  return Number.isSafeInteger(value) ? value : 0;
+  const settings = getEffectiveChannelSettings(instanceSettings, companySettings, env);
+  return settings.telegramSplitMaxParts.value;
 }
