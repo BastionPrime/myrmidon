@@ -30,6 +30,26 @@ version file to edit. Base Paperclip version is in the image label
   ends with `DEPLOY DEGRADED` — the verdict does not fail a switched and
   healthy deploy. Without the two settings the check is skipped.
 
+### WIP limit (WIP-LIMIT parts A + B)
+
+- The per-agent work-in-progress limit: a company-wide default and
+  per-agent overrides edited on the "WIP limit" screen in Company Settings
+  (sidebar item after Autonomy); each agent's live
+  `in progress + in review` load shows in the screen's table, as a
+  `wip/limit` badge on every agent row of the agents page (red over the
+  limit, bare count when the limit is off, no badge without a status
+  entry), and in the attention feed (source kind `wip_limit`, one card per
+  over-limit agent). A periodic sweep on the heartbeat scheduler (300 s)
+  writes one system-notice comment per over-limit agent per UTC day
+  (dedup key `wip-limit:<agentId>:<utc-day>`) on the agent's most recent
+  in-progress task. The settings live in
+  `instance_settings.general.wipLimit` — no environment variables; an
+  absent limit means count-only (status and badge still work, nothing
+  signals). A lead (an agent with direct reports) has an implementation
+  limit of 0 — any task it holds in flight is over the limit by
+  definition. See [wip-limit](guides/wip-limit.md).
+
+
 ### Telegram notification settings UI (TG-NOTIFY-SETTINGS part F)
 
 - The "Telegram notifications" panel on the System screen of the 2.0 UI: all
