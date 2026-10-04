@@ -8,7 +8,7 @@
 // number the board produced at a known moment even after the source rows moved
 // on. Nothing vendor-side is touched.
 
-import { index, jsonb, pgTable, timestamp, uuid } from "drizzle-orm/pg-core";
+import { index, jsonb, pgTable, timestamp, uuid, varchar, boolean } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
 export const baselineMetricSnapshots = pgTable(
@@ -19,12 +19,18 @@ export const baselineMetricSnapshots = pgTable(
     windowFrom: timestamp("window_from", { withTimezone: true }).notNull(),
     windowTo: timestamp("window_to", { withTimezone: true }).notNull(),
     generatedAt: timestamp("generated_at", { withTimezone: true }).notNull(),
+    label: varchar("label"),
+    pinned: boolean("pinned").default(false).notNull(),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
   },
   (table) => ({
     companyGeneratedIdx: index("baseline_metric_snapshots_company_generated_idx").on(
       table.companyId,
       table.generatedAt,
+    ),
+    companyPinnedIdx: index("baseline_metric_snapshots_company_pinned_idx").on(
+      table.companyId,
+      table.pinned,
     ),
   }),
 );

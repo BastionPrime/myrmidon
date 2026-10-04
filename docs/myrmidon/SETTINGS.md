@@ -405,6 +405,10 @@ a human under `mode: types`). The one-button emergency off is
 |---|---|---|---|---|
 | `permissions.toolAccess` | S6 | `{ "mode": "all" }`, written into the agent record explicitly | The agent's permission for tools and connections. `mode: "listed"` — only tools from `tools` and connections from `connections` are allowed, other calls are rejected (403, `deny_agent_permission`, a line in the call log). Set by the operator in the agent card (Permissions tab, "Tool and connection access" section) or `PATCH /api/agents/:id/permissions` with the `toolAccess` field | `{ "mode": "all" }` — previous behavior. An agent without the field and a record with an unreadable value are read as `all` |
 
+## 1.6.2 - BASELINE SNAPSHOT API
+
+No specific environment variables are required for the baseline snapshot API functionality. The feature is enabled automatically when the baseline module is available.
+
 ## SC1 — server console (SERVER-CONSOLE, 1.4)
 
 The "Server console" section in company settings (`server/src/myrmidon/fleet-console/`,
