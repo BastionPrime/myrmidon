@@ -633,6 +633,16 @@ periodic job below freezes the last 14 days into `baseline_metric_snapshots`,
 so a pilot after the autonomy changes can be compared against the number the
 board produced before them.
 
+1.6.2 adds the manual snapshot API (board/admin only):
+`POST /api/myrmidon/companies/:companyId/baseline/snapshots`
+`{from,to,label,pinned}` computes the same metrics for an arbitrary window and
+freezes them as one row; `pinned: true` marks the row as the company's single
+reference point for pilot comparison (pinning a new row unpins the previous
+one). `GET …/baseline/snapshots` lists them, `GET …/snapshots/:id` reads one
+back. See `guides/baseline-snapshots-api.md` (EN) / `baseline-snapshots-api.ru.md`
+(RU). No new env variables: the endpoints are always on; behavior changes need
+no restart.
+
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_BASELINE_INTERVAL_SEC` | 1.6-BASELINE | unset (off) | Period (sec) of the snapshot job: every tick recomputes the last 14 days per company and appends one frozen row to `baseline_metric_snapshots` | Unset or empty — no timer, no query. Set to an integer from 60 to 604800; an unreadable or out-of-range value keeps the job on with the daily default (86400) |
