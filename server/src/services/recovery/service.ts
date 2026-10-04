@@ -1045,6 +1045,32 @@ export function recoveryService(
       .then((rows) => rows[0] ?? null);
   }
 
+  // myrmidon(OPE-4043): helper to check if agent has a live run on any issue
+  async function getLatestLiveRunForAgent(
+    companyId: string,
+    agentId: string,
+  ): Promise<Pick<typeof heartbeatRuns.$inferSelect, 'id' | 'status' | 'createdAt'> | null> {
+    return db
+      .select({
+        id: heartbeatRuns.id,
+        status: heartbeatRuns.status,
+        createdAt: heartbeatRuns.createdAt,
+      })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, companyId),
+          eq(heartbeatRuns.agentId, agentId),
+          inArray(heartbeatRuns.status, [
+            ...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES,
+          ]),
+        ),
+      )
+      .orderBy(desc(heartbeatRuns.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+  }
+
   async function summarizeRecentContinuationRetries(
     companyId: string,
     issueId: string,
@@ -5261,97 +5287,117 @@ export function recoveryService(
           continue;
         }
 
-        const participantAdapterFailureClassification =
-          isUnsuccessfulTerminalIssueRun(participantLatestRun)
-            ? classifyAdapterFailureForRecovery(
+        // myrmidon(OPE-4043): check if participant has a live run on another issue before escalating
+        const participantLiveRun = await getLatestLiveRunForAgent(
+          issue.companyId,
+          participantAgentId,
+        );
+        
+        // Check if participant has a live run on ANY issue (not just this one)
+        const participantHasLiveRun = Boolean(participantLiveRun);
+
+        if (!participantHasLiveRun) {
+          // Only proceed with escalation if participant truly has no live runs anywhere
+          const participantAdapterFailureClassification =
+            isUnsuccessfulTerminalIssueRun(participantLatestRun)
+              ? classifyAdapterFailureForRecovery(
+                  participantLatestRun,
+                  recoveryNow,
+                )
+              : null;
+          if (
+            participantAdapterFailureClassification?.kind === "provider_quota"
+          ) {
+            const monitored = await scheduleProviderQuotaRecoveryMonitor({
+              issue,
+              latestRun: participantLatestRun,
+              classification: participantAdapterFailureClassification,
+            });
+            if (monitored) {
+              latestRun = await persistAdapterFailureRecoveryClassification(
                 participantLatestRun,
-                recoveryNow,
-              )
-            : null;
-        if (
-          participantAdapterFailureClassification?.kind === "provider_quota"
-        ) {
-          const monitored = await scheduleProviderQuotaRecoveryMonitor({
-            issue,
-            latestRun: participantLatestRun,
-            classification: participantAdapterFailureClassification,
-          });
-          if (monitored) {
-            latestRun = await persistAdapterFailureRecoveryClassification(
-              participantLatestRun,
-              participantAdapterFailureClassification,
-            );
-            result.providerQuotaMonitored += 1;
-            result.issueIds.push(issue.id);
-          } else {
-            result.skipped += 1;
+                participantAdapterFailureClassification,
+              );
+              result.providerQuotaMonitored += 1;
+              result.issueIds.push(issue.id);
+            } else {
+              result.skipped += 1;
+            }
+            continue;
           }
-          continue;
-        }
-        if (
-          participantAdapterFailureClassification?.kind ===
-          "configuration_incomplete"
-        ) {
-          const updated = await escalateStrandedAssignedIssue({
-            issue,
-            previousStatus: "in_review",
-            latestRun: participantLatestRun,
-            recoveryCause: "configuration_incomplete",
-            comment:
-              productSaid("classified the active review participant's latest adapter failure as ") +
-              "`configuration_incomplete`. Moving the issue to `blocked` with the configuration fix " +
-              "recorded instead of repeatedly requeueing the reviewer.",
-          });
-          if (updated) {
-            latestRun = await persistAdapterFailureRecoveryClassification(
-              participantLatestRun,
-              participantAdapterFailureClassification,
-            );
-            result.escalated += 1;
-            result.issueIds.push(issue.id);
-          } else {
-            result.skipped += 1;
+          if (
+            participantAdapterFailureClassification?.kind ===
+            "configuration_incomplete"
+          ) {
+            const updated = await escalateStrandedAssignedIssue({
+              issue,
+              previousStatus: "in_review",
+              latestRun: participantLatestRun,
+              recoveryCause: "configuration_incomplete",
+              comment:
+                productSaid("classified the active review participant's latest adapter failure as ") +
+                "`configuration_incomplete`. Moving the issue to `blocked` with the configuration fix " +
+                "recorded instead of repeatedly requeueing the reviewer.",
+            });
+            if (updated) {
+              latestRun = await persistAdapterFailureRecoveryClassification(
+                participantLatestRun,
+                participantAdapterFailureClassification,
+              );
+              result.escalated += 1;
+              result.issueIds.push(issue.id);
+            } else {
+              result.skipped += 1;
+            }
+            continue;
           }
-          continue;
-        }
 
-        if (!agentInvokable) {
-          const updated = await escalateStrandedAssignedIssue({
-            issue,
-            previousStatus: "in_review",
-            latestRun: participantLatestRun,
-            notice: buildExecutionReviewParticipantUnavailableNoticeSeed(),
-            recoveryCause: EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON,
-          });
-          if (updated) {
-            result.escalated += 1;
-            result.issueIds.push(issue.id);
-          } else {
-            result.skipped += 1;
+          if (!agentInvokable) {
+            const updated = await escalateStrandedAssignedIssue({
+              issue,
+              previousStatus: "in_review",
+              latestRun: participantLatestRun,
+              notice: buildExecutionReviewParticipantUnavailableNoticeSeed(),
+              recoveryCause: EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON,
+            });
+            if (updated) {
+              result.escalated += 1;
+              result.issueIds.push(issue.id);
+            } else {
+              result.skipped += 1;
+            }
+            continue;
           }
-          continue;
-        }
 
-        if (
-          didAutomaticRecoveryFail(
-            participantLatestRun,
-            EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON,
-          )
-        ) {
-          const updated = await escalateStrandedAssignedIssue({
-            issue,
-            previousStatus: "in_review",
-            latestRun: participantLatestRun,
-            notice: buildExecutionReviewParticipantRecoveryNoticeSeed(),
-            recoveryCause: EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON,
-          });
-          if (updated) {
-            result.escalated += 1;
-            result.issueIds.push(issue.id);
-          } else {
-            result.skipped += 1;
+          if (
+            didAutomaticRecoveryFail(
+              participantLatestRun,
+              EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON,
+            )
+          ) {
+            // myrmidon(OPE-4043): even if automatic recovery failed, if participant has a live run 
+            // on another issue, we shouldn't escalate to board-only blocked state
+            if (participantHasLiveRun) {
+              // Instead of escalating, just skip and let the live run handle it
+              result.skipped += 1;
+              continue;
+            }
+            
+            const updated = await escalateStrandedAssignedIssue({
+              issue,
+              previousStatus: "in_review",
+              latestRun: participantLatestRun,
+              notice: buildExecutionReviewParticipantRecoveryNoticeSeed(),
+              recoveryCause: EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON,
+            });
+            if (updated) {
+              result.escalated += 1;
+              result.issueIds.push(issue.id);
+            } else {
+              result.skipped += 1;
+            }
+            continue;
           }
-          continue;
         }
 
         if (
@@ -5370,6 +5416,7 @@ export function recoveryService(
           continue;
         }
 
+        // If participant has a live run somewhere, just enqueue a recovery wake instead of escalating
         const queued = await enqueueStrandedIssueRecovery({
           issueId: issue.id,
           agentId: participantAgentId,
