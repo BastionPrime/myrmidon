@@ -121,6 +121,66 @@ one service, one image line, one source of the image. The override the rollout w
 contains only the image line, so a service defined in your own compose file keeps its
 volumes, sockets and networks; the override only pins which image it runs.
 
+### Bot images roll out with the board (BOT-IMAGE-ROLLOUT)
+
+Since 1.6.1, a deploy also rolls the **bot runtime images** of the same release —
+`myrmidon-hermes`, `myrmidon-hermes-dev`, `myrmidon-hermes-node` — with no manual steps.
+The 03.10 incident: the board became 1.6.0 while the dev bots stayed on the old
+`hermes-dev` image; the new image was not even in dockergate's `images` allowlist and the
+operator moved the bots by hand. `deploy.sh` now calls
+[`bot-image-rollout.sh`](../../scripts/myrmidon/deploy/bot-image-rollout.sh) (step 9.5,
+after the components, before the smoke — the smoke then proves a bot actually re-applied
+on the new image), and the script can run standalone after any missed rollout:
+
+```sh
+scripts/myrmidon/deploy/bot-image-rollout.sh --config deploy.env \
+  --resolution tag --ref myr-v1.6.1     # or: --resolution sha --ref 0123456
+```
+
+What it does, fail-closed (nothing changes until the checks pass):
+
+1. **Resolve.** The three bot image digests resolve from the same release as the board
+   (the bot image workflow tags `sha-<short>` and `myr-vX.Y.Z` like every component, via
+   `check-release-support.sh`). A release whose bot images are missing is refused before
+   anything changes — a board the bots cannot follow is exactly the 03.10 split.
+2. **Pull.** Every resolved image is pulled on the local host and on each
+   `MYRMIDON_BOT_IMAGE_ROLLOUT_FLEET_HOSTS` host (the container drivers never pull).
+3. **Allow.** The new digests are added to dockergate's `images` (a structural jq edit of
+   `MYRMIDON_BOT_IMAGE_ROLLOUT_DOCKERGATE_CONFIG`, verified by `dockergate check-config`
+   when `MYRMIDON_BOT_IMAGE_ROLLOUT_DOCKERGATE_CHECK_CONFIG_COMMAND` is set), then dockergate
+   re-reads the config (`MYRMIDON_BOT_IMAGE_ROLLOUT_DOCKERGATE_SIGNAL_COMMAND`, SIGHUP).
+   The **old** bot images stay allowed until the last bot moved, so a mid-rollout failure
+   never strands the un-moved bots.
+4. **Enroll.** Every `hermes_gateway` agent with an enabled container block is enrolled in
+   dockergate's `bots[]` (limits from the card: `container.memoryMb/cpus/pidsLimit`). A bot
+   missing from `bots[]` is exactly the `bot_not_enrolled` refusal that hit Wiki Maintainer
+   on 03.10; after this, a new bot on the board starts with no config edit by hand. Fleet
+   hosts get the same enrollment in their fleetd config
+   (`MYRMIDON_BOT_IMAGE_ROLLOUT_FLEET_CONFIG`).
+5. **Switch.** The bot cards switch to the release image **one bot at a time** (the
+   `MYRMIDON_BOT_IMAGE_ROLLOUT_CANARY` agent first when set): PATCH
+   `/api/agents/:id` with only `adapterConfig.container.image`, then POST
+   `/api/myrmidon/agents/:id/bot-container/apply` so the board's own reconciler drains that
+   agent alone and recreates the container. A bot with a running run answers `deferred`:
+   the rollout retries it for up to `MYRMIDON_BOT_IMAGE_ROLLOUT_BOT_TIMEOUT_SEC` seconds,
+   and **a run is never interrupted by the rollout** — a deferred bot keeps its old card
+   image until a later retry or the periodic sweep.
+6. **Retire.** After every bot runs a release image, the superseded bot image refs (only
+   refs of our three bot repositories, never a pinned third-party one) are removed from
+   `images` and dockergate re-reads the config again. Deferred bots keep the old refs
+   listed until they move.
+7. **Journal.** Every switch is appended to `STATE_DIR/bot-image-rollout.log`
+   (`UTC agent-id old-image -> new-image (outcome)`) and to the deploy history, and the
+   deploy log lists every bot with its image.
+
+`MYRMIDON_BOT_IMAGE_ROLLOUT=0` restores the manual path (the deploy warns — that is the
+03.10 split by choice). All settings are in [SETTINGS.md](SETTINGS.md) with examples in
+[`deploy.env.example`](../../scripts/myrmidon/deploy/deploy.env.example). A failed bot
+rollout ends the deploy DEGRADED with the rollback commands, never silently.
+
+This rollout is also the foundation for the in-UI auto-update of OPE-3967 (1.7): the UI
+job will call the same resolution, allowlist, enrollment and card-switch steps.
+
 ### Upgrading from 1.4.0 to 1.5.0
 
 The 1.5.0 additions are additive on the host side: no new migrations to run by

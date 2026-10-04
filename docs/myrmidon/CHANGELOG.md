@@ -23,6 +23,43 @@ version file to edit. Base Paperclip version is in the image label
 
 
 
+
+### Bot images roll out with the board (BOT-IMAGE-ROLLOUT)
+
+- `deploy.sh` (step 9.5, via the new `scripts/myrmidon/deploy/bot-image-rollout.sh`)
+  now rolls the bot runtime images of the same release — hermes, hermes-dev,
+  hermes-node — with no manual steps: the digests resolve from the same release
+  tag/sha (`check-release-support.sh`), the images are pulled on the deploy host
+  and the fleet hosts, added to dockergate's `images` allowlist (structural jq
+  edit, `check-config`-verified, config re-read by SIGHUP), and the fleet is
+  enrolled in `bots[]` from the board's agents list — a new bot on the board
+  starts with no manual config edit (the 03.10 `bot_not_enrolled` failure of
+  Wiki Maintainer).
+- The bot cards switch to the release image one bot at a time (canary first
+  when `MYRMIDON_BOT_IMAGE_ROLLOUT_CANARY` is set): PATCH of the card's
+  `adapterConfig.container.image` + the card's own apply, so a running run is
+  never interrupted — a deferred bot is retried and keeps its old image until
+  it moves. The superseded bot images leave the allowlist only after the whole
+  fleet moved. Every switch is journalled to
+  `STATE_DIR/bot-image-rollout.log`. A failed rollout ends the deploy DEGRADED
+  with the rollback commands. `MYRMIDON_BOT_IMAGE_ROLLOUT=0` restores the
+  manual path (with a warning). This is the foundation of the OPE-3967
+  in-UI auto-update (1.7).
+- Settings (all in [SETTINGS.md](SETTINGS.md) with examples in
+  `deploy.env.example`): `MYRMIDON_BOT_IMAGE_ROLLOUT`,
+  `_CANARY`, `_BOT_TIMEOUT_SEC`, `_DOCKERGATE_CONFIG`,
+  `_DOCKERGATE_CHECK_CONFIG_COMMAND`, `_DOCKERGATE_SIGNAL_COMMAND`,
+  `_FLEET_HOSTS`, `_FLEET_CONFIG`, `_LOG`.
+- Tests: `scripts/myrmidon/deploy/bot-image-rollout.test.mjs` (17 cases:
+  resolution, allowlist, enrollment, card switches, deferred retries, canary
+  order, removal, DEGRADED paths, dry run, the deploy.sh wiring).
+- Docs: [deploy.md](deploy.md) and [deploy.md](deploy.ru.md) (a new
+  section), [SETTINGS.md](SETTINGS.md)/[SETTINGS.md](SETTINGS.ru.md) rows.
+
+
+--- MERGED ---
+
+ origin/main
 ### Custom castes, consumers (CUSTOM-CASTES B)
 
 - The server-side consumers of the company caste directory (part A ships the

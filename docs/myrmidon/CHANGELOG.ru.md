@@ -23,6 +23,42 @@
 
 
 
+
+### Образы ботов обновляются вместе с доской (BOT-IMAGE-ROLLOUT)
+
+- `deploy.sh` (шаг 9.5, через новый `scripts/myrmidon/deploy/bot-image-rollout.sh`)
+  теперь раскатывает и образы рантайма ботов того же релиза — hermes, hermes-dev,
+  hermes-node — без ручных шагов: дайджесты берутся из того же тега/sha релиза
+  (`check-release-support.sh`), образы тянутся на хост выката и хосты флота,
+  добавляются в разрешённые `images` докергейта (структурная jq-правка с проверкой
+  `check-config`, конфиг перечитывается по SIGHUP), и флот записывается в `bots[]`
+  из списка агентов доски — новый бот на доске запускается без ручной правки
+  конфига (сбой 03.10 `bot_not_enrolled` у Wiki Maintainer).
+- Карточки ботов переключаются на образ релиза по одной (канарейка первой, если
+  задан `MYRMIDON_BOT_IMAGE_ROLLOUT_CANARY`): PATCH поля
+  `adapterConfig.container.image` карточки + собственный apply карточки, поэтому
+  активный прогон никогда не обрывается — отложенный бот повторяется и сохраняет
+  старый образ, пока не перейдёт. Заменённые образы ботов покидают список
+  разрешённых только после перехода всего флота. Каждое переключение — в журнале
+  `STATE_DIR/bot-image-rollout.log`. Неудавшийся роллаут завершает выкат DEGRADED
+  с командами отката. `MYRMIDON_BOT_IMAGE_ROLLOUT=0` возвращает ручной путь (с
+  предупреждением). Это основа автообновления из интерфейса OPE-3967 (1.7).
+- Настройки (все — в [SETTINGS.md](SETTINGS.ru.md), примеры — в
+  `deploy.env.example`): `MYRMIDON_BOT_IMAGE_ROLLOUT`, `_CANARY`,
+  `_BOT_TIMEOUT_SEC`, `_DOCKERGATE_CONFIG`,
+  `_DOCKERGATE_CHECK_CONFIG_COMMAND`, `_DOCKERGATE_SIGNAL_COMMAND`,
+  `_FLEET_HOSTS`, `_FLEET_CONFIG`, `_LOG`.
+- Тесты: `scripts/myrmidon/deploy/bot-image-rollout.test.mjs` (17 случаев:
+  резолв, allowlist, запись ботов, переключения карточек, повтор отложенных,
+  порядок канарейки, снятие старых образов, пути DEGRADED, dry run, врезка в
+  deploy.sh).
+- Документация: [deploy.md](deploy.ru.md) (новая секция), строки в
+  [SETTINGS.md](SETTINGS.ru.md).
+
+
+--- MERGED ---
+
+ origin/main
 ### Свои касты, потребители (CUSTOM-CASTES B)
 
 - Серверные потребители справочника каст компании (сам справочник — часть A):

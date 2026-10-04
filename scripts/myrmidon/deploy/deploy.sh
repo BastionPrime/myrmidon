@@ -38,6 +38,14 @@
 # component digests are missing is refused BEFORE anything changes. After the
 # board is healthy each component is pulled, switched and health-checked
 # (rollout-component.sh); a failing component health is DEGRADED, not silent.
+#
+# myrmidon(BOT-IMAGE-ROLLOUT, 1.6.1): after the components, the BOT images of
+# the same release roll out in this same run (bot-image-rollout.sh): the
+# digests resolve from the same release, land in dockergate's allowed images
+# and the fleet's bots[] enrollment, every bot card switches (canary first,
+# one at a time, never interrupting a run), and the superseded bot images
+# leave the list. Gated by MYRMIDON_BOT_IMAGE_ROLLOUT (default 1 when the
+# board has bot containers configured; 0 restores the manual path).
 # Last, a post-deploy smoke (bot-apply-smoke.sh) waits for at least one bot
 # container to re-apply; failing that within its window the deploy reports
 # DEGRADED and prints the rollback commands.
@@ -85,6 +93,11 @@ MYR_SMOKE_TIMEOUT_SEC="${MYRMIDON_DEPLOY_SMOKE_TIMEOUT_SEC:-300}"
 MYR_SMOKE_INTERVAL_SEC="${MYRMIDON_DEPLOY_SMOKE_INTERVAL_SEC:-10}"
 MYR_SMOKE_COMPANY="${MYRMIDON_DEPLOY_SMOKE_COMPANY:-}"
 MYR_SMOKE_AGENT="${MYRMIDON_DEPLOY_SMOKE_AGENT:-}"
+# myrmidon(BOT-IMAGE-ROLLOUT): the bot images of the release roll out in this
+# same run, after the components. On by default: the 03.10 incident was the
+# board moving while the bots could not follow. 0 restores the manual path
+# (and the deploy then warns, because the split is the incident).
+MYR_BOT_ROLLOUT_ENABLED="${MYRMIDON_BOT_IMAGE_ROLLOUT:-1}"
 
 # Only CI images reach production: this runs before any other action.
 [[ "$MYRMIDON_IMAGE" == "$MYR_CI_IMAGE" ]] \
@@ -129,6 +142,28 @@ if [[ -n "$MYR_RELEASE_COMPONENTS" && "$MYR_RELEASE_COMPONENTS" != "none" ]]; th
   done <<<"$component_digests"
 fi
 
+# myrmidon(BOT-IMAGE-ROLLOUT): the resolution deploy.sh used for the release,
+# passed to bot-image-rollout.sh so it resolves the bot images of the SAME
+# release (tag when the board was built from a myr-v* tag, else the short sha).
+bot_rollout_resolution="$component_resolution"
+bot_rollout_ref=""
+if [[ "$bot_rollout_resolution" == "tag "* ]]; then
+  bot_rollout_ref="${bot_rollout_resolution#tag }"
+elif [[ "$bot_rollout_resolution" == "sha "* ]]; then
+  bot_rollout_ref="${bot_rollout_resolution#sha }"
+else
+  # MYRMIDON_RELEASE_COMPONENTS=none: no resolution was made, but the bot
+  # rollout still needs one. Fall back to the board image's own facts: the
+  # version label when it is a plain semver, else the commit short sha.
+  if [[ "${CI_IMAGE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    bot_rollout_resolution="tag $CI_IMAGE_VERSION"
+    bot_rollout_ref="$CI_IMAGE_VERSION"
+  else
+    bot_rollout_resolution="sha ${CI_IMAGE_REVISION:0:7}"
+    bot_rollout_ref="${CI_IMAGE_REVISION:0:7}"
+  fi
+fi
+
 # myrmidon(BOOT-PATH): one boot path. The boot unit must read exactly the
 # compose files this deploy manages, or a reboot restarts the board from
 # a different (e.g. vendor) compose file. Refused before anything changes;
@@ -163,6 +198,11 @@ if [[ "$DRY_RUN" == "1" ]]; then
   if [[ -n "$component_digests" ]]; then
     plan "9. roll out release components together with the board: $MYR_RELEASE_COMPONENTS (${component_resolution}; one rollout-component.sh per component, each with its own pull, switch and health check)"
     plan "10. post-deploy smoke: wait for a bot container to re-apply (bot-apply-smoke.sh, timeout ${MYR_SMOKE_TIMEOUT_SEC}s); on failure the deploy reports DEGRADED and prints the rollback commands"
+  fi
+  if [[ "$MYR_BOT_ROLLOUT_ENABLED" == "1" ]]; then
+    plan "9.5 roll out the release's BOT images together with the board (bot-image-rollout.sh, $bot_rollout_resolution): resolve hermes/hermes-dev/hermes-node digests, allow them in dockergate, enroll the fleet in bots[], switch every bot card one at a time (canary ${MYRMIDON_BOT_IMAGE_ROLLOUT_CANARY:-<none>}, deferred bots retried, no run interrupted), remove the superseded bot images; journal $STATE_DIR/bot-image-rollout.log"
+  else
+    plan "9.5 BOT image rollout disabled (MYRMIDON_BOT_IMAGE_ROLLOUT=0): the bot images of the release do NOT roll out with the board; move the bots by hand (the 03.10 split)"
   fi
   exit 0
 fi
@@ -296,6 +336,25 @@ if [[ -n "$component_digests" ]]; then
     log "Roll back a component with: $MYR_SCRIPT_DIR/rollback-component.sh --config $config --component <dockergate|fleetd>"
     exit 1
   fi
+fi
+
+# myrmidon(BOT-IMAGE-ROLLOUT): the bot images of the SAME release roll out in
+# this run, after the components and before the smoke (the smoke then proves a
+# bot re-applied — on the new image). A failure is DEGRADED (the board and the
+# components are already healthy); the rollback commands are printed.
+if [[ "$MYR_BOT_ROLLOUT_ENABLED" == "1" ]]; then
+  log "9.5/10 roll out the release's bot images ($bot_rollout_resolution)"
+  bot_rollout_args=(--config "$config" --resolution "${bot_rollout_resolution%% *}" --ref "$bot_rollout_ref")
+  [[ -n "${MYRMIDON_BOT_IMAGE_ROLLOUT_CANARY:-}" ]] && bot_rollout_args+=(--canary "$MYRMIDON_BOT_IMAGE_ROLLOUT_CANARY")
+  if ! "$MYR_SCRIPT_DIR/bot-image-rollout.sh" "${bot_rollout_args[@]}"; then
+    log "DEGRADED: the bot image rollout failed; the board and the components are healthy, see the bot rollout log above"
+    log "Roll back the board with: $MYR_SCRIPT_DIR/rollback.sh --config $config"
+    log "Roll back a component with: $MYR_SCRIPT_DIR/rollback-component.sh --config $config --component <dockergate|fleetd>"
+    log "Roll the bot images by hand with: $MYR_SCRIPT_DIR/bot-image-rollout.sh --config $config --resolution ${bot_rollout_resolution%% *} --ref $bot_rollout_ref"
+    exit 1
+  fi
+else
+  log "WARNING: MYRMIDON_BOT_IMAGE_ROLLOUT=0: the bot images of this release did not roll out with the board; move the bots by hand (this split is the 03.10 incident)"
 fi
 
 # RELEASE-GATE: post-deploy smoke. Within MYR_SMOKE_TIMEOUT_SEC at least one
