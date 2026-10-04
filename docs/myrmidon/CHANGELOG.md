@@ -87,9 +87,27 @@ version file to edit. Base Paperclip version is in the image label
   board); a 403 from the API becomes a plain-language note under the toggle.
   The Company Settings **Members** page names every agent administrator: one
   table row per non-terminated flagged agent, with a **Board administrator**
-  badge and a link to the agent's Permissions tab. The grant semantics (the
-  permission keys, the grant snapshot, the self-toggle prohibition) are the
-  server half of the feature and merge separately. Operator guide:
+  badge and a link to the agent's Permissions tab. Operator guide:
+  [guides/agent-board-admin.md](guides/agent-board-admin.md).
+
+### Board administrator grant semantics (ADMIN-AGENT part A)
+
+- The server half of the board-administrator switch. `PATCH
+  /agents/:id/permissions` accepts an optional `boardAdmin` boolean: enabling
+  grants the fixed operator set — the 17 keys of
+  `BOARD_ADMIN_PERMISSION_KEYS` (`agents:create` … `joins:approve`), an
+  explicit list that never silently widens when the global permission
+  registry grows — and snapshots the set keys the agent already held into
+  `permissions.boardAdminSavedGrantKeys`; disabling revokes only the keys the
+  switch added, so personal grants (a separately issued `tasks:assign`)
+  survive, and re-enabling keeps the original snapshot. `GET /agents/:id`
+  resolves `access.boardAdmin` for the CEO, the stored flag, or a
+  pre-existing full set (read-time migration — nothing is rewritten until
+  the first toggle). Flipping the switch needs the company
+  `users:manage_permissions` right (board actors) or the same grant (agent
+  actors; an agent cannot grant board admin to itself — 403), and every flip
+  logs `agent.permissions_updated` with the `boardAdmin` value and the acting
+  principal. Same guide:
   [guides/agent-board-admin.md](guides/agent-board-admin.md).
 
 ## 1.6.0
