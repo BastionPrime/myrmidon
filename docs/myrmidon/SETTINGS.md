@@ -648,8 +648,25 @@ array in the GET response. Factory default: every cell `allowed` (zero behavior 
 until an operator edits; a conservative preset is a follow-up). Enforcement seam:
 `server/src/myrmidon/autonomy/gate.ts` (`autonomyGate`) consults `resolveAutonomy` at the
 action point — forbidden refuses with a clear error, approval_required maps to the
-existing toolActionRequests + approval-card conveyor, allowed passes. Regulations UI
-(Part B) edits the matrix through this API.
+existing toolActionRequests + approval-card conveyor, allowed passes. When approval_required
+is returned for an action, the `holdOrAssert` function creates an approval card using 
+the existing tool action request mechanism and returns 202 with the approval ID. Once 
+approved, the held action is executed on behalf of the original actor exactly once 
+(idempotent execution). Regulations UI (Part B) edits the matrix through this API.
+
+The following API endpoints now support the autonomy matrix approval workflow:
+- `POST /agents/:id/pause` - Pausing an agent
+- `POST /agents/:id/resume` - Resuming an agent  
+- `POST /agents/:id/wakeup` - Waking up an agent
+
+When these endpoints encounter an action that requires approval, they return a `202 Accepted` 
+response with the following body:
+```json
+{
+  "held": true,
+  "approvalId": "unique-approval-id"
+}
+```
 
 No environment variables, no new secrets. Remove: the autonomy tree, the export line in
 `packages/shared/src/index.ts`, the two marker lines in `app.ts`/`instance-settings.ts`

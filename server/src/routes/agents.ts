@@ -16,7 +16,7 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
 import type { ChatChannelService } from "../services/chat-channels.js";
-import { activityLog, agents as agentsTable, chatConversations, companies, heartbeatRuns, issues as issuesTable, projects as projectsTable } from "@paperclipai/db";
+import { activityLog, agents as agentsTable, chatConversations, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
 import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
 import { sha256Digest } from "../services/feedback-redaction.js";
 import {
@@ -58,6 +58,12 @@ import {
   toAccountHandle,
   type AgentAdapterType,
 } from "@paperclipai/shared";
+import {
+  autonomyGate,
+  dbAutonomyStore,
+  agentRoleFromDb,
+  type AutonomyActionClass,
+} from "../myrmidon/autonomy/gate.js";
 import {
   isForbiddenConfigEnvKey,
   normalizePaperclipRunnerAdapterConfig,
@@ -5630,6 +5636,21 @@ export function agentRoutes(
       return;
     }
     await assertCanPauseAgent(req, existing);
+    
+    // Check autonomy matrix for pause_wake_agents action class
+    const gate = autonomyGate({ store: dbAutonomyStore(db), roleOf: agentRoleFromDb(db), db });
+    const result = await gate.holdOrAssert(req, "pause_wake_agents", {
+      route: `/agents/${id}/pause`,
+      method: "POST",
+      body: req.body,
+    });
+    
+    // If the action is held for approval, return 202 with approval ID
+    if (result.held) {
+      res.status(202).json({ held: true, approvalId: result.approvalId });
+      return;
+    }
+    
     const agent = await svc.pause(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
@@ -5679,6 +5700,21 @@ export function agentRoutes(
       });
       return;
     }
+    
+    // Check autonomy matrix for pause_wake_agents action class
+    const gate = autonomyGate({ store: dbAutonomyStore(db), roleOf: agentRoleFromDb(db), db });
+    const result = await gate.holdOrAssert(req, "pause_wake_agents", {
+      route: `/agents/${id}/resume`,
+      method: "POST",
+      body: req.body,
+    });
+    
+    // If the action is held for approval, return 202 with approval ID
+    if (result.held) {
+      res.status(202).json({ held: true, approvalId: result.approvalId });
+      return;
+    }
+    
     const agent = await svc.resume(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
@@ -6001,6 +6037,20 @@ export function agentRoutes(
       res.status(409).json({
         error: agent.orgChainHealth?.repairGuidance ?? "Repair this agent's reporting chain before starting runs",
       });
+      return;
+    }
+
+    // Check autonomy matrix for pause_wake_agents action class
+    const gate = autonomyGate({ store: dbAutonomyStore(db), roleOf: agentRoleFromDb(db), db });
+    const result = await gate.holdOrAssert(req, "pause_wake_agents", {
+      route: `/agents/${id}/wakeup`,
+      method: "POST",
+      body: req.body,
+    });
+    
+    // If the action is held for approval, return 202 with approval ID
+    if (result.held) {
+      res.status(202).json({ held: true, approvalId: result.approvalId });
       return;
     }
 
