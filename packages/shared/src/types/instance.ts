@@ -3,6 +3,7 @@ import type { FeedbackDataSharingPreference } from "./feedback.js";
 import type { WorkspaceHygieneLimits } from "../myrmidon-workspace-hygiene.js";
 // myrmidon(C0): the run admission limits stored in instance settings
 import type { RunLimits } from "../myrmidon-runtime-limits.js";
+import type { HostDiskSettings } from "../myrmidon-host-disk.js";
 // myrmidon(PARALLEL-HELPERS): the helper ceiling/default stored in instance settings
 import type { ParallelHelpersSettings } from "../myrmidon-parallel-helpers.js";
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in instance settings
@@ -56,6 +57,13 @@ export interface InstanceGeneralSettings {
    * the validator of the same field (packages/shared/src/validators/instance.ts).
    */
   workspaceHygiene?: WorkspaceHygieneLimits;
+  /**
+   * myrmidon(BOT-DISK E): the host disk usage threshold, changed from
+   * `GET`/`PATCH /api/myrmidon/host-disk`. Absent means "use the environment
+   * variable, then the default (85)"; kept in sync with the validator of the
+   * same field (packages/shared/src/validators/instance.ts).
+   */
+  hostDisk?: HostDiskSettings;
   /**
    * myrmidon(C0): run admission limits changed from the instance settings page
    * and `GET`/`PATCH /api/myrmidon/runtime-limits`. Absent means "use the

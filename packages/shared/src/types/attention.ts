@@ -27,6 +27,8 @@ export const ATTENTION_SOURCE_KINDS = [
   // myrmidon(STALE-BLOCK): the watchdog lifted a dead block off a task; the
   // lead and operator must see the routing change the machine made.
   "stale_block",
+  // myrmidon(BOT-DISK E): the host disk fill level crossed the saved threshold.
+  "host_disk_alert",
   // myrmidon(1.6.1-WIP-LIMIT-A): an agent's in-flight task count (in_progress
   // + in_review) is over its resolved WIP limit, or a lead holds a
   // implementation task (lead limit = 0).
@@ -187,6 +189,18 @@ export type AttentionItemDetail =
       observedPercent: number;
       amountObserved: number;
       amountLimit: number;
+      images: AttentionDetailImage[];
+    }
+  | {
+      kind: "host_disk";
+      usedPercent: number;
+      thresholdPercent: number;
+      usedGb: number;
+      totalGb: number;
+      freeGb: number;
+      growthBytesPerHour: number | null;
+      mountPoint: string | null;
+      consumers: Array<{ path: string; sizeGb: number }>;
       images: AttentionDetailImage[];
     }
   | {
