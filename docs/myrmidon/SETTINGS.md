@@ -765,6 +765,7 @@ The jobs are wired maintenance-style: `server/src/index.ts` has one marked call,
 |---|---|---|---|---|
 | `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
 
+<<<<<<< HEAD
 
 
 ## 1.6.1 — TG-NOTIFY-SETTINGS part F: the board UI for the Telegram notification settings
@@ -914,3 +915,28 @@ configured token the endpoint answers 401 for everyone — it never falls open.
 | `MYRMIDON_METRICS_TOKEN` | 1.7-METRICS | unset | The scraper bearer token read from the environment, used when no secret name is configured | Unset together with the secret name — 401 for every request |
 | `MYRMIDON_METRICS_ERROR_WINDOW_SEC` | 1.7-METRICS | `3600` | Window (seconds) of the error families (failed runs, gateway spend). A request may override it per scrape with `?window=<sec>` | From 60 to 86400; below 60 — 60, above 86400 — 86400, non-numeric — the default |
 | `MYRMIDON_METRICS_LATENCY_WINDOW_SEC` | 1.7-METRICS | `21600` | Window (seconds) of the latency family: p50/p95 of finished run durations (finishedAt − startedAt). A request may override it with `?latency_window=<sec>` | From 300 to 86400; below 300 — 300, above 86400 — 86400, non-numeric — the default |
+
+## 1.6 — TG-NOTIFY C: board errors channel (attention feed → Telegram)
+
+Settings of `server/src/myrmidon/telegram-notify/` (part C of the 1.6 TG-NOTIFY
+umbrella). The channel is off by default: with defaults, a board in trouble is
+silent in Telegram, exactly like before. The settings live in instance
+settings under the general key `telegramNotify` (area contract fixed by the
+umbrella task, part A owns the GET/PATCH routes; until part A merges the
+errors area is read directly from the JSON column).
+
+| Setting | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `telegramNotify.errors.enabled` | 1.6-TG-NOTIFY-C | `false` | Master switch. Only when `true` does the sweep (see `MYRMIDON_TG_NOTIFY_INTERVAL_SEC`) read the attention feed of each company, filter error-class cards and stage notifications | `false` or missing — silence: no feed read, no publication, no rate-limit bookkeeping |
+| `telegramNotify.errors.chatId` | 1.6-TG-NOTIFY-C | `null` | Target Telegram chat id. Notifications go to the existing chat publication path (conversation of that chat), never to a new Telegram client | Missing while enabled — the sweep is a no-op (nothing is sent until a target is configured) |
+| `telegramNotify.errors.topicId` | 1.6-TG-NOTIFY-C | `null` | Topic thread id inside a forum chat. When set, notifications pick the conversation of that topic thread instead of the chat-level one | `null` — the chat-level conversation |
+| `telegramNotify.errors.minSeverity` | 1.6-TG-NOTIFY-C | `"error"` | Severity threshold: `error` admits high/critical cards only, `warning` also admits medium ones. Cards below the threshold are skipped, not queued | Anything other than `error`/`warning` — the default (`error`) |
+| `telegramNotify.errors.maxPerHour` | 1.6-TG-NOTIFY-C | `10` | Per-hour rate limit per company. Cards above the limit are dropped — never queued, never retried | Integer 1..120; anything else — the default (10) |
+| `MYRMIDON_TG_NOTIFY_INTERVAL_SEC` | 1.6-TG-NOTIFY-C | `300` | Period of the periodic pass, in seconds. A pass whose previous run is still going is skipped, not queued. The timer itself always runs; every tick checks the per-company master switch first | 60..86400; non-integer or out of bounds — `300` |
+
+Delivery is idempotent per card: the publication key is
+`tg-notify-errors:<companyId>:<card dedupKey>`, so the same error card never
+notifies twice, however often the sweep runs. The limiter is in-memory (no
+migration): a restart resets the hour bucket, which re-admits — the safe
+direction for alerts. Tests:
+`server/src/myrmidon/telegram-notify/errors-channel*.myrmidon.test.ts`.
