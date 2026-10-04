@@ -40,7 +40,10 @@
     },
     "group": "Agent maintenance ({{state}}) since {{since}}: {{reason}} — agents: {{count}}, queued wakeups: {{queued}}. New agent runs are paused; wakes are delivered when maintenance ends.",
     "ending": "Agent maintenance ending — agents: {{count}}",
-    "idsSummary": "Agent ids"
+    "idsSummary": "Agent ids",
+    "summary": "Maintenance windows: {{count}} across {{rows}} kind(s), {{state}}",
+    "row": "{{scope}} ({{state}}) since {{since}}: {{reason}} — windows: {{count}}, queued wakeups: {{queued}}.",
+    "endsBy": "ends by {{time}}"
   },
   "about": {
     "title": "About Myrmidon",
@@ -90,7 +93,8 @@
       "colony": "{{active}} of {{total}}",
       "fleet": "Fleet",
       "fleetAttention": "Fleet: 1 attention",
-      "forecast": "{{spend}} of {{budget}}"
+      "forecast": "{{spend}} of {{budget}}",
+      "forecastSpendOnly": "{{spend}} spent"
     },
     "decisions": {
       "badge": "{{count}} decisions waiting"
@@ -402,5 +406,20 @@
     "noAgents": "No agents in this company yet.",
     "save": "Save WIP limit",
     "saving": "Saving..."
+  },
+  "cardEffort": {
+    "thinkingEffort": "Thinking effort",
+    "thinkingEffortHint": "Reasoning depth. Only values the selected model accepts are offered; empty uses the model's default.",
+    "effortDefault": "default",
+    "effortEmptyHint": "Empty compiles to the model default: {{value}}",
+    "effortSelected": "Selected: {{value}}",
+    "contextLength": "Context length (tokens)",
+    "contextLengthHint": "Explicit context window for the model. Empty keeps the profile setting.",
+    "contextLengthInvalid": "Context length must be a whole number of tokens.",
+    "contextLengthRange": "Context length must be between {{min}} and {{max}}.",
+    "titleGenerationModel": "Title generation model",
+    "titleGenerationModelHint": "Model for auxiliary title generation. Empty keeps the instance default.",
+    "compressionModel": "Compression model",
+    "compressionModelHint": "Model for auxiliary compression summaries. Empty keeps the instance default."
   }
 }

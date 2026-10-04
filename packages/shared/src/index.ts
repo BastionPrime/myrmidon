@@ -2774,6 +2774,9 @@ export * from "./announcements.js";
 // myrmidon(WORKSPACE-HYGIENE): workspace quota values and the measurement record shared by the
 // server, the sweep and the settings validator.
 export * from "./myrmidon-workspace-hygiene.js";
+// myrmidon(BOT-DISK E): host disk usage threshold, samples and growth shared by the server, the
+// UI and the settings validator.
+export * from "./myrmidon-host-disk.js";
 // myrmidon(C0): live run-admission limits shared by the server, the UI and the settings validator.
 export * from "./myrmidon-runtime-limits.js";
 // myrmidon(PARALLEL-HELPERS): the card -> Hermes `delegation` contract shared by the profile
@@ -2786,6 +2789,10 @@ export { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema } fro
 export * from "./myrmidon-browser-bridge.js";
 // myrmidon(UI2-I18N): per-user board UI language preference contract (2.0 UI tree).
 export * from "./myrmidon-ui2-i18n.js";
+// myrmidon(OPE-3789): the telegramNotify settings contract shared by the
+// server core (part A) and the board UI (part F). Must stay byte-identical to
+// the merged core A file (core PR 392); do not fork values here.
+export * from "./myrmidon-telegram-notify.js";
 // myrmidon(S6): per-agent tool and connection permissions.
 export * from "./myrmidon-agent-tool-permissions.js";
 // myrmidon(ADMIN-AGENT): the board administrator flag on an agent.
@@ -2800,3 +2807,8 @@ export * from "./myrmidon-swarm-claim.js";
 export * from "./myrmidon-autonomy.js";
 // myrmidon(1.6-CTO-CHAT-B): the owner-message-to-epic proposal contract of the CTO chat.
 export * from "./myrmidon-cto-chat.js";
+// myrmidon(1.6-TG-PROACTIVITY-E): the telegramNotify proactivity contract (mode, rarely ceiling, per-agent override).
+export * from "./myrmidon-telegram-notify.js";
+// myrmidon(1.6.1-WIP-LIMIT-A): the shared contract of the per-agent WIP limit —
+// the settings shape, the limit resolver and the status feed rows.
+export * from "./myrmidon-wip-limit.js";

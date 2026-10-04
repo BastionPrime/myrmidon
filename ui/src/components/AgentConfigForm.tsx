@@ -78,7 +78,9 @@ import { ClaudeLocalAdvancedFields } from "../adapters/claude-local/config-field
 import { MarkdownEditor } from "./MarkdownEditor";
 import { ChoosePathButton } from "./PathInstructionsModal";
 // myrmidon(M1): extra models on the agent card
-import { AgentCardModelsFields } from "./myrmidon/AgentCardModelsFields";
+import { AgentCardModelsFields, CardEffortPicker } from "./myrmidon/AgentCardModelsFields";
+// myrmidon(BOT-TUNING-C): the per-model effort list for the hermes_local card picker.
+import { defaultEffortForModel, effortsForModel } from "../lib/card-effort-policy";
 // myrmidon(W2b): bot container settings on the agent card
 import { AgentCardContainerFields } from "./myrmidon/AgentCardContainerFields";
 // myrmidon(PARALLEL-HELPERS): parallel helper subagents on the agent card
@@ -1296,6 +1298,11 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
         : adapterType === "opencode_local"
           ? "variant"
           : adapterType === "pi_local" ? "thinking" : "effort";
+  // myrmidon(BOT-TUNING-C): hermes_local offers only the values the selected
+  // model accepts (GLM: low/high/max, no medium) instead of the claude list.
+  const isHermesLocalEffort = adapterType === "hermes_local";
+  const hermesEfforts = isHermesLocalEffort ? effortsForModel(currentModelId) : [];
+  const hermesEffortDefault = isHermesLocalEffort ? defaultEffortForModel(currentModelId) : "";
   const thinkingEffortOptions =
     adapterType === "codex_local"
       ? codexReasoningEffortOptions(currentModelId, "Auto").map((option) => ({
@@ -1310,7 +1317,11 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
             ? kimiThinkingEffortOptions
             : adapterType === "pi_local"
               ? [{ id: "", label: "Auto" }, ...["off", "minimal", "low", "medium", "high", "xhigh"].map(id => ({ id, label: id }))]
-              : claudeThinkingEffortOptions;
+              : isHermesLocalEffort
+                // myrmidon(BOT-TUNING-C): the per-model list; "" compiles to
+                // the model's safe default, not a hardcoded level.
+                ? [{ id: "", label: hermesEffortDefault ? `Default (${hermesEffortDefault})` : "Auto" }, ...hermesEfforts.map(id => ({ id, label: id }))]
+                : claudeThinkingEffortOptions;
   const currentThinkingEffort = isCreate
     ? val!.thinkingEffort
     : adapterType === "codex_local"
@@ -1837,17 +1848,28 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
 
               {showThinkingEffort && (
                 <>
-                  <ThinkingEffortDropdown
-                    value={currentThinkingEffort}
-                    options={thinkingEffortOptions}
-                    onChange={(v) =>
-                      isCreate
-                        ? set!({ thinkingEffort: v })
-                        : mark("adapterConfig", thinkingEffortKey, v || undefined)
-                    }
-                    open={thinkingEffortOpen}
-                    onOpenChange={setThinkingEffortOpen}
-                  />
+                  {isHermesLocalEffort && !isCreate ? (
+                    // myrmidon(BOT-TUNING-C): the per-model effort picker with
+                    // the model's safe default badged; only values the
+                    // selected model accepts are offered.
+                    <CardEffortPicker
+                      model={currentModelId || undefined}
+                      value={currentThinkingEffort}
+                      onChange={(v) => mark("adapterConfig", thinkingEffortKey, v || undefined)}
+                    />
+                  ) : (
+                    <ThinkingEffortDropdown
+                      value={currentThinkingEffort}
+                      options={thinkingEffortOptions}
+                      onChange={(v) =>
+                        isCreate
+                          ? set!({ thinkingEffort: v })
+                          : mark("adapterConfig", thinkingEffortKey, v || undefined)
+                      }
+                      open={thinkingEffortOpen}
+                      onOpenChange={setThinkingEffortOpen}
+                    />
+                  )}
                   {adapterType === "codex_local" &&
                     codexSearchEnabled &&
                     currentThinkingEffort === "minimal" && (

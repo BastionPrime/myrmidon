@@ -88,6 +88,7 @@ A track writes only into its own section. A row is added in the same PR as the s
 | `MYRMIDON_CHAT_CROSS_CHANNEL_TOTAL_CHARS` | X8d | `4000` | Total character limit on the quote block; the oldest lines are dropped first, the skipped counter is a `(k earlier messages not shown)` line | Non-numeric or negative — the default |
 | `MYRMIDON_CHAT_CROSS_CHANNEL_LOOKBACK_HOURS` | X8d | `168` (a week) | How old adjacent-conversation messages are still quoted | Non-numeric or negative — the default |
 | `MYRMIDON_CHAT_RECONCILE_INTERVAL_MS` | D1 | unset | Minimum interval between run-milestone sweep runs (`enqueueChatRunMilestones`); replaces the standard coalescing-trigger interval (100 ms) rather than adding to it. The publication sweep (delivering messages to the provider) is untouched — it keeps its usual pace | Unset, `0`, negative or non-numeric — today's pace (the fix of the D1 queries themselves is always on, this is not a defect switch). Set (e.g. `15000`) if after D1 the milestone sweep is still noticeable in load when chats are idle |
+| `MYRMIDON_TELEGRAM_VOICE_STT` | 1.6.1 VOICE-STT B | off | Transcribe an inbound Telegram voice/audio message at intake: the bytes are prefetched (bounded, 20 MB, 45 s), recognized through the shared STT core (part A1) and the transcript is written into the task comment next to the kept attachment — the bot reads it as user input on the same wakeup. Speaker segments render as «Говорящий N [mm:ss]: …». An STT failure is a skip: the comment keeps the vendor body, the redacted `stt_skipped` code lands in the comment metadata, and the delivery is unaffected | Any value other than `1`/`true`/`yes`/`on` — the vendor path byte for byte: no byte prefetch, zero calls to the transcription core. Read per delivery, no restart. Until the STT core is wired (part A1 merged and connected), an enabled setting records `stt_unconfigured` skips |
 
 ## Track 5 — operations
 
@@ -166,6 +167,15 @@ A track writes only into its own section. A row is added in the same PR as the s
 |---|---|---|---|---|
 | `MYRMIDON_WORKSPACE_PNPM_STORE_DIR` | WORKSPACE-HYGIENE | unset — `<repository root>/.paperclip/pnpm-store` | Absolute path of the shared pnpm store into which `provision-worktree.sh` installs packages and from which they are imported into the workspace `node_modules` with hard links (`--config.package-import-method=hardlink`): one store for all workspaces of one repository instead of a full copy of packages per branch. The repository root is taken from `PAPERCLIP_WORKSPACE_REPO_ROOT` (then `PAPERCLIP_WORKSPACE_BASE_CWD`) — the default path lies on the same volume as the workspaces, so hardlink import works | A relative path in this variable is resolved from the same anchor. Store and workspace on different filesystems — installation falls back to vendor behavior (pnpm's own default store) with a warning to stderr |
 | `MYRMIDON_WORKSPACE_PNPM_STORE` | WORKSPACE-HYGIENE | `1` (enabled) | Master switch of the shared store: `0`/`false`/`no`/`off` — `provision-worktree.sh` runs `pnpm install` with vendor argv without store flags | Disabling returns the previous disk usage (a full copy of `node_modules` per workspace) |
+## BOT-DISK E — host disk usage signal
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_HOST_DISK_USAGE_THRESHOLD_PERCENT` | BOT-DISK E | `85` | The fill level of the host disk that raises the attention signal. The sweep measures the disk of the server data root (`MYRMIDON_HOST_DISK_DATA_ROOT`) on every scheduler tick, keeps a sample ring for the growth rate per hour, and when usage crosses this level the attention queue gets one row with the numbers and the biggest consumers. The value is the default at FIRST start only; the effective threshold lives in the instance settings (`instance_settings.general.hostDisk`) and changes live on the Instance → General page («Host disk») or through `GET`/`PATCH /api/myrmidon/host-disk` — the sweep re-reads it on every measurement, no restart | A non-integer or a value outside 1–99 — the default (85). A stored row that does not validate is ignored as a whole |
+| `MYRMIDON_HOST_DISK_DATA_ROOT` | BOT-DISK E | `/data` | Directory whose filesystem usage is measured: `statfs` of this path reports the disk the board's database, workspaces and container volumes live on | Must exist and be readable by the server process; unreadable — the sweep logs one error per tick and no signal is raised |
+| `MYRMIDON_HOST_DISK_CONSUMER_PATHS` | BOT-DISK E | the data root | Comma-separated directories ranked as «biggest consumers» in the signal: each is walked with a bounded depth/entry/time cap, biggest first | Unset — the data root itself is the one consumer listed |
+
+
 ## P12 — the deferred addressee-wake sweeper
 
 | Variable | Function | Default | What it does | How to disable / special |
@@ -221,6 +231,7 @@ Decision register — `containers-plan-senior-2026-09-28.md`.
 | `MYRMIDON_LITELLM_BASE_URL` | M2-A | unset (off) | Address of the LLM gateway (OpenAI-compatible, e.g. LiteLLM) from which the board server assembles the spend log and model prices: `http(s)://…`, read at startup and at every collection pass. The address is not stored in the open repository — the value is set by the deployment | Set together with `MYRMIDON_LITELLM_KEY_SECRET`; without both, collection is off: the periodic pass does not start, and `/api/myrmidon/…/litellm/*` answers 503 `enabled: false`, and the Costs "Gateway" tab writes "collection is not enabled" |
 | `MYRMIDON_LITELLM_KEY_SECRET` | M2-A | unset (off) | Name of the company secret holding the gateway key with access to `/spend/logs/v2` and `/v1/model/info` (for LiteLLM this is a virtual key with the right to read the spend log) | The value is read only for the duration of the pass, is not written to the log and is not stored; spend rows are attributed to agents by sha256 of bot key values — the values themselves do not leave the process |
 | `MYRMIDON_LITELLM_COST_INTERVAL_SEC` | M2-A | `300` | Collection pass period (in seconds): reads `/spend/logs/v2` since the last collected event (first pass — a 24 h window), refreshes the model catalog `/v1/model/info` | From 30 to 86400; non-integer or out of bounds — `300` is taken. An overlapping pass skips the tick instead of queueing up |
+| `MYRMIDON_LITELLM_FIRST_LOOKBACK_DAYS` | HERMES-USAGE-COST | `1` | How far back a FIRST collection pass reads when nothing has been collected yet: the whole unpriced month can be collected by setting this to its length in days. After the pass, the reconcile step fills the unpriced `hermes_gateway` rows of the vendor cost ledger with the collected prices, so the dashboard and Costs screens stop showing $0 | From 1 to 90; non-integer or out of bounds — `1` is taken. A one-off backfill can instead pin the window start with `POST /api/myrmidon/companies/:id/litellm/sweep` body `{ "from": "2026-10-01" }` (board only) |
 | `MYRMIDON_LITELLM_ADMIN_KEY_SECRET` | M2-B | unset (key management off) | Name of the company secret holding the gateway ADMIN key (for LiteLLM — the master key): it manages the agents' virtual keys and is never handed to an agent. It is used only to read key names and to issue or rotate one agent's key; the value is not written to the log. Without it, together with `MYRMIDON_LITELLM_BASE_URL`, the keys API answers 503 `enabled: false` | — |
 | `MYRMIDON_BUDGET_SIGNAL_MODE` | M3 | on | When a budget hard-stop is reached, the owner gets a signal: a system-notice comment in the thread of every open issue the stop interrupted (cause, limit, observed spend, how to continue — raise the budget or keep the scope paused), written once per incident per issue. Without this the stop is silent in the issue thread: runs are cancelled and queued wakeups dropped, and the only trace is the decision inbox card the owner must open on their own | `off` (case-insensitive) — disable the signal entirely; any other value or unset — on. The vendor pause/cancel/incident mechanics are not affected by this switch, only the delivery of the signal |
 | `MYRMIDON_LITELLM_AGENT_KEY_ENV` | M2-B | unset | Name of the environment variable in which the bot profile compiler substitutes THIS agent's key (`llm.apiKeyEnv` of the resulting `config.yaml`): the key comes from the agent's secret rather than from a single company-wide value, so spend arrives in the gateway log under the agent's key. Unset — the previous behaviour. The name may not be `HOME`, `PATH`, `HERMES_HOME`, `API_SERVER_KEY`, `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY`; an invalid name reads as "not set" | — |
@@ -411,6 +422,7 @@ a human under `mode: types`). The one-button emergency off is
 | Field | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `permissions.toolAccess` | S6 | `{ "mode": "all" }`, written into the agent record explicitly | The agent's permission for tools and connections. `mode: "listed"` — only tools from `tools` and connections from `connections` are allowed, other calls are rejected (403, `deny_agent_permission`, a line in the call log). Set by the operator in the agent card (Permissions tab, "Tool and connection access" section) or `PATCH /api/agents/:id/permissions` with the `toolAccess` field | `{ "mode": "all" }` — previous behavior. An agent without the field and a record with an unreadable value are read as `all` |
+| `permissions.boardAdmin` | ADMIN-AGENT (1.6.1) | flag absent — reads as `false` | The board administrator flag on the agent record. Enabling through `PATCH /api/agents/:id/permissions` with the `boardAdmin` field (or the "Board administrator" toggle on the agent card's Permissions tab) grants the fixed 17-key operator set (`BOARD_ADMIN_PERMISSION_KEYS`) and snapshots the pre-existing set keys into `permissions.boardAdminSavedGrantKeys`; disabling revokes only the keys the switch added. Flipping needs the company `users:manage_permissions` right (board actors) or the same grant (agent actors); an agent cannot grant board admin to itself (403). `GET /api/agents/:id` resolves `access.boardAdmin` for the CEO, the stored flag, or a pre-existing full set (read-time migration). Details: [guides/agent-board-admin.md](guides/agent-board-admin.md) | Clear the flag with the same PATCH and `boardAdmin: false` — keys outside the set and keys in the snapshot are untouched; both readers are fail-closed — an unreadable value reads as `false` |
 
 ## SC1 — server console (SERVER-CONSOLE, 1.4)
 
@@ -713,12 +725,111 @@ outside: an operator turns it on together with `MYRMIDON_FORAGING_KEY_SECRET` wh
 sources need a token. Findings are recorded `unverified` until the skill lifecycle accepts
 them as candidates; `POST …/foraging/sweep` (board only) runs one pass by hand.
 
+The flow end to end — the registry, how a pass works, the screen and the API — is
+the operator guide [guides/foraging.md](guides/foraging.md).
+
+
+## 1.6.1 — BOT-RUNTIME-TUNING D: model fallback attention signal
+
+Settings of `server/src/myrmidon/litellm-fallback-signal/`. The signal is off
+by default: without `MYRMIDON_MODEL_FALLBACK_ENABLED=1` no timer is armed and
+the attention feed never sees a fallback card. When on, the sweep reads the
+gateway spend log (the same client and master-key secret as M2-A
+litellm-costs), attributes rows to agents by the sha256 of each bot's virtual
+key, and raises ONE medium-severity attention card per agent whose fallback
+share — calls served by a model outside the agent's card model set — is at or
+above the threshold over the window. The card disappears when the share drops
+below half the threshold (hysteresis) or the window empties below min calls.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_MODEL_FALLBACK_ENABLED` | BOT-RUNTIME-TUNING D | unset (off) | Master switch of the fallback signal sweep: computes each agent's share of gateway calls served outside its card model set and records the attention signals the feed turns into cards | Only the exact values `1` or `true` enable it; unset, `0`, `false` or a typo — off, no timer, no card. Needs `MYRMIDON_LITELLM_*` (M2-A) to read the spend log; without them the sweep logs one warn per tick and stays idle |
+| `MYRMIDON_MODEL_FALLBACK_THRESHOLD_PCT` | BOT-RUNTIME-TUNING D | `20` | Fallback share (percent of attributed calls in the window) at which an agent gets the card. Exit is half of this (hysteresis: a share hovering at the threshold must not blink) | Integer from 1 to 100; non-integer or out of bounds — `20` |
+| `MYRMIDON_MODEL_FALLBACK_MIN_CALLS` | BOT-RUNTIME-TUNING D | `20` | Minimum attributed calls in the window before the agent is evaluated at all — two calls must not raise a signal | Integer from 1; non-integer or below — `20` |
+| `MYRMIDON_MODEL_FALLBACK_WINDOW_SEC` | BOT-RUNTIME-TUNING D | `3600` (1 h) | Length of the rolling window the share is computed over | Integer from 300 to 86400; non-integer or out of bounds — `3600` |
+| `MYRMIDON_MODEL_FALLBACK_INTERVAL_SEC` | BOT-RUNTIME-TUNING D | `300` | Sweep period, in seconds. A tick whose previous sweep is still running is skipped, not queued | Integer from 60 to 86400; non-integer or out of bounds — `300` |
+
+## 1.6.1 — TG-NOTIFY jobs (daily digest and escalations, part B)
+
+Settings of `server/src/myrmidon/telegram-notify/jobs.ts` — the periodic digest and
+escalation jobs of the Telegram notify track (part B; the routes and the
+`telegramNotify` settings area belong to part A). Both jobs read the owner
+settings through part A's JSON contract every pass, so they are
+runtime-changeable, and both are OFF by default: with the defaults the owner
+receives in Telegram only replies to his own messages and U2 decision cards.
+Delivery goes through the existing chat publication path (`chat_publications`,
+the vendor outbox), never a second client. No new table: the escalation state
+and the last digest day live under our own key of `instance_settings.general`.
+
+The jobs are wired maintenance-style: `server/src/index.ts` has one marked call,
+`startTelegramNotifyJobs(db)`; everything else lives in the module.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_TELEGRAM_NOTIFY_TICK_SEC` | 1.6.1-TG-NOTIFY-B | `300` | Period of the shared job interval: how often the jobs check whether the digest time has arrived or an escalation threshold has passed. The jobs still send only when the owner settings enable them | From 30 to 3600; non-integer or out of bounds — the default (300). A pass whose previous run is still going is skipped, not queued |
 
 ## 1.6 — PARALLEL-HELPERS (delegated helper agents)
 
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | `MYRMIDON_BOT_HELPER_MODEL` | PARALLEL-HELPERS | unset (helpers inherit the parent agent's model) | Model that delegated helper children run on when neither the agent card nor the stored `parallelHelpers` instance settings name one. Read from the agent card's environment when the bot profile is built. A deployment value: no model name is baked into the product | Empty/unset — the child uses the parent agent's model (Hermes' own behavior for an unset `delegation.model`) |
+
+
+
+## 1.6.1 — TG-NOTIFY-SETTINGS part F: the board UI for the Telegram notification settings
+
+The board-facing half of the Telegram notification settings: the "Telegram
+notifications" panel on the System screen of the 2.0 UI (Settings → System,
+under the UI-2.0 shell). It edits the company-level `telegramNotify` document
+the settings core (part A) stores and serves; no environment variables —
+everything is runtime-changeable per company through the same API.
+
+- The panel shows all five sections with their options: the daily digest
+  (send time, chat id, topic id, sections), error notifications (chat id,
+  topic id, minimum severity, rate limit per hour), owner messages
+  (require mention), escalations (stuck hours, channel, chat id, topic id) and
+  head-bot proactivity (mode, cap per day in "rarely" mode). With the contract
+  defaults every section reads OFF.
+- Saving sends one `PATCH /api/myrmidon/telegram-notify` with only the fields
+  that differ from the stored values; the answer is applied back, so a change
+  is reflected immediately. Editing is board-only on the server; a read
+  without board access renders the denied state.
+- The settings change log from the GET answer (actor, field path, previous and
+  next value) is rendered under the sections — the same changelog the core
+  records for every changed field.
+
+## 1.6.1 — TG-NOTIFY head-bot proactivity (part E: gate, rarely limit, U2 bundling)
+
+Settings of `server/src/myrmidon/telegram-notify/` (the proactivity half of the
+TG-NOTIFY-SETTINGS epic, part E). The head bot's own-initiative publications are
+gated per agent: `only_on_owner_request` (the default — the owner receives only
+replies to their own messages and the U2 decision cards), `rarely` (at most
+`rarelyMaxPerDay` proactive messages per agent per UTC day, everything beyond
+the ceiling is bundled into a daily summary publication), or `normal` (no
+limit). The mode and the ceiling live in the `proactivity` area of the
+`telegramNotify` settings document (instance settings, runtime-changeable; the
+contract and defaults are defined in `packages/shared/src/myrmidon-telegram-notify.ts`).
+A per-agent override uses the same enum under the `mode` key of the agent's
+metadata and wins over the company default.
+
+Storage: no new tables. The rarely day counters and the bundle queues sit under
+`instance_settings.general.myrmidonTelegramNotify` (the instance-settings JSON
+pattern; preserved across vendor `general` writes). The U2 card bundling turns
+several pending interaction cards older than 5 minutes in one conversation into
+one summary publication; each bundled card keeps its own callback action rows,
+so every card stays individually answerable.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `telegramNotify.proactivity.mode` (settings area) | 1.6-TG-PROACTIVITY-E | `only_on_owner_request` | Proactivity of the head bot per company: `only_on_owner_request` blocks every own-initiative publication; `rarely` allows at most `rarelyMaxPerDay` per agent per day and bundles the rest; `normal` removes the limit | Any other value is rejected by the validator; a malformed stored value falls back to the default |
+| `telegramNotify.proactivity.rarelyMaxPerDay` (settings area) | 1.6-TG-PROACTIVITY-E | `3` | Daily ceiling of proactive messages per agent in `rarely` mode; the counter resets on the UTC day boundary | Integer from 1 to 50; anything else falls back to 3 |
+| agent metadata key `mode` | 1.6-TG-PROACTIVITY-E | unset | Per-agent override of the mode (the same three values). Wins over the company default for that agent | A malformed value is ignored — the company default applies; an override can only pick one of the three modes |
+
+No environment variables, no new secrets. The gate runs inside the chat
+publication sweep; the bundling window is fixed at 5 minutes. Remove: the
+`server/src/myrmidon/telegram-notify/` tree, the export line in
+`packages/shared/src/index.ts`, the two marker lines in `app.ts` and
+`instance-settings.ts`, and this section.
 
 ## 1.6.1 — WIP-LIMIT: the WIP limit screen and badge (part B, UI)
 
@@ -737,3 +848,78 @@ query/badge and the `wipLimit` i18n namespace.
 | Variable | Function | Default | What it does | How to disable / special |
 |---|---|---|---|---|
 | — | 1.6.1-WIP-LIMIT-B | — (always on) | The settings screen writes the row through part A's PUT; the badge on an agent row reads the status endpoint | Not configurable: no deployment-specific values in the UI half |
+
+## 1.6.1 — CUSTOM-CASTES B: caste-directory consumers (role validator, swarm gate)
+
+No environment variables and no new settings documents: this part wires the
+consumers of the company caste directory (the directory itself is part A).
+Both consumers read the directory through an injectable port, so until part A
+lands the port is absent and every behavior below is a no-op that matches the
+pre-directory release exactly.
+
+Agent role validation (`packages/shared/src/validators/agent.ts`,
+`server/src/services/agents.ts`): the `role` field of the agent create/update
+payload is a caste key — latin letters, digits and hyphens, 1–60 characters —
+and no longer one of the fixed twelve role names. When the directory port is
+wired, create and update refuse a key that is not a caste of the company with
+a 400 (`code` `role_not_company_caste`, the refused key in `role`); create the
+caste first, then assign it. The board UI falls back to displaying the raw key
+for any role the built-in label map does not know.
+
+Swarm claim gate (`server/src/myrmidon/swarm-claim/service.ts`): when the
+directory port is wired, the gate looks up the claiming agent's caste before
+taking a task. A caste with `swarmEligible=false` never enters the claim pool
+— the claim endpoint answers `caste_excluded` instead of taking a task (a
+supervision caste such as a lead or an on-call reviewer stays out of the pool
+the swarm draws from). A caste-set `maxActiveTasks` overrides the global
+`MYRMIDON_SWARM_MAX_ACTIVE_TASKS` ceiling for agents of that caste only;
+`null` keeps the global ceiling. A role with no directory entry behaves
+exactly as before.
+
+Unchanged: the autonomy matrix resolves the caste key as the role string with
+no schema change (moving an agent between castes changes no verdict), the
+`ceo` built-in checks stay byte-identical, custom roles keep working through
+explicit grants, and the cloud-connector caste grants are untouched.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| — | 1.6.1-CUSTOM-CASTES-B | — | This part adds no tunables of its own; the directory rows (`swarmEligible`, `maxActiveTasks`) come from part A's store, the swarm globals stay under `MYRMIDON_SWARM_*` | Until part A's directory is wired the consumers are no-ops; nothing to disable |
+
+## 1.6.1 — WIP-LIMIT: per-agent work-in-progress limit
+
+Settings of `server/src/myrmidon/wip-limit/` (the 1.6.1 track, part A). The feature has no
+environment variables: the limits are a policy choice stored in
+`instance_settings.general.wipLimit` and changed from
+`GET`/`PUT /api/myrmidon/companies/:companyId/wip-limit/settings` (any company member reads,
+instance admins write). Absent settings mean "count only" — the status endpoint
+(`GET …/wip-limit/status`) keeps answering, but no attention item and no comment is ever
+raised.
+
+The limit resolution is `perAgent[agentId]` over `defaultLimit`; an explicit `null` in either
+place means count-only. The lead rule is not a setting: an agent someone reports to is a lead,
+and a lead holding a task in `in_progress` or `in_review` is over the limit by definition (the
+implementation limit of a lead is 0 — a lead supervises and accepts, it does not deliver).
+
+The periodic check runs on the heartbeat scheduler (the same path the swarm-claim sweep uses)
+with an in-module interval of 300 s; a pass whose previous run is still going is skipped. One
+signal per agent per UTC day: a system-notice comment on the agent's most recent in_progress
+task, deduplicated by the `wip-limit:<agentId>:<utc-day>` metadata key. The attention feed
+(source kind `wip_limit`) needs no sweep — it recomputes on every list.
+
+## 1.7 — METRICS: the board's own /metrics endpoint (Prometheus text)
+
+Settings of `server/src/myrmidon/monitoring/metrics/`. The endpoint answers
+`GET /metrics` at the origin root (outside `/api`, the same mounting shape the
+swarm-claim ingress uses) with the Prometheus text exposition format 0.0.4, so
+the existing scraper stack can collect it. Access is one bearer token: the
+value comes from the company secret named by `MYRMIDON_METRICS_TOKEN_SECRET`
+(resolved by name, the value is never returned and never logged) or, when no
+secret name is set, from the `MYRMIDON_METRICS_TOKEN` variable. Without a
+configured token the endpoint answers 401 for everyone — it never falls open.
+
+| Variable | Function | Default | What it does | How to disable / special |
+|---|---|---|---|---|
+| `MYRMIDON_METRICS_TOKEN_SECRET` | 1.7-METRICS | unset | Name of the company secret that holds the scraper bearer token. The first resolvable secret of that name across companies wins (the same lookup order the litellm sweep uses); the value never appears in a log, an error or a response | Unset — the env token is used; both unset — the endpoint answers 401 |
+| `MYRMIDON_METRICS_TOKEN` | 1.7-METRICS | unset | The scraper bearer token read from the environment, used when no secret name is configured | Unset together with the secret name — 401 for every request |
+| `MYRMIDON_METRICS_ERROR_WINDOW_SEC` | 1.7-METRICS | `3600` | Window (seconds) of the error families (failed runs, gateway spend). A request may override it per scrape with `?window=<sec>` | From 60 to 86400; below 60 — 60, above 86400 — 86400, non-numeric — the default |
+| `MYRMIDON_METRICS_LATENCY_WINDOW_SEC` | 1.7-METRICS | `21600` | Window (seconds) of the latency family: p50/p95 of finished run durations (finishedAt − startedAt). A request may override it with `?latency_window=<sec>` | From 300 to 86400; below 300 — 300, above 86400 — 86400, non-numeric — the default |

@@ -10,6 +10,7 @@ import { feedbackDataSharingPreferenceSchema } from "./feedback.js";
 import { shapeWithoutDefaults } from "./partial.js";
 // myrmidon(WORKSPACE-HYGIENE): workspace disk quotas that can be changed while the server runs
 import { workspaceHygieneLimitsSchema } from "../myrmidon-workspace-hygiene.js";
+import { hostDiskSettingsSchema } from "../myrmidon-host-disk.js";
 // myrmidon(C0): run admission limits that can be changed while the server runs
 import { runLimitsSchema } from "../myrmidon-runtime-limits.js";
 // myrmidon(PARALLEL-HELPERS): company ceiling/default for parallel helper
@@ -18,6 +19,9 @@ import { parallelHelpersSettingsSchema, patchParallelHelpersSettingsSchema } fro
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in the same general settings row
 import { browserBridgeSettingsSchema } from "../myrmidon-browser-bridge.js";
 import { swarmClaimSettingsSchema } from "../myrmidon-swarm-claim.js";
+// myrmidon(1.6.1-WIP-LIMIT-A): the per-agent WIP limit settings stored in the
+// same general settings row.
+import { wipLimitSettingsSchema } from "../myrmidon-wip-limit.js";
 
 // myrmidon(PARALLEL-HELPERS): re-exported for the barrel so the settings page and the
 // /api/myrmidon/parallel-helpers route validate with the exact schema stored here.
@@ -54,6 +58,10 @@ export const instanceGeneralSettingsSchema = z.object({
   // page and /api/myrmidon/runtime-limits; absent means "use the environment
   // variable, then the default" (see packages/shared/src/myrmidon-runtime-limits.ts).
   runLimits: runLimitsSchema.optional(),
+  // myrmidon(BOT-DISK E): the host disk usage threshold, changed from
+  // /api/myrmidon/host-disk; absent means "use the environment variable, then
+  // the default (85)".
+  hostDisk: hostDiskSettingsSchema.optional(),
   // myrmidon(PARALLEL-HELPERS): company ceiling and default for the "Parallel
   // helpers" block on an agent card, changed from the instance settings page
   // and /api/myrmidon/parallel-helpers; absent means the module defaults apply
@@ -62,11 +70,15 @@ export const instanceGeneralSettingsSchema = z.object({
   // myrmidon(EXTCASE-B): browser-bridge allowlist changed from the bridge panel;
   // absent means "no domain is allowed" (deny by default).
   browserBridge: browserBridgeSettingsSchema.optional(),
-  // myrmidon(1.6-SWARM): per-role queues with leased claims — the pilot flag,
+  // myrmidon(1.6-SWARM): per-role task queues with leased claims — the pilot flag,
   // the lease TTL, the per-agent ceiling and the sweep interval, changed from
   // /api/myrmidon/swarm-claim; absent means "use the environment variable, then
   // the default (the pilot is off)".
   swarmClaim: swarmClaimSettingsSchema.optional(),
+  // myrmidon(1.6.1-WIP-LIMIT-A): per-agent WIP limits — the company default and
+  // per-agent overrides, changed from /api/myrmidon/companies/:id/wip-limit/settings;
+  // absent means the feature counts but never signals (all limits null).
+  wipLimit: wipLimitSettingsSchema.optional(),
 }).strict();
 
 export const patchInstanceGeneralSettingsSchema = z

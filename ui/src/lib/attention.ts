@@ -62,8 +62,13 @@ const SOURCE_META: Record<AttentionSourceKind, SourceMeta> = {
   agent_error_alert: { label: "Agent error" },
   // myrmidon(SUB): label for the stack-update source added with the stack registry release check.
   stack_update: { label: "Stack update" },
+  // myrmidon(BOT-RUNTIME-TUNING D): label for the model fallback signal source.
+  model_fallback_alert: { label: "Model fallback" },
   // myrmidon(STALE-BLOCK): label for the lifted-stale-block source.
   stale_block: { label: "Stale block lifted" },
+  host_disk_alert: { label: "Host disk" },
+  // myrmidon(1.6.1-WIP-LIMIT-A): label for the WIP-limit source added with the per-agent WIP limit.
+  wip_limit: { label: "WIP limit" },
 };
 
 export function sourceMeta(kind: AttentionSourceKind): SourceMeta {
@@ -131,6 +136,7 @@ export function attentionKind(item: AttentionItem): AttentionKind {
     case "blocker_attention":
     case "recovery_action":
     case "budget_alert":
+    case "host_disk_alert":
       return "blocking";
     case "approval":
     case "issue_thread_interaction":
@@ -245,6 +251,17 @@ export function attentionDetailLine(item: AttentionItem): string | null {
     }
     case "budget":
       return `${Math.round(detail.observedPercent)}% of budget used ($${detail.amountObserved} / $${detail.amountLimit})`;
+    case "host_disk": {
+      const parts = [`${detail.usedPercent}% of ${detail.totalGb} GB used (${detail.freeGb} GB free)`];
+      if (detail.growthBytesPerHour !== null) {
+        const gbPerHour = detail.growthBytesPerHour / (1024 * 1024 * 1024);
+        parts.push(gbPerHour >= 1 ? `+${gbPerHour.toFixed(1)} GB/hour` : `+${Math.round(gbPerHour * 1024)} MB/hour`);
+      }
+      if (detail.consumers.length > 0) {
+        parts.push(`biggest: ${detail.consumers.map((c) => `${c.path} (${c.sizeGb} GB)`).join(", ")}`);
+      }
+      return parts.join(" — ");
+    }
     case "generic":
       return quote(detail.summaryExcerpt);
     default:
@@ -820,6 +837,45 @@ const DATE_BUCKET_LABELS: Record<DateBucket, string> = {
   this_week: "This week",
   earlier: "Earlier",
 };
+
+// myrmidon(UI-RU): i18n keys for group labels produced by this module. Render
+// sites (desk + queue pages) resolve labels through localizeAttentionLabel so
+// RU users see translated shelf/group headers without changing grouping logic.
+export const ATTENTION_LABEL_I18N: Record<string, string> = {
+  "Decide now": "decisions.decideNow",
+  "New today": "decisions.newToday",
+  "Earlier": "decisions.earlier",
+  "Today": "decisions.today",
+  "Yesterday": "decisions.yesterday",
+  "This week": "decisions.thisWeek",
+  "Critical": "decisions.severityCritical",
+  "High": "decisions.severityHigh",
+  "Medium": "decisions.severityMedium",
+  "Low": "decisions.severityLow",
+  "No project": "decisions.noProject",
+  "Approval": "decisions.sourceApproval",
+  "Decision": "decisions.sourceDecision",
+  "Decision requested": "decisions.sourceDecisionRequested",
+  "Join request": "decisions.sourceJoinRequest",
+  "Recovery": "decisions.sourceRecovery",
+  "Task": "decisions.sourceTask",
+  "Blocked dependency": "decisions.sourceBlockedDependency",
+  "Review": "decisions.sourceReview",
+  "Failed run": "decisions.sourceFailedRun",
+  "Budget": "decisions.sourceBudget",
+  "Agent error": "decisions.sourceAgentError",
+  "Stack update": "decisions.sourceStackUpdate",
+};
+
+/** myrmidon(UI-RU): resolve a group label through the fork catalog when a key exists. */
+export function localizeAttentionLabel(
+  label: string | null,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string | null {
+  if (label === null) return null;
+  const key = ATTENTION_LABEL_I18N[label];
+  return key ? t(key) : label;
+}
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 

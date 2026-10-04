@@ -40,7 +40,10 @@
     },
     "group": "Обслуживание агентов ({{state}}) с {{since}}: {{reason}} — агентов: {{count}}, в очереди побудок: {{queued}}. Новые запуски агентов приостановлены; побудки будут доставлены после окончания обслуживания.",
     "ending": "Обслуживание агентов завершается — агентов: {{count}}",
-    "idsSummary": "Идентификаторы агентов"
+    "idsSummary": "Идентификаторы агентов",
+    "summary": "Окон обслуживания: {{count}} в {{rows}} потока(х), {{state}}",
+    "row": "{{scope}} ({{state}}) с {{since}}: {{reason}} — окон: {{count}}, в очереди побудок: {{queued}}.",
+    "endsBy": "до {{time}}"
   },
   "about": {
     "title": "О Myrmidon",
@@ -90,7 +93,8 @@
       "colony": "{{active}} из {{total}}",
       "fleet": "Флот",
       "fleetAttention": "Флот: требует внимания",
-      "forecast": "{{spend}} из {{budget}}"
+      "forecast": "{{spend}} из {{budget}}",
+      "forecastSpendOnly": "Потрачено {{spend}}"
     },
     "decisions": {
       "badge": "Решений ждёт: {{count}}"
@@ -402,5 +406,20 @@
     "noAgents": "В этой компании пока нет агентов.",
     "save": "Сохранить лимит WIP",
     "saving": "Сохранение..."
+  },
+  "cardEffort": {
+    "thinkingEffort": "Уровень размышлений",
+    "thinkingEffortHint": "Глубина размышлений. Предлагаются только значения, которые принимает выбранная модель; пусто — дефолт модели.",
+    "effortDefault": "дефолт",
+    "effortEmptyHint": "Пусто компилируется в дефолт модели: {{value}}",
+    "effortSelected": "Выбрано: {{value}}",
+    "contextLength": "Контекст (токены)",
+    "contextLengthHint": "Явное окно контекста модели. Пусто — настройка профиля.",
+    "contextLengthInvalid": "Контекст должен быть целым числом токенов.",
+    "contextLengthRange": "Контекст должен быть от {{min}} до {{max}}.",
+    "titleGenerationModel": "Модель заголовков",
+    "titleGenerationModelHint": "Модель вспомогательной генерации заголовков. Пусто — дефолт инстанса.",
+    "compressionModel": "Модель сжатия",
+    "compressionModelHint": "Модель вспомогательных резюме при сжатии. Пусто — дефолт инстанса."
   }
 }

@@ -288,6 +288,21 @@ async function sourceIssueId(
       const doc = await readStackDocument(db);
       return { exists: doc.components.some((component) => component.name === sourceId), issueId: null };
     }
+    // myrmidon(BOT-DISK E): the host disk alert is process-level state; the
+    // source id is the fixed "host-disk" subject, so existence is always true
+    // while the board runs (the row is dismissable, never stale-checked).
+    case "host_disk_alert": {
+      return { exists: true, issueId: null };
+    }
+    // myrmidon(BOT-RUNTIME-TUNING D): the fallback alert's source id is the
+    // agent id — the card's subject — so existence is the agent row.
+    case "model_fallback_alert": {
+      const row = await db.select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.companyId, companyId), eq(agents.id, sourceId)))
+        .then((rows) => rows[0] ?? null);
+      return { exists: Boolean(row), issueId: null, agentId: row?.id ?? null };
+    }
     // myrmidon(STALE-BLOCK): a lifted-block signal lives in the process-level
     // registry; the source id is the task the sweep unblocked.
     case "stale_block": {
@@ -297,6 +312,16 @@ async function sourceIssueId(
         .where(and(eq(issues.companyId, companyId), eq(issues.id, sourceId), isNull(issues.hiddenAt)))
         .then((rows) => rows[0] ?? null);
       return { exists: Boolean(row), issueId: row?.id ?? null };
+    }
+    // myrmidon(1.6.1-WIP-LIMIT-A): the signal subject is an agent of the
+    // company; existence is the live agent row (the status feed is computed,
+    // not stored, so there is nothing else to check).
+    case "wip_limit": {
+      const row = await db.select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.companyId, companyId), eq(agents.id, sourceId)))
+        .then((rows) => rows[0] ?? null);
+      return { exists: Boolean(row), issueId: null, agentId: row?.id ?? null };
     }
   }
 }
@@ -318,6 +343,24 @@ export async function canReadDecisionSource(
   }
 
   if (sourceKind === "agent_error_alert" && source.agentId) {
+    return (await authz.decide({
+      actor,
+      action: "agent:read",
+      resource: { type: "agent", companyId, agentId: source.agentId },
+    })).allowed;
+  }
+  // myrmidon(BOT-RUNTIME-TUNING D): the fallback alert names one agent; the
+  // same agent-read authority the error alert uses.
+  if (sourceKind === "model_fallback_alert" && source.agentId) {
+    return (await authz.decide({
+      actor,
+      action: "agent:read",
+      resource: { type: "agent", companyId, agentId: source.agentId },
+    })).allowed;
+  }
+  // myrmidon(1.6.1-WIP-LIMIT-A): the signal subject is an agent, so an agent
+  // read follows the same agent:read decision the error alert uses.
+  if (sourceKind === "wip_limit" && source.agentId) {
     return (await authz.decide({
       actor,
       action: "agent:read",

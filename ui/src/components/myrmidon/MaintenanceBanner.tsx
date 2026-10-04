@@ -2,9 +2,12 @@
 // window concerns the current company. Informational only: changes happen in
 // Instance settings → General → Maintenance.
 //
-// Agent-scoped windows are opened in batches (for example when bot container
-// templates are updated), so windows of one kind are shown as a single line;
-// windows that are already ending collapse into one compact line.
+// 1.6.1 MAINTENANCE-BANNER: however many windows are open (one per agent in a
+// batch update, plus instance/company/department ones), the banner stays a
+// single plaque. The plaque carries the aggregate state (on / draining /
+// ending), the total window count and the "ends by" bound; the details list
+// inside stays one line per kind of window. Agent ids are never rendered in
+// the collapsed plaque — only counts.
 import { useQuery } from "@tanstack/react-query";
 import { Wrench } from "lucide-react";
 import { useTranslation } from "@/i18n";
@@ -28,61 +31,77 @@ export function normalizeReason(reason: string): string {
     .trim();
 }
 
-export interface AgentWindowGroup {
+/**
+ * Roll-up of one or more windows of the same kind: scope type + state +
+ * normalized reason. `agentCount` is the number of distinct windows
+ * (agent-scoped windows are one-per-agent), `endsBy` is the latest drain
+ * deadline of the windows in the row.
+ */
+export interface MaintenanceRow {
   key: string;
+  scopeType: MaintenanceWindowView["scope"]["type"];
+  state: MaintenanceWindowView["state"];
   reason: string;
-  windows: MaintenanceWindowView[];
+  startedAt: string;
+  endsBy: string | null;
+  agentCount: number;
   queuedWakeups: number;
   runningRuns: number;
   drainTimedOut: boolean;
-  startedAt: string;
+  /** Agent ids behind the row, for the expanded details only. */
+  ids: string[];
 }
 
-export interface GroupedWindows {
-  /** Instance, company and department windows: one line each, as before. */
-  single: MaintenanceWindowView[];
-  /** Agent windows that are on or draining, one entry per kind of reason. */
-  agentGroups: AgentWindowGroup[];
-  /** Agent windows already ending, shown together on one compact line. */
-  ending: MaintenanceWindowView[];
+export interface AggregatedMaintenance {
+  /** One row per kind of window (scope type + state + reason). */
+  rows: MaintenanceRow[];
+  /** Total number of windows the plaque counts. */
+  windowCount: number;
+  /** Latest drain deadline across all non-leaving windows, when known. */
+  endsBy: string | null;
 }
 
-export function groupWindows(windows: MaintenanceWindowView[]): GroupedWindows {
-  const single: MaintenanceWindowView[] = [];
-  const ending: MaintenanceWindowView[] = [];
-  const groups = new Map<string, AgentWindowGroup>();
+export function aggregateMaintenance(windows: MaintenanceWindowView[]): AggregatedMaintenance {
+  const rows = new Map<string, MaintenanceRow>();
   for (const window of windows) {
-    if (window.scope.type !== "agent") {
-      single.push(window);
-      continue;
+    const reason = window.state === "leaving" ? "" : normalizeReason(window.reason);
+    const key = `${window.state}\u0000${window.scope.type}\u0000${reason}`;
+    const row =
+      rows.get(key) ??
+      {
+        key,
+        scopeType: window.scope.type,
+        state: window.state,
+        reason,
+        startedAt: window.startedAt,
+        endsBy: null,
+        agentCount: 0,
+        queuedWakeups: 0,
+        runningRuns: 0,
+        drainTimedOut: false,
+        ids: [],
+      };
+    row.agentCount += 1;
+    if (window.scope.type === "agent") row.ids.push(window.scope.id ?? window.id);
+    row.queuedWakeups += window.queuedWakeups;
+    row.runningRuns += window.runningRuns;
+    row.drainTimedOut ||= window.drainTimedOut;
+    if (new Date(window.startedAt).getTime() < new Date(row.startedAt).getTime()) row.startedAt = window.startedAt;
+    if (!row.endsBy || new Date(window.drainDeadlineAt).getTime() > new Date(row.endsBy).getTime()) {
+      row.endsBy = window.drainDeadlineAt;
     }
-    if (window.state === "leaving") {
-      ending.push(window);
-      continue;
-    }
-    const reason = normalizeReason(window.reason);
-    const key = `${window.state === "entering" ? "entering" : "on"}\u0000${reason}`;
-    const group = groups.get(key) ?? {
-      key,
-      reason,
-      windows: [],
-      queuedWakeups: 0,
-      runningRuns: 0,
-      drainTimedOut: false,
-      startedAt: window.startedAt,
-    };
-    group.windows.push(window);
-    group.queuedWakeups += window.queuedWakeups;
-    group.runningRuns += window.runningRuns;
-    group.drainTimedOut ||= window.drainTimedOut;
-    if (new Date(window.startedAt).getTime() < new Date(group.startedAt).getTime()) group.startedAt = window.startedAt;
-    groups.set(key, group);
+    rows.set(key, row);
   }
-  return { single, agentGroups: [...groups.values()], ending };
+  let endsBy: string | null = null;
+  for (const row of rows.values()) {
+    if (row.state === "leaving" || !row.endsBy) continue;
+    if (!endsBy || new Date(row.endsBy).getTime() > new Date(endsBy).getTime()) endsBy = row.endsBy;
+  }
+  return { rows: [...rows.values()], windowCount: windows.length, endsBy };
 }
 
-function agentIds(windows: MaintenanceWindowView[]): string {
-  return windows.map((w) => w.scope.id ?? w.id).join(", ");
+function rowIds(row: MaintenanceRow): string | null {
+  return row.scopeType === "agent" ? row.ids.join(", ") : null;
 }
 
 export function MaintenanceBannerView({
@@ -105,54 +124,58 @@ export function MaintenanceBannerView({
     return t(window.state === "leaving" ? "maintenanceBanner.state.ending" : "maintenanceBanner.state.on");
   };
 
-  const { single, agentGroups, ending } = groupWindows(windows);
+  const { rows, windowCount, endsBy } = aggregateMaintenance(windows);
+  const endsByLabel = endsBy ? ` · ${t("maintenanceBanner.endsBy", { time: new Date(endsBy).toLocaleString() })}` : "";
   return (
     <div
       role="status"
       data-testid="myrmidon-maintenance-banner"
       className="border-b border-amber-300/60 bg-amber-50 text-amber-950 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-100"
     >
-      <div className="flex flex-col gap-1 px-3 py-2 text-sm">
-        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-(--tracking-caps)">
-          <Wrench className="h-3.5 w-3.5 shrink-0" />
-          <span>{t("maintenanceBanner.title")}</span>
-        </div>
-        {single.map((window) => (
-          <p key={window.id}>
-            {t("maintenanceBanner.window", {
-              scope: t(`maintenanceBanner.scope.${window.scope.type}`),
-              state: stateLabel(window),
-              since: new Date(window.startedAt).toLocaleString(),
-              reason: window.reason,
-              queued: window.queuedWakeups,
-            })}
-          </p>
-        ))}
-        {agentGroups.map((group) => (
-          <details key={group.key} data-testid="myrmidon-maintenance-agent-group">
-            <summary className="cursor-pointer" title={agentIds(group.windows)}>
-              {t("maintenanceBanner.group", {
-                state: stateLabel({
-                  state: group.key.startsWith("entering") ? "entering" : "on",
-                  runningRuns: group.runningRuns,
-                  drainTimedOut: group.drainTimedOut,
-                }),
-                since: new Date(group.startedAt).toLocaleString(),
-                reason: group.reason,
-                count: group.windows.length,
-                queued: group.queuedWakeups,
-              })}
-            </summary>
-            <p className="pl-4 text-xs opacity-80">
-              {t("maintenanceBanner.idsSummary")}: {agentIds(group.windows)}
-            </p>
-          </details>
-        ))}
-        {ending.length > 0 ? (
-          <p data-testid="myrmidon-maintenance-ending" title={agentIds(ending)}>
-            {t("maintenanceBanner.ending", { count: ending.length })}
-          </p>
-        ) : null}
+      <div className="px-3 py-2 text-sm">
+        <details data-testid="myrmidon-maintenance-details">
+          <summary className="cursor-pointer list-none">
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-(--tracking-caps)">
+                <Wrench className="h-3.5 w-3.5 shrink-0" />
+                <span>{t("maintenanceBanner.title")}</span>
+              </div>
+              <p data-testid="myrmidon-maintenance-summary">
+                {t("maintenanceBanner.summary", {
+                  count: windowCount,
+                  rows: rows.length,
+                  state: stateLabel({
+                    state: rows.every((r) => r.state === "leaving")
+                      ? "leaving"
+                      : rows.some((r) => r.state === "entering")
+                        ? "entering"
+                        : "on",
+                    runningRuns: rows.reduce((sum, r) => sum + r.runningRuns, 0),
+                    drainTimedOut: rows.some((r) => r.drainTimedOut),
+                  }),
+                })}
+                {endsByLabel}
+              </p>
+            </div>
+          </summary>
+          <ul className="mt-1 flex flex-col gap-1 pl-4 text-xs opacity-80">
+            {rows.map((row) => (
+              <li key={row.key} data-testid="myrmidon-maintenance-row" title={rowIds(row) ?? undefined}>
+                {t("maintenanceBanner.row", {
+                  scope: t(`maintenanceBanner.scope.${row.scopeType}`),
+                  state: stateLabel(row),
+                  since: new Date(row.startedAt).toLocaleString(),
+                  reason: row.reason,
+                  count: row.agentCount,
+                  queued: row.queuedWakeups,
+                })}
+                {rowIds(row) ? (
+                  <span className="block pl-2 opacity-70">{t("maintenanceBanner.idsSummary")}: {rowIds(row)}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </details>
       </div>
     </div>
   );

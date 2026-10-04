@@ -3,11 +3,14 @@ import type { FeedbackDataSharingPreference } from "./feedback.js";
 import type { WorkspaceHygieneLimits } from "../myrmidon-workspace-hygiene.js";
 // myrmidon(C0): the run admission limits stored in instance settings
 import type { RunLimits } from "../myrmidon-runtime-limits.js";
+import type { HostDiskSettings } from "../myrmidon-host-disk.js";
 // myrmidon(PARALLEL-HELPERS): the helper ceiling/default stored in instance settings
 import type { ParallelHelpersSettings } from "../myrmidon-parallel-helpers.js";
 // myrmidon(EXTCASE-B): the browser-bridge allowlist stored in instance settings
 import type { BrowserBridgeSettings } from "../myrmidon-browser-bridge.js";
 import type { SwarmClaimSettings } from "../myrmidon-swarm-claim.js";
+// myrmidon(1.6.1-WIP-LIMIT-A): per-agent WIP limits of the same general settings row.
+import type { WipLimitSettings } from "../myrmidon-wip-limit.js";
 
 export const DAILY_RETENTION_PRESETS = [3, 7, 14] as const;
 export const WEEKLY_RETENTION_PRESETS = [1, 2, 4] as const;
@@ -55,6 +58,13 @@ export interface InstanceGeneralSettings {
    */
   workspaceHygiene?: WorkspaceHygieneLimits;
   /**
+   * myrmidon(BOT-DISK E): the host disk usage threshold, changed from
+   * `GET`/`PATCH /api/myrmidon/host-disk`. Absent means "use the environment
+   * variable, then the default (85)"; kept in sync with the validator of the
+   * same field (packages/shared/src/validators/instance.ts).
+   */
+  hostDisk?: HostDiskSettings;
+  /**
    * myrmidon(C0): run admission limits changed from the instance settings page
    * and `GET`/`PATCH /api/myrmidon/runtime-limits`. Absent means "use the
    * environment variable, then the default"; kept in sync with the validator of
@@ -85,6 +95,13 @@ export interface InstanceGeneralSettings {
    * validator of the same field (packages/shared/src/validators/instance.ts).
    */
   swarmClaim?: SwarmClaimSettings;
+  /**
+   * myrmidon(1.6.1-WIP-LIMIT-A): per-agent WIP limits, changed from
+   * `GET`/`PUT /api/myrmidon/companies/:companyId/wip-limit/settings`. Absent
+   * means "count only, never signal". Kept in sync with the validator of the
+   * same field (packages/shared/src/validators/instance.ts).
+   */
+  wipLimit?: WipLimitSettings;
 }
 
 export interface InstanceExperimentalSettings {

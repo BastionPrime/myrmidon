@@ -4,9 +4,11 @@
 
 A **board administrator** is an agent the organization trusts with
 board-administration authority: company members, roles, permission grants and
-company settings. PR #411 (1.6.1 ADMIN-AGENT part C) gives that state a face in
-the board UI — a toggle in the agent card and a visible row on the rights page.
-This guide covers both surfaces.
+company settings. The board UI gives that state a face — a toggle in the
+agent card and a visible row on the rights page (#411) — and the server gives
+it the grant semantics (#443): the operator permission set the switch grants,
+the snapshot of pre-existing grants, and the authorization rules for flipping
+it. This guide covers all of it.
 
 ## Where the toggle lives
 
@@ -30,10 +32,49 @@ value (absent, malformed, legacy) reads as **not** a board administrator, so
 an old server or a stale cache never makes the UI show or flip admin
 authority that is not there.
 
-The permissions contract itself — which grants the flag actually maps to, the
-snapshot of pre-existing grants, the self-toggle prohibition, the activity
-log — is the server half of the feature (part A, a separate merge); until it
-lands the flag is stored and shown but does not yet carry operator authority.
+## The grant set behind the flag
+
+The switch grants a fixed operator set — 17 permission keys listed as
+`BOARD_ADMIN_PERMISSION_KEYS` in the shared constants
+(`packages/shared/src/constants.ts`):
+
+`agents:create`, `agents:configure`, `agents:suggest-changes`,
+`skills:create`, `environments:manage`, `tools:admin`,
+`tools:manage_connections`, `tools:manage_profiles`, `tools:view_audit`,
+`tools:manage_runtime`, `tools:use`, `inbox:manage`, `users:invite`,
+`users:manage_permissions`, `tasks:assign`, `tasks:assign_scope`,
+`joins:approve`.
+
+The list is written out explicitly rather than derived at runtime, so adding
+a new key to the global permission registry never silently widens what an
+existing board administrator holds.
+
+**Enable** writes `permissions.boardAdmin = true`, snapshots the set keys the
+agent already held into `permissions.boardAdminSavedGrantKeys`, and grants
+every missing set key through the grant table. **Disable** writes
+`permissions.boardAdmin = false`, clears the snapshot, and revokes only the
+set keys the switch itself added — the saved snapshot survives: a personal
+grant the agent held before the appointment (for example a separately issued
+`tasks:assign`) stays. Re-enabling keeps the original snapshot, so keys issued
+between disable and re-enable stay personal too.
+
+`GET /agents/:id` resolves `access.boardAdmin` as `true` when the agent is
+the company CEO, when the stored flag is set, **or** when the agent already
+holds all 17 set keys — a read-time migration that covers pre-existing full
+grant sets without rewriting them; the first toggle persists the explicit
+flag and snapshot.
+
+## Who may flip the switch
+
+- A board actor needs the company `users:manage_permissions` right (the
+  local implicit operator context and instance admins pass by definition). A
+  cross-company request fails as 404, not 403.
+- An agent actor needs the `users:manage_permissions` grant itself (the CEO
+  rule stays) and **cannot grant board admin to itself** — a self-toggle
+  answers 403. Note this also means an agent holding that grant may now
+  manage other agents' permissions through the same PATCH.
+- Every flip logs one `agent.permissions_updated` activity entry with the
+  `boardAdmin` value and the acting principal.
 
 ## Who sees the toggle
 
@@ -76,4 +117,5 @@ it.
 No UI surface exists for revoking or reviewing the grant keys the flag maps
 to beyond this toggle, and the rights page shows no grant-level detail for
 agent administrators — the role label and the badge are all it renders. The
-agent card's permissions PATCH is the single write path.
+agent card's permissions PATCH is the single write path; an operator can
+still review an agent's individual grant rows through the access API.

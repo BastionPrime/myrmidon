@@ -21,9 +21,18 @@ export const ATTENTION_SOURCE_KINDS = [
   // myrmidon(SUB): an upstream release of a tracked stack component is newer
   // than the running version, or appeared since the previous release check.
   "stack_update",
+  // myrmidon(BOT-RUNTIME-TUNING D): a bot's gateway calls were served by a
+  // model outside its card more than the configured share of the window.
+  "model_fallback_alert",
   // myrmidon(STALE-BLOCK): the watchdog lifted a dead block off a task; the
   // lead and operator must see the routing change the machine made.
   "stale_block",
+  // myrmidon(BOT-DISK E): the host disk fill level crossed the saved threshold.
+  "host_disk_alert",
+  // myrmidon(1.6.1-WIP-LIMIT-A): an agent's in-flight task count (in_progress
+  // + in_review) is over its resolved WIP limit, or a lead holds a
+  // implementation task (lead limit = 0).
+  "wip_limit",
 ] as const;
 
 export type AttentionSourceKind = (typeof ATTENTION_SOURCE_KINDS)[number];
@@ -180,6 +189,18 @@ export type AttentionItemDetail =
       observedPercent: number;
       amountObserved: number;
       amountLimit: number;
+      images: AttentionDetailImage[];
+    }
+  | {
+      kind: "host_disk";
+      usedPercent: number;
+      thresholdPercent: number;
+      usedGb: number;
+      totalGb: number;
+      freeGb: number;
+      growthBytesPerHour: number | null;
+      mountPoint: string | null;
+      consumers: Array<{ path: string; sizeGb: number }>;
       images: AttentionDetailImage[];
     }
   | {

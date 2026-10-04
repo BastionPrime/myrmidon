@@ -391,6 +391,50 @@ describe("attentionDetailLine (§7)", () => {
     expect(line).not.toContain("tasks");
   });
 
+  it("renders the host disk numbers, growth and consumers", () => {
+    const line = attentionDetailLine(
+      buildItem({
+        sourceKind: "host_disk_alert",
+        detail: {
+          kind: "host_disk",
+          usedPercent: 91,
+          thresholdPercent: 85,
+          usedGb: 91,
+          totalGb: 100,
+          freeGb: 9,
+          growthBytesPerHour: 1024 * 1024 * 1024,
+          mountPoint: "/srv/data",
+          consumers: [{ path: "/srv/data/workspaces", sizeGb: 40 }],
+          images: [],
+        },
+      }),
+    );
+    expect(line).toContain("91% of 100 GB used (9 GB free)");
+    expect(line).toContain("+1.0 GB/hour");
+    expect(line).toContain("/srv/data/workspaces (40 GB)");
+  });
+
+  it("renders the host disk line without growth when the sweep has one sample", () => {
+    const line = attentionDetailLine(
+      buildItem({
+        sourceKind: "host_disk_alert",
+        detail: {
+          kind: "host_disk",
+          usedPercent: 91,
+          thresholdPercent: 85,
+          usedGb: 91,
+          totalGb: 100,
+          freeGb: 9,
+          growthBytesPerHour: null,
+          mountPoint: "/srv/data",
+          consumers: [],
+          images: [],
+        },
+      }),
+    );
+    expect(line).toBe("91% of 100 GB used (9 GB free)");
+  });
+
   it("renders a failed run as agent — reason", () => {
     const line = attentionDetailLine(
       buildItem({

@@ -2,7 +2,7 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_OPENCODE_LOCAL_MODEL } from "@paperclipai/adapter-opencode-local";
-import { LOW_TRUST_REVIEW_PRESET } from "@paperclipai/shared";
+import { BOARD_ADMIN_PERMISSION_KEYS, LOW_TRUST_REVIEW_PRESET } from "@paperclipai/shared";
 import { hoistModuleGraph } from "./helpers/hoist-module-graph.js";
 
 vi.mock("acpx/runtime", () => ({
@@ -2054,6 +2054,234 @@ describe.sequential("agent permission routes", () => {
         resource: { type: "company", companyId },
       }));
     });
+  });
+
+  // myrmidon(1.6.1 ADMIN-AGENT): the board-administrator switch on
+  // PATCH /agents/:id/permissions. Plain-neutral identifiers per repo policy.
+  function grantsFor(keys: string[]) {
+    return keys.map((key) => ({
+      id: `grant-${key}`,
+      companyId,
+      principalType: "agent",
+      principalId: agentId,
+      permissionKey: key,
+      enabled: true,
+      grantedByUserId: "board-user",
+      grantedAt: new Date("2026-03-19T00:00:00.000Z"),
+      createdAt: new Date("2026-03-19T00:00:00.000Z"),
+      updatedAt: new Date("2026-03-19T00:00:00.000Z"),
+    }));
+  }
+
+  it("enables board admin, grants the operator set, and revokes only switch-added keys on disable", async () => {
+    // Mutable stored state: updatePermissions persists into the row the next
+    // get in the same request flow returns (mirrors the real service).
+    const storedAgent = { ...baseAgent, permissions: { canCreateAgents: false } };
+    mockAgentService.getById.mockImplementation(async (requestedId: string) =>
+      requestedId === agentId ? storedAgent : null,
+    );
+    mockAgentService.updatePermissions.mockImplementation(
+      async (_id: string, permissions: Record<string, unknown>) => {
+        storedAgent.permissions = { ...storedAgent.permissions, ...permissions };
+        return storedAgent;
+      },
+    );
+    // The agent already holds a personal tasks:assign grant the switch must
+    // not touch. grantsNow tracks the grant table across the whole flow.
+    let grantsNow = ["tasks:assign"];
+    mockAccessService.listPrincipalGrants.mockImplementation(
+      async () => grantsFor(grantsNow),
+    );
+    mockAccessService.setPrincipalPermission.mockImplementation(
+      async (
+        _companyId: string,
+        _principalType: string,
+        _principalId: string,
+        permissionKey: string,
+        enabled: boolean,
+      ) => {
+        if (enabled) grantsNow = [...new Set([...grantsNow, permissionKey])];
+        else grantsNow = grantsNow.filter((key) => key !== permissionKey);
+      },
+    );
+
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+    const enable = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}/permissions`)
+      .send({ canCreateAgents: false, canAssignTasks: true, boardAdmin: true }));
+
+    expect(enable.status).toBe(200);
+    // Snapshot of the pre-toggle grant keys persisted on the agent record.
+    expect(mockAgentService.updatePermissions).toHaveBeenCalledWith(agentId, {
+      canCreateAgents: false,
+      canAssignTasks: true,
+      boardAdmin: true,
+      boardAdminSavedGrantKeys: ["tasks:assign"],
+    });
+    // Every missing operator-set key was granted.
+    for (const key of BOARD_ADMIN_PERMISSION_KEYS) {
+      expect(mockAccessService.setPrincipalPermission).toHaveBeenCalledWith(
+        companyId, "agent", agentId, key, true, "board-user",
+      );
+    }
+    expect([...grantsNow].sort()).toEqual([...BOARD_ADMIN_PERMISSION_KEYS].sort());
+    // The activity log records the switch with the acting principal.
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "agent.permissions_updated",
+        entityId: agentId,
+        details: expect.objectContaining({ boardAdmin: true }),
+      }),
+    );
+
+    mockAccessService.setPrincipalPermission.mockClear();
+    const disable = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}/permissions`)
+      .send({ canCreateAgents: false, canAssignTasks: true, boardAdmin: false }));
+
+    expect(disable.status).toBe(200);
+    expect(mockAgentService.updatePermissions).toHaveBeenCalledWith(agentId, {
+      canCreateAgents: false,
+      canAssignTasks: true,
+      boardAdmin: false,
+      boardAdminSavedGrantKeys: [],
+    });
+    const revokedKeys = mockAccessService.setPrincipalPermission.mock.calls
+      .filter((call) => call[4] === false)
+      .map((call) => call[3]);
+    // Only the switch-added keys are revoked; the personal tasks:assign
+    // grant survives.
+    expect(revokedKeys.sort()).toEqual(
+      [...BOARD_ADMIN_PERMISSION_KEYS].filter((key) => key !== "tasks:assign").sort(),
+    );
+    expect(grantsNow).toEqual(["tasks:assign"]);
+  });
+
+  it("rejects an agent enabling board admin for itself", async () => {
+    const selfActorAgent = { ...baseAgent, id: agentId, role: "engineer", companyId };
+    mockAgentService.getById.mockImplementation(async (requestedId: string) =>
+      requestedId === agentId ? selfActorAgent : null,
+    );
+    // The actor holds every grant including users:manage_permissions: even so,
+    // self-promotion must be denied.
+    mockAccessService.hasPermission.mockResolvedValue(true);
+
+    const app = createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      runId: "run-1",
+      source: "agent_key",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}/permissions`)
+      .send({ canCreateAgents: false, canAssignTasks: true, boardAdmin: true }));
+
+    expect(res.status).toBe(403);
+    expect(mockAgentService.updatePermissions).not.toHaveBeenCalled();
+    expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+  });
+
+  it("lets a granted agent admin change another agent's permissions, denies a plain agent", async () => {
+    const targetAgentId = "12121212-3434-4545-a656-787878787878";
+    const actorAgentId = "13131313-3434-4545-a656-787878787878";
+    const targetAgent = { ...baseAgent, id: targetAgentId, companyId };
+    const actorAgentRow = { ...baseAgent, id: actorAgentId, role: "engineer", companyId };
+    mockAgentService.getById.mockImplementation(async (requestedId: string) => {
+      if (requestedId === targetAgentId) return targetAgent;
+      if (requestedId === actorAgentId) return actorAgentRow;
+      return null;
+    });
+    mockAgentService.updatePermissions.mockImplementation(
+      async (_id: string, permissions: Record<string, unknown>) => ({
+        ...targetAgent,
+        permissions: { ...targetAgent.permissions, ...permissions },
+      }),
+    );
+    mockAccessService.listPrincipalGrants.mockResolvedValue([]);
+
+    const plainApp = createApp({
+      type: "agent",
+      agentId: actorAgentId,
+      companyId,
+      runId: "run-1",
+      source: "agent_key",
+    });
+    // The default hasPermission mock resolves false: a plain agent without
+    // grants gets 403 (either the self-check or the missing-grant gate).
+    const denied = await requestApp(plainApp, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${targetAgentId}/permissions`)
+      .send({ canCreateAgents: false, canAssignTasks: true, boardAdmin: true }));
+
+    expect(denied.status).toBe(403);
+    expect(mockAgentService.updatePermissions).not.toHaveBeenCalled();
+    expect(denied.body.error).toBe("Missing users:manage_permissions grant");
+
+    // With the users:manage_permissions grant: allowed.
+    mockAccessService.hasPermission.mockResolvedValue(true);
+    const allowed = await requestApp(plainApp, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${targetAgentId}/permissions`)
+      .send({ canCreateAgents: false, canAssignTasks: true, boardAdmin: true }));
+
+    expect(allowed.status).toBe(200);
+    expect(mockAgentService.updatePermissions).toHaveBeenCalledWith(targetAgentId, {
+      canCreateAgents: false,
+      canAssignTasks: true,
+      boardAdmin: true,
+      boardAdminSavedGrantKeys: [],
+    });
+    expect(allowed.body.access.boardAdmin).toBe(true);
+  });
+
+  it("rejects a board actor without users:manage_permissions flipping the switch", async () => {
+    mockAccessService.canUser.mockResolvedValue(false);
+    mockAccessService.decide.mockImplementation(async (input: { action?: string }) => ({
+      allowed: input.action === "agent:read",
+      reason: input.action === "agent:read" ? "allow_test_read" : "deny_missing_grant",
+      explanation: input.action === "agent:read" ? "Allowed." : "Missing grant.",
+    }));
+    mockAgentService.updatePermissions.mockClear();
+
+    const app = createApp({
+      type: "board",
+      userId: "member-user",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: [companyId],
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}/permissions`)
+      .send({ canCreateAgents: false, canAssignTasks: true, boardAdmin: true }));
+
+    expect(res.status).toBe(403);
+    expect(mockAgentService.updatePermissions).not.toHaveBeenCalled();
+  });
+
+  it("reads an agent with the full operator set as a board admin (read-time migration)", async () => {
+    mockAccessService.listPrincipalGrants.mockResolvedValue(grantsFor([...BOARD_ADMIN_PERMISSION_KEYS]));
+    mockAgentService.updatePermissions.mockClear();
+
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/agents/${agentId}`));
+
+    expect(res.status).toBe(200);
+    expect(res.body.access.boardAdmin).toBe(true);
+    // Read-only derivation: nothing was written.
+    expect(mockAgentService.updatePermissions).not.toHaveBeenCalled();
+    expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
   });
 
   it("rejects heartbeat cancellation outside the caller company scope", async () => {
